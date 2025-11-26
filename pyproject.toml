@@ -1,0 +1,14 @@
+[build-system]
+   requires = ["setuptools>=45", "wheel"]
+   build-backend = "setuptools.build_meta"
+
+   [project]
+   name = "pyrtnf"
+   version = "0.1.0"
+   description = "Python Real-Time fMRI Neurofeedback"
+   authors = [{name = "Marlee M Vandewouw", email = "marlee.vandewouw@outlook.com"}]
+   dependencies = [
+   ]
+
+   [project.optional-dependencies]
+   dev = []
