@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.DS_Store
 .env
+.venv/
 venv/
 *.ipynb_checkpoints
 *.conda

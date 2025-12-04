@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: pyrtnf
+Version: 0.1.0
+Summary: Python Real-Time fMRI Neurofeedback
+Author-email: Marlee M Vandewouw <marlee.vandewouw@outlook.com>
+License-File: LICENSE
+Provides-Extra: dev
+Dynamic: license-file
