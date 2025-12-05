@@ -9,3 +9,4 @@ venv/
 *.conda
 *.tar.bz2
 envs/
+tests
