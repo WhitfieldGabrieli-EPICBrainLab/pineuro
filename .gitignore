@@ -10,3 +10,4 @@ venv/
 *.tar.bz2
 envs/
 tests
+examples
