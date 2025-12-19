@@ -1,10 +1,50 @@
 """
+Functional network mask extraction pipeline for real-time fMRI neurofeedback.
 
+This module provides functions for extracting participant-specific functional network masks from resting-state fMRI data using Independent Component Analysis (ICA) and spatial correlation with reference brain networks. The pipeline identifies network-specific brain regions for use as neurofeedback targets.
+
+Key Functions
+-------------
+run_ica : Perform Canonical ICA decomposition on fMRI data
+spatial_correlation : Compute spatial correlation between components and parcellations
+mask_extraction_rest : Complete mask extraction pipeline for resting-state data
+
+Dependencies
+------------
+- nilearn[1]
+- FSL[2]
+- nibabel
+- numpy
+- pandas
+- scipy
+
+Notes
+-----
+The mask extraction pipeline creates a standardized directory structure:
+- 01_ica : ICA components and metadata
+- 02_mnireg : MNI space registrations and transformations
+- 03_masks : Extracted and thresholded network masks
+
+The pipeline registers reference atlases (e.g., Yeo networks) from MNI152 space
+to participant space, performs ICA decomposition, and identifies components
+corresponding to target functional networks through spatial correlation.
+
+References
+----------
+[1] Varoquaux, G., Sadaghiani, S., Pinel, P., Kleinschmidt, A., Poline, J. B., 
+    & Thirion, B. (2010). A group model for stable multi-subject ICA on fMRI 
+    datasets. NeuroImage, 51(1), 288-299.
+[2] Jenkinson, M., Beckmann, C. F., Behrens, T. E., Woolrich, M. W., & Smith, 
+    S. M. (2012). FSL. NeuroImage, 62(2), 782-790.
+[3] Yeo, B. T., Krienen, F. M., Sepulcre, J., Sabuncu, M. R., Lashkari, D., 
+    Hollinshead, M., ... & Buckner, R. L. (2011). The organization of the 
+    human cerebral cortex estimated by intrinsic functional connectivity. 
+    Journal of Neurophysiology, 106(3), 1125-1165.
 
 """
 
 # Standard library imports
-from typing import Union, Any, List
+from typing import Union, Any, List, Optional
 from pathlib import Path
 
 # Third-party imports
@@ -29,7 +69,10 @@ def run_ica(
         mask_file: Union[str, Path],
         output_dir: Union[str, Path],
         output_name: str,
-        n_components: int = 30,
+        n_components: int = 20,
+        smooth_fwhm: Optional[float] = None,
+        highpass: Optional[float] = None,
+        lowpass: Optional[float] = None,
         overwrite: bool = False
 ) -> tuple[Path, Path]:
     """
@@ -47,6 +90,12 @@ def run_ica(
         Base name for output file (without extension)
     n_components : int, default = 30
         Number of independent components to extract
+    smooth_fwhm : float, optional
+        FWHM of Gaussian smoothing kernel in mm for ICA. If None, no smoothing is applied
+    highpass : float, optional
+        High-pass filter cutoff in Hz for ICA. If None, no high-pass filtering is applied
+    lowpass : float, optional
+        Low-pass filter cutoff in Hz for ICA. If None, no low-pass filtering is applied
     overwrite : bool, default=True
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
@@ -101,12 +150,20 @@ def run_ica(
     logger.info("Parameters:")
     logger.info(f"  n_components: {n_components}")
 
+    # Extract the TR
+    img = load(input_file)
+    tr = img.header.get_zooms()[3] # type: ignore
+
     # Initialize CanICA
     logger.info("Initializing CanICA...")
     canica: Any = CanICA(
         mask=mask_file,
         n_components=n_components,
-        smoothing_fwhm=None,
+        smoothing_fwhm=smooth_fwhm, # type: ignore
+        high_pass=highpass,
+        low_pass=lowpass,
+        threshold=None,  # type: ignore
+        t_r=tr,
         n_jobs=-1, # Use all CPUs
         random_state=0, # For reproducibility
         memory=str(output_dir / "cache"),
@@ -150,9 +207,10 @@ def run_ica(
 def spatial_correlation(
         input_file: Union[str, Path],
         parcellation_file: Union[str, Path],
+        mask_file: Union[str, Path],
         labels: List,
-        output_file: Union[str, Path]
-
+        output_file: Union[str, Path],
+        overwrite: bool = False
 ) -> pd.DataFrame:
     """
     Spatially coreralte a NIfTI file with a parcellation using FSL's fslcc.
@@ -160,13 +218,18 @@ def spatial_correlation(
     Parameters
     ----------
     input_file : str or Path
-        Path to first 4D NIfTI file
+        Path to 4D NIfTI file to compute spatial correlation with
+    mask_file : str of Path
+        Path to mask for input file
     parcellation_file : str or Path
         Path to 3D NIfTI parcellation file
     labels : List
         List of parcellation labels
     output_file : str or Path
         Path to save correlation results as CSV file
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
     
      Raises
     ------
@@ -182,41 +245,73 @@ def spatial_correlation(
     
     # Convert to Path objects
     input_file = Path(input_file)
+    mask_file = Path(mask_file)
     parcellation_file = Path(parcellation_file)
     output_file = Path(output_file)
+
+    # Check if outputs exist and skip if overwrite=False
+    if not overwrite:
+        if output_file.exists():
+            logger.info(f"Output file exists and overwrite=False. Skipping spatial correlations.")
+            corr_df = pd.read_csv(output_file)
+            return corr_df
 
     # Validate files
     if not input_file.exists():
         raise FileNotFoundError(f"Input file not found: {input_file}")
+    if not mask_file.exists():
+        raise FileNotFoundError(f"Mask file not found: {mask_file}")
     if not parcellation_file.exists():
         raise FileNotFoundError(f"File not found: {parcellation_file}")
 
     # Create output directory
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Load files
+    # Load input file
     logger.info(f"Loading: {input_file}...")
     img = load(input_file)  
     data = get_data(img) 
     n = data.shape[3]
+
+    # Load parcellation and resample (note: they should already be co-registered)
     logger.info(f"Loading: {parcellation_file}...")
     img_parcellation = load(parcellation_file)  
-    
-    # Resample (note: they should already be co-registered)
-    logger.info("Resampling...")
     img_parcellation_rs = resample_to_img(img_parcellation, img, interpolation='nearest')
-    data_parcellation = get_data(img_parcellation_rs)
-    mask = data_parcellation > 0
+    data_parcellation = get_data(img_parcellation_rs).astype(int)
+
+    # Load mask
+    logger.info(f"Loading: {mask_file}...")
+    img_mask = load(mask_file)
+    data_mask = get_data(img_mask) > 0
+    V = data_mask.sum()
+
+    # Flatten components and labels inside the mask
+    X = data[data_mask].reshape(V, n)
+    data_parcellation = data_parcellation[data_mask]
+    
+    # Demean
+    X_dm = X - X.mean(axis=0, keepdims=True)
+    x_norm = np.sqrt((X_dm**2).sum(axis=0))
 
     # Compute spatial correlations
     logger.info("Correlating...")
     correlation_matrix: np.ndarray = np.zeros((n, len(labels)))
-    for idx in range(n):
-        x = data[..., idx]
-        for pdx, id in enumerate(labels):
-            network_map = (data_parcellation == id).astype(float)
-            corr, _ = pearsonr(x[mask], network_map[mask]) # type: ignore
-            correlation_matrix[idx, pdx] = corr
+    for j, net_id in enumerate(labels):
+        
+        # Extract and demean
+        y = (data_parcellation == j+1).astype(float)
+        y_dm = y - y.mean()
+        y_norm = np.sqrt((y_dm**2).sum())
+
+        # Numerator
+        num = X_dm.T @ y_dm
+
+        # Denominator
+        den = x_norm * y_norm
+
+        # Compute the correlation
+        corr = num / den
+        correlation_matrix[:, j] = corr
 
     # Create DataFrame and save
     logger.info(f"Saving correlations to{output_file}")
@@ -225,6 +320,7 @@ def spatial_correlation(
 
     return corr_df
 
+# TODO: Use MNI masks if not possible to use participant-specific masks
 def mask_extraction_rest(
         participant_id: str,
         root_dir: Union[str, Path],
@@ -232,7 +328,13 @@ def mask_extraction_rest(
         mask_file: Union[str, Path],
         ref_file: Union[str, Path],
         n_yeo: int = 17,
-        yeo_targets : Union[str, List[str]] = ["DefaultA", "ContA"]
+        yeo_targets : Union[str, List[str]] = ["DefaultA", "ContA"],
+        n_components: int = 20,
+        threshold: int = 2000,
+        smooth_fwhm: Optional[float] = None,
+        highpass: Optional[float] = None,
+        lowpass: Optional[float] = None,
+        overwrite: bool = False
 ) -> List[Path]:
     """
     Run the mask extraction pipeline for resting-state fMRI data.
@@ -255,6 +357,24 @@ def mask_extraction_rest(
         Yeo network parcellation to use. Options: 7 or 17
     yeo_targets : str or List of str
         Yeo network targets to extract masks for
+    n_components : int, default=20
+        Number of ICA components to extract
+    threshold : int, default=2000
+        Number of voxels to keep in the thresholded mask
+    smooth_fwhm : float, optional
+        FWHM of Gaussian smoothing kernel in mm for ICA. If None, no smoothing is applied
+    highpass : float, optional
+        High-pass filter cutoff in Hz for ICA. If None, no high-pass filtering is applied
+    lowpass : float, optional
+        Low-pass filter cutoff in Hz for ICA. If None, no low-pass filtering is applied
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
+
+    Returns
+    -------
+    thr_files
+        List of extracted thresholded masks
 
     Raises
     ------
@@ -294,7 +414,17 @@ def mask_extraction_rest(
     
     # Step 1: ICA
     ica_dir = root_dir / "01_ica"
-    components_file, _ = run_ica(input_file=input_file, mask_file=mask_file, output_dir=ica_dir, output_name=input_file.with_suffix("").stem)
+    components_file, _ = run_ica(
+        input_file=input_file,
+        mask_file=mask_file,
+        output_dir=ica_dir,
+        output_name=input_file.with_suffix("").stem,
+        n_components=n_components,
+        smooth_fwhm=smooth_fwhm,
+        highpass=highpass,
+        lowpass=lowpass,
+        overwrite=overwrite
+    )
     components_img = load(components_file)
     components_data = get_data(components_img)
 
@@ -303,35 +433,55 @@ def mask_extraction_rest(
 
     # Step 2a: Register fMRI BOLD reference to MNI BOLD reference
     output_name = mnireg_dir / Path(f"{ref_file.with_suffix("").stem}_to_MNI_boldref")
-    _, sub2mni_xfm = compute_xfm_to_mni(input_file=ref_file, output_name=output_name, cost='corratio', dof=6)
+    _, sub2mni_xfm = compute_xfm_to_mni(input_file=ref_file, output_name=output_name, cost='corratio', dof=6, overwrite=overwrite)
 
     # Step 2c: Invert transformation
     mni2sub_xfm = mnireg_dir / Path(f"MNI_boldref_to_{ref_file.with_suffix("").stem}.mat")
-    invert_xfm(input_file=sub2mni_xfm, output_file=mni2sub_xfm)
+    invert_xfm(input_file=sub2mni_xfm, output_file=mni2sub_xfm, overwrite=overwrite)
 
     # Step 2d: Register the Yeo parcellation to participant space
     yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
     yeo2sub = mnireg_dir / Path(f"{Path(yeo).with_suffix("").stem}_to_{ref_file.with_suffix("").stem}.nii.gz")
-    apply_xfm(input_file=yeo, reference_file=ref_file, xfm_file=mni2sub_xfm, output_file=yeo2sub, interp='nearestneighbour')
+    apply_xfm(input_file=yeo, reference_file=ref_file, xfm_file=mni2sub_xfm, output_file=yeo2sub, interp='nearestneighbour', overwrite=overwrite)
 
     # Step 3: Extract masks
     masks_dir = root_dir / "03_masks"
     
     # Step 3a: Spatial correlation
     sc_file = masks_dir / Path(f"{Path(yeo).with_suffix("").stem}_IC_spatial_correlation.csv")
-    sc_df = spatial_correlation(input_file=components_file, parcellation_file=yeo2sub, labels=labels, output_file=sc_file)
+    sc_df = spatial_correlation(input_file=components_file, mask_file=mask_file, parcellation_file=yeo2sub, labels=labels, output_file=sc_file, overwrite=overwrite)
 
     # Step 3b: Extract component with maximum correlation
-    mask_files = []
+    network_files = []
     for target in yeo_targets:
-        mask_file = masks_dir / Path(f"{participant_id}_{target}.nii.gz")
-        ic_ind = sc_df[target].idmax()
-        ic_data = components_data[..., ic_ind]
-        ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header) # type: ignore
-        save(ic_img, mask_file)
-        mask_files.append(mask_file)
+        network_file = masks_dir / Path(f"{participant_id}_{target}.nii.gz")
+        if not network_file.exists() or overwrite:
+            ic_ind = sc_df[target].idxmax()
+            ic_data = components_data[..., ic_ind] # type: ignore
+            ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header) # type: ignore
+            save(ic_img, network_file)
+        else:
+            logger.info(f"Output file exists and overwrite=False. Skipping network extraction.")
+        network_files.append(network_file)
 
-    return mask_files
+    # Step 3c: Threshold by number of voxels
+    network_thr_files = []
+    for network_file in network_files:
+        thr_file = network_file.with_name(network_file.with_suffix("").stem + "_thr.nii.gz")
+        if not thr_file.exists() or overwrite:
+            img = load(network_file)
+            data = img.get_fdata()
+            flat = data.ravel()
+            mask = np.zeros(flat.shape, dtype=bool)
+            mask[np.argpartition(flat, -threshold)[-threshold:]] = True
+            mask = mask.reshape(data.shape)
+            thresholded = ((data * mask) > 0).astype("uint8")
+            save(Nifti1Image(thresholded, img.affine, img.header), thr_file)
+        else:
+            logger.info(f"Output file exists and overwrite=False. Skipping network thresholding.")
+        network_thr_files.append(thr_file)
+        
+    return network_thr_files
 
     
 

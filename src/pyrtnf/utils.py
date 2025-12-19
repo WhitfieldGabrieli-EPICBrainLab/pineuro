@@ -182,6 +182,52 @@ def run_command(
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
+def dicom_to_nifti(
+        dicom_dir: Union[str, Path],
+        output_dir: Union[str, Path],
+        output_name: str,
+        overwrite: bool = False
+) -> Path:
+    """
+    Convert DICOM files to NIfTI format using dcm2niix.
+
+    Parameters
+    ----------
+    dicom_dir : str or Path
+        Directory containing DICOM files to convert.
+    output_dir : str or Path
+        Directory where the NIfTI file will be saved. Will be created if it doesn't exist
+    output_name : str
+        Base name for output file (without extension)
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
+
+    Returns
+    -------
+    nifti_path : Path
+        Path to the created NIfTI file
+
+    """
+    
+    # Build command
+    cmd = ['dcm2niix', '-z', 'y', '-o', str(output_dir), '-f', str(output_name), str(dicom_dir)]
+
+    # Set output filename
+    nifti_path = Path(output_dir) /f"{output_name}.nii.gz"
+
+    # Run dcm2niix
+    run_command(
+        cmd_name='dcm2niix',
+        cmd=cmd,
+        description='Converting DICOM to NIfTI',
+        inputs=dicom_dir,
+        outputs=nifti_path,
+        overwrite=overwrite
+    )
+
+    return nifti_path
+
 def get_yeo_labels(
         n_networks: int
 ) -> List[str]:
@@ -216,7 +262,7 @@ def get_yeo_labels(
     if n_networks == 7:
         labels = ["Vis", "SomMot", "DorsAttn", "SalVentAttn", "Limbic", "Cont", "Default"]
     else:
-        labels = ["VisCent", "VisPeri", "SomMotA", "SomMotB", "DorsAttnA", "DorsAttnB"
+        labels = ["VisCent", "VisPeri", "SomMotA", "SomMotB", "DorsAttnA", "DorsAttnB",
         "SalVentAttnA", "SalVentAttnB", "LimbicA", "LimbicB", "ContC", "ContA", "ContB",
         "TempPar", "DefaultC", "DefaultA", "DefaultB"]
 
@@ -228,7 +274,8 @@ def get_yeo_labels(
 
 def compute_mean(
         input_file: Union[str, Path],
-        output_file: Union[str, Path]
+        output_file: Union[str, Path],
+        overwrite: bool = False
 ) -> None:
     """
     Compute temporal mean of fMRI data.
@@ -239,6 +286,9 @@ def compute_mean(
         Path to input NIfTI file (should be 4D)
     output_file: str or Path
         Path to save output mean image
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
 
     """
 
@@ -256,7 +306,8 @@ def compute_mean(
         cmd=cmd,
         description='Compute mean',
         inputs=input_file,
-        outputs=output_file
+        outputs=output_file,
+        overwrite=overwrite
     ) 
 
 def compute_xfm(
@@ -264,7 +315,8 @@ def compute_xfm(
         reference_file: Union[str, Path],
         output_name: Union[str, Path],
         cost: str = 'corratio',
-        dof: int = 6
+        dof: int = 6,
+        overwrite: bool = False
 ) -> tuple[Path, Path]:
     """
     Compute a transformation matrix using FSL's FLIRT
@@ -281,6 +333,9 @@ def compute_xfm(
         Cost function for registration (per FSL, e.g., corratio, leastsq)
     dof: int, default=6
         Degrees of freedom for transformation (per FSL, e.g., 6 for rigid body)
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
 
     Returns
     -------
@@ -335,7 +390,8 @@ def compute_xfm(
         cmd=cmd,
         description='Computing transformation',
         inputs=[input_file, reference_file],
-        outputs=[output_file, output_xfm]
+        outputs=[output_file, output_xfm],
+        overwrite=overwrite
     ) 
 
     return output_file, output_xfm
@@ -346,6 +402,7 @@ def apply_xfm(
         xfm_file: Union[str, Path],
         output_file: Union[str, Path],
         interp: str = 'nearestneighbour',
+        overwrite: bool = False
 ) -> None:
     """
     Apply a transformation matrix using FSL's FLIRT
@@ -362,6 +419,9 @@ def apply_xfm(
         Path for output file 
     interp : str, default='nearestneighbour'
         Interpolation for registration (per FSL, e.g., trilinear, nearestneighbour)
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
 
     Raises
     ------
@@ -385,6 +445,7 @@ def apply_xfm(
         '-ref', str(reference_file),
         '-out', str(output_file),
         '-init', str(xfm_file),
+        '-applyxfm',
         '-interp', interp,
         '-noresample',
         '-noresampblur'
@@ -395,12 +456,14 @@ def apply_xfm(
         cmd=cmd,
         description='Applying transformation',
         inputs=[input_file, reference_file, xfm_file],
-        outputs=output_file
+        outputs=output_file,
+        overwrite=overwrite
     )
 
 def invert_xfm(
         input_file: Union[str, Path],
         output_file: Union[str, Path],
+        overwrite: bool = False
 ) -> None:
     """
     Invert a transformation matrix using FSL's convert_xfm
@@ -411,6 +474,9 @@ def invert_xfm(
         Path to input transformation file
     output_file : str or Path
         Path to output transformation file
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
 
     """
 
@@ -427,14 +493,16 @@ def invert_xfm(
         cmd=cmd,
         description='Applying transformation',
         inputs=input_file,
-        outputs=output_file
+        outputs=output_file,
+        overwrite=overwrite
     )
 
 def compute_xfm_to_mni(
         input_file: Union[str, Path],
         output_name: Union[str, Path],
         cost: str = 'corratio',
-        dof: int = 6
+        dof: int = 6,
+        overwrite: bool = False
 ) -> tuple[Path, Path]:
     """
     Wrapper for compute_xfm to specifically compute transformation to MNI space using the BOLD reference
@@ -445,6 +513,9 @@ def compute_xfm_to_mni(
         Path to input NIfTI file
     output_name : str or Path
         Base name for output file (without extension)
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
 
     Returns
     -------
@@ -455,13 +526,23 @@ def compute_xfm_to_mni(
 
     """
 
+    # Check if outputs exist and skip if overwrite=False
+    if not overwrite:
+        sub2mni_file = Path(output_name).with_suffix(".nii.gz")
+        sub2mni_xfm = Path(output_name).with_suffix(".mat")
+        output_paths_check = [Path(sub2mni_file), Path(sub2mni_xfm)]
+        if all(p.exists() for p in output_paths_check):
+            logger.info(f"All output files exist and overwrite=False. Skipping MNI registration.")
+            return sub2mni_file, sub2mni_xfm
+
+    
     # Load in the MNI152 BOLD reference
     epi_tpl_path = cast(Path, tflow.get( 
         "MNI152NLin2009cAsym",
         resolution=2,          # 2 mm
         desc="fMRIPrep",       # fMRIPrep-style boldref
         suffix="boldref"
-    ))
+    )) # type: ignore
 
     # Compute xfm
     sub2mni_file, sub2mni_xfm = compute_xfm(
@@ -469,12 +550,51 @@ def compute_xfm_to_mni(
         reference_file=epi_tpl_path,
         output_name=output_name,
         cost='corratio',
-        dof=6
+        dof=6,
+        overwrite=overwrite
     )
 
     return sub2mni_file, sub2mni_xfm
 
-    
+def apply_mask(
+        input_file: Union[str, Path],
+        mask_file: Union[str, Path],
+        output_file: Union[str, Path],
+        overwrite: bool = False
+) -> None:
+    """
+    Invert a transformation matrix using FSL's convert_xfm
+
+    Parameters
+    ----------
+    input_file : str or Path
+        Path to input transformation file
+    mask_file : str or Path
+    output_file : str or Path
+        Path to output transformation file
+    overwrite : bool, default=True
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
+
+    """
+
+    # Build fslmaths command
+    cmd = [
+        'fslmaths',
+        str(input_file),
+        "-mas", str(mask_file),
+        str(output_file)
+    ]
+
+    # Run fslmaths
+    run_command(
+        cmd_name='fslmaths',
+        cmd=cmd,
+        description='Applying mask',
+        inputs=[input_file, mask_file],
+        outputs=output_file,
+        overwrite=overwrite
+    )    
     
 
 
