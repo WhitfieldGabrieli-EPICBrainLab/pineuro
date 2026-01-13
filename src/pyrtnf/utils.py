@@ -1,16 +1,49 @@
 """
-Utilities for pyrtnf
+Utilities and command execution framework for pyrtnf.
 
-This module provides utilities for the pyrtnf package
+This module provides centralized command execution, FSL wrappers, and utility
+functions for the pyrtnf package. All external commands (FSL, dcm2niix) are
+routed through a common execution interface with validation and logging.
+
+Key Functions
+-------------
+run_command : Universal command execution with validation and overwrite control
+dicom_to_nifti : Convert DICOM files to NIfTI format using dcm2niix
+get_yeo_labels : Get Yeo network labels for 7 or 17 network parcellations
+compute_mean : Compute temporal mean of fMRI data (FSL fslmaths)
+compute_xfm : Compute transformation matrix using FSL FLIRT
+apply_xfm : Apply transformation matrix using FSL FLIRT
+invert_xfm : Invert transformation matrix using FSL convert_xfm
+compute_xfm_to_mni : Register to MNI152 space using templateflow BOLD reference
+apply_mask : Apply binary mask to volume (FSL fslmaths)
+
+Dependencies
+------------
+- FSL (FMRIB Software Library) - for registration and image manipulation
+- dcm2niix - for DICOM to NIfTI conversion
+- templateflow - for MNI152 template access
+- numpy, pathlib
 
 Notes
 -----
+The run_command() function provides centralized handling for all external
+commands with features including:
+- Automatic command availability checking
+- Input/output file validation
+- Overwrite control (skip if outputs exist)
+- Comprehensive error logging
+- Subprocess execution with error handling
 
-Examples
---------
+All FSL commands use standardized flags (-noresample, -noresampblur) for
+consistent behavior across the pipeline.
 
 References
 ----------
+[1] Jenkinson, M., Beckmann, C. F., Behrens, T. E., Woolrich, M. W., & Smith,
+    S. M. (2012). FSL. NeuroImage, 62(2), 782-790.
+[2] Li, X., Morgan, P. S., Ashburner, J., Smith, J., & Rorden, C. (2016).
+    The first step for neuroimaging data analysis: DICOM to NIfTI conversion.
+    Journal of Neuroscience Methods, 264, 47-56.
 """
 
 # Standard library imports
@@ -18,6 +51,7 @@ import shutil
 from typing import Union, List, Optional, cast
 from pathlib import Path
 import subprocess
+import tempfile
 
 # Third-party imports
 from templateflow import api as tflow
@@ -67,7 +101,8 @@ def run_command(
         description: str,
         inputs: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
         outputs: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
-        overwrite: bool = False
+        overwrite: bool = False,
+        verbose: bool = True
 ) -> None:
     """
     Run a shell command with error handling and logging
@@ -84,9 +119,11 @@ def run_command(
         Paths to files/folders that should exist before command starts
     outputs : list of str or Path, optional
         Paths to files/folders that should exist after command completes
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
+    verbose : bool, default=True
+        If False, suppresses informational logging messages.
 
     Raises
     ------
@@ -98,7 +135,8 @@ def run_command(
     """
 
     # Log the command
-    logger.info(f"{description}...")
+    if verbose:
+        logger.info(f"{description}...")
     
     # Convert outputs to list if single file provided
     if isinstance(outputs, (str, Path)):
@@ -108,11 +146,13 @@ def run_command(
     if not overwrite and outputs is not None:
         output_paths_check = [Path(f) for f in outputs]
         if all(p.exists() for p in output_paths_check):
-            logger.info(f"All output files exist and overwrite=False. Skipping {description}.")
+            if verbose:
+                logger.info(f"All output files exist and overwrite=False. Skipping {description}.")
             return
     
     # Log the command
-    logger.info(f"Running command: {' '.join(cmd)}")
+    if verbose:
+        logger.info(f"Running command: {' '.join(cmd)}")
 
     # Check if command is installed
     _check_command_installation(cmd_name)
@@ -124,21 +164,25 @@ def run_command(
     # Convert to Path objects and validate
     input_paths: list[Path] = []
     if inputs is not None:
-        logger.info(f"Input files:")
+        if verbose:
+            logger.info(f"Input files:")
         for f in inputs:
             path = Path(f)
             if not path.exists():
                 raise FileNotFoundError(f"Input file not found: {path}")
             input_paths.append(path)
-            logger.info(f"  {f}")
+            if verbose:
+                logger.info(f"  {f}")
     output_paths: list[Path] = []
     if outputs is not None:
-        logger.info(f"Output files:")
+        if verbose:
+            logger.info(f"Output files:")
         for f in outputs:
             path = Path(f)
             (path if path.suffix == "" else path.parent).mkdir(parents=True, exist_ok=True)
             output_paths.append(path)
-            logger.info(f"  {f}")
+            if verbose:
+                logger.info(f"  {f}")
 
     # Run command
     try:
@@ -150,12 +194,13 @@ def run_command(
         )
 
         # Log output
-        if result.stdout:
+        if result.stdout and verbose:
             logger.debug(f"stdout:\n{result.stdout}")
-        if result.stderr:
+        if result.stderr and verbose:
             logger.debug(f"stderr:\n{result.stderr}")
         
-        logger.info(f"{description} completed successfully")
+        if verbose:
+            logger.info(f"{description} completed successfully")
     
     except subprocess.CalledProcessError as e:
         error_msg = (
@@ -186,45 +231,81 @@ def dicom_to_nifti(
         dicom_dir: Union[str, Path],
         output_dir: Union[str, Path],
         output_name: str,
-        overwrite: bool = False
+        overwrite: bool = False,
+        verbose: bool = True
 ) -> Path:
     """
-    Convert DICOM files to NIfTI format using dcm2niix.
+    Convert DICOM file(s) to NIfTI format using dcm2niix.
 
     Parameters
     ----------
     dicom_dir : str or Path
-        Directory containing DICOM files to convert.
+        Directory containing DICOM files or path to a single DICOM file to convert.
     output_dir : str or Path
         Directory where the NIfTI file will be saved. Will be created if it doesn't exist
     output_name : str
         Base name for output file (without extension)
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
+    verbose : bool, default=True
+        If False, suppresses dcm2niix output messages.
 
     Returns
     -------
     nifti_path : Path
         Path to the created NIfTI file
 
+    Notes
+    -----
+    If dicom_dir is a file path, the file is copied to a temporary directory
+    before conversion to ensure only that file is converted.
+    If dicom_dir is a directory path, all DICOM files in that directory will be converted.
+
     """
     
-    # Build command
-    cmd = ['dcm2niix', '-z', 'y', '-o', str(output_dir), '-f', str(output_name), str(dicom_dir)]
-
-    # Set output filename
-    nifti_path = Path(output_dir) /f"{output_name}.nii.gz"
-
-    # Run dcm2niix
-    run_command(
-        cmd_name='dcm2niix',
-        cmd=cmd,
-        description='Converting DICOM to NIfTI',
-        inputs=dicom_dir,
-        outputs=nifti_path,
-        overwrite=overwrite
-    )
+    dicom_path = Path(dicom_dir)
+    
+    # Add quiet flag if not verbose
+    quiet_flag = [] if verbose else ['-q']
+    
+    # If a single file is provided, create a temp directory with just that file
+    if dicom_path.is_file():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            # Copy the DICOM file to temp directory
+            tmp_dicom = tmpdir_path / dicom_path.name
+            shutil.copy2(dicom_path, tmp_dicom)
+            
+            # Build command with temp directory
+            cmd = ['dcm2niix'] + quiet_flag + ['-z', 'y', '-o', str(output_dir), '-f', str(output_name), str(tmpdir_path)]
+            nifti_path = Path(output_dir) / f"{output_name}.nii.gz"
+            
+            # Run dcm2niix
+            run_command(
+                cmd_name='dcm2niix',
+                cmd=cmd,
+                description='Converting DICOM to NIfTI',
+                inputs=dicom_path,
+                outputs=nifti_path,
+                overwrite=overwrite,
+                verbose=verbose
+            )
+    else:
+        # Directory path - process normally
+        cmd = ['dcm2niix'] + quiet_flag + ['-z', 'y', '-o', str(output_dir), '-f', str(output_name), str(dicom_path)]
+        nifti_path = Path(output_dir) / f"{output_name}.nii.gz"
+        
+        # Run dcm2niix
+        run_command(
+            cmd_name='dcm2niix',
+            cmd=cmd,
+            description='Converting DICOM to NIfTI',
+            inputs=dicom_path,
+            outputs=nifti_path,
+            overwrite=overwrite,
+            verbose=verbose
+        )
 
     return nifti_path
 
@@ -286,7 +367,7 @@ def compute_mean(
         Path to input NIfTI file (should be 4D)
     output_file: str or Path
         Path to save output mean image
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -333,7 +414,7 @@ def compute_xfm(
         Cost function for registration (per FSL, e.g., corratio, leastsq)
     dof: int, default=6
         Degrees of freedom for transformation (per FSL, e.g., 6 for rigid body)
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -419,7 +500,7 @@ def apply_xfm(
         Path for output file 
     interp : str, default='nearestneighbour'
         Interpolation for registration (per FSL, e.g., trilinear, nearestneighbour)
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -474,7 +555,7 @@ def invert_xfm(
         Path to input transformation file
     output_file : str or Path
         Path to output transformation file
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -513,7 +594,7 @@ def compute_xfm_to_mni(
         Path to input NIfTI file
     output_name : str or Path
         Base name for output file (without extension)
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -572,7 +653,7 @@ def apply_mask(
     mask_file : str or Path
     output_file : str or Path
         Path to output transformation file
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -594,8 +675,4 @@ def apply_mask(
         inputs=[input_file, mask_file],
         outputs=output_file,
         overwrite=overwrite
-    )    
-    
-
-
-
+    )

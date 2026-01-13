@@ -44,7 +44,7 @@ References
 """
 
 # Standard library imports
-from typing import Union, Any, List, Optional
+from typing import Union, Any, List, Optional, Sequence
 from pathlib import Path
 
 # Third-party imports
@@ -55,10 +55,11 @@ from nilearn import datasets
 from nilearn.image import get_data, resample_to_img
 from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
+from nibabel.spatialimages import SpatialImage
 from scipy.stats import pearsonr
 
 # Local imports
-from pyrtnf.utils import compute_mean, compute_xfm_to_mni, invert_xfm, apply_xfm, get_yeo_labels
+from pyrtnf.utils import compute_mean, compute_xfm, compute_xfm_to_mni, invert_xfm, apply_xfm, get_yeo_labels, dicom_to_nifti
 
 # Configure module-level logger
 import logging
@@ -96,7 +97,7 @@ def run_ica(
         High-pass filter cutoff in Hz for ICA. If None, no high-pass filtering is applied
     lowpass : float, optional
         Low-pass filter cutoff in Hz for ICA. If None, no low-pass filtering is applied
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -182,10 +183,10 @@ def run_ica(
         raise RuntimeError(error_msg) from e
     
     # Get components as image
-    components_img = canica.components_img_
+    components_img: SpatialImage = canica.components_img_  # type: ignore
 
     # Save components
-    save(components_img, components_file) 
+    save(components_img, components_file)
     logger.info(f"Saved components to: {components_file}")
 
     # Save metadata
@@ -227,7 +228,7 @@ def spatial_correlation(
         List of parcellation labels
     output_file : str or Path
         Path to save correlation results as CSV file
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
     
@@ -314,13 +315,12 @@ def spatial_correlation(
         correlation_matrix[:, j] = corr
 
     # Create DataFrame and save
-    logger.info(f"Saving correlations to{output_file}")
+    logger.info(f"Saving correlations to {output_file}")
     corr_df = pd.DataFrame(correlation_matrix, columns=labels)
     corr_df.to_csv(output_file)
 
     return corr_df
 
-# TODO: Use MNI masks if not possible to use participant-specific masks
 def mask_extraction_rest(
         participant_id: str,
         root_dir: Union[str, Path],
@@ -338,6 +338,13 @@ def mask_extraction_rest(
 ) -> List[Path]:
     """
     Run the mask extraction pipeline for resting-state fMRI data.
+
+    This function extracts participant-specific functional network masks using
+    ICA decomposition and spatial correlation with Yeo atlas networks. The
+    approach is preferred over using MNI masks directly as it accounts for
+    individual anatomical and functional variability. Fallback to MNI masks
+    may be implemented in future versions for cases where participant data
+    quality is insufficient for reliable ICA decomposition.
 
     Parameters
     ----------
@@ -367,7 +374,7 @@ def mask_extraction_rest(
         High-pass filter cutoff in Hz for ICA. If None, no high-pass filtering is applied
     lowpass : float, optional
         Low-pass filter cutoff in Hz for ICA. If None, no low-pass filtering is applied
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -432,23 +439,23 @@ def mask_extraction_rest(
     mnireg_dir = root_dir / "02_mnireg"
 
     # Step 2a: Register fMRI BOLD reference to MNI BOLD reference
-    output_name = mnireg_dir / Path(f"{ref_file.with_suffix("").stem}_to_MNI_boldref")
+    output_name = mnireg_dir / Path(f"{ref_file.with_suffix('').stem}_to_MNI_boldref")
     _, sub2mni_xfm = compute_xfm_to_mni(input_file=ref_file, output_name=output_name, cost='corratio', dof=6, overwrite=overwrite)
 
     # Step 2c: Invert transformation
-    mni2sub_xfm = mnireg_dir / Path(f"MNI_boldref_to_{ref_file.with_suffix("").stem}.mat")
+    mni2sub_xfm = mnireg_dir / Path(f"MNI_boldref_to_{ref_file.with_suffix('').stem}.mat")
     invert_xfm(input_file=sub2mni_xfm, output_file=mni2sub_xfm, overwrite=overwrite)
 
     # Step 2d: Register the Yeo parcellation to participant space
     yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
-    yeo2sub = mnireg_dir / Path(f"{Path(yeo).with_suffix("").stem}_to_{ref_file.with_suffix("").stem}.nii.gz")
+    yeo2sub = mnireg_dir / Path(f"{Path(yeo).with_suffix('').stem}_to_{ref_file.with_suffix('').stem}.nii.gz")
     apply_xfm(input_file=yeo, reference_file=ref_file, xfm_file=mni2sub_xfm, output_file=yeo2sub, interp='nearestneighbour', overwrite=overwrite)
 
     # Step 3: Extract masks
     masks_dir = root_dir / "03_masks"
     
     # Step 3a: Spatial correlation
-    sc_file = masks_dir / Path(f"{Path(yeo).with_suffix("").stem}_IC_spatial_correlation.csv")
+    sc_file = masks_dir / Path(f"{Path(yeo).with_suffix('').stem}_IC_spatial_correlation.csv")
     sc_df = spatial_correlation(input_file=components_file, mask_file=mask_file, parcellation_file=yeo2sub, labels=labels, output_file=sc_file, overwrite=overwrite)
 
     # Step 3b: Extract component with maximum correlation
@@ -469,27 +476,144 @@ def mask_extraction_rest(
     for network_file in network_files:
         thr_file = network_file.with_name(network_file.with_suffix("").stem + "_thr.nii.gz")
         if not thr_file.exists() or overwrite:
-            img = load(network_file)
+            img: SpatialImage = load(network_file)  # type: ignore
             data = img.get_fdata()
             flat = data.ravel()
             mask = np.zeros(flat.shape, dtype=bool)
             mask[np.argpartition(flat, -threshold)[-threshold:]] = True
             mask = mask.reshape(data.shape)
             thresholded = ((data * mask) > 0).astype("uint8")
-            save(Nifti1Image(thresholded, img.affine, img.header), thr_file)
+            save(Nifti1Image(thresholded, img.affine, img.header), thr_file)  # type: ignore
         else:
             logger.info(f"Output file exists and overwrite=False. Skipping network thresholding.")
         network_thr_files.append(thr_file)
         
     return network_thr_files
 
+def coregister_2vol(
+        participant_id: str,
+        root_dir: Union[str, Path],
+        input_dicom: Union[str, Path],
+        network_files: Union[str, Path, Sequence[Union[str, Path]]],
+        ref_file: Union[str, Path],
+        overwrite: bool = False
+) -> List[Path]:
+    """
+    Coregister extracted networks to participant's current position in the scanner
+    using a two volume (2vol) acquisition.
+
+    Parameters
+    ----------
+    participant_id : str
+        Participant ID
+    root_dir : str or Path
+        Path to the root directory for all outputs
+    input_dicom : str or Path
+        Path to a single DICOM folder
+    network_files : str or Path or list of str of Path
+        Path to a single network file, or list of multiple network files
+    ref_file : str or Path
+        Path to NIfTI file to use as a BOLD reference for network space
+    overwrite : bool, default=False
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
+
+    Returns
+    -------
+    network_coreg_files
+        List of co-registered networks
+
+    Raises
+    ------
+    FileNotFoundError
+        If input_dicoms, network_files, or ref_file does not exist or is empty
+
+    """
+
+    # Log the command
+    logger.info(f"Running preprocessing for {participant_id}...")
     
-
+    # Convert to Path object
+    root_dir = Path(root_dir)
     
+    # Convert to Path objects and validate
+    input_path = Path(input_dicom)
+    logger.info(f"Input DICOM folder: {str(input_path)}")
+    if not input_path.exists():
+        raise FileNotFoundError(f"Folder not found: {input_path}")
+    if not input_path.is_dir():
+        raise FileNotFoundError(f"Not a directory: {input_path}")
+    if not any(input_path.iterdir()):
+        raise FileNotFoundError(f"Directory is empty: {input_path}")
 
+    # Convert outputs to list if single file provided
+    if isinstance(network_files, (str, Path)):
+        network_files = [network_files]
 
+    # Convert to Path objects and validate
+    network_paths: list[Path] = [] 
+    logger.info(f"Input network files:\n")
+    for f in network_files:
+        path = Path(f)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        network_paths.append(path)
+        logger.info(f"  {str(path)}")
 
+    # Convert to Path object and validate
+    ref_file = Path(ref_file)
+    if not ref_file.exists():
+        raise FileNotFoundError(f"File not found: {ref_file}")
 
+    # Step 1: Check for existing 2vol and get largest run number
+    # Current behavior: Increments run number if overwrite=True
+    # Future enhancement: Could track 2vol acquisitions by timestamp or session metadata
+    # for more robust handling of multiple coregistration runs
+    twovol_dir = root_dir / "01_2vol"
+    last_run = 0
+    if twovol_dir.exists() and overwrite:
+        pattern = f"{participant_id}_task-2vol_run-*.nii.gz"
+        matching_files = list(twovol_dir.glob(pattern))
+        run_numbers = []
+        for file in matching_files:
+            for part in file.stem.split('_'):
+                if part.startswith('run-'):
+                    try:
+                        run_numbers.append(int(part.split('-')[1]))
+                    except ValueError:
+                        pass
+        if run_numbers:
+            last_run = max(run_numbers)
+    else:
+        twovol_dir.mkdir(parents=True, exist_ok=True)
+    next_run = last_run + 1
+
+    # Step 2: Convert DICOMs to NIfTI
+    nifti_file = dicom_to_nifti(
+        dicom_dir=input_path,
+        output_dir=twovol_dir,
+        output_name=f"{participant_id}_task-2vol_run-{str(next_run).zfill(2)}",
+        overwrite=overwrite
+    )
+
+    # Step 3: Compute mean
+    mean_file = twovol_dir / Path(f"{participant_id}_task-2vol_run-{str(next_run).zfill(2)}_mean.nii.gz")
+    compute_mean(input_file=nifti_file, output_file=mean_file, overwrite=overwrite)
+    
+    # Step 4: Compute transformation
+    xfm_dir = twovol_dir / "xfm"
+    output_name = xfm_dir / Path(f"{participant_id}_boldref_to_task-2vol_run-{str(next_run).zfill(2)}_mean")
+    _, xfm_file = compute_xfm(input_file=ref_file, reference_file=mean_file, output_name=output_name, cost='corratio', dof=6, overwrite=overwrite)
+
+    # Step 5: Apply transformation
+    mask_dir = twovol_dir / "masks"
+    network_coreg_files = []
+    for network in network_paths:
+        output_file = mask_dir / (network.with_suffix("").stem + f"_to_task-2vol_run-{str(next_run).zfill(2)}_mean.nii.gz")
+        apply_xfm(input_file=network, reference_file=mean_file, xfm_file=xfm_file, output_file=output_file, interp='nearestneighbour', overwrite=overwrite)
+        network_coreg_files.append(output_file)
+
+    return network_coreg_files
 
 
 

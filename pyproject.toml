@@ -8,6 +8,15 @@
    description = "Python Real-Time fMRI Neurofeedback"
    authors = [{name = "Marlee M Vandewouw", email = "marlee.vandewouw@outlook.com"}]
    dependencies = [
+      "numpy",
+      "nibabel",
+      "nilearn",
+      "scipy",
+      "pandas",
+      "pydicom",
+      "templateflow",
+      "psychopy",
+      "watchdog",
    ]
 
    [project.optional-dependencies]

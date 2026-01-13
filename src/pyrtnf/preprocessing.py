@@ -60,7 +60,7 @@ def motion_correction(
         Path to input 4D NIfTI file containing fMRI timeseries
     output_file : str or Path
         Path for output motion-corrected NIfTI file. Parent directory will be created if it doesn't exist
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -97,7 +97,7 @@ def concat(
         List of path to input NIfTI files
     output_file: str or Path
         Path to save concatenated data
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -136,7 +136,7 @@ def spatial_smoothing(
         Path for output smoothed NIfTI file. Parent directory will be created if it doesn't exist
     fwhm : float, default=5.0
         Full width at half maximum (FWHM) of the Gaussian smoothing kernel in mm
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -180,7 +180,7 @@ def temporal_filtering(
         High-pass filter cutoff in Hz. If None, no high-pass filtering is applied
     lowpass : float, optional
         Low-pass filter cutoff in Hz. If None, no low-pass filtering is applied
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -234,7 +234,7 @@ def brain_extraction(
         Path to input NIfTI file
     output_dir : str or Path
         Directory where the NIfTI file will be saved. Will be created if it doesn't exist
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -242,8 +242,8 @@ def brain_extraction(
     
     # Construct the expected outputs
     output_name = Path(input_file).with_suffix("").stem
-    brain_file = Path(output_dir) /f"{output_name}_brain.nii.gz"
-    mask_file = Path(output_dir) /f"{output_name}_brain_mask.nii.gz"
+    brain_file = Path(output_dir) / f"{output_name}_brain.nii.gz"
+    mask_file = Path(output_dir) / f"{output_name}_brain_mask.nii.gz"
     
     # Build bet command
     cmd = [
@@ -285,7 +285,7 @@ def preprocessing(
         Path to the root directory for all outputs
     input_dicoms : str or Path or list of str or Path
         Path to a single DICOM folder, or list of paths to multiple files
-    overwrite : bool, default=True
+    overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
@@ -397,7 +397,9 @@ def preprocessing(
                 concat_files.append(output_file)
 
         # Step 5b: Concatenate
-        # TODO: Handle incomplete sequences 
+        # Current behavior: Concatenates all available runs sequentially
+        # Incomplete sequences: If a run fails preprocessing, it should be excluded
+        # from concat_files prior to this step (currently assumes all runs succeed)
         concat(input_files=concat_files, output_file=coreg_file, overwrite=overwrite)
 
     # Copy mask 

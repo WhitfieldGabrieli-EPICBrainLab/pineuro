@@ -4,5 +4,13 @@ Version: 0.1.0
 Summary: Python Real-Time fMRI Neurofeedback
 Author-email: Marlee M Vandewouw <marlee.vandewouw@outlook.com>
 License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: nibabel
+Requires-Dist: nilearn
+Requires-Dist: scipy
+Requires-Dist: pandas
+Requires-Dist: pydicom
+Requires-Dist: templateflow
+Requires-Dist: psychopy
 Provides-Extra: dev
 Dynamic: license-file
