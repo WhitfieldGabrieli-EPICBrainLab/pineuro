@@ -13,6 +13,7 @@ get_yeo_labels : Get Yeo network labels for 7 or 17 network parcellations
 compute_mean : Compute temporal mean of fMRI data (FSL fslmaths)
 compute_xfm : Compute transformation matrix using FSL FLIRT
 apply_xfm : Apply transformation matrix using FSL FLIRT
+apply_xfm_sform_to_mni : Apply sform/qform transformation to MNI space
 invert_xfm : Invert transformation matrix using FSL convert_xfm
 compute_xfm_to_mni : Register to MNI152 space using templateflow BOLD reference
 apply_mask : Apply binary mask to volume (FSL fslmaths)
@@ -537,6 +538,81 @@ def apply_xfm(
         cmd=cmd,
         description='Applying transformation',
         inputs=[input_file, reference_file, xfm_file],
+        outputs=output_file,
+        overwrite=overwrite
+    )
+
+def apply_xfm_sform_to_mni(
+        input_file: Union[str, Path],
+        output_file: Union[str, Path],
+        interp: str = 'nearestneighbour',
+        overwrite: bool = False
+) -> None:
+    """
+    Apply transformation to MNI space using sform/qform matrices from NIfTI headers
+
+    This function applies the transformation encoded in the sform/qform matrices
+    to transform the input file to MNI152 space using the templateflow BOLD reference.
+    No explicit transformation matrix file is required.
+
+    Parameters
+    ----------
+    input_file : str or Path
+        Path to input NIfTI file (should have sform/qform set to MNI space)
+    output_file : str or Path
+        Path for output file in MNI space
+    interp : str, default='nearestneighbour'
+        Interpolation method (per FSL, e.g., trilinear, nearestneighbour)
+    overwrite : bool, default=False
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
+
+    Raises
+    ------
+    ValueError
+        If interp parameter is invalid
+
+    Notes
+    -----
+    This function uses FLIRT's -applyxfm -usesqform flags to apply the
+    transformation encoded in the NIfTI headers rather than using an
+    external transformation matrix file. The reference template is the
+    MNI152NLin2009cAsym BOLD reference from templateflow.
+
+    """
+
+    # Validate interp
+    valid_interps = ['nearestneighbour', 'trilinear', 'sinc', 'spline', 'nn']
+    if interp not in valid_interps:
+        raise ValueError(
+            f"Invalid interpolation: {interp}. "
+            f"Valid options are: {', '.join(valid_interps)}"
+        )
+
+    # Load in the MNI152 BOLD reference
+    epi_tpl_path = cast(Path, tflow.get(
+        "MNI152NLin2009cAsym",
+        resolution=2,          # 2 mm
+        desc="fMRIPrep",       # fMRIPrep-style boldref
+        suffix="boldref"
+    )) # type: ignore
+
+    # Build flirt command
+    cmd = [
+        'flirt',
+        '-in', str(input_file),
+        '-ref', str(epi_tpl_path),
+        '-out', str(output_file),
+        '-applyxfm',
+        '-usesqform',
+        '-interp', interp
+    ]
+
+    run_command(
+        cmd_name='flirt',
+        cmd=cmd,
+        description='Applying sform/qform transformation to MNI',
+        inputs=input_file,
         outputs=output_file,
         overwrite=overwrite
     )

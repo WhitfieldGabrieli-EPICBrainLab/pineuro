@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 class IncrementalGLM:
     """Incremental least squares solver using Gentleman's algorithm.
 
-    Implements online GLM fitting with MURFI-style normalization for real-time
+    Implements online GLM fitting with continuous normalization for real-time
     applications. The algorithm maintains an R matrix (upper triangular from
     QR decomposition) that can be updated incrementally as new observations
     arrive, avoiding full matrix recomputation.
@@ -71,10 +71,6 @@ class IncrementalGLM:
     n_outputs : int, optional
         Number of output variables (e.g., voxels) to fit simultaneously.
         Default is 1.
-    n_steady_state : int, optional
-        Number of observations after which to freeze the residual variance
-        estimate (for computational efficiency). Default is 200. Set to 0
-        to never freeze.
 
     Attributes
     ----------
@@ -88,10 +84,10 @@ class IncrementalGLM:
     maintains numerical stability while achieving O(p²) complexity per
     update instead of O(np²) for full recomputation.
 
-    The normalization follows the MURFI approach (Hinds et al., 2011):
+    The normalization approach:
     - Error signal = y - X_nuisance @ beta_nuisance (removing only nuisance)
     - Deviation = sqrt(RSS / t) where RSS is residual sum of squares from
-      the full model and t is the current timepoint
+      the full model and t is the current timepoint (no df correction)
     - Activation = error / deviation
 
     This provides continuous normalization throughout the session, not just
@@ -123,7 +119,6 @@ class IncrementalGLM:
         n_regressors: int,
         n_nuisance: int,
         n_outputs: int = 1,
-        n_steady_state: int = 200,
     ) -> None:
         if n_regressors < 1:
             raise ValueError("n_regressors must be at least 1")
@@ -135,7 +130,6 @@ class IncrementalGLM:
         self.n_regressors = n_regressors
         self.n_nuisance = n_nuisance
         self.n_outputs = n_outputs
-        self.n_steady_state = n_steady_state
 
         # Observation counter
         self.n_obs = 0
@@ -151,8 +145,15 @@ class IncrementalGLM:
         # This is accumulated from the Givens rotation residuals
         self._rss: NDArray[np.float64] = np.zeros(n_outputs, dtype=np.float64)
 
-        # Steady-state RSS (frozen after n_steady_state observations)
+        # Residual mean squared error (MSE) for each output - used for weighting
+        # This is RSS / n_obs
+        self._residual_mse: NDArray[np.float64] = np.zeros(n_outputs, dtype=np.float64)
+
+        # Steady-state RSS and MSE (frozen after n_steady_state observations)
+        # After baseline, these values are frozen for stable normalization
         self._steady_state_rss: Optional[NDArray[np.float64]] = None
+        self._steady_state_residual_mse: Optional[NDArray[np.float64]] = None
+        self._steady_state_timepoint: Optional[int] = None  # Frozen timepoint for normalization
 
     def _apply_givens_rotation(
         self,
@@ -230,13 +231,13 @@ class IncrementalGLM:
 
         return beta
 
-    def _compute_murfi_activation(
+    def _compute_normalized_activation(
         self,
         X: NDArray[np.float64],
         y: NDArray[np.float64],
         beta: NDArray[np.float64],
     ) -> NDArray[np.float64]:
-        """Compute MURFI-style normalized activation.
+        """Compute normalized activation.
 
         Computes error by removing only nuisance regressors, then normalizes
         by the deviation (sqrt(RSS / t)).
@@ -257,7 +258,7 @@ class IncrementalGLM:
         """
         p = self.n_regressors
 
-        # Compute error by removing only nuisance regressors (MURFI approach)
+        # Compute error by removing only nuisance regressors
         # This preserves signal of interest while removing nuisance
         # Nuisance columns are the LAST n_nuisance columns (task columns come first)
         nuisance_start = p - self.n_nuisance
@@ -265,27 +266,23 @@ class IncrementalGLM:
         nuisance_X = X[nuisance_start:]
         error = y - (nuisance_X @ nuisance_beta).ravel()
 
-        # Compute deviation as sqrt(RSS / t) - MURFI approach
-        # Use steady-state RSS if available (after n_steady_state observations)
-        if self._steady_state_rss is not None:
+        # Compute deviation as sqrt(RSS / t)
+        # Use frozen steady-state values if available (after baseline completes)
+        if self._steady_state_rss is not None and self._steady_state_timepoint is not None:
             rss_to_use = self._steady_state_rss
+            timepoint_to_use = self._steady_state_timepoint
         else:
             rss_to_use = self._rss
-            # Freeze RSS at steady state for efficiency
-            if self.n_steady_state > 0 and self.n_obs == self.n_steady_state:
-                self._steady_state_rss = self._rss.copy()
-                logger.info(
-                    f"Steady state reached after {self.n_steady_state} observations"
-                )
+            timepoint_to_use = self.n_obs
 
-        # Use degrees of freedom to avoid near-zero deviation when n_obs ≈ n_regressors
-        df = max(self.n_obs - self.n_regressors, 1)
-        deviation = np.sqrt(rss_to_use / df)
+        # Use timepoint directly (no degrees of freedom correction)
+        # After freezing, uses frozen timepoint for stable normalization
+        deviation = np.sqrt(rss_to_use / timepoint_to_use)
 
         # Avoid division by zero
         deviation = np.where(deviation > 0, deviation, 1.0)
 
-        # Compute normalized activation (MURFI: err / dev)
+        # Compute normalized activation (error / deviation)
         activation = error / deviation
 
         return activation
@@ -307,7 +304,7 @@ class IncrementalGLM:
         Returns
         -------
         activation : ndarray, shape (n_outputs,) or None
-            Normalized activation (error / deviation) following MURFI approach,
+            Normalized activation (error / deviation),
             or None if not enough observations to estimate parameters yet.
         """
         # Validate and prepare inputs
@@ -337,6 +334,9 @@ class IncrementalGLM:
         # Update RSS with squared residuals from the full model
         full_model_residual = aug_row[p:]
         self._rss += full_model_residual ** 2
+        
+        # Update residual MSE (RSS / n_obs) - matches MURFI's residual_mse-img
+        self._residual_mse = self._rss / self.n_obs
 
         # Cannot compute activation until we have enough observations
         if self.n_obs < self.n_regressors:
@@ -347,10 +347,42 @@ class IncrementalGLM:
         r = self._R[:, p:]
         beta = self._solve_via_backsubstitution(R, r)
 
-        # Compute MURFI-style normalized activation
-        activation = self._compute_murfi_activation(X, y, beta)
+        # Compute normalized activation
+        activation = self._compute_normalized_activation(X, y, beta)
 
         return activation
+
+    def get_residual_mse(self) -> NDArray[np.float64]:
+        """Get current residual mean squared error for each output.
+
+        Returns the residual MSE (RSS / n_obs). After steady state is reached,
+        returns the frozen steady-state values for stable normalization.
+
+        Returns
+        -------
+        residual_mse : ndarray, shape (n_outputs,)
+            Current (or frozen steady-state) residual MSE for each output (voxel).
+        """
+        # Return frozen steady-state MSE if available
+        if self._steady_state_residual_mse is not None:
+            return self._steady_state_residual_mse.copy()
+        return self._residual_mse.copy()
+
+    def freeze_steady_state(self) -> None:
+        """Freeze RSS, residual MSE, and timepoint for steady-state.
+
+        Called by FeedbackEstimator when baseline completes. After freezing,
+        deviation calculations use the frozen values for stable normalization
+        throughout the session.
+        """
+        if self._steady_state_residual_mse is None:
+            self._steady_state_rss = self._rss.copy()
+            self._steady_state_residual_mse = self._residual_mse.copy()
+            self._steady_state_timepoint = self.n_obs
+            logger.info(
+                f"Steady state frozen at observation {self.n_obs}"
+            )
+
 
 class FeedbackEstimator:
     """Real-time neurofeedback estimator using incremental GLM.
@@ -370,15 +402,14 @@ class FeedbackEstimator:
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
         If True, use inverse-variance weighting for ROI aggregation (computed
-        from baseline). If False, use simple mean. Default is False (matching
-        MURFI's default behavior).
+        from residual MSE). If False, use simple mean. Default is False.
     task_regressor : ndarray or Path, optional
         Task regressor values for each volume (HRF-convolved block design).
         Can be:
         - ndarray of shape (n_volumes,): task regressor values
-        - Path to a MURFI-style design matrix file (.mat ASCII format)
+        - Path to a design matrix file (.mat ASCII format)
         If provided, this is treated as a regressor of interest and NOT
-        subtracted from the error signal (MURFI behavior).
+        subtracted from the error signal.
 
     Attributes
     ----------
@@ -395,13 +426,13 @@ class FeedbackEstimator:
     - Column 2 (or 1): Linear drift - nuisance
     - Columns 3-8 (or 2-7): 6 motion parameters (differential) - nuisance
 
-    Activation is computed following MURFI (Hinds et al., 2011):
+    Activation is computed using continuous normalization (Hinds et al., 2011):
     - Error = y - X_nuisance @ beta_nuisance (removing nuisance only)
     - Deviation = sqrt(RSS / t) where RSS is residual sum of squares
     - Activation = error / deviation
 
-    Motion parameters are extracted directly from DICOM headers (Siemens private tags
-    0021,115a for rotation and 0021,115b for translation in PerFrameFunctionalGroupsSequence).
+    Motion parameters are extracted from dcm2niix JSON sidecar files
+    (ImageComments field).
     """
 
     N_NUISANCE_REGRESSORS = 8  # intercept + drift + 6 motion
@@ -456,10 +487,8 @@ class FeedbackEstimator:
         # Motion parameter tracking for differential motion
         self._prev_motion: Optional[NDArray[np.float64]] = None
 
-        # Baseline activations storage for weight computation (if enabled)
-        self._baseline_activations: list[NDArray[np.float64]] = []
-
-        # Voxel weights per mask (computed after baseline if enabled)
+        # Dict to store efficiency weights per mask: {mask_name: weights_array}
+        # Weights are computed from residual MSE for inverse-variance weighting
         self._weights: dict[str, NDArray[np.float64]] = {}
 
         # Timeseries storage
@@ -475,16 +504,16 @@ class FeedbackEstimator:
     def _load_task_regressor(
         self, source: NDArray[np.float64] | Path | str
     ) -> NDArray[np.float64]:
-        """Load task regressor from array or MURFI design matrix file."""
+        """Load task regressor from array or design matrix file."""
         if isinstance(source, np.ndarray):
             return source.astype(np.float64).ravel()
 
-        # Load from file (MURFI-style ASCII design matrix)
+        # Load from file (ASCII design matrix)
         path = Path(source)
         if not path.exists():
             raise FileNotFoundError(f"Task regressor file not found: {path}")
 
-        # Parse MURFI design matrix format
+        # Parse design matrix format
         # First line is header with column names
         # Subsequent lines are space-separated values
         task_values = []
@@ -690,7 +719,7 @@ class FeedbackEstimator:
             Otherwise:
               [intercept, drift, motion_diff...]
         """
-        # Compute relative/differential motion (MURFI uses motion_diff)
+        # Compute relative/differential motion
         if self.n_volumes == 0:
             motion_diff = np.zeros(6, dtype=np.float64)
         else:
@@ -724,23 +753,23 @@ class FeedbackEstimator:
         return X
 
     def _compute_weights(self) -> None:
-        """Compute voxel efficiency weights from baseline activations."""
+        """Compute voxel efficiency weights from residual MSE.
+
+        Uses inverse-variance weighting based on the residual MSE from the GLM.
+        """
         if not self.use_efficiency_weights:
             return
 
-        # Stack baseline activations: shape (n_baseline, n_voxels)
-        baseline_array = np.array(self._baseline_activations)
-
-        # Compute variance per voxel
-        voxel_variance = np.var(baseline_array, axis=0, ddof=1)
+        # Get residual MSE from GLM
+        residual_mse = self._glm.get_residual_mse()
 
         # Compute weights for each mask
         for name, idx in self._mask_voxel_idx.items():
-            mask_variance = voxel_variance[idx]
+            mask_mse = residual_mse[idx]
 
-            # Inverse variance weighting (handle zero variance)
+            # Inverse variance (MSE) weighting (handle zero MSE)
             with np.errstate(divide="ignore", invalid="ignore"):
-                weights = 1.0 / mask_variance
+                weights = 1.0 / mask_mse
                 weights[~np.isfinite(weights)] = 0.0
 
             # Normalize to sum to 1
@@ -750,14 +779,11 @@ class FeedbackEstimator:
             else:
                 # Fallback to uniform weights
                 weights = np.ones_like(weights) / len(weights)
-                logger.warning(f"Mask '{name}': using uniform weights (zero variance)")
+                logger.warning(f"Mask '{name}': using uniform weights (zero MSE)")
 
             self._weights[name] = weights
 
-        logger.info("Voxel efficiency weights computed from baseline")
-
-        # Clear baseline activations to free memory
-        self._baseline_activations = []
+        logger.info("Voxel efficiency weights computed from residual MSE")
 
     def process_volume(
         self,
@@ -824,12 +850,13 @@ class FeedbackEstimator:
                 self.timeseries[name].append(0.0)
             return activations
 
-        # During baseline, store activations for weight computation (if enabled)
-        if self.use_efficiency_weights and self.n_volumes <= self.n_baseline:
-            self._baseline_activations.append(result.copy())
+        # Compute efficiency weights when baseline completes
+        if self.n_volumes == self.n_baseline:
+            # Freeze RSS, MSE, and timepoint for stable normalization
+            self._glm.freeze_steady_state()
 
-            # Compute weights when baseline completes
-            if self.n_volumes == self.n_baseline:
+            # Compute weights using frozen residual MSE
+            if self.use_efficiency_weights:
                 self._compute_weights()
 
         # ===== 4. Compute weighted activations per mask =====
@@ -841,7 +868,7 @@ class FeedbackEstimator:
                 # Use efficiency weights if enabled and computed
                 weighted_mean = float(np.sum(self._weights[name] * mask_values))
             else:
-                # Use simple mean (MURFI default)
+                # Use simple mean
                 weighted_mean = float(np.mean(mask_values))
 
             activations[name] = weighted_mean
@@ -881,6 +908,12 @@ class NeurofeedbackCoordinator:
         Directory for NIfTI outputs and CSV log.
     mask_paths : list of Path or str
         Paths to NIfTI mask files for feedback estimation.
+    subject : str
+        Subject identifier (e.g., 'sub-01').
+    task : str
+        Task name (e.g., 'rest', 'nback').
+    run : int
+        Run number (e.g., 1 for run-01).
     n_baseline : int, optional
         Number of initial volumes for baseline. Default is 25.
     n_volumes : int, optional
@@ -889,6 +922,9 @@ class NeurofeedbackCoordinator:
         Names for each mask. If not provided, uses mask filenames.
     task_regressor : ndarray or Path, optional
         Task regressor for the GLM. See FeedbackEstimator for details.
+    use_efficiency_weights : bool, optional
+        If True, use inverse-variance weighting for ROI aggregation (computed
+        from residual MSE). If False, use simple mean. Default is False.
 
     Attributes
     ----------
@@ -907,6 +943,9 @@ class NeurofeedbackCoordinator:
     ...     watch_dir='/path/to/incoming',
     ...     output_dir='/path/to/output',
     ...     mask_paths=['/path/to/dmn_mask.nii.gz'],
+    ...     subject='sub-01',
+    ...     task='rest',
+    ...     run=1,
     ...     n_volumes=100
     ... )
     >>> coordinator.run()
@@ -917,13 +956,20 @@ class NeurofeedbackCoordinator:
         watch_dir: Path | str,
         output_dir: Path | str,
         mask_paths: list[Path | str],
+        subject: str,
+        task: str,
+        run: int,
         n_baseline: int = 25,
         n_volumes: int = 200,
         mask_names: Optional[list[str]] = None,
         task_regressor: Optional[NDArray[np.float64] | Path | str] = None,
+        use_efficiency_weights: bool = False,
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
+        self.subject = subject
+        self.task = task
+        self.run_number = run
         self.n_baseline = n_baseline
         self.n_volumes = n_volumes
 
@@ -934,7 +980,8 @@ class NeurofeedbackCoordinator:
             raise ValueError(f"Watch path is not a directory: {self.watch_dir}")
 
         # Create output directories
-        self.nifti_dir = self.output_dir / "01_nifti"
+        run_str = f"{self.run_number:02d}"
+        self.nifti_dir = self.output_dir / f"nifti_task-{self.task}_run-{run_str}"
         self.nifti_dir.mkdir(parents=True, exist_ok=True)
         # Multi-run handling: Current implementation processes a single continuous
         # acquisition. For multi-run sessions, run separate NeurofeedbackCoordinator
@@ -951,6 +998,7 @@ class NeurofeedbackCoordinator:
             mask_paths=list(mask_paths_resolved),
             n_baseline=n_baseline,
             mask_names=mask_names,
+            use_efficiency_weights=use_efficiency_weights,
             task_regressor=task_regressor,
         )
 
@@ -963,8 +1011,9 @@ class NeurofeedbackCoordinator:
         self._start_time: Optional[float] = None
         self.design_matrix: list[NDArray[np.float64]] = []
 
-        # CSV log setup
-        self._csv_path = self.output_dir / "feedback_log.csv"
+        # CSV log setup with BIDS-style naming
+        self._csv_path = self.output_dir / f"{self.subject}_task-{self.task}_run-{run_str}_feedbacklog.csv"
+        self._design_matrix_path = self.output_dir / f"{self.subject}_task-{self.task}_run-{run_str}_design.tsv"
 
         logger.info(
             f"NeurofeedbackCoordinator initialized: "
@@ -985,6 +1034,40 @@ class NeurofeedbackCoordinator:
             self._csv_file.close()
             self._csv_file = None
             self._csv_writer = None
+
+    def _save_design_matrix(self) -> None:
+        """Save design matrix to TSV file.
+
+        Saves the design matrix with column names corresponding to the regressors:
+        - If task regressor provided: [task, intercept, drift, motion_x, motion_y, motion_z, motion_rx, motion_ry, motion_rz]
+        - Otherwise: [intercept, drift, motion_x, motion_y, motion_z, motion_rx, motion_ry, motion_rz]
+        """
+        if not self.design_matrix:
+            logger.warning("No design matrix data to save")
+            return
+
+        # Build column names based on whether task regressor was used
+        if self._estimator._task_regressor is not None:
+            column_names = ['task', 'intercept', 'drift',
+                          'motion_x', 'motion_y', 'motion_z',
+                          'motion_rx', 'motion_ry', 'motion_rz']
+        else:
+            column_names = ['intercept', 'drift',
+                          'motion_x', 'motion_y', 'motion_z',
+                          'motion_rx', 'motion_ry', 'motion_rz']
+
+        # Convert design matrix list to numpy array
+        design_array = np.array(self.design_matrix)
+
+        # Save to TSV file
+        with open(self._design_matrix_path, 'w') as f:
+            # Write header
+            f.write('\t'.join(column_names) + '\n')
+
+            # Write data rows
+            for row in design_array:
+                row_str = '\t'.join(f'{val:.6f}' for val in row)
+                f.write(row_str + '\n')
 
     def _on_new_file(self, file_path: Path) -> None:
         """Callback when a new file is detected."""
@@ -1098,12 +1181,14 @@ class NeurofeedbackCoordinator:
             observer.stop()
             observer.join()
             self._close_csv()
+            self._save_design_matrix()
 
             elapsed = time.time() - self._start_time if self._start_time else 0.0
             logger.info(
                 f"Session complete: {self.n_processed} volumes in {elapsed:.1f}s"
             )
             logger.info(f"Log saved to: {self._csv_path}")
+            logger.info(f"Design matrix saved to: {self._design_matrix_path}")
 
     def stop(self) -> None:
         """Signal the coordinator to stop."""

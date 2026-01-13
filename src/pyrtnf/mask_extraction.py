@@ -59,7 +59,7 @@ from nibabel.spatialimages import SpatialImage
 from scipy.stats import pearsonr
 
 # Local imports
-from pyrtnf.utils import compute_mean, compute_xfm, compute_xfm_to_mni, invert_xfm, apply_xfm, get_yeo_labels, dicom_to_nifti
+from pyrtnf.utils import compute_mean, compute_xfm, compute_xfm_to_mni, invert_xfm, apply_xfm, get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni
 
 # Configure module-level logger
 import logging
@@ -446,10 +446,14 @@ def mask_extraction_rest(
     mni2sub_xfm = mnireg_dir / Path(f"MNI_boldref_to_{ref_file.with_suffix('').stem}.mat")
     invert_xfm(input_file=sub2mni_xfm, output_file=mni2sub_xfm, overwrite=overwrite)
 
-    # Step 2d: Register the Yeo parcellation to participant space
+    # Step 2d: Interpolate the Yeo parcellation into MNI space
     yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
+    yeo_mni = Path(yeo).with_suffix('').parent / Path(Path(yeo).with_suffix('').stem + '_interp_to_fMRIPrep_boldref.nii.gz')
+    apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp='nearestneighbour', overwrite=overwrite)
+    
+    # Step 2d: Register the Yeo parcellation to participant space
     yeo2sub = mnireg_dir / Path(f"{Path(yeo).with_suffix('').stem}_to_{ref_file.with_suffix('').stem}.nii.gz")
-    apply_xfm(input_file=yeo, reference_file=ref_file, xfm_file=mni2sub_xfm, output_file=yeo2sub, interp='nearestneighbour', overwrite=overwrite)
+    apply_xfm(input_file=yeo_mni, reference_file=ref_file, xfm_file=mni2sub_xfm, output_file=yeo2sub, interp='nearestneighbour', overwrite=overwrite)
 
     # Step 3: Extract masks
     masks_dir = root_dir / "03_masks"

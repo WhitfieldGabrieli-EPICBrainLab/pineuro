@@ -60,6 +60,8 @@ class DicomSimulator:
         Speed multiplier for simulation
     clear_target : bool, default=True
         Whether to clear target directory before starting
+    cleanup_on_complete : bool, default=False
+        Whether to delete the entire target directory after simulation completes
 
     Raises
     ------
@@ -76,13 +78,15 @@ class DicomSimulator:
         target_dir: Union[str, Path],
         tr: Optional[float] = None,
         speed: float = 1.0,
-        clear_target: bool = True
+        clear_target: bool = True,
+        cleanup_on_complete: bool = False
     ):
         self.source_dir = Path(source_dir)
         self.target_dir = Path(target_dir)
         self.tr = tr
         self.speed = speed
         self.clear_target = clear_target
+        self.cleanup_on_complete = cleanup_on_complete
 
         if not self.source_dir.exists():
             raise FileNotFoundError(f"Source directory not found: {self.source_dir}")
@@ -154,6 +158,17 @@ class DicomSimulator:
                     f.unlink()
             logger.info(f"Cleared target directory: {self.target_dir}")
 
+    def cleanup(self) -> None:
+        """
+        Delete the entire target directory and its contents.
+
+        This method removes the target directory created by the simulator,
+        useful for cleaning up after a simulation run completes.
+        """
+        if self.target_dir.exists():
+            shutil.rmtree(self.target_dir)
+            logger.info(f"Deleted target directory: {self.target_dir}")
+
     def run(self, n_volumes: Optional[int] = None) -> None:
         """
         Run the DICOM simulation.
@@ -194,6 +209,9 @@ class DicomSimulator:
         print(f"Simulation complete. Total time: {total_time:.1f}s")
         print(f"{'='*60}\n")
 
+        if self.cleanup_on_complete:
+            self.cleanup()
+
 
 def main():
     """Command-line entry point for DICOM simulator."""
@@ -204,6 +222,7 @@ def main():
     parser.add_argument('--speed', type=float, default=1.0, help='Speed multiplier')
     parser.add_argument('--n', type=int, default=None, dest='n_volumes', help='Number of volumes')
     parser.add_argument('--no-clear', action='store_true', help='Keep existing files')
+    parser.add_argument('--cleanup', action='store_true', help='Delete target directory after completion')
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
 
@@ -217,7 +236,8 @@ def main():
         target_dir=args.target,
         tr=args.tr,
         speed=args.speed,
-        clear_target=not args.no_clear
+        clear_target=not args.no_clear,
+        cleanup_on_complete=args.cleanup
     )
 
     try:
