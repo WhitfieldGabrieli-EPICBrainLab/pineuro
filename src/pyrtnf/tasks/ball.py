@@ -12,7 +12,7 @@ import csv
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 # Third-party imports
 import numpy as np
@@ -21,8 +21,44 @@ from psychopy import visual, core, event, monitors
 # Local imports
 from .base import BaseTask
 
+if TYPE_CHECKING:
+    from .session import SessionState
+
 # Configure module-level logger
 logger = logging.getLogger(__name__)
+
+# Instruction text constants
+INSTRUCTIONS_FIRST_TRANSFER = (
+    "Next, you will continue the practice you just learned.\n\n"
+    "You will see 2 circles with a white ball in the middle, "
+    "but they won't move for now."
+)
+
+INSTRUCTIONS_LATER_TRANSFER = (
+    "Great job! Next, you'll practice for another 2.5 min.\n\n"
+    "This time the ball and circles will not move, "
+    "so you don't need to check them."
+)
+
+INSTRUCTIONS_FIRST_FEEDBACK = (
+    "Great job! Now, you'll get to try moving the ball with your practice!\n\n"
+    "You will see the 2 circles and white ball again. "
+    "When the white ball moves up towards the top yellow circle, "
+    "this means you are in a mindful brain state with your practice.\n\n"
+    "If the ball reaches either of the circles, it will move back to the center."
+)
+
+INSTRUCTIONS_LATER_FEEDBACK = (
+    "Great job! Now, you're going to practice for another 2.5 min "
+    "with more brain feedback from the ball.\n\n"
+    "When the ball moves upwards, that corresponds to your practice."
+)
+
+INSTRUCTIONS_READY = (
+    "When you see the plus sign (+), just relax.\n\n"
+    "Once the circles appear, please start the practice. "
+    "This scan will last 2.5 min."
+)
 
 
 class BallTask(BaseTask):
@@ -51,12 +87,23 @@ class BallTask(BaseTask):
     trigger_keys : list of str, optional
         Keys that trigger acquisition start. Default is ['t'] for scanner trigger.
         In simulation mode, trigger is sent automatically.
+    left_button : str, default='1'
+        Key for moving slider left during post-run questions.
+    right_button : str, default='2'
+        Key for moving slider right during post-run questions.
+    enter_button : str, default='0'
+        Key for confirming slider selection during post-run questions.
     fullscreen : bool, default=False
         Whether to run in fullscreen mode
-    target_fps : float, optional
-        Fixed frame rate to use instead of measuring monitor refresh rate.
-        When set, provides reproducible frame timing for testing.
-        Default None uses measured/adaptive frame rate.
+    feedback_mode : bool, default=True
+        If True, ball moves based on activation (feedback mode).
+        If False, ball stays stationary but all computations still occur (non-feedback/transfer mode).
+    run_number : int, default=1
+        Overall run number in the session (used for BIDS naming).
+    is_first_of_type : bool, default=True
+        Whether this is the first run of this type (transfer or feedback).
+        Controls instruction text: first runs show detailed explanations,
+        later runs show brief reminders.
 
     Attributes
     ----------
@@ -88,11 +135,29 @@ class BallTask(BaseTask):
         internal_scaler: float = 10.0,
         pda_outlier_threshold: float = 2.0,
         trigger_keys: list[str] = None,
+        left_button: str = '1',
+        right_button: str = '2',
+        enter_button: str = '0',
         fullscreen: bool = False,
-        target_fps: Optional[float] = None,
+        feedback_mode: bool = True,
+        run_number: int = 1,
+        is_first_of_type: bool = True,
+        session_state: Optional["SessionState"] = None,
+        # Adaptive difficulty parameters (passed to SessionState.record_run)
+        min_hits_threshold: int = 3,
+        max_hits_threshold: int = 5,
+        scale_adjust_factor: float = 0.25,
     ):
         # Don't call super().__init__() yet - need to set mask_names first
         self.coordinator = coordinator
+        self._session_state = session_state
+        self.run_number = run_number
+        self.is_first_of_type = is_first_of_type
+        
+        # Adaptive difficulty parameters
+        self._min_hits_threshold = min_hits_threshold
+        self._max_hits_threshold = max_hits_threshold
+        self._scale_adjust_factor = scale_adjust_factor
 
         # Validate dual-network requirement
         if len(coordinator.mask_names) < 2:
@@ -117,17 +182,31 @@ class BallTask(BaseTask):
 
         # Trigger configuration
         self.trigger_keys = trigger_keys if trigger_keys is not None else ['t']
+        self.instruction_advance_keys = ['space']  # Keys to advance instruction slides
+        
+        # Button configuration for slider questions
+        self.left_button = left_button
+        self.right_button = right_button
+        self.enter_button = enter_button
 
         # Window parameters
         self.fullscreen = fullscreen
-        self.target_fps = target_fps
+
+        # Feedback mode: controls whether ball actually moves
+        self.feedback_mode = feedback_mode
 
         # Task state
         self.ball_pos = [0.0, 0.0]  # Start at center
-        self.hit_counters = [0, 0]
+        self.hit_counters = [0, 0]  # Per-run hits (not cumulative)
         self.circle_positions = [1.0 / 3, -1.0 / 3]  # Vertical positions (top, bottom)
-        self.circle_radii = [0.15, 0.15]
+        self.circle_radii = [0.15, 0.15]  # Always reset to same size each run
         self.circle_colors = ['yellow', 'lightblue']
+        
+        # Restore scale_factor from session if provided (for multi-run continuity)
+        # Note: circle_radii reset each run per MIND-BPD design
+        if session_state is not None:
+            self.scale_factor = session_state.scale_factor
+            logger.info(f"Restored scale_factor from session: {self.scale_factor}")
 
         # Network positions for movement calculation
         # Top circle (index 0), Bottom circle (index 1)
@@ -203,25 +282,12 @@ class BallTask(BaseTask):
             units='height',  # Use height units for consistent scaling
             color='black',
             allowGUI=False,
+            waitBlanking=False,  # Disable frame rate measurement (using dt-based timing)
         )
 
-        # Set frame rate - use fixed target_fps if specified, otherwise measure
-        if self.target_fps is not None:
-            self.frame_duration = 1.0 / self.target_fps
-            logger.info(f"Using fixed framerate: {self.target_fps:.2f} Hz")
-        else:
-            measured_rate = self.win.getActualFrameRate()
-            if measured_rate is not None:
-                self.frame_duration = 1.0 / measured_rate
-                logger.info(f"Measured framerate: {measured_rate:.2f} Hz")
-            else:
-                self.frame_duration = 1.0 / 60.0
-                logger.warning("Could not measure framerate, assuming 60 Hz")
-
-        # Calculate TR-to-frame ratio for smooth movement distribution
-        # This distributes TR-based movement across monitor refresh frames
-        self.tr_to_frame_ratio = self.coordinator.tr / self.frame_duration
-        logger.info(f"TR-to-frame ratio: {self.tr_to_frame_ratio:.2f} frames per TR")
+        # Use default frame duration for display loop timing (prevents CPU spinning)
+        # Movement is time-based (dt) so actual frame rate doesn't affect physics
+        self.frame_duration = 1.0 / 60.0  # ~60 Hz target for smooth display
 
         # Create target circles
         self.circles = []
@@ -245,31 +311,6 @@ class BallTask(BaseTask):
             lineColor='white',
         )
 
-        # Text displays
-        self.volume_text = visual.TextStim(
-            win=self.win,
-            text='',
-            pos=(0, -0.45),
-            height=0.03,
-            color='white',
-        )
-
-        self.hits_text = visual.TextStim(
-            win=self.win,
-            text='',
-            pos=(0, 0.45),
-            height=0.03,
-            color='white',
-        )
-
-        self.status_text = visual.TextStim(
-            win=self.win,
-            text='',
-            pos=(0, 0.40),
-            height=0.025,
-            color='yellow',
-        )
-
         # Fixation cross for baseline period
         self.fixation_cross = visual.TextStim(
             win=self.win,
@@ -277,7 +318,7 @@ class BallTask(BaseTask):
             pos=(0, 0),
             height=0.3,
             color='white',
-            font='Arial',
+            font=None,
         )
 
         # Waiting for scanner text (displayed before trigger)
@@ -287,8 +328,55 @@ class BallTask(BaseTask):
             pos=(0, 0),
             height=0.1,
             color='white',
-            font='Arial',
+            font=None,
         )
+
+        # Instruction text stimulus
+        self.instruction_text = visual.TextStim(
+            win=self.win,
+            text='',
+            pos=(0, 0),
+            height=0.06,
+            wrapWidth=1.2,
+            color='white',
+            font=None,
+        )
+        
+        # Question text stimulus (for post-run slider questions)
+        self.question_text = visual.TextStim(
+            win=self.win,
+            text='',
+            pos=(0, 0.2),
+            height=0.06,
+            wrapWidth=1.2,
+            color='white',
+            font=None,
+        )
+        
+        # Slider instruction text
+        self.slider_instruction_text = visual.TextStim(
+            win=self.win,
+            text=(
+                "You'll see a few slider questions next\n"
+                "Press the left and right buttons to move the slider\n"
+                "And the top button to enter your response\n"
+                "Press any button to continue"
+            ),
+            pos=(0, 0.2),
+            height=0.06,
+            wrapWidth=1.2,
+            color='white',
+            font=None,
+        )
+        
+        # Setup questions CSV file with BIDS-style naming
+        run_str = f"{self.coordinator.run_number:02d}"
+        output_dir = Path(self.coordinator.output_dir)
+        self._questions_file_path = output_dir / f"{self.coordinator.subject}_task-{self.coordinator.task}_run-{run_str}_questions.tsv"
+        self._questions_file = open(self._questions_file_path, 'w', newline='')
+        self._questions_writer = csv.writer(self._questions_file, delimiter='\t')
+        self._questions_writer.writerow(['subject', 'run', 'feedback_mode', 'question_text', 'response', 'rt'])
+        self._questions_file.flush()
 
     def wait_for_trigger(self):
         """Display waiting screen and block until trigger received.
@@ -306,7 +394,7 @@ class BallTask(BaseTask):
 
         # Check if we're in simulation mode (coordinator has a simulator)
         if self.coordinator._simulator is not None:
-            logger.info("Simulation mode: auto-triggering")
+            logger.info("▶ Simulation mode: auto-triggering")
             core.wait(0.1)  # Brief pause to show waiting screen
             self.coordinator.send_trigger()
         else:
@@ -318,12 +406,226 @@ class BallTask(BaseTask):
                 if 'escape' in keys:
                     raise KeyboardInterrupt("User cancelled during trigger wait")
                 if any(k in keys for k in self.trigger_keys):
-                    logger.info(f"Trigger received: {keys}")
+                    logger.info(f"▶ Trigger received: starting task")
                     self.coordinator.send_trigger()
                     continueRoutine = False
 
         # Brief pause before starting task
         core.wait(0.1)
+
+    def show_instructions(self):
+        """Display instruction slides before task begins.
+        
+        Instructions vary based on feedback_mode and is_first_of_type:
+        - First transfer run: explains task with no movement
+        - Later transfer runs: brief reminder about no movement
+        - First feedback run: explains ball movement mechanism
+        - Later feedback runs: brief reminder
+        
+        Each slide is advanced by pressing spacebar (or configured advance key).
+        Escape key can exit during instructions.
+        """
+        # Determine which instruction slides to show
+        if not self.feedback_mode:
+            if self.is_first_of_type:
+                slides = [INSTRUCTIONS_FIRST_TRANSFER, INSTRUCTIONS_READY]
+            else:
+                slides = [INSTRUCTIONS_LATER_TRANSFER, INSTRUCTIONS_READY]
+        else:  # feedback_mode
+            if self.is_first_of_type:
+                slides = [INSTRUCTIONS_FIRST_FEEDBACK, INSTRUCTIONS_READY]
+            else:
+                slides = [INSTRUCTIONS_LATER_FEEDBACK, INSTRUCTIONS_READY]
+        
+        # Display each instruction slide
+        for slide_text in slides:
+            self.instruction_text.setText(slide_text)
+            self.instruction_text.draw()
+            self.win.flip()
+            
+            # Wait for key press to advance
+            continueRoutine = True
+            while continueRoutine:
+                keys = event.getKeys(keyList=self.instruction_advance_keys + ['escape'])
+                
+                if 'escape' in keys:
+                    raise KeyboardInterrupt("User cancelled during instructions")
+                
+                if any(k in keys for k in self.instruction_advance_keys):
+                    continueRoutine = False
+            
+            # Brief pause between slides
+            core.wait(0.1)
+        
+        logger.info("Instructions complete")
+
+    def _run_slider(
+        self,
+        question_text: str,
+        left_label: str = 'left',
+        right_label: str = 'right',
+    ) -> int:
+        """Display a slider question and return the user's response.
+        
+        Parameters
+        ----------
+        question_text : str
+            The question to display above the slider
+        left_label : str
+            Label for the low end (1) of the scale
+        right_label : str
+            Label for the high end (9) of the scale
+            
+        Returns
+        -------
+        int
+            The user's rating (1-9)
+        """
+        # Create slider
+        slider = visual.Slider(
+            win=self.win,
+            size=(0.85, 0.1),
+            ticks=(1, 9),
+            labels=(left_label, right_label),
+            granularity=1,
+            color='white',
+            fillColor='white',
+            labelHeight=0.06,
+        )
+        
+        # Set question text
+        self.question_text.setText(question_text)
+        
+        # Initialize slider position
+        event.clearEvents('keyboard')
+        slider.markerPos = 5  # Start at center
+        
+        # Draw initial state
+        slider.draw()
+        self.question_text.draw()
+        self.win.flip()
+        
+        # Track timing
+        response_clock = core.Clock()
+        
+        # Wait for response
+        continueRoutine = True
+        while continueRoutine:
+            keys = event.getKeys(keyList=[
+                self.left_button, self.right_button, self.enter_button, 'escape'
+            ])
+            
+            if 'escape' in keys:
+                raise KeyboardInterrupt("User cancelled during slider question")
+            
+            if len(keys):
+                if self.left_button in keys:
+                    slider.markerPos = max(1, slider.markerPos - 1)
+                elif self.right_button in keys:
+                    slider.markerPos = min(9, slider.markerPos + 1)
+                elif self.enter_button in keys:
+                    slider.rating = slider.markerPos
+                    continueRoutine = False
+                
+                # Redraw
+                slider.draw()
+                self.question_text.draw()
+                self.win.flip()
+        
+        # Get response time
+        rt = response_clock.getTime()
+        rating = int(slider.rating)
+        
+        # Log to questions file
+        self._questions_writer.writerow([
+            self.coordinator.subject,
+            self.coordinator.run_number,
+            'feedback' if self.feedback_mode else 'transfer',
+            question_text,
+            rating,
+            f'{rt:.3f}',
+        ])
+        self._questions_file.flush()
+        
+        logger.info(f"Question response: '{question_text[:40]}...' → {rating} (RT: {rt:.2f}s)")
+        
+        return rating
+
+    def _show_post_run_questions(self) -> None:
+        """Display post-run slider questions.
+        
+        Always asks 4 core questions. If this is the last feedback run
+        (determined by session_state.is_last_feedback_run), asks 3 additional
+        questions about the relationship between practice and ball movement.
+        """
+        # Show instruction screen
+        self.slider_instruction_text.draw()
+        self.win.flip()
+        
+        # Wait for any button press to continue
+        event.clearEvents('keyboard')
+        continueRoutine = True
+        while continueRoutine:
+            keys = event.getKeys(keyList=[
+                self.left_button, self.right_button, self.enter_button, 'escape'
+            ])
+            if 'escape' in keys:
+                raise KeyboardInterrupt("User cancelled during slider instructions")
+            if len(keys):
+                continueRoutine = False
+        
+        # Core questions (always asked)
+        self._run_slider(
+            question_text='How often were you using the Mindful Describing practice?',
+            left_label='Never',
+            right_label='Always',
+        )
+        
+        self._run_slider(
+            question_text='How often did you check the position of the ball?',
+            left_label='Never',
+            right_label='All the time',
+        )
+        
+        self._run_slider(
+            question_text='How difficult was it to apply Mindful Describing?',
+            left_label='Not at all',
+            right_label='Very Difficult',
+        )
+        
+        self._run_slider(
+            question_text='How calm do you feel right now?',
+            left_label='Not at all',
+            right_label='Very calm',
+        )
+        
+        # Conditional questions (last feedback run only)
+        is_last_feedback = False
+        if self._session_state is not None:
+            is_last_feedback = self._session_state.is_last_feedback_run
+        
+        if self.feedback_mode and is_last_feedback:
+            logger.info("Last feedback run - asking additional questions")
+            
+            self._run_slider(
+                question_text='The ball seemed to move up while I was practicing Mindful Describing',
+                left_label='False',
+                right_label='True',
+            )
+            
+            self._run_slider(
+                question_text='The ball seemed to move down while my mind was wandering.',
+                left_label='False',
+                right_label='True',
+            )
+            
+            self._run_slider(
+                question_text='The ball seemed to move down while I was trying to control it.',
+                left_label='False',
+                right_label='True',
+            )
+        
+        logger.info("Post-run questions complete")
 
     def calculate_ball_movement(self, activations: dict) -> None:
         """Update movement parameters based on new activations.
@@ -340,6 +642,7 @@ class BallTask(BaseTask):
 
         # Check for outlier - skip update but preserve existing activity
         if np.max(np.abs(acts)) > self.pda_outlier_threshold:
+            logger.debug(f"Outlier activation skipped: {acts[0]:.2f}, {acts[1]:.2f} (threshold: {self.pda_outlier_threshold})")
             return
 
         # Determine which network has higher activation
@@ -374,6 +677,10 @@ class BallTask(BaseTask):
 
         # Don't move during baseline
         if self.is_baseline:
+            return
+
+        # Don't move if in non-feedback mode (but still compute everything)
+        if not self.feedback_mode:
             return
 
         # Calculate movement based on elapsed time (time-based, not frame-based)
@@ -411,6 +718,10 @@ class BallTask(BaseTask):
             if hit:
                 # Register hit
                 self.hit_counters[i] += 1
+                
+                # Log hit event
+                network_name = self.mask_names[i]
+                logger.info(f"✓ Hit! {network_name} target (total: {self.hit_counters[i]})")
 
                 # Flash circle
                 self.circles[i].fillColor = 'white'
@@ -469,17 +780,6 @@ class BallTask(BaseTask):
         # Store current volume for display
         self.current_volume = data.get('volume', 0)
 
-    def _update_text(self):
-        """Update text displays with current state."""
-        self.volume_text.text = (
-            f'Volume {self.current_volume} / {self.coordinator.n_volumes}  '
-            f'Scale: {self.scale_factor:.1f}'
-        )
-        self.hits_text.text = (
-            f'{self.mask_names[0]}: {self.hit_counters[0]}  '
-            f'{self.mask_names[1]}: {self.hit_counters[1]}'
-        )
-
     def _log_frame(self):
         """Log current frame data to TSV file."""
         # Get latest activations in thread-safe manner
@@ -519,21 +819,16 @@ class BallTask(BaseTask):
         # Check for hits
         self.check_hits()
 
-        # Update text displays
-        self._update_text()
-
         # Draw scene based on baseline status
         if self.is_baseline:
             # During baseline: show only fixation cross
             self.fixation_cross.draw()
         else:
-            # During active task: show ball, circles, and text
+            # During active task: show ball and circles only
             for circle in self.circles:
                 circle.draw()
 
             self.ball.draw()
-            self.volume_text.draw()
-            self.hits_text.draw()
 
         # Flip window
         self.win.flip()
@@ -549,13 +844,49 @@ class BallTask(BaseTask):
         for circle in self.circles:
             circle.fillColor = None
 
+    def save_state(self, session_state: Optional["SessionState"] = None) -> None:
+        """Save current task state to session state for multi-run continuity.
+        
+        Parameters
+        ----------
+        session_state : SessionState, optional
+            Session state to save to. If None, uses the session_state passed
+            to __init__. If neither is available, does nothing.
+        """
+        state = session_state or self._session_state
+        if state is None:
+            logger.debug("No session state provided, skipping save")
+            return
+        
+        run_type = 'feedback' if self.feedback_mode else 'transfer'
+        state.record_run(
+            run_type=run_type,
+            hit_counters=self.hit_counters,
+            scale_factor=self.scale_factor,
+            circle_radii=self.circle_radii,
+            volumes_processed=self.current_volume,
+            min_hits_threshold=self._min_hits_threshold,
+            max_hits_threshold=self._max_hits_threshold,
+            scale_adjust_factor=self._scale_adjust_factor,
+        )
+
     def cleanup(self):
         """Close window and quit."""
+        # Save state before cleanup if session_state was provided
+        self.save_state()
+        
         # Close PsychoPy log file
         if self._psychopy_log_file is not None:
             self._psychopy_log_file.close()
             self._psychopy_log_file = None
             self._psychopy_log_writer = None
+        
+        # Close questions file
+        if self._questions_file is not None:
+            self._questions_file.close()
+            self._questions_file = None
+            self._questions_writer = None
+            logger.info(f"Questions saved: {self._questions_file_path}")
 
         self.win.close()
         core.quit()
@@ -569,7 +900,7 @@ class BallTask(BaseTask):
         from psychopy import event
 
         self._running = True
-        self.setup()  # Creates window, measures framerate
+        self.setup()  # Creates window and initializes task stimuli
 
         # Use PsychoPy clock for precise timing
         frame_clock = core.Clock()
@@ -578,12 +909,23 @@ class BallTask(BaseTask):
             # Wait for coordinator to be ready
             self.coordinator.wait_until_ready(timeout=10.0)
 
+            # Show instructions
+            self.show_instructions()
+
             # Show waiting screen and wait for trigger
             self.wait_for_trigger()
 
             # Record task start time for frame timestamps
             self._task_start_time = core.getTime()
             self._last_frame_time = core.getTime()  # Initialize for time-based movement
+            
+            logger.info("=== BallTask Session Started ===")
+            logger.info(f"Mode: {'FEEDBACK' if self.feedback_mode else 'NON-FEEDBACK (transfer)'}")
+            logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
+            logger.info(f"Scale factor: {self.scale_factor}")
+            logger.info(f"Target volumes: {self.coordinator.n_volumes}")
+            logger.info(f"Baseline volumes: {self.coordinator.n_baseline}")
+            logger.info(f"PsychoPy log: {self._psychopy_log_path.name}")
 
             # Now start main task loop
             while self._running and not self.coordinator.is_complete():
@@ -609,7 +951,28 @@ class BallTask(BaseTask):
                     core.wait(remaining, hogCPUperiod=0.001)
 
         except KeyboardInterrupt:
+            logger.info("Task interrupted by user")
             pass
         finally:
             self._running = False
+            
+            # Log session summary
+            logger.info("")
+            logger.info("=== BallTask Session Complete ===")
+            logger.info(f"Total volumes: {self.current_volume}/{self.coordinator.n_volumes}")
+            logger.info(f"Hits - {self.mask_names[0]}: {self.hit_counters[0]}, {self.mask_names[1]}: {self.hit_counters[1]}")
+            logger.info(f"Total hits: {sum(self.hit_counters)}")
+            logger.info(f"Final scale factor: {self.scale_factor:.1f}")
+            logger.info(f"Total frames rendered: {self._frame_counter}")
+            if self.current_volume > 0:
+                avg_frames_per_vol = self._frame_counter / self.current_volume
+                logger.info(f"Average frames per volume: {avg_frames_per_vol:.1f}")
+            logger.info(f"PsychoPy log saved: {self._psychopy_log_path}")
+            
+            # Show post-run slider questions
+            try:
+                self._show_post_run_questions()
+            except KeyboardInterrupt:
+                logger.info("Questions interrupted by user")
+            
             self.cleanup()

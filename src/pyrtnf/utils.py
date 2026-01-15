@@ -55,6 +55,10 @@ import subprocess
 import tempfile
 
 # Third-party imports
+import numpy as np
+import nibabel as nib
+from nibabel.loadsave import save
+from nibabel.nifti1 import Nifti1Image
 from templateflow import api as tflow
 
 # Local imports
@@ -363,7 +367,7 @@ def compute_mean(
         overwrite: bool = False
 ) -> None:
     """
-    Compute temporal mean of fMRI data.
+    Compute temporal mean of fMRI data using numpy.
 
     Parameters
     ----------
@@ -376,24 +380,25 @@ def compute_mean(
         If False, skip command if all output files already exist.
 
     """
-
-    # Build fslmaths command
-    cmd = [
-        'fslmaths',
-        str(input_file),
-        '-Tmean',
-        str(output_file)
-    ]
-
-    # Run fslmaths
-    run_command(
-        cmd_name='fslmaths',
-        cmd=cmd,
-        description='Compute mean',
-        inputs=input_file,
-        outputs=output_file,
-        overwrite=overwrite
-    ) 
+    output_path = Path(output_file)
+    
+    # Check if output exists
+    if not overwrite and output_path.exists():
+        logger.info(f"Output file exists and overwrite=False. Skipping compute mean.")
+        return
+    
+    logger.info("Computing mean...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load 4D image and compute mean along time axis
+    img = nib.load(str(input_file))
+    data = img.get_fdata()
+    mean_data = data.mean(axis=-1)
+    
+    # Save output
+    out_img = Nifti1Image(mean_data, img.affine, img.header)
+    save(out_img, output_path)
+    logger.info(f"Output: {output_path}") 
 
 def compute_xfm(
         input_file: Union[str, Path],
@@ -626,12 +631,12 @@ def invert_xfm(
         overwrite: bool = False
 ) -> None:
     """
-    Invert a transformation matrix using FSL's convert_xfm
+    Invert a transformation matrix using numpy.
 
     Parameters
     ----------
     input_file : str or Path
-        Path to input transformation file
+        Path to input transformation file (FSL .mat format)
     output_file : str or Path
         Path to output transformation file
     overwrite : bool, default=False
@@ -639,23 +644,25 @@ def invert_xfm(
         If False, skip command if all output files already exist.
 
     """
-
-    # Build convert_xfm command
-    cmd = [
-        'convert_xfm',
-        '-omat', str(output_file),
-        '-inverse', str(input_file),
-    ]
-
-    # Run convert_xfm
-    run_command(
-        cmd_name='convert_xfm',
-        cmd=cmd,
-        description='Applying transformation',
-        inputs=input_file,
-        outputs=output_file,
-        overwrite=overwrite
-    )
+    output_path = Path(output_file)
+    
+    # Check if output exists
+    if not overwrite and output_path.exists():
+        logger.info(f"Output file exists and overwrite=False. Skipping invert_xfm.")
+        return
+    
+    logger.info("Inverting transformation matrix...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load FSL .mat file (4x4 matrix, space-separated)
+    matrix = np.loadtxt(str(input_file))
+    
+    # Invert the matrix
+    inverted = np.linalg.inv(matrix)
+    
+    # Save in FSL format
+    np.savetxt(str(output_path), inverted, fmt='%.10f')
+    logger.info(f"Output: {output_path}")
 
 def compute_xfm_to_mni(
         input_file: Union[str, Path],
@@ -723,35 +730,225 @@ def apply_mask(
         overwrite: bool = False
 ) -> None:
     """
-    Invert a transformation matrix using FSL's convert_xfm
+    Apply a binary mask to a NIfTI image using numpy.
 
     Parameters
     ----------
     input_file : str or Path
-        Path to input transformation file
+        Path to input NIfTI file
     mask_file : str or Path
+        Path to mask NIfTI file
     output_file : str or Path
-        Path to output transformation file
+        Path to output NIfTI file
     overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
 
     """
+    output_path = Path(output_file)
+    
+    # Check if output exists
+    if not overwrite and output_path.exists():
+        logger.info(f"Output file exists and overwrite=False. Skipping apply_mask.")
+        return
+    
+    logger.info("Applying mask...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load images
+    img = nib.load(str(input_file))
+    mask = nib.load(str(mask_file))
+    
+    # Get data
+    data = img.get_fdata()
+    mask_data = mask.get_fdata()
+    
+    # Apply mask (multiply)
+    masked = data * (mask_data > 0).astype(data.dtype)
+    
+    # Save output
+    out_img = Nifti1Image(masked, img.affine, img.header)
+    save(out_img, output_path)
+    logger.info(f"Output: {output_path}")
 
-    # Build fslmaths command
-    cmd = [
-        'fslmaths',
-        str(input_file),
-        "-mas", str(mask_file),
-        str(output_file)
-    ]
 
-    # Run fslmaths
-    run_command(
-        cmd_name='fslmaths',
-        cmd=cmd,
-        description='Applying mask',
-        inputs=[input_file, mask_file],
-        outputs=output_file,
-        overwrite=overwrite
+# ==============================================================
+#  ANTs FUNCTIONS
+# ==============================================================
+
+def compute_mean_ants(
+        input_file: Union[str, Path],
+        output_file: Union[str, Path],
+        overwrite: bool = False
+) -> None:
+    """
+    Compute temporal mean of fMRI data using ANTsPy.
+
+    Parameters
+    ----------
+    input_file : str or Path
+        Path to input NIfTI file (should be 4D)
+    output_file : str or Path
+        Path to save output mean image
+    overwrite : bool, default=False
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
+    """
+    import ants
+    
+    output_path = Path(output_file)
+    
+    # Check if output exists
+    if not overwrite and output_path.exists():
+        logger.info(f"Output file exists and overwrite=False. Skipping compute mean.")
+        return
+    
+    logger.info("Computing mean (ANTs)...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load 4D image and compute mean
+    img_4d = ants.image_read(str(input_file))
+    mean_data = img_4d.numpy().mean(axis=-1)
+    
+    # Create mean image with same spatial properties
+    mean_img = ants.from_numpy(
+        mean_data,
+        origin=img_4d.origin[:3],
+        spacing=img_4d.spacing[:3],
+        direction=img_4d.direction[:3, :3]
     )
+    
+    ants.image_write(mean_img, str(output_file))
+    logger.info(f"Output: {output_file}")
+
+
+def compute_xfm_ants(
+        input_file: Union[str, Path],
+        reference_file: Union[str, Path],
+        output_name: Union[str, Path],
+        type_of_transform: str = 'Rigid',
+        overwrite: bool = False
+) -> tuple[Path, list]:
+    """
+    Compute a transformation using ANTsPy registration.
+
+    Parameters
+    ----------
+    input_file : str or Path
+        Path to input NIfTI file (moving image)
+    reference_file : str or Path
+        Path to reference image (fixed/target space for alignment)
+    output_name : str or Path
+        Base name for output file (without extension)
+    type_of_transform : str, default='Rigid'
+        Type of transform: 'Rigid', 'Affine', 'SyN', etc.
+    overwrite : bool, default=False
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
+
+    Returns
+    -------
+    output_file : Path
+        Path for output registered NIfTI file
+    transform_files : list
+        List of paths to transform files
+    """
+    import ants
+    
+    output_file = Path(output_name).with_suffix(".nii.gz")
+    xfm_dir = output_file.parent
+    xfm_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check if outputs exist
+    if not overwrite and output_file.exists():
+        # Try to find existing transform files
+        existing_transforms = list(xfm_dir.glob(f"{Path(output_name).stem}_transform_*.mat"))
+        if existing_transforms:
+            logger.info(f"Output files exist and overwrite=False. Skipping registration.")
+            return output_file, [str(t) for t in sorted(existing_transforms)]
+    
+    logger.info(f"Computing transformation (ANTs {type_of_transform})...")
+    logger.info(f"Input: {input_file}")
+    logger.info(f"Reference: {reference_file}")
+    
+    # Load images
+    fixed = ants.image_read(str(reference_file))
+    moving = ants.image_read(str(input_file))
+    
+    # Run registration
+    registration = ants.registration(
+        fixed=fixed,
+        moving=moving,
+        type_of_transform=type_of_transform,
+        verbose=False
+    )
+    
+    # Save registered image
+    ants.image_write(registration['warpedmovout'], str(output_file))
+    logger.info(f"Output: {output_file}")
+    
+    # Copy and rename transform files to output directory
+    transform_files = []
+    for i, fwd in enumerate(registration['fwdtransforms']):
+        suffix = Path(fwd).suffix
+        new_path = xfm_dir / f"{Path(output_name).stem}_transform_{i}{suffix}"
+        shutil.copy(fwd, new_path)
+        transform_files.append(str(new_path))
+        logger.info(f"Transform: {new_path}")
+    
+    return output_file, transform_files
+
+
+def apply_xfm_ants(
+        input_file: Union[str, Path],
+        reference_file: Union[str, Path],
+        transform_files: list,
+        output_file: Union[str, Path],
+        interpolator: str = 'nearestNeighbor',
+        overwrite: bool = False
+) -> None:
+    """
+    Apply a transformation using ANTsPy.
+
+    Parameters
+    ----------
+    input_file : str or Path
+        Path to input NIfTI file
+    reference_file : str or Path
+        Path to reference image (target space)
+    transform_files : list
+        List of paths to transform files from compute_xfm_ants
+    output_file : str or Path
+        Path for output file
+    interpolator : str, default='nearestNeighbor'
+        Interpolation method: 'nearestNeighbor', 'linear', 'bSpline', etc.
+    overwrite : bool, default=False
+        If True, always run command and overwrite existing outputs.
+        If False, skip command if all output files already exist.
+    """
+    import ants
+    
+    output_path = Path(output_file)
+    
+    # Check if output exists
+    if not overwrite and output_path.exists():
+        logger.info(f"Output file exists and overwrite=False. Skipping apply transform.")
+        return
+    
+    logger.info(f"Applying transformation (ANTs)...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load images
+    fixed = ants.image_read(str(reference_file))
+    moving = ants.image_read(str(input_file))
+    
+    # Apply transforms
+    transformed = ants.apply_transforms(
+        fixed=fixed,
+        moving=moving,
+        transformlist=transform_files,
+        interpolator=interpolator
+    )
+    
+    ants.image_write(transformed, str(output_file))
+    logger.info(f"Output: {output_file}")

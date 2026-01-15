@@ -37,7 +37,12 @@ import shutil
 import copy
 
 # Third-party imports
-from nibabel.loadsave import load
+import numpy as np
+import nibabel as nib
+from nibabel.loadsave import load, save
+from nibabel.nifti1 import Nifti1Image
+from nilearn.image import smooth_img
+from scipy.signal import butter, filtfilt
 
 # Local imports
 from pyrtnf.utils import run_command, dicom_to_nifti, compute_xfm, apply_xfm, compute_mean, apply_mask
@@ -89,7 +94,7 @@ def concat(
         overwrite: bool = False
 ) -> None:
     """
-    Concatenate a set of fMRI data.
+    Concatenate a set of fMRI data along the time axis.
 
     Parameters
     ----------
@@ -102,22 +107,29 @@ def concat(
         If False, skip command if all output files already exist.
 
     """
+    output_path = Path(output_file)
     
-    # Build fslmerge command
-    cmd: List[str] = [
-        'fslmerge', '-t',
-        str(output_file),
-    ] + [str(f) for f in input_files]
-
-    # Run fslmerge
-    run_command(
-        cmd_name='fslmerge',
-        cmd=cmd,
-        description='Concatenating',
-        inputs=input_files, 
-        outputs=output_file,
-        overwrite=overwrite
-    )
+    # Check if output exists
+    if not overwrite and output_path.exists():
+        logger.info(f"Output file exists and overwrite=False. Skipping concatenation.")
+        return
+    
+    logger.info("Concatenating...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load all images and concatenate
+    images = [nib.load(str(f)) for f in input_files]
+    
+    # Get data arrays and concatenate along time axis
+    data_arrays = [img.get_fdata() for img in images]
+    concatenated = np.concatenate(data_arrays, axis=-1)
+    
+    # Use affine and header from first image
+    first_img = images[0]
+    out_img = Nifti1Image(concatenated, first_img.affine, first_img.header)
+    
+    save(out_img, output_path)
+    logger.info(f"Output: {output_path}")
 
 def spatial_smoothing(
         input_file: Union[str, Path],
@@ -126,7 +138,7 @@ def spatial_smoothing(
         overwrite: bool = False
 ) -> None:
     """
-    Apply Gaussian spatial smoothing to fMRI data using FSL's fslmaths.
+    Apply Gaussian spatial smoothing to fMRI data using nilearn.
 
     Parameters
     ----------
@@ -141,24 +153,20 @@ def spatial_smoothing(
         If False, skip command if all output files already exist.
 
     """
-
-    # Build fslmaths command
-    cmd = [
-        'fslmaths',
-        str(input_file),
-        '-s', str(fwhm / 2.355),  # Convert FWHM to sigma (FWHM = 2.355 * sigma)
-        str(output_file)
-    ]
-
-    # Run fslmaths
-    run_command(
-        cmd_name='fslmaths',
-        cmd=cmd,
-        description='Spatial smoothing',
-        inputs=input_file,
-        outputs=output_file,
-        overwrite=overwrite
-    )
+    output_path = Path(output_file)
+    
+    # Check if output exists
+    if not overwrite and output_path.exists():
+        logger.info(f"Output file exists and overwrite=False. Skipping spatial smoothing.")
+        return
+    
+    logger.info("Spatial smoothing...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Use nilearn for smoothing
+    smoothed = smooth_img(str(input_file), fwhm=fwhm)
+    smoothed.to_filename(str(output_path))
+    logger.info(f"Output: {output_path}")
 
 def temporal_filtering(
         input_file: Union[str, Path],
@@ -168,7 +176,7 @@ def temporal_filtering(
         overwrite: bool = False
 ) -> None:
     """
-    Apply temporal bandpass filtering to fMRI data using FSL's fslmaths.
+    Apply temporal bandpass filtering to fMRI data using scipy Butterworth filter.
 
     Parameters
     ----------
@@ -185,40 +193,60 @@ def temporal_filtering(
         If False, skip command if all output files already exist.
 
     """
-
-    # Load TR from header
-    img = load(input_file)
-    tr = img.header.get_zooms()[3] # type: ignore
-    logger.info(f"Using TR from header: {tr}s")
-
-    # Build fslmaths command
-    cmd = ['fslmaths', str(input_file)]
+    output_path = Path(output_file)
     
-    # Add high-pass filter
-    if highpass is not None:
-        sigma_hp = 1 / (2 * highpass * tr)  # Convert Hz to sigma in volumes
-        cmd.extend(['-bptf', str(sigma_hp), '-1'])
+    # Check if output exists
+    if not overwrite and output_path.exists():
+        logger.info(f"Output file exists and overwrite=False. Skipping temporal filtering.")
+        return
     
-    # Add low-pass filter
-    if lowpass is not None:
-        sigma_lp = 1 / (2 * lowpass * tr)
-        if highpass is None:
-            cmd.extend(['-bptf', '-1', str(sigma_lp)])
-        else:
-            # Replace -1 with actual lowpass value
-            cmd[-1] = str(sigma_lp)
+    # Load image
+    img = nib.load(str(input_file))
+    data = img.get_fdata()
     
-    cmd.append(str(output_file))
-
-    # Run fslmaths
-    run_command(
-        cmd_name='fslmaths',
-        cmd=cmd,
-        description='Temporal filtering',
-        inputs=input_file,
-        outputs=output_file,
-        overwrite=overwrite
-    )
+    # Get TR from header (sampling rate)
+    tr = img.header.get_zooms()[3]  # type: ignore
+    fs = 1.0 / tr  # Sampling frequency in Hz
+    nyquist = fs / 2.0
+    
+    logger.info(f"Temporal filtering (TR={tr}s, fs={fs:.3f}Hz)...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Determine filter type and cutoffs
+    if highpass is not None and lowpass is not None:
+        # Bandpass filter
+        btype = 'bandpass'
+        Wn = [highpass / nyquist, lowpass / nyquist]
+    elif highpass is not None:
+        # High-pass filter
+        btype = 'highpass'
+        Wn = highpass / nyquist
+    elif lowpass is not None:
+        # Low-pass filter  
+        btype = 'lowpass'
+        Wn = lowpass / nyquist
+    else:
+        # No filtering requested
+        logger.info("No filter cutoffs specified. Saving unchanged.")
+        save(img, output_path)
+        return
+    
+    # Design Butterworth filter (order 2 to match FSL behavior)
+    b, a = butter(2, Wn, btype=btype)
+    
+    # Apply filter along time axis (axis=-1)
+    # Reshape to 2D for filtering, then reshape back
+    original_shape = data.shape
+    data_2d = data.reshape(-1, original_shape[-1])
+    
+    # Apply zero-phase filtering
+    filtered_2d = filtfilt(b, a, data_2d, axis=-1)
+    filtered = filtered_2d.reshape(original_shape)
+    
+    # Save output
+    out_img = Nifti1Image(filtered, img.affine, img.header)
+    save(out_img, output_path)
+    logger.info(f"Output: {output_path}")
 
 def brain_extraction(
         input_file: Union[str, Path],
@@ -330,9 +358,11 @@ def preprocessing(
         logger.info(f"  {str(path)}")
     
     # Step 1: Convert DICOMs to NIfTI
+    logger.info("Step 1/4: Converting DICOMs to NIfTI...")
     nifti_dir = root_dir / "01_nifti"
     nifti_files = []
     for run, path in enumerate(input_paths):
+        logger.info(f"  Processing run {run+1}/{len(input_paths)}...")
         nifti_file = dicom_to_nifti(
             dicom_dir=path,
             output_dir=nifti_dir,
@@ -340,16 +370,21 @@ def preprocessing(
             overwrite=overwrite
         )
         nifti_files.append(nifti_file)
+    logger.info(f"✓ DICOM to NIfTI conversion complete ({len(nifti_files)} runs)")
 
     # Step 2: Motion correction
+    logger.info("Step 2/4: Running motion correction...")
     mcf_dir = root_dir / "02_motion_correction"
     mcf_files = []
     for run, nifti in enumerate(nifti_files):
+        logger.info(f"  Processing run {run+1}/{len(nifti_files)}...")
         mcf_file = mcf_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mcf.nii.gz")
         motion_correction(input_file=nifti, output_file=mcf_file, overwrite=overwrite)
         mcf_files.append(mcf_file)
+    logger.info(f"✓ Motion correction complete ({len(mcf_files)} runs)")
 
     # Step 3: Brain extract
+    logger.info("Step 3/4: Computing temporal means and brain extraction...")
     bet_dir = root_dir / "03_brain_extraction"
 
     # Step 3a: Compute mean of motion corrected data
@@ -360,21 +395,24 @@ def preprocessing(
         mean_files.append(mean_file)
     
     # Step 3b: Skull-strip first run
+    logger.info(f"  Extracting brain mask from run 1...")
     sub_ref = mean_files[0]
     _, mean_mask = brain_extraction(input_file=sub_ref, output_dir=bet_dir, overwrite=overwrite)
+    logger.info(f"✓ Brain extraction complete")
 
     # Step 4: Co-registration across runs (if more than one)
+    logger.info("Step 4/4: Coregistering runs and applying masks...")
     coreg_dir = root_dir / "04_coregistered"
     coreg_file = coreg_dir / Path(f"{participant_id}_task-{task}.nii.gz")
     xfm_dir = coreg_dir / "xfm"
 
     if len(mcf_files) == 1:
-
+        logger.info(f"  Single run detected, skipping coregistration")
         # Just use the first run
         coreg_file = mcf_files[0]
     
     else:
-        
+        logger.info(f"  Coregistering {len(mcf_files)} runs to run 1...")
         # Step 4a: Co-register to first run's mean
         sub_ref = mean_files[0]
         concat_files = []
@@ -386,7 +424,7 @@ def preprocessing(
                 concat_files.append(mcf_files[run])
             
             if run > 0:
-                
+                logger.info(f"    Coregistering run {run+1}/{len(mean_files)}...")
                 # Compute transformation using the means
                 output_name = xfm_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mean_to_run-01_mean")
                 _, xfm_file = compute_xfm(input_file=mean_file, reference_file=sub_ref, output_name=output_name, cost='corratio', dof=6, overwrite=overwrite)
@@ -400,9 +438,11 @@ def preprocessing(
         # Current behavior: Concatenates all available runs sequentially
         # Incomplete sequences: If a run fails preprocessing, it should be excluded
         # from concat_files prior to this step (currently assumes all runs succeed)
+        logger.info(f"  Concatenating {len(concat_files)} runs...")
         concat(input_files=concat_files, output_file=coreg_file, overwrite=overwrite)
 
     # Copy mask 
+    logger.info(f"  Applying brain mask to outputs...")
     mask_file = root_dir / Path(f"{participant_id}_task-{task}_preproc_mask.nii.gz")
     if not mask_file.exists() or overwrite:
         shutil.copy(mean_mask, mask_file)
@@ -416,6 +456,11 @@ def preprocessing(
     ref_file = root_dir / Path(f"{participant_id}_task-{task}_boldref.nii.gz")
     if not ref_file.exists() or overwrite:
         apply_mask(input_file=sub_ref, mask_file=mask_file, output_file=ref_file, overwrite=overwrite)
+    
+    logger.info(f"✓ Preprocessing complete!")
+    logger.info(f"  Preprocessed file: {preproc_file.name}")
+    logger.info(f"  Brain mask: {mask_file.name}")
+    logger.info(f"  BOLD reference: {ref_file.name}")
     
     # Return preprocessed file
     return preproc_file, mask_file, ref_file

@@ -8,6 +8,7 @@ Key Classes
 -----------
 BaseTask : Abstract base class for all neurofeedback tasks
 BallTask : Example task with dual-network feedback and ball movement
+SessionState : Persistent state management for multi-run sessions
 ActivationSmoother : Exponential moving average smoother
 ActivationNormalizer : Percentile-based activation normalizer
 
@@ -18,11 +19,13 @@ See examples/run_feedback_with_task.py for complete integration example.
 
 from .base import BaseTask
 from .ball import BallTask
+from .session import SessionState
 from .utils import ActivationSmoother, ActivationNormalizer
 
 __all__ = [
     'BaseTask',
     'BallTask',
+    'SessionState',
     'ActivationSmoother',
     'ActivationNormalizer',
 ]

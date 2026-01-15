@@ -59,7 +59,11 @@ from nibabel.spatialimages import SpatialImage
 from scipy.stats import pearsonr
 
 # Local imports
-from pyrtnf.utils import compute_mean, compute_xfm, compute_xfm_to_mni, invert_xfm, apply_xfm, get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni
+from pyrtnf.utils import (
+    compute_mean, compute_xfm, compute_xfm_to_mni, invert_xfm, apply_xfm, 
+    get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni,
+    compute_mean_ants, compute_xfm_ants, apply_xfm_ants
+)
 
 # Configure module-level logger
 import logging
@@ -603,21 +607,21 @@ def coregister_2vol(
         overwrite=overwrite
     )
 
-    # Step 3: Compute mean
+    # Step 3: Compute mean (using ANTs for speed)
     mean_file = twovol_dir / Path(f"{participant_id}_task-2vol_run-{str(next_run).zfill(2)}_mean.nii.gz")
-    compute_mean(input_file=nifti_file, output_file=mean_file, overwrite=overwrite)
+    compute_mean_ants(input_file=nifti_file, output_file=mean_file, overwrite=overwrite)
     
-    # Step 4: Compute transformation
+    # Step 4: Compute transformation (using ANTs for speed - ~28x faster than FLIRT)
     xfm_dir = twovol_dir / "xfm"
     output_name = xfm_dir / Path(f"{participant_id}_boldref_to_task-2vol_run-{str(next_run).zfill(2)}_mean")
-    _, xfm_file = compute_xfm(input_file=ref_file, reference_file=mean_file, output_name=output_name, cost='corratio', dof=6, overwrite=overwrite)
+    _, xfm_files = compute_xfm_ants(input_file=ref_file, reference_file=mean_file, output_name=output_name, type_of_transform='Rigid', overwrite=overwrite)
 
-    # Step 5: Apply transformation
+    # Step 5: Apply transformation (using ANTs)
     mask_dir = twovol_dir / "masks"
     network_coreg_files = []
     for network in network_paths:
         output_file = mask_dir / (network.with_suffix("").stem + f"_to_task-2vol_run-{str(next_run).zfill(2)}_mean.nii.gz")
-        apply_xfm(input_file=network, reference_file=mean_file, xfm_file=xfm_file, output_file=output_file, interp='nearestneighbour', overwrite=overwrite)
+        apply_xfm_ants(input_file=network, reference_file=mean_file, transform_files=xfm_files, output_file=output_file, interpolator='nearestNeighbor', overwrite=overwrite)
         network_coreg_files.append(output_file)
 
     return network_coreg_files

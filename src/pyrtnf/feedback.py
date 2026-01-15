@@ -1128,7 +1128,7 @@ class NeurofeedbackCoordinator:
         self._error_callback = error_callback
 
         # CSV log setup with BIDS-style naming
-        self._csv_path = self.output_dir / f"{self.subject}_task-{self.task}_run-{run_str}_feedbacklog.csv"
+        self._csv_path = self.output_dir / f"{self.subject}_task-{self.task}_run-{run_str}_feedbacklog.tsv"
         self._design_matrix_path = self.output_dir / f"{self.subject}_task-{self.task}_run-{run_str}_design.tsv"
 
         logger.info(
@@ -1139,7 +1139,7 @@ class NeurofeedbackCoordinator:
     def _init_csv(self) -> None:
         """Initialize CSV log file with header."""
         self._csv_file = open(self._csv_path, "w", newline="")
-        self._csv_writer = csv.writer(self._csv_file)
+        self._csv_writer = csv.writer(self._csv_file, delimiter='\t')
         header = ["volume", "time", "is_baseline"] + self.mask_names
         self._csv_writer.writerow(header)
         self._csv_file.flush()
@@ -1492,6 +1492,11 @@ class NeurofeedbackCoordinator:
             self._csv_file.flush()
 
         # Log to console with timing info
+        # proc = processing time for this single volume (dcm2niix + GLM update)
+        # drift = cumulative timing difference (actual elapsed time - expected time based on TR)
+        #         Positive drift means processing is falling behind schedule.
+        #         Expected for volume N: N * TR seconds. Drift accumulates from inter-volume
+        #         delays, file I/O overhead, and scanner timing variability.
         status = "BASELINE" if is_baseline else "ACTIVE"
         activation_str = "  ".join(
             f"{name}={activations[name]:+.3f}" for name in self.mask_names
@@ -1499,12 +1504,13 @@ class NeurofeedbackCoordinator:
         
         # Warn if processing is falling behind
         queue_warning = f" [QUEUE:{queue_depth}]" if queue_depth > 0 else ""
-        drift_str = f"+{timing_drift:.2f}" if timing_drift >= 0 else f"{timing_drift:.2f}"
+        timing_drift_ms = timing_drift * 1000  # Convert to ms for consistency
+        drift_str = f"+{timing_drift_ms:.0f}" if timing_drift_ms >= 0 else f"{timing_drift_ms:.0f}"
         
         logger.info(
             f"[{elapsed_time:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
             f"({status}): {activation_str} "
-            f"[proc:{total_duration:.0f}ms drift:{drift_str}s]{queue_warning}"
+            f"[proc:{total_duration:.0f}ms drift:{drift_str}ms]{queue_warning}"
         )
 
     def _run_simulator(self) -> None:
