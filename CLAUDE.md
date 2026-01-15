@@ -41,9 +41,11 @@ The library follows a sequential pipeline with numbered output directories (01_,
    - Thresholds masks by voxel count (2000 default)
    - `coregister_2vol()` handles registration to 2-volume feedback space
 
-3. **Feedback Estimation** (`feedback.py`) - Real-time activation computation (stub - to be implemented):
-   - `IncrementalGLM` - Gentleman's algorithm for online least squares updates
-   - Will include mask alignment, nuisance regression, z-scoring
+3. **Feedback Estimation** (`feedback.py`) - Real-time activation computation:
+   - `IncrementalGLM` - Gentleman's algorithm for online least squares updates with continuous normalization
+   - `FeedbackEstimator` - Processes fMRI volumes, fits GLM to remove nuisance signals
+   - `NeurofeedbackCoordinator` - Watches for DICOMs, converts to NIfTI, processes through estimator
+   - `run_feedback_session()` - High-level function that handles both simulation and real-time modes
 
 4. **Simulation** (`simulator.py`) - `DicomSimulator` copies DICOMs at TR intervals for offline testing. Auto-extracts TR from DICOM headers.
 
@@ -80,3 +82,41 @@ Preprocessing creates numbered directories:
 
 Mask extraction:
 - `01_ica/`, `02_mnireg/`, `03_masks/`, `01_2vol/`
+
+## Usage Examples
+
+### Running a Feedback Session (Simulation Mode)
+```python
+from pyrtnf import run_feedback_session
+
+# Offline testing with simulated DICOM acquisition
+results = run_feedback_session(
+    mask_paths=['/path/to/dmn_mask.nii.gz'],
+    subject='sub-01',
+    task='nback',
+    run=1,
+    output_dir='/path/to/output',
+    n_baseline=25,
+    n_volumes=150,
+    # Enable simulation mode
+    simulator_source_dir='/path/to/source_dicoms',
+    simulator_speed=10.0,  # 10x speed for testing
+)
+```
+
+### Running a Feedback Session (Real-Time Mode)
+```python
+from pyrtnf import run_feedback_session
+
+# Real-time processing with scanner acquisition
+results = run_feedback_session(
+    mask_paths=['/path/to/dmn_mask.nii.gz'],
+    subject='sub-01',
+    task='nback',
+    run=1,
+    output_dir='/path/to/output',
+    incoming_dir='/scanner/export/dicoms',  # Scanner DICOM directory
+    n_baseline=25,
+    n_volumes=200,
+)
+```

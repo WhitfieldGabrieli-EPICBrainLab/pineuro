@@ -12,5 +12,6 @@ Requires-Dist: pandas
 Requires-Dist: pydicom
 Requires-Dist: templateflow
 Requires-Dist: psychopy
+Requires-Dist: watchdog
 Provides-Extra: dev
 Dynamic: license-file

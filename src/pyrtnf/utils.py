@@ -233,7 +233,8 @@ def dicom_to_nifti(
         output_dir: Union[str, Path],
         output_name: str,
         overwrite: bool = False,
-        verbose: bool = True
+        verbose: bool = True,
+        compress: bool = True
 ) -> Path:
     """
     Convert DICOM file(s) to NIfTI format using dcm2niix.
@@ -251,6 +252,9 @@ def dicom_to_nifti(
         If False, skip command if all output files already exist.
     verbose : bool, default=True
         If False, suppresses dcm2niix output messages.
+    compress : bool, default=True
+        If True, output gzip-compressed NIfTI (.nii.gz).
+        If False, output uncompressed NIfTI (.nii) for faster writes.
 
     Returns
     -------
@@ -259,44 +263,39 @@ def dicom_to_nifti(
 
     Notes
     -----
-    If dicom_dir is a file path, the file is copied to a temporary directory
-    before conversion to ensure only that file is converted.
-    If dicom_dir is a directory path, all DICOM files in that directory will be converted.
+    Set compress=False for real-time processing where speed is critical.
+    Uncompressed output saves ~50-100ms per volume but produces larger files.
 
     """
-    
+
     dicom_path = Path(dicom_dir)
-    
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Add quiet flag if not verbose
     quiet_flag = [] if verbose else ['-q']
-    
-    # If a single file is provided, create a temp directory with just that file
+
+    # Compression flag: -z y for gzip, -z n for uncompressed
+    compress_flag = 'y' if compress else 'n'
+    ext = '.nii.gz' if compress else '.nii'
+    nifti_path = output_dir / f"{output_name}{ext}"
+
+    # Handle single file vs directory
+    # If a single file is given, copy it to a temp directory to avoid converting
+    # all DICOMs in the same directory
+    temp_dir = None
     if dicom_path.is_file():
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir_path = Path(tmpdir)
-            # Copy the DICOM file to temp directory
-            tmp_dicom = tmpdir_path / dicom_path.name
-            shutil.copy2(dicom_path, tmp_dicom)
-            
-            # Build command with temp directory
-            cmd = ['dcm2niix'] + quiet_flag + ['-z', 'y', '-o', str(output_dir), '-f', str(output_name), str(tmpdir_path)]
-            nifti_path = Path(output_dir) / f"{output_name}.nii.gz"
-            
-            # Run dcm2niix
-            run_command(
-                cmd_name='dcm2niix',
-                cmd=cmd,
-                description='Converting DICOM to NIfTI',
-                inputs=dicom_path,
-                outputs=nifti_path,
-                overwrite=overwrite,
-                verbose=verbose
-            )
+        temp_dir = tempfile.mkdtemp(prefix='dcm2niix_')
+        temp_dicom = Path(temp_dir) / dicom_path.name
+        shutil.copy2(dicom_path, temp_dicom)
+        conversion_path = Path(temp_dir)
     else:
-        # Directory path - process normally
-        cmd = ['dcm2niix'] + quiet_flag + ['-z', 'y', '-o', str(output_dir), '-f', str(output_name), str(dicom_path)]
-        nifti_path = Path(output_dir) / f"{output_name}.nii.gz"
-        
+        conversion_path = dicom_path
+
+    try:
+        # Build command
+        cmd = ['dcm2niix'] + quiet_flag + ['-z', compress_flag, '-o', str(output_dir), '-f', str(output_name), str(conversion_path)]
+
         # Run dcm2niix
         run_command(
             cmd_name='dcm2niix',
@@ -307,6 +306,10 @@ def dicom_to_nifti(
             overwrite=overwrite,
             verbose=verbose
         )
+    finally:
+        # Clean up temp directory if created
+        if temp_dir is not None and Path(temp_dir).exists():
+            shutil.rmtree(temp_dir)
 
     return nifti_path
 

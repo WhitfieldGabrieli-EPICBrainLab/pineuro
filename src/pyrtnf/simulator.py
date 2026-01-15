@@ -21,6 +21,12 @@ Files are sorted by InstanceNumber or AcquisitionTime to ensure proper temporal 
 TR can be specified or automatically read from DICOM headers. The speed parameter enables
 faster-than-realtime simulation (e.g., speed=2.0 for 2x speed).
 
+**Timing Model:**
+The simulator uses deadline-based timing to maintain consistent TR intervals regardless
+of file copy duration. Each volume has an expected arrival time (volume_index * TR),
+and the simulator sleeps until that deadline rather than sleeping a fixed duration
+after each copy. This prevents timing drift when copy operations take variable time.
+
 Command-line usage:
     python -m pyrtnf.simulator --source /path/to/dicoms --target /path/to/incoming --tr 1.5 --speed 1.0
 
@@ -31,22 +37,26 @@ References
 """
 
 # Standard library imports
-from typing import Union, Optional, List
+import argparse
+import logging
 from pathlib import Path
 import shutil
 import time
-import argparse
+from typing import Union, Optional, List, Callable
 
 # Third-party imports
 import pydicom
 
 # Configure module-level logger
-import logging
 logger = logging.getLogger(__name__)
 
 class DicomSimulator:
     """
     Simulates real-time DICOM acquisition by copying files at TR intervals.
+
+    Uses deadline-based timing to ensure consistent TR intervals regardless of
+    copy operation duration. Each volume has an expected arrival time, and the
+    simulator sleeps until that deadline rather than sleeping a fixed duration.
 
     Parameters
     ----------
@@ -63,6 +73,14 @@ class DicomSimulator:
     cleanup_on_complete : bool, default=False
         Whether to delete the entire target directory after simulation completes
 
+    Attributes
+    ----------
+    start_time : float or None
+        Unix timestamp when simulation started (set by start() or copy_volumes_iter)
+    volume_copied_callback : callable or None
+        Optional callback invoked after each volume is copied, with signature:
+        callback(volume_num: int, elapsed: float, expected_time: float)
+
     Raises
     ------
     FileNotFoundError
@@ -70,6 +88,22 @@ class DicomSimulator:
     ValueError
         If source_dir is not a directory or contains no DICOM files
 
+    Notes
+    -----
+    **Timing Model:**
+    
+    Volume N should arrive at time N * TR (0-indexed). The simulator computes
+    the expected arrival time for each volume and sleeps until that deadline.
+    This compensates for variable copy duration and prevents cumulative drift.
+    
+    Example at TR=1.2s, speed=1x:
+    - Volume 0: deadline = 0.0s (copy immediately after start)
+    - Volume 1: deadline = 1.2s
+    - Volume 2: deadline = 2.4s
+    - etc.
+    
+    If a copy takes 0.1s, the next sleep is 1.1s (not 1.2s), maintaining
+    the overall schedule.
     """
 
     def __init__(
@@ -87,6 +121,10 @@ class DicomSimulator:
         self.speed = speed
         self.clear_target = clear_target
         self.cleanup_on_complete = cleanup_on_complete
+        
+        # Timing state
+        self.start_time: Optional[float] = None
+        self.volume_copied_callback: Optional[Callable[[int, float, float], None]] = None
 
         if not self.source_dir.exists():
             raise FileNotFoundError(f"Source directory not found: {self.source_dir}")
@@ -105,6 +143,32 @@ class DicomSimulator:
 
         self.delay = self.tr / self.speed
         logger.info(f"Effective delay: {self.delay:.3f}s (speed={self.speed}x)")
+    
+    def _sleep_until_deadline(self, deadline: float) -> float:
+        """
+        Sleep until the specified deadline time.
+        
+        Parameters
+        ----------
+        deadline : float
+            Absolute time (from time.time()) to sleep until.
+            
+        Returns
+        -------
+        float
+            Actual sleep duration (may be 0 if deadline already passed).
+        """
+        now = time.time()
+        sleep_duration = deadline - now
+        if sleep_duration > 0:
+            time.sleep(sleep_duration)
+            return sleep_duration
+        else:
+            # Deadline already passed - we're running behind
+            lag = -sleep_duration
+            if lag > self.delay * 0.1:  # Warn if >10% behind schedule
+                logger.warning(f"Simulator running {lag:.3f}s behind schedule")
+            return 0.0
 
     def _get_sorted_dicoms(self) -> List[Path]:
         """
@@ -169,9 +233,94 @@ class DicomSimulator:
             shutil.rmtree(self.target_dir)
             logger.info(f"Deleted target directory: {self.target_dir}")
 
-    def run(self, n_volumes: Optional[int] = None) -> None:
+    def copy_volumes_iter(self, n_volumes: Optional[int] = None):
         """
-        Run the DICOM simulation.
+        Generator that copies volumes one at a time, yielding after each.
+
+        This method is designed for integration with the feedback coordinator,
+        allowing the simulator to run in the same thread/process while yielding
+        control between volume copies.
+        
+        Uses deadline-based timing: each volume has an expected arrival time,
+        and we sleep until that deadline rather than sleeping a fixed duration.
+        This ensures consistent TR intervals regardless of copy operation duration.
+
+        Parameters
+        ----------
+        n_volumes : int, optional
+            Number of volumes to simulate. If None, simulates all available volumes.
+
+        Yields
+        ------
+        int
+            Volume number (1-indexed) after each copy
+
+        Examples
+        --------
+        >>> sim = DicomSimulator(source_dir, target_dir, tr=1.5, speed=2.0)
+        >>> for vol_num in sim.copy_volumes_iter(n_volumes=10):
+        ...     print(f"Copied volume {vol_num}")
+        """
+        self.target_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.clear_target:
+            self._clear_target_directory()
+
+        files_to_send = self.dicom_files[:n_volumes] if n_volumes else self.dicom_files
+        n_total = len(files_to_send)
+
+        logger.info(f"Starting DICOM simulator: {n_total} volumes at {self.speed}x speed")
+        logger.debug(f"TR: {self.tr}s | Delay: {self.delay:.3f}s")
+
+        # Set start time if not already set (coordinator may set it earlier)
+        if self.start_time is None:
+            self.start_time = time.time()
+
+        for i, src_file in enumerate(files_to_send):
+            # Compute deadline for this volume (0-indexed, so vol 0 arrives at t=delay)
+            # Volume arrives after one TR (simulating acquisition time)
+            expected_time = (i + 1) * self.delay
+            deadline = self.start_time + expected_time
+            
+            # Sleep until deadline
+            self._sleep_until_deadline(deadline)
+
+            # Copy the file
+            dst_file = self.target_dir / src_file.name
+            copy_start = time.time()
+            shutil.copy2(src_file, dst_file)
+            copy_duration = time.time() - copy_start
+            
+            actual_elapsed = time.time() - self.start_time
+            logger.debug(
+                f"Copied volume {i+1}/{n_total}: {src_file.name} "
+                f"(expected={expected_time:.3f}s, actual={actual_elapsed:.3f}s, "
+                f"copy={copy_duration*1000:.1f}ms)"
+            )
+            
+            # Invoke callback if set
+            if self.volume_copied_callback is not None:
+                try:
+                    self.volume_copied_callback(i + 1, actual_elapsed, expected_time)
+                except Exception as e:
+                    logger.error(f"Volume callback error: {e}")
+
+            # Yield control back to caller
+            yield i + 1
+
+        logger.info(f"Simulator complete: {n_total} volumes copied")
+
+        if self.cleanup_on_complete:
+            self.cleanup()
+
+    def run(self, n_volumes: Optional[int] = None) -> None:
+        """Run the DICOM simulation with CLI progress output.
+        
+        Uses deadline-based timing to ensure consistent TR intervals.
+        
+        This method uses print() instead of logging for user-facing CLI output
+        with formatted banners and real-time progress. For programmatic use,
+        see copy_volumes_iter() which uses logging instead.
 
         Parameters
         ----------
@@ -195,18 +344,29 @@ class DicomSimulator:
         print(f"Target: {self.target_dir}")
         print(f"{'='*60}\n")
 
-        start_time = time.time()
+        # Set start time
+        self.start_time = time.time()
+        
         for i, src_file in enumerate(files_to_send):
+            # Compute deadline for this volume
+            expected_time = (i + 1) * self.delay
+            deadline = self.start_time + expected_time
+            
+            # Sleep until deadline
+            self._sleep_until_deadline(deadline)
+
             dst_file = self.target_dir / src_file.name
             shutil.copy2(src_file, dst_file)
-            elapsed = time.time() - start_time
-            print(f"[{elapsed:7.2f}s] Volume {i+1:4d}/{n_total}: {src_file.name}")
-            if i < n_total - 1:
-                time.sleep(self.delay)
+            
+            actual_elapsed = time.time() - self.start_time
+            drift = actual_elapsed - expected_time
+            drift_str = f"+{drift:.3f}" if drift >= 0 else f"{drift:.3f}"
+            print(f"[{actual_elapsed:7.2f}s] Volume {i+1:4d}/{n_total}: {src_file.name} (drift: {drift_str}s)")
 
-        total_time = time.time() - start_time
+        total_time = time.time() - self.start_time
+        expected_total = n_total * self.delay
         print(f"\n{'='*60}")
-        print(f"Simulation complete. Total time: {total_time:.1f}s")
+        print(f"Simulation complete. Total time: {total_time:.1f}s (expected: {expected_total:.1f}s)")
         print(f"{'='*60}\n")
 
         if self.cleanup_on_complete:

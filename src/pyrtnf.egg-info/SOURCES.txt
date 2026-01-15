@@ -2,12 +2,9 @@ LICENSE
 README.md
 pyproject.toml
 src/pyrtnf/__init__.py
-src/pyrtnf/display.py
 src/pyrtnf/feedback.py
 src/pyrtnf/mask_extraction.py
-src/pyrtnf/metrics.py
 src/pyrtnf/preprocessing.py
-src/pyrtnf/session.py
 src/pyrtnf/simulator.py
 src/pyrtnf/utils.py
 src/pyrtnf.egg-info/PKG-INFO
@@ -18,5 +15,5 @@ src/pyrtnf.egg-info/top_level.txt
 src/pyrtnf/tasks/__init__.py
 src/pyrtnf/tasks/ball.py
 src/pyrtnf/tasks/base.py
-src/pyrtnf/tasks/logging.py
+src/pyrtnf/tasks/utils.py
 tests/test.py

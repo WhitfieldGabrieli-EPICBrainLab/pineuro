@@ -31,11 +31,15 @@ Hinds, O., et al. (2011). Computing moment-to-moment BOLD activation for
 
 # Standard library imports
 import csv
+import json
 import logging
 from pathlib import Path
 import threading
 import time
 from typing import Callable, Optional, Sequence
+from collections import OrderedDict
+import heapq
+import re
 
 # Third-party imports
 import nibabel as nib
@@ -43,10 +47,9 @@ from nibabel.nifti1 import Nifti1Image
 import numpy as np
 from numpy.typing import NDArray
 import pydicom
+from scipy.stats import gamma as gamma_dist
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, DirCreatedEvent
-import json
-import re
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -131,29 +134,21 @@ class IncrementalGLM:
         self.n_nuisance = n_nuisance
         self.n_outputs = n_outputs
 
-        # Observation counter
         self.n_obs = 0
 
-        # R matrix from QR decomposition: upper triangular (p x p)
-        # Augmented with an extra column for the cross-product with y
-        # Shape: (n_regressors, n_regressors + n_outputs)
+        # R matrix from QR decomposition: upper triangular, augmented with y cross-product
         self._R: NDArray[np.float64] = np.zeros(
             (n_regressors, n_regressors + n_outputs), dtype=np.float64
         )
 
-        # Residual sum of squares (RSS) for each output - tracks full model error
-        # This is accumulated from the Givens rotation residuals
+        # Residual sum of squares and mean squared error for each output
         self._rss: NDArray[np.float64] = np.zeros(n_outputs, dtype=np.float64)
-
-        # Residual mean squared error (MSE) for each output - used for weighting
-        # This is RSS / n_obs
         self._residual_mse: NDArray[np.float64] = np.zeros(n_outputs, dtype=np.float64)
 
-        # Steady-state RSS and MSE (frozen after n_steady_state observations)
-        # After baseline, these values are frozen for stable normalization
+        # Steady-state statistics (frozen after baseline for stable normalization)
         self._steady_state_rss: Optional[NDArray[np.float64]] = None
         self._steady_state_residual_mse: Optional[NDArray[np.float64]] = None
-        self._steady_state_timepoint: Optional[int] = None  # Frozen timepoint for normalization
+        self._steady_state_timepoint: Optional[int] = None
 
     def _apply_givens_rotation(
         self,
@@ -384,6 +379,111 @@ class IncrementalGLM:
             )
 
 
+# ==============================================================================
+# HRF and Task Regressor Computation
+# ==============================================================================
+
+
+def _compute_hrf(tr: float, duration: float = 32.0) -> NDArray[np.float64]:
+    """Compute canonical double-gamma HRF (SPM/MURFI style).
+
+    Parameters
+    ----------
+    tr : float
+        Repetition time in seconds.
+    duration : float, optional
+        Duration of HRF in seconds. Default is 32s.
+
+    Returns
+    -------
+    hrf : ndarray
+        HRF sampled at TR intervals, normalized to peak at 1.0.
+
+    Notes
+    -----
+    Uses SPM canonical HRF parameters:
+    - Positive gamma: shape=6, scale=1 (peak ~5s)
+    - Negative gamma: shape=16, scale=1 (peak ~16s)
+    - Undershoot ratio: 1/6
+    """
+    # Time points at TR intervals
+    t = np.arange(0, duration, tr)
+
+    # SPM canonical HRF parameters
+    # Positive response: gamma(6, 1) peaks at ~5s
+    # Undershoot: gamma(16, 1) peaks at ~16s
+    a1, b1 = 6.0, 1.0  # shape, scale for positive response
+    a2, b2 = 16.0, 1.0  # shape, scale for undershoot
+    c = 1.0 / 6.0  # undershoot ratio
+
+    # Double-gamma HRF
+    hrf = gamma_dist.pdf(t, a1, scale=b1) - c * gamma_dist.pdf(t, a2, scale=b2)
+
+    # Normalize to peak at 1.0
+    hrf = hrf / np.max(hrf)
+
+    return hrf.astype(np.float64)
+
+
+def _compute_task_regressor(
+    n_baseline: int,
+    n_volumes: int,
+    tr: float,
+) -> NDArray[np.float64]:
+    """Compute HRF-convolved boxcar task regressor.
+
+    Creates a task regressor where:
+    - Baseline period (0 to n_baseline-1): task = 0
+    - Feedback period (n_baseline onwards): task = 1 convolved with HRF
+
+    Parameters
+    ----------
+    n_baseline : int
+        Number of baseline volumes (task = 0).
+    n_volumes : int
+        Total number of volumes.
+    tr : float
+        Repetition time in seconds.
+
+    Returns
+    -------
+    regressor : ndarray, shape (n_volumes,)
+        Task regressor values for each volume.
+
+    Notes
+    -----
+    The convolution produces the characteristic HRF response shape:
+    - Stays at 0 during baseline
+    - Ramps up after baseline onset following HRF shape
+    - Reaches steady state (~1.0) after ~25-30s
+    """
+    # Create boxcar: 0 during baseline, 1 during feedback
+    boxcar = np.zeros(n_volumes, dtype=np.float64)
+    boxcar[n_baseline:] = 1.0
+
+    # Compute HRF kernel
+    hrf = _compute_hrf(tr)
+
+    # Convolve boxcar with HRF
+    convolved = np.convolve(boxcar, hrf, mode='full')
+
+    # Trim to original length
+    regressor = convolved[:n_volumes]
+
+    # Normalize so steady-state is ~1.0 (divide by sum of HRF)
+    # This ensures the regressor reaches 1.0 after the HRF response settles
+    hrf_sum = np.sum(hrf)
+    if hrf_sum > 0:
+        regressor = regressor / hrf_sum
+
+    return regressor
+
+
+# ==============================================================================
+# FeedbackEstimator - Real-time GLM fitting for neurofeedback
+# ==============================================================================
+
+
 class FeedbackEstimator:
     """Real-time neurofeedback estimator using incremental GLM.
 
@@ -391,25 +491,25 @@ class FeedbackEstimator:
     signals and estimate BOLD activation. Supports multiple masks with
     optional voxel efficiency weighting.
 
+    The task regressor is automatically computed as an HRF-convolved boxcar:
+    - Baseline period (0 to n_baseline-1): task = 0
+    - Feedback period (n_baseline onwards): task = 1 convolved with canonical HRF
+
     Parameters
     ----------
     mask_paths : list of Path or str
         Paths to NIfTI mask files. Each mask defines a region of interest.
-    n_baseline : int, optional
-        Number of initial volumes for baseline period. Default is 25 (~30s at
-        TR=1.2s). Used for voxel weight computation.
+    n_baseline : int
+        Number of initial volumes for baseline period. Default is 25.
+    n_volumes : int
+        Total expected number of volumes. Used to pre-compute task regressor.
+    tr : float
+        Repetition time in seconds. Required for HRF computation.
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
         If True, use inverse-variance weighting for ROI aggregation (computed
         from residual MSE). If False, use simple mean. Default is False.
-    task_regressor : ndarray or Path, optional
-        Task regressor values for each volume (HRF-convolved block design).
-        Can be:
-        - ndarray of shape (n_volumes,): task regressor values
-        - Path to a design matrix file (.mat ASCII format)
-        If provided, this is treated as a regressor of interest and NOT
-        subtracted from the error signal.
 
     Attributes
     ----------
@@ -421,10 +521,10 @@ class FeedbackEstimator:
     Notes
     -----
     The GLM design matrix structure:
-    - Column 0: Task regressor (of interest, NOT subtracted from error) - if provided
-    - Column 1 (or 0 if no task): Intercept (constant) - nuisance
-    - Column 2 (or 1): Linear drift - nuisance
-    - Columns 3-8 (or 2-7): 6 motion parameters (differential) - nuisance
+    - Column 0: Task regressor (of interest, NOT subtracted from error)
+    - Column 1: Intercept (constant) - nuisance
+    - Column 2: Linear drift - nuisance
+    - Columns 3-8: 6 motion parameters (differential) - nuisance
 
     Activation is computed using continuous normalization (Hinds et al., 2011):
     - Error = y - X_nuisance @ beta_nuisance (removing nuisance only)
@@ -436,35 +536,39 @@ class FeedbackEstimator:
     """
 
     N_NUISANCE_REGRESSORS = 8  # intercept + drift + 6 motion
+    # Pre-compiled regex for motion parameter extraction (avoids re-compilation per volume)
+    _MOTION_PATTERN = re.compile(r'Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)')
 
     def __init__(
         self,
         mask_paths: Sequence[Path | str],
-        n_baseline: int = 25,
+        n_baseline: int,
+        n_volumes: int,
+        tr: float,
         mask_names: Optional[list[str]] = None,
         use_efficiency_weights: bool = False,
-        task_regressor: Optional[NDArray[np.float64] | Path | str] = None,
     ) -> None:
         if len(mask_paths) == 0:
             raise ValueError("At least one mask path required")
+        if n_baseline < 1:
+            raise ValueError("n_baseline must be at least 1")
+        if n_volumes < n_baseline:
+            raise ValueError("n_volumes must be >= n_baseline")
+        if tr <= 0:
+            raise ValueError("tr must be positive")
 
         self.n_baseline = n_baseline
+        self._n_volumes_expected = n_volumes
+        self._tr = tr
         self.n_volumes = 0
         self.use_efficiency_weights = use_efficiency_weights
 
-        # Load task regressor if provided
-        self._task_regressor: Optional[NDArray[np.float64]] = None
-        if task_regressor is not None:
-            self._task_regressor = self._load_task_regressor(task_regressor)
-            self._n_regressors = self.N_NUISANCE_REGRESSORS + 1  # task + nuisance
-            self._n_nuisance = self.N_NUISANCE_REGRESSORS  # only nuisance columns
-            self._task_col_idx = 0  # task regressor is first column
-            self._nuisance_start_idx = 1  # nuisance starts at column 1
-        else:
-            self._n_regressors = self.N_NUISANCE_REGRESSORS
-            self._n_nuisance = self.N_NUISANCE_REGRESSORS  # all are nuisance
-            self._task_col_idx = None
-            self._nuisance_start_idx = 0
+        # Compute task regressor (HRF-convolved boxcar)
+        self._task_regressor = _compute_task_regressor(n_baseline, n_volumes, tr)
+        self._n_regressors = self.N_NUISANCE_REGRESSORS + 1  # task + nuisance
+        self._n_nuisance = self.N_NUISANCE_REGRESSORS  # only nuisance columns
+        self._task_col_idx = 0  # task regressor is first column
+        self._nuisance_start_idx = 1  # nuisance starts at column 1
 
         # Set up mask names
         mask_paths_resolved: list[Path] = [Path(p) for p in mask_paths]
@@ -497,39 +601,9 @@ class FeedbackEstimator:
         logger.info(
             f"FeedbackEstimator initialized with {len(mask_paths)} masks, "
             f"{self._n_voxels} total voxels, "
-            f"task_regressor={'enabled' if self._task_regressor is not None else 'disabled'}, "
+            f"n_baseline={n_baseline}, n_volumes={n_volumes}, tr={tr:.3f}s, "
             f"efficiency_weights={'enabled' if use_efficiency_weights else 'disabled'}"
         )
-
-    def _load_task_regressor(
-        self, source: NDArray[np.float64] | Path | str
-    ) -> NDArray[np.float64]:
-        """Load task regressor from array or design matrix file."""
-        if isinstance(source, np.ndarray):
-            return source.astype(np.float64).ravel()
-
-        # Load from file (ASCII design matrix)
-        path = Path(source)
-        if not path.exists():
-            raise FileNotFoundError(f"Task regressor file not found: {path}")
-
-        # Parse design matrix format
-        # First line is header with column names
-        # Subsequent lines are space-separated values
-        task_values = []
-        with open(path, 'r') as f:
-            lines = f.readlines()
-
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            values = line.split()
-            if len(values) > 0:
-                # First column is the task regressor
-                task_values.append(float(values[0]))
-
-        return np.array(task_values, dtype=np.float64)
 
     def _load_single_mask(
         self, path: Path, name: str
@@ -686,9 +760,8 @@ class FeedbackEstimator:
                 logger.debug(f"Reference volume detected in {json_path}")
                 return np.zeros(6, dtype=np.float64)
 
-            # Try to extract motion parameters from pattern: Motion: x,y,z,rx,ry,rz
-            pattern = r'Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)'
-            match = re.search(pattern, image_comments)
+            # Use pre-compiled pattern for motion extraction
+            match = self._MOTION_PATTERN.search(image_comments)
 
             if match:
                 values = [float(m) for m in match.groups()]
@@ -714,10 +787,7 @@ class FeedbackEstimator:
         Returns
         -------
         X : ndarray, shape (n_regressors,)
-            Design row. If task regressor provided:
-              [task, intercept, drift, motion_diff...]
-            Otherwise:
-              [intercept, drift, motion_diff...]
+            Design row: [task, intercept, drift, motion_diff...]
         """
         # Compute relative/differential motion
         if self.n_volumes == 0:
@@ -734,21 +804,15 @@ class FeedbackEstimator:
         # Current volume index (0-based for array access)
         vol_idx = self.n_volumes  # This is the volume we're about to process
 
-        if self._task_regressor is not None:
-            # With task regressor: [task, intercept, drift, motion_diff...]
-            if vol_idx < len(self._task_regressor):
-                X[0] = self._task_regressor[vol_idx]
-            else:
-                # Extrapolate with last value if we exceed design length
-                X[0] = self._task_regressor[-1] if len(self._task_regressor) > 0 else 0.0
-            X[1] = 1.0  # intercept
-            X[2] = float(vol_idx + 1)  # linear drift (1-indexed volume number)
-            X[3:9] = motion_diff  # differential motion
+        # Design row: [task, intercept, drift, motion_diff...]
+        if vol_idx < len(self._task_regressor):
+            X[0] = self._task_regressor[vol_idx]
         else:
-            # Without task regressor: [intercept, drift, motion_diff...]
-            X[0] = 1.0  # intercept
-            X[1] = float(vol_idx + 1)  # linear drift (1-indexed volume number)
-            X[2:8] = motion_diff  # differential motion
+            # Extrapolate with last value if we exceed design length
+            X[0] = self._task_regressor[-1]
+        X[1] = 1.0  # intercept
+        X[2] = float(vol_idx + 1)  # linear drift (1-indexed volume number)
+        X[3:9] = motion_diff  # differential motion
 
         return X
 
@@ -820,10 +884,9 @@ class FeedbackEstimator:
                 f"Volume shape {data.shape[:3]} != mask shape {self._shape}"
             )
 
-        # Extract voxel values at all mask locations using flat indexing
-        data_flat = data.reshape(-1)
-        flat_indices = np.ravel_multi_index(self._voxel_indices, self._shape)
-        voxel_values = data_flat[flat_indices]
+        # Extract voxel values using direct fancy indexing (faster than reshape + ravel)
+        # self._voxel_indices is a tuple of (i, j, k) arrays
+        voxel_values = data[self._voxel_indices]
 
         # ===== 2. Extract motion parameters =====
         if motion_source is None:
@@ -894,11 +957,25 @@ class _DicomEventHandler(FileSystemEventHandler):
             self._callback(Path(src_path))
 
 
+# ==============================================================================
+# NeurofeedbackCoordinator - Watch for DICOMs and coordinate processing
+# ==============================================================================
+
+
 class NeurofeedbackCoordinator:
     """Coordinates real-time neurofeedback by watching for DICOMs.
 
     Monitors a directory for incoming DICOM files, converts them to NIfTI,
     processes through FeedbackEstimator, and logs results to CSV.
+
+    **Timing Model:**
+
+    Volumes are processed strictly in order (by filename). If volume N+1 arrives
+    before volume N, it waits in a priority queue until volume N is processed.
+    This ensures deterministic output regardless of filesystem event ordering.
+
+    Processing time per volume is logged for diagnostics. If processing
+    consistently takes longer than TR, a warning is issued (queue depth > 0).
 
     Parameters
     ----------
@@ -914,14 +991,14 @@ class NeurofeedbackCoordinator:
         Task name (e.g., 'rest', 'nback').
     run : int
         Run number (e.g., 1 for run-01).
-    n_baseline : int, optional
-        Number of initial volumes for baseline. Default is 25.
-    n_volumes : int, optional
-        Total number of volumes to process. Default is 200.
+    n_baseline : int
+        Number of initial volumes for baseline.
+    n_volumes : int
+        Total number of volumes to process.
+    tr : float
+        Repetition time in seconds. Required for HRF computation.
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
-    task_regressor : ndarray or Path, optional
-        Task regressor for the GLM. See FeedbackEstimator for details.
     use_efficiency_weights : bool, optional
         If True, use inverse-variance weighting for ROI aggregation (computed
         from residual MSE). If False, use simple mean. Default is False.
@@ -937,6 +1014,9 @@ class NeurofeedbackCoordinator:
     triggers conversion via dcm2niix and processing through FeedbackEstimator.
     Results are logged to CSV after each volume.
 
+    The task regressor is automatically computed as an HRF-convolved boxcar
+    based on n_baseline and n_volumes.
+
     Examples
     --------
     >>> coordinator = NeurofeedbackCoordinator(
@@ -946,7 +1026,9 @@ class NeurofeedbackCoordinator:
     ...     subject='sub-01',
     ...     task='rest',
     ...     run=1,
-    ...     n_volumes=100
+    ...     n_baseline=25,
+    ...     n_volumes=100,
+    ...     tr=1.2
     ... )
     >>> coordinator.run()
     """
@@ -959,11 +1041,14 @@ class NeurofeedbackCoordinator:
         subject: str,
         task: str,
         run: int,
-        n_baseline: int = 25,
-        n_volumes: int = 200,
+        n_baseline: int,
+        n_volumes: int,
+        tr: float,
         mask_names: Optional[list[str]] = None,
-        task_regressor: Optional[NDArray[np.float64] | Path | str] = None,
         use_efficiency_weights: bool = False,
+        activation_callback: Optional[Callable[[dict[str, float], int, float, bool], None]] = None,
+        error_callback: Optional[Callable[[Exception], None]] = None,
+        simulator=None,  # DicomSimulator instance for simulation mode
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -972,6 +1057,7 @@ class NeurofeedbackCoordinator:
         self.run_number = run
         self.n_baseline = n_baseline
         self.n_volumes = n_volumes
+        self._tr = tr
 
         # Validate watch directory
         if not self.watch_dir.exists():
@@ -997,19 +1083,49 @@ class NeurofeedbackCoordinator:
         self._estimator = FeedbackEstimator(
             mask_paths=list(mask_paths_resolved),
             n_baseline=n_baseline,
+            n_volumes=n_volumes,
+            tr=tr,
             mask_names=mask_names,
             use_efficiency_weights=use_efficiency_weights,
-            task_regressor=task_regressor,
         )
 
         # Processing state
         self.n_processed = 0
         self._processed_files: set[str] = set()
         self._pending_files: list[Path] = []
+        self._pending_heap: list[tuple[str, Path]] = []  # Priority queue: (filename, path)
+        self._next_expected_filename: Optional[str] = None  # Filename we're waiting for
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._ready_event = threading.Event()  # Signal when coordinator is ready
+        self._trigger_event = threading.Event()  # Signal when trigger received (starts acquisition)
+        self._error: Optional[Exception] = None  # Store any error that occurs
         self._start_time: Optional[float] = None
         self.design_matrix: list[NDArray[np.float64]] = []
+        
+        # Timing diagnostics
+        self._timing_stats: dict[str, list[float]] = {
+            'dcm2niix_ms': [],
+            'glm_ms': [],
+            'total_ms': [],
+            'queue_depth': [],
+        }
+
+        # Simulator integration
+        self._simulator = simulator
+        self._simulator_thread: Optional[threading.Thread] = None
+
+        # Cleanup options
+        self._cleanup_incoming: bool = False
+        self._cleanup_nifti: bool = False
+
+        # Shared state for PsychoPy task communication (thread-safe)
+        self._latest_activations: dict[str, float] = {name: 0.0 for name in mask_names}
+        self._latest_volume: int = 0
+        self._latest_time: float = 0.0
+        self._latest_is_baseline: bool = True
+        self._activation_callback = activation_callback
+        self._error_callback = error_callback
 
         # CSV log setup with BIDS-style naming
         self._csv_path = self.output_dir / f"{self.subject}_task-{self.task}_run-{run_str}_feedbacklog.csv"
@@ -1038,23 +1154,16 @@ class NeurofeedbackCoordinator:
     def _save_design_matrix(self) -> None:
         """Save design matrix to TSV file.
 
-        Saves the design matrix with column names corresponding to the regressors:
-        - If task regressor provided: [task, intercept, drift, motion_x, motion_y, motion_z, motion_rx, motion_ry, motion_rz]
-        - Otherwise: [intercept, drift, motion_x, motion_y, motion_z, motion_rx, motion_ry, motion_rz]
+        Saves the design matrix with column names:
+        [task, intercept, drift, motion_x, motion_y, motion_z, motion_rx, motion_ry, motion_rz]
         """
         if not self.design_matrix:
             logger.warning("No design matrix data to save")
             return
 
-        # Build column names based on whether task regressor was used
-        if self._estimator._task_regressor is not None:
-            column_names = ['task', 'intercept', 'drift',
-                          'motion_x', 'motion_y', 'motion_z',
-                          'motion_rx', 'motion_ry', 'motion_rz']
-        else:
-            column_names = ['intercept', 'drift',
-                          'motion_x', 'motion_y', 'motion_z',
-                          'motion_rx', 'motion_ry', 'motion_rz']
+        column_names = ['task', 'intercept', 'drift',
+                       'motion_x', 'motion_y', 'motion_z',
+                       'motion_rx', 'motion_ry', 'motion_rz']
 
         # Convert design matrix list to numpy array
         design_array = np.array(self.design_matrix)
@@ -1069,11 +1178,210 @@ class NeurofeedbackCoordinator:
                 row_str = '\t'.join(f'{val:.6f}' for val in row)
                 f.write(row_str + '\n')
 
+    @property
+    def tr(self) -> float:
+        """
+        Get the TR (repetition time) in seconds.
+
+        Returns
+        -------
+        float
+            TR in seconds
+
+        Raises
+        ------
+        ValueError
+            If TR has not been set and cannot be determined from simulator
+
+        Notes
+        -----
+        In simulation mode, TR is extracted from the simulator.
+        In real-time mode, TR must be provided to the constructor or will be
+        extracted from the first DICOM file.
+        """
+        if self._tr is not None:
+            return self._tr
+
+        # Try to get from simulator
+        if self._simulator is not None:
+            self._tr = self._simulator.tr
+            return self._tr
+
+        raise ValueError(
+            "TR not available. Provide tr parameter to NeurofeedbackCoordinator "
+            "constructor or wait for first DICOM to be processed."
+        )
+
+    def wait_until_ready(self, timeout: float = 5.0) -> bool:
+        """
+        Wait until the coordinator is ready to process volumes.
+
+        This method blocks until the coordinator's watchdog Observer has started
+        and is ready to detect new DICOM files, or until the timeout is reached.
+
+        Parameters
+        ----------
+        timeout : float, default=5.0
+            Maximum time to wait in seconds
+
+        Returns
+        -------
+        bool
+            True if coordinator is ready, False if timeout occurred
+
+        Raises
+        ------
+        TimeoutError
+            If coordinator is not ready within timeout period
+
+        Examples
+        --------
+        >>> coordinator = NeurofeedbackCoordinator(...)
+        >>> coordinator.wait_until_ready(timeout=5)
+        True
+        """
+        is_ready = self._ready_event.wait(timeout=timeout)
+        if not is_ready:
+            raise TimeoutError(
+                f"Coordinator not ready within {timeout}s. "
+                "Ensure coordinator.run() has been called in a background thread."
+            )
+        return is_ready
+
+    def send_trigger(self) -> None:
+        """
+        Signal that acquisition should begin.
+
+        This method is called by the task (e.g., after displaying "waiting for scanner"
+        and receiving a trigger key press) to signal the coordinator to start processing.
+
+        In simulation mode, the trigger is sent automatically. In real-time mode, this
+        should be called after a scanner trigger is received (e.g., keyboard press).
+
+        Examples
+        --------
+        >>> coordinator = NeurofeedbackCoordinator(...)
+        >>> coordinator.wait_until_ready()
+        >>> coordinator.send_trigger()  # Start acquisition
+        """
+        self._trigger_event.set()
+        logger.info("Trigger received - acquisition will begin")
+
+    def check_error(self) -> None:
+        """
+        Check if an error occurred in the coordinator or simulator thread.
+
+        This method should be called periodically (e.g., from the task loop)
+        to detect and propagate errors that occurred in background threads.
+
+        Raises
+        ------
+        Exception
+            Re-raises the stored exception if one occurred
+
+        Examples
+        --------
+        >>> coordinator = NeurofeedbackCoordinator(...)
+        >>> # In task loop:
+        >>> coordinator.check_error()  # Raises if background error occurred
+        """
+        if self._error is not None:
+            raise self._error
+
+    def is_complete(self) -> bool:
+        """
+        Check if the feedback session is complete or stopped.
+
+        Returns True if any of these conditions are met:
+        - All expected volumes have been processed
+        - Stop event has been set (via stop() method)
+        - An error has occurred
+
+        Returns
+        -------
+        bool
+            True if session is complete, False otherwise
+
+        Examples
+        --------
+        >>> coordinator = NeurofeedbackCoordinator(...)
+        >>> while not coordinator.is_complete():
+        ...     # Process task updates
+        ...     pass
+        """
+        return (
+            self.n_processed >= self.n_volumes
+            or self._stop_event.is_set()
+            or self._error is not None
+        )
+
     def _on_new_file(self, file_path: Path) -> None:
-        """Callback when a new file is detected."""
+        """Callback when a new file is detected.
+        
+        Adds file to priority queue (heap) sorted by filename.
+        """
         with self._lock:
             if file_path.name not in self._processed_files:
-                self._pending_files.append(file_path)
+                # Add to heap (priority queue) sorted by filename
+                heapq.heappush(self._pending_heap, (file_path.name, file_path))
+
+    def _scan_for_existing_files(self) -> None:
+        """Scan watch directory for any DICOM files not yet processed.
+
+        This handles files that may have been missed by watchdog events,
+        particularly when the simulator runs faster than processing.
+        """
+        # Glob files OUTSIDE the lock to avoid blocking other threads during I/O
+        found_files: list[Path] = []
+        for ext in ['*.dcm', '*.DCM', '*.ima', '*.IMA']:
+            found_files.extend(self.watch_dir.glob(ext))
+
+        # Only hold lock for the quick heap operations
+        with self._lock:
+            existing_names = {item[0] for item in self._pending_heap}
+            for file_path in found_files:
+                if file_path.name not in self._processed_files:
+                    if file_path.name not in existing_names:
+                        heapq.heappush(self._pending_heap, (file_path.name, file_path))
+                        existing_names.add(file_path.name)
+    
+    def _get_next_file_to_process(self) -> Optional[Path]:
+        """Get the next file to process in strict order.
+        
+        Returns the file with the smallest filename (alphabetically) from the
+        pending heap, but only if it's a valid DICOM. Invalid files are skipped.
+        
+        Returns
+        -------
+        Path or None
+            Path to next file to process, or None if no valid file available.
+        """
+        with self._lock:
+            while self._pending_heap:
+                # Peek at smallest filename
+                filename, file_path = self._pending_heap[0]
+                
+                if filename in self._processed_files:
+                    # Already processed (e.g., added twice via watchdog + scan)
+                    heapq.heappop(self._pending_heap)
+                    continue
+                
+                if self._is_valid_dicom(file_path):
+                    # Valid DICOM - pop and return
+                    heapq.heappop(self._pending_heap)
+                    self._processed_files.add(filename)
+                    return file_path
+                else:
+                    # Invalid file - remove and continue
+                    heapq.heappop(self._pending_heap)
+                    logger.debug(f"Skipping invalid DICOM: {filename}")
+            
+            return None
+    
+    def _get_queue_depth(self) -> int:
+        """Get current queue depth (files waiting to be processed)."""
+        with self._lock:
+            return len(self._pending_heap)
 
     def _is_valid_dicom(self, file_path: Path) -> bool:
         """Check if file is a valid DICOM."""
@@ -1084,13 +1392,33 @@ class NeurofeedbackCoordinator:
             return False
 
     def _process_volume(self, dicom_path: Path) -> None:
-        """Convert DICOM and process through estimator."""
+        """Convert DICOM and process through estimator.
+        
+        Tracks timing for dcm2niix conversion and GLM update for diagnostics.
+        """
         from .utils import dicom_to_nifti
+        
+        process_start = time.time()
 
-        # Convert DICOM to NIfTI
+        # Extract TR from first DICOM if not yet set
+        if self._tr is None and self.n_processed == 0:
+            try:
+                dcm = pydicom.dcmread(dicom_path, stop_before_pixels=True)
+                if hasattr(dcm, 'RepetitionTime'):
+                    self._tr = float(dcm.RepetitionTime) / 1000.0
+                    logger.info(f"Extracted TR from DICOM: {self._tr}s")
+                else:
+                    logger.warning("TR not found in DICOM, using default 2.0s")
+                    self._tr = 2.0
+            except Exception as e:
+                logger.warning(f"Failed to extract TR from DICOM: {e}, using default 2.0s")
+                self._tr = 2.0
+
+        # Convert DICOM to NIfTI (with timing)
         volume_num = self.n_processed + 1
         output_name = f"vol_{volume_num:04d}"
-
+        
+        dcm2niix_start = time.time()
         try:
             nifti_path = dicom_to_nifti(
                 dicom_dir=dicom_path,
@@ -1098,43 +1426,100 @@ class NeurofeedbackCoordinator:
                 output_name=output_name,
                 overwrite=True,
                 verbose=False,
+                compress=False,  # Uncompressed for faster real-time processing
             )
         except Exception as e:
             logger.error(f"Failed to convert DICOM {dicom_path}: {e}")
             return
+        dcm2niix_duration = (time.time() - dcm2niix_start) * 1000  # ms
 
         # Derive JSON sidecar path from nifti_path
         json_path = Path(str(nifti_path).replace('.nii.gz', '.json').replace('.nii', '.json'))
 
-        # Process through estimator
+        # Process through estimator (with timing)
+        glm_start = time.time()
         try:
             activations = self._estimator.process_volume(nifti_path, json_path)
             self.design_matrix.append(self._estimator._last_design_row)
         except Exception as e:
             logger.error(f"Failed to process volume {volume_num}: {e}")
             return
+        glm_duration = (time.time() - glm_start) * 1000  # ms
+        
+        total_duration = (time.time() - process_start) * 1000  # ms
+        queue_depth = self._get_queue_depth()
+        
+        # Store timing stats
+        self._timing_stats['dcm2niix_ms'].append(dcm2niix_duration)
+        self._timing_stats['glm_ms'].append(glm_duration)
+        self._timing_stats['total_ms'].append(total_duration)
+        self._timing_stats['queue_depth'].append(queue_depth)
 
         self.n_processed += 1
-        elapsed = time.time() - self._start_time if self._start_time else 0.0
+        # Compute actual elapsed wall-clock time since session started
+        elapsed_time = time.time() - self._start_time if self._start_time else 0.0
         is_baseline = self.n_processed <= self.n_baseline
+        
+        # Compute expected time for this volume (based on TR)
+        expected_time = self.n_processed * (self._tr if self._tr else 1.2)  # fallback TR
+        timing_drift = elapsed_time - expected_time
+
+        # Update shared state (thread-safe)
+        with self._lock:
+            self._latest_activations = activations.copy()
+            self._latest_volume = self.n_processed
+            self._latest_time = elapsed_time
+            self._latest_is_baseline = is_baseline
+
+        # Invoke user callback
+        if self._activation_callback is not None:
+            try:
+                self._activation_callback(activations, self.n_processed, elapsed_time, is_baseline)
+            except Exception as e:
+                logger.error(f"Error in activation callback: {e}")
+                if self._error_callback is not None:
+                    try:
+                        self._error_callback(e)
+                    except:
+                        pass
 
         # Log to CSV
-        row = [self.n_processed, f"{elapsed:.2f}", is_baseline]
+        row = [self.n_processed, f"{elapsed_time:.2f}", is_baseline]
         row.extend([f"{activations[name]:.4f}" for name in self.mask_names])
         if self._csv_writer is not None:
             self._csv_writer.writerow(row)
         if self._csv_file is not None:
             self._csv_file.flush()
 
-        # Log to console
+        # Log to console with timing info
         status = "BASELINE" if is_baseline else "ACTIVE"
         activation_str = "  ".join(
             f"{name}={activations[name]:+.3f}" for name in self.mask_names
         )
+        
+        # Warn if processing is falling behind
+        queue_warning = f" [QUEUE:{queue_depth}]" if queue_depth > 0 else ""
+        drift_str = f"+{timing_drift:.2f}" if timing_drift >= 0 else f"{timing_drift:.2f}"
+        
         logger.info(
-            f"[{elapsed:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
-            f"({status}): {activation_str}"
+            f"[{elapsed_time:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
+            f"({status}): {activation_str} "
+            f"[proc:{total_duration:.0f}ms drift:{drift_str}s]{queue_warning}"
         )
+
+    def _run_simulator(self) -> None:
+        """Internal method to run simulator in background thread."""
+        try:
+            logger.info("Starting simulator thread")
+            for vol_num in self._simulator.copy_volumes_iter(n_volumes=self.n_volumes):
+                if self._stop_event.is_set():
+                    logger.info("Simulator stopped by stop event")
+                    break
+            logger.info("Simulator thread complete")
+        except Exception as e:
+            logger.exception(f"Simulator thread error: {e}")
+            self._error = e
+            self._stop_event.set()
 
     def run(self) -> None:
         """Run the coordinator until n_volumes processed or interrupted.
@@ -1144,6 +1529,12 @@ class NeurofeedbackCoordinator:
         # Initialize CSV
         self._init_csv()
 
+        # Clear target directory BEFORE starting watchdog to avoid picking up stale files
+        if self._simulator is not None and self._simulator.clear_target:
+            self._simulator._clear_target_directory()
+            # Mark as already cleared so simulator doesn't clear again
+            self._simulator.clear_target = False
+
         # Set up watchdog observer
         event_handler = _DicomEventHandler(self._on_new_file)
         observer = Observer()
@@ -1151,33 +1542,63 @@ class NeurofeedbackCoordinator:
         observer.start()
 
         logger.info(f"Watching {self.watch_dir} for DICOMs...")
+
+        # Signal that coordinator is ready
+        self._ready_event.set()
+        logger.debug("Coordinator ready signal set")
+
+        # Wait for trigger in both simulation and real-time mode
+        # In simulation mode, the task will call send_trigger() automatically
+        # In real-time mode, the task waits for user keypress before calling send_trigger()
+        logger.info("Waiting for trigger...")
+        self._trigger_event.wait()  # Block until trigger received
+        logger.info("Trigger received - starting acquisition")
+
+        # Set start time AFTER trigger received so elapsed time reflects actual acquisition time
         self._start_time = time.time()
+
+        # Start simulator thread after trigger (if in simulation mode)
+        if self._simulator is not None:
+            # Synchronize start time: set simulator's start_time to match coordinator's
+            self._simulator.start_time = self._start_time
+            
+            self._simulator_thread = threading.Thread(
+                target=self._run_simulator,
+                daemon=False,
+                name="SimulatorThread"
+            )
+            self._simulator_thread.start()
+            logger.info("Simulator thread started")
 
         try:
             while self.n_processed < self.n_volumes and not self._stop_event.is_set():
-                # Check for pending files
-                file_to_process = None
-                with self._lock:
-                    if self._pending_files:
-                        # Sort by filename and take first
-                        self._pending_files.sort()
-                        candidate = self._pending_files[0]
-                        if self._is_valid_dicom(candidate):
-                            file_to_process = self._pending_files.pop(0)
-                            self._processed_files.add(file_to_process.name)
-                        else:
-                            # Remove invalid file from pending
-                            self._pending_files.pop(0)
+                # Get next file in strict order (smallest filename first)
+                file_to_process = self._get_next_file_to_process()
 
                 if file_to_process:
                     self._process_volume(file_to_process)
                 else:
-                    # Brief sleep to avoid busy-waiting
-                    time.sleep(0.01)
+                    # No file ready - scan directory for any missed files
+                    # This handles cases where watchdog events were missed
+                    self._scan_for_existing_files()
+                    # Sleep to reduce CPU usage when idle (watchdog handles new file events)
+                    time.sleep(0.05)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
+        except Exception as e:
+            logger.exception(f"Coordinator error: {e}")
+            self._error = e
+            self._stop_event.set()
         finally:
+            # Stop simulator thread if running
+            if self._simulator_thread is not None and self._simulator_thread.is_alive():
+                logger.info("Stopping simulator thread")
+                self._stop_event.set()
+                self._simulator_thread.join(timeout=5)
+                if self._simulator_thread.is_alive():
+                    logger.warning("Simulator thread did not stop gracefully")
+
             observer.stop()
             observer.join()
             self._close_csv()
@@ -1189,8 +1610,391 @@ class NeurofeedbackCoordinator:
             )
             logger.info(f"Log saved to: {self._csv_path}")
             logger.info(f"Design matrix saved to: {self._design_matrix_path}")
+            
+            # Log timing statistics
+            self._log_timing_summary()
+
+            # Cleanup temporary directories if requested
+            self._cleanup_directories()
+    
+    def _log_timing_summary(self) -> None:
+        """Log summary of processing timing statistics."""
+        if not self._timing_stats['total_ms']:
+            return
+        
+        total_ms = np.array(self._timing_stats['total_ms'])
+        dcm2niix_ms = np.array(self._timing_stats['dcm2niix_ms'])
+        glm_ms = np.array(self._timing_stats['glm_ms'])
+        queue_depth = np.array(self._timing_stats['queue_depth'])
+        
+        tr_ms = (self._tr or 1.2) * 1000  # TR in ms
+        
+        logger.info("=" * 60)
+        logger.info("TIMING SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"TR: {self._tr:.3f}s ({tr_ms:.0f}ms)")
+        logger.info(f"Volumes processed: {len(total_ms)}")
+        logger.info("-" * 40)
+        logger.info(f"Total processing:  mean={total_ms.mean():.1f}ms, "
+                   f"std={total_ms.std():.1f}ms, max={total_ms.max():.1f}ms")
+        logger.info(f"  dcm2niix:        mean={dcm2niix_ms.mean():.1f}ms, "
+                   f"std={dcm2niix_ms.std():.1f}ms, max={dcm2niix_ms.max():.1f}ms")
+        logger.info(f"  GLM update:      mean={glm_ms.mean():.1f}ms, "
+                   f"std={glm_ms.std():.1f}ms, max={glm_ms.max():.1f}ms")
+        logger.info("-" * 40)
+        
+        # Check if processing typically exceeded TR
+        pct_exceeds_tr = (total_ms > tr_ms).mean() * 100
+        max_queue = queue_depth.max()
+        
+        if pct_exceeds_tr > 10:
+            logger.warning(f"Processing exceeded TR in {pct_exceeds_tr:.1f}% of volumes!")
+            logger.warning(f"Max queue depth: {max_queue} (volumes waiting)")
+        else:
+            logger.info(f"Processing within TR budget: {100-pct_exceeds_tr:.1f}% of volumes")
+            logger.info(f"Max queue depth: {max_queue}")
+        
+        logger.info("=" * 60)
+    
+    def get_timing_stats(self) -> dict:
+        """Get timing statistics for analysis.
+        
+        Returns
+        -------
+        dict
+            Dictionary with timing arrays:
+            - 'dcm2niix_ms': dcm2niix conversion time per volume (ms)
+            - 'glm_ms': GLM update time per volume (ms)
+            - 'total_ms': total processing time per volume (ms)
+            - 'queue_depth': queue depth at each volume
+        """
+        return {k: np.array(v) for k, v in self._timing_stats.items()}
+
+    def _cleanup_directories(self) -> None:
+        """Clean up temporary directories after session completes."""
+        import shutil
+
+        if self._cleanup_incoming and self.watch_dir.exists():
+            try:
+                shutil.rmtree(self.watch_dir)
+                logger.info(f"Cleaned up incoming directory: {self.watch_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up incoming directory: {e}")
+
+        if self._cleanup_nifti and self.nifti_dir.exists():
+            try:
+                shutil.rmtree(self.nifti_dir)
+                logger.info(f"Cleaned up nifti directory: {self.nifti_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up nifti directory: {e}")
+
+    def cleanup(self, force: bool = False) -> None:
+        """Clean up temporary directories created during the session.
+
+        Use this method to explicitly clean up incoming DICOM and converted
+        NIfTI directories after a feedback session completes. This is useful
+        when automatic cleanup is disabled (e.g., for debugging) but you want
+        to clean up directories after inspecting them.
+
+        Parameters
+        ----------
+        force : bool, optional
+            If True, clean up directories regardless of the `_cleanup_incoming`
+            and `_cleanup_nifti` flags set during initialization. If False
+            (default), only clean up directories if their respective cleanup
+            flags are True.
+
+        Notes
+        -----
+        This method is safe to call multiple times; it will only remove
+        directories that exist. Directories removed:
+
+        - ``watch_dir`` (incoming): Where DICOMs are copied/received
+        - ``nifti_dir``: Where converted NIfTI volumes are stored
+
+        Examples
+        --------
+        >>> # Clean up only if cleanup flags were set during init
+        >>> coordinator.cleanup()
+        >>>
+        >>> # Force cleanup regardless of initial settings
+        >>> coordinator.cleanup(force=True)
+        """
+        if force:
+            self._cleanup_incoming = True
+            self._cleanup_nifti = True
+        self._cleanup_directories()
 
     def stop(self) -> None:
         """Signal the coordinator to stop."""
         self._stop_event.set()
+
+    def get_latest_activations(self) -> dict:
+        """Get latest activation values in thread-safe manner.
+
+        Returns
+        -------
+        dict
+            Dictionary containing:
+            - 'activations': dict[str, float] - Activation per mask
+            - 'volume': int - Current volume number
+            - 'time': float - Elapsed time in seconds
+            - 'is_baseline': bool - Whether in baseline period
+        """
+        with self._lock:
+            return {
+                'activations': self._latest_activations.copy(),
+                'volume': self._latest_volume,
+                'time': self._latest_time,
+                'is_baseline': self._latest_is_baseline,
+            }
+
+
+
+
+def run_feedback_session(
+    mask_paths: list[Path | str],
+    subject: str,
+    task: str,
+    run: int,
+    output_dir: Path | str,
+    n_baseline: int,
+    n_volumes: int,
+    tr: float,
+    incoming_dir: Optional[Path | str] = None,
+    mask_names: Optional[list[str]] = None,
+    use_efficiency_weights: bool = False,
+    simulator_source_dir: Optional[Path | str] = None,
+    simulator_speed: float = 1.0,
+    simulator_clear_target: bool = True,
+    simulator_cleanup: bool = True,
+    activation_callback: Optional[Callable[[dict[str, float], int, float, bool], None]] = None,
+    error_callback: Optional[Callable[[Exception], None]] = None,
+) -> dict:
+    """Run a complete feedback session with optional DICOM simulation.
+
+    This is the main entry point for running neurofeedback sessions. It handles
+    both simulated (offline) and real-time (scanner) acquisition modes.
+
+    The task regressor is automatically computed as an HRF-convolved boxcar
+    based on n_baseline and n_volumes.
+
+    Parameters
+    ----------
+    mask_paths : list of Path or str
+        Paths to NIfTI mask files for feedback estimation.
+    subject : str
+        Subject identifier (e.g., 'sub-01').
+    task : str
+        Task name (e.g., 'rest', 'nback').
+    run : int
+        Run number (e.g., 1 for run-01).
+    output_dir : Path or str
+        Base directory for all outputs (NIfTI conversions, logs, etc.).
+    n_baseline : int
+        Number of initial volumes for baseline.
+    n_volumes : int
+        Total number of volumes to process.
+    tr : float
+        Repetition time in seconds. Required for HRF computation.
+    incoming_dir : Path or str, optional
+        Directory to watch for incoming DICOMs. If None, creates a temporary
+        directory under output_dir. For scanner acquisition, this should be
+        the directory where the scanner writes DICOMs.
+    mask_names : list of str, optional
+        Names for each mask. If not provided, uses mask filenames.
+    use_efficiency_weights : bool, optional
+        If True, use inverse-variance weighting for ROI aggregation (computed
+        from residual MSE). If False, use simple mean. Default is False.
+    simulator_source_dir : Path or str, optional
+        If provided, runs in simulation mode. Directory containing source DICOM
+        files to simulate scanner acquisition. If None, runs in real-time mode
+        and watches incoming_dir for scanner-generated DICOMs.
+    simulator_speed : float, optional
+        Speed multiplier for simulation (e.g., 2.0 for 2x speed). Default is 1.0.
+        Only used if simulator_source_dir is provided.
+    simulator_clear_target : bool, optional
+        Whether to clear incoming directory before simulation starts. Default is True.
+        Only used if simulator_source_dir is provided.
+    simulator_cleanup : bool, optional
+        Whether to delete incoming directory after simulation completes. Default is True.
+        Only used if simulator_source_dir is provided.
+    activation_callback : callable, optional
+        Function called after each volume with signature:
+        callback(activations: dict, volume: int, elapsed: float, is_baseline: bool).
+        Use this to update PsychoPy displays immediately when new data arrives.
+        Default is None.
+    error_callback : callable, optional
+        Function called if activation_callback raises an exception.
+        Signature: callback(exception: Exception). Default is None.
+
+    Returns
+    -------
+    session_info : dict
+        Dictionary containing:
+        - 'coordinator': NeurofeedbackCoordinator instance
+        - 'thread': Background thread running the coordinator
+        - 'mode': 'simulated' or 'real-time'
+        - 'started': True (always, indicates session has started)
+
+        Use coordinator.wait_until_ready() before accessing coordinator methods.
+        Use coordinator.stop() and thread.join() to gracefully shut down.
+
+    Examples
+    --------
+    Simulated (offline) mode:
+
+    >>> results = run_feedback_session(
+    ...     mask_paths=['/path/to/dmn_mask.nii.gz'],
+    ...     subject='sub-01',
+    ...     task='nback',
+    ...     run=1,
+    ...     output_dir='/path/to/output',
+    ...     n_baseline=25,
+    ...     n_volumes=150,
+    ...     tr=1.2,
+    ...     simulator_source_dir='/path/to/source_dicoms',
+    ...     simulator_speed=10.0,  # 10x speed for testing
+    ... )
+
+    Real-time (scanner) mode:
+
+    >>> results = run_feedback_session(
+    ...     mask_paths=['/path/to/dmn_mask.nii.gz'],
+    ...     subject='sub-01',
+    ...     task='nback',
+    ...     run=1,
+    ...     output_dir='/path/to/output',
+    ...     n_baseline=25,
+    ...     n_volumes=200,
+    ...     tr=1.2,
+    ...     incoming_dir='/scanner/export/dicoms',
+    ... )
+
+    Notes
+    -----
+    **Event Ordering and Trigger Mechanism**
+
+    The function implements a trigger-based workflow to synchronize task display
+    with data acquisition:
+
+    1. Coordinator starts in background thread
+    2. Coordinator signals ready (via wait_until_ready())
+    3. Task waits for trigger (keyboard or automatic)
+    4. Trigger starts data acquisition
+    5. Baseline period begins
+    6. Feedback display starts after baseline
+
+    In **simulation mode**, the trigger is sent automatically when the task calls
+    coordinator.send_trigger(). This allows for seamless testing without manual
+    intervention.
+
+    In **real-time mode**, the coordinator waits for the task to call send_trigger()
+    (typically after displaying "waiting for scanner" and receiving a keyboard
+    trigger like 't'). This synchronizes with scanner pulse timing.
+
+    **Threading Model**
+
+    The function always runs the coordinator in a background thread and returns
+    immediately. This enables integration with GUI frameworks like PsychoPy.
+
+    In simulation mode, the coordinator starts a simulator thread to copy DICOMs
+    at TR intervals. In real-time mode, it simply watches the incoming directory
+    for scanner-generated DICOMs.
+
+    Results are logged to CSV and the design matrix is saved to TSV.
+    """
+    from .simulator import DicomSimulator
+    import threading
+
+    # Convert paths
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine mode and set up incoming directory
+    if simulator_source_dir is not None:
+        mode = 'simulated'
+        # Create incoming directory if not specified
+        if incoming_dir is None:
+            incoming_dir = output_dir / 'incoming'
+        incoming_dir = Path(incoming_dir)
+        incoming_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Running in SIMULATION mode")
+        logger.info(f"Source DICOMs: {simulator_source_dir}")
+        logger.info(f"Target incoming: {incoming_dir}")
+    else:
+        mode = 'real-time'
+        if incoming_dir is None:
+            raise ValueError(
+                "incoming_dir must be specified for real-time mode "
+                "(or provide simulator_source_dir for simulation mode)"
+            )
+        incoming_dir = Path(incoming_dir)
+        if not incoming_dir.exists():
+            raise FileNotFoundError(
+                f"Incoming directory not found: {incoming_dir}. "
+                "For real-time mode, this should be the directory where the scanner writes DICOMs."
+            )
+        logger.info(f"Running in REAL-TIME mode")
+        logger.info(f"Watching: {incoming_dir}")
+
+    # Set up simulator if in simulation mode
+    simulator = None
+    if mode == 'simulated':
+        # Type checker: simulator_source_dir is guaranteed non-None here
+        # because mode='simulated' only when simulator_source_dir is not None
+        assert simulator_source_dir is not None
+
+        # Create simulator instance
+        # Note: cleanup_on_complete is set to False here because the coordinator
+        # handles cleanup of both incoming and nifti directories after completion
+        simulator = DicomSimulator(
+            source_dir=simulator_source_dir,
+            target_dir=incoming_dir,
+            tr=tr,
+            speed=simulator_speed,
+            clear_target=simulator_clear_target,
+            cleanup_on_complete=False,  # Coordinator handles cleanup
+        )
+        logger.info(f"Simulator configured (speed={simulator_speed}x)")
+
+    # Initialize coordinator with simulator
+    coordinator = NeurofeedbackCoordinator(
+        watch_dir=incoming_dir,
+        output_dir=output_dir,
+        mask_paths=mask_paths,
+        subject=subject,
+        task=task,
+        run=run,
+        n_baseline=n_baseline,
+        n_volumes=n_volumes,
+        tr=tr,
+        mask_names=mask_names,
+        use_efficiency_weights=use_efficiency_weights,
+        activation_callback=activation_callback,
+        error_callback=error_callback,
+        simulator=simulator,  # Pass simulator to coordinator
+    )
+
+    # Set cleanup flags for simulation mode
+    if mode == 'simulated':
+        coordinator._cleanup_incoming = simulator_cleanup
+        coordinator._cleanup_nifti = simulator_cleanup
+
+    # Start coordinator in background thread (always)
+    coordinator_thread = threading.Thread(
+        target=coordinator.run,
+        daemon=False,
+        name="FeedbackCoordinator"
+    )
+    coordinator_thread.start()
+    logger.info("Coordinator thread started")
+
+    return {
+        'coordinator': coordinator,
+        'thread': coordinator_thread,
+        'mode': mode,
+        'started': True,
+    }
 
