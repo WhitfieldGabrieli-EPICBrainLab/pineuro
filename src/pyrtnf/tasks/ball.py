@@ -334,6 +334,8 @@ class BallTask(BaseTask):
             wrapWidth=1.2,
             color='white',
             font=None,
+            alignText='center',
+            anchorVert='center',
         )
         
         # Question text stimulus (for post-run slider questions)
