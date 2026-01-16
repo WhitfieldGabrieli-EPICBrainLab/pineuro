@@ -1,31 +1,33 @@
 """
 DICOM simulator for offline testing of real-time neurofeedback.
 
-This module simulates real-time scanner acquisition by copying DICOM files from
-a source directory to a target directory at TR intervals, enabling offline testing
-of real-time fMRI neurofeedback pipelines.
+Summary
+-------
+Copies DICOM files from a source folder to a target folder at TR-paced
+intervals to mimic scanner acquisition for testing pipelines.
 
-Key Components
---------------
-DicomSimulator : Simulate real-time DICOM acquisition by copying files at TR intervals
+Components
+----------
+- DicomSimulator: Deadline-based copier that preserves timing and ordering
+
+Workflow
+--------
+- Sort source DICOMs
+- Determine TR (argument or header)
+- Copy to target at TR/speed deadlines, invoking optional callbacks
+- Optional cleanup of target directory on completion
 
 Dependencies
 ------------
-- pydicom
-- pathlib
-- shutil
+pydicom, pathlib, shutil
 
 Notes
 -----
-Files are sorted by InstanceNumber or AcquisitionTime to ensure proper temporal ordering.
-TR can be specified or automatically read from DICOM headers. The speed parameter enables
-faster-than-realtime simulation (e.g., speed=2.0 for 2x speed).
-
-**Timing Model:**
-The simulator uses deadline-based timing to maintain consistent TR intervals regardless
-of file copy duration. Each volume has an expected arrival time (volume_index * TR),
-and the simulator sleeps until that deadline rather than sleeping a fixed duration
-after each copy. This prevents timing drift when copy operations take variable time.
+Files are sorted to keep temporal order. TR can be provided or read from
+DICOM headers. The speed parameter accelerates or slows delivery (e.g.,
+speed=2.0 for 2x). Deadline-based timing avoids drift from variable copy
+durations, making this suitable for end-to-end dry runs without a scanner.
+Further reading: see docs/references.md.
 
 Command-line usage:
     python -m pyrtnf.simulator --source /path/to/dicoms --target /path/to/incoming --tr 1.5 --speed 1.0
@@ -33,7 +35,6 @@ Command-line usage:
 References
 ----------
 [1] DICOM Standard: https://www.dicomstandard.org/
-
 """
 
 # Standard library imports
@@ -46,6 +47,9 @@ from typing import Union, Optional, List, Callable
 
 # Third-party imports
 import pydicom
+
+# Local imports
+from .utils import get_dicom_files, get_tr_from_dicom
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -131,14 +135,14 @@ class DicomSimulator:
         if not self.source_dir.is_dir():
             raise ValueError(f"Source is not a directory: {self.source_dir}")
 
-        self.dicom_files = self._get_sorted_dicoms()
+        self.dicom_files = get_dicom_files(self.source_dir)
         if len(self.dicom_files) == 0:
             raise ValueError(f"No DICOM files found in: {self.source_dir}")
 
         logger.info(f"Found {len(self.dicom_files)} DICOM files in source")
 
         if self.tr is None:
-            self.tr = self._get_tr_from_dicom(self.dicom_files[0])
+            self.tr = get_tr_from_dicom(self.dicom_files[0])
             logger.info(f"Read TR from DICOM: {self.tr}s")
 
         self.delay = self.tr / self.speed
@@ -169,50 +173,6 @@ class DicomSimulator:
             if lag > self.delay * 0.1:  # Warn if >10% behind schedule
                 logger.warning(f"Simulator running {lag:.3f}s behind schedule")
             return 0.0
-
-    def _get_sorted_dicoms(self) -> List[Path]:
-        """
-        Get DICOM files sorted by filename.
-
-        Returns
-        -------
-        List[Path]
-            Sorted list of DICOM file paths
-
-        """
-        dicom_files = []
-        for ext in ['*.dcm', '*.DCM', '*.ima', '*.IMA']:
-            dicom_files.extend(self.source_dir.glob(ext))
-
-        # Filter to only files and sort by name
-        valid_dicoms = [f for f in dicom_files if f.is_file()]
-        valid_dicoms.sort()
-        return valid_dicoms
-
-    def _get_tr_from_dicom(self, dicom_path: Path) -> float:
-        """
-        Extract repetition time (TR) from DICOM header.
-
-        Parameters
-        ----------
-        dicom_path : Path
-            Path to DICOM file
-
-        Returns
-        -------
-        float
-            TR in seconds. Returns 2.0s if TR cannot be read.
-
-        """
-        try:
-            dcm = pydicom.dcmread(dicom_path, stop_before_pixels=True)
-            if hasattr(dcm, 'RepetitionTime'):
-                return float(dcm.RepetitionTime) / 1000.0
-            logger.warning("Could not read TR, using default 2.0s")
-            return 2.0
-        except Exception as e:
-            logger.warning(f"Error reading TR: {e}, using default 2.0s")
-            return 2.0
 
     def _clear_target_directory(self) -> None:
         """Remove all files from target directory."""

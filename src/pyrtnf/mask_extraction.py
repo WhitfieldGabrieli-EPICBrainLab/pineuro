@@ -1,33 +1,38 @@
 """
 Functional network mask extraction pipeline for real-time fMRI neurofeedback.
 
-This module provides functions for extracting participant-specific functional network masks from resting-state fMRI data using Independent Component Analysis (ICA) and spatial correlation with reference brain networks. The pipeline identifies network-specific brain regions for use as neurofeedback targets.
+Summary
+-------
+Extract participant-specific network masks from resting-state fMRI using ICA
+and spatial correlation with reference atlases.
 
-Key Functions
--------------
-run_ica : Perform Canonical ICA decomposition on fMRI data
-spatial_correlation : Compute spatial correlation between components and parcellations
-mask_extraction_rest : Complete mask extraction pipeline for resting-state data
+Functions
+---------
+- run_ica: Canonical ICA decomposition on fMRI data
+- spatial_correlation: Correlate ICA components with parcellations
+- mask_extraction_rest: End-to-end mask extraction workflow
+
+Workflow
+--------
+- Run ICA on resting-state data within a mask
+- Register reference atlas to participant space
+- Correlate components with atlas networks and select targets
+- Threshold and save network masks for feedback
 
 Dependencies
 ------------
-- nilearn[1]
-- FSL[2]
-- nibabel
-- numpy
-- pandas
-- scipy
+nilearn, ANTsPy, nibabel, numpy, pandas, scipy
 
 Notes
 -----
-The mask extraction pipeline creates a standardized directory structure:
+Outputs follow a standardized layout:
 - 01_ica : ICA components and metadata
-- 02_mnireg : MNI space registrations and transformations
+- 02_mnireg : MNI registrations and transforms
 - 03_masks : Extracted and thresholded network masks
 
-The pipeline registers reference atlases (e.g., Yeo networks) from MNI152 space
-to participant space, performs ICA decomposition, and identifies components
-corresponding to target functional networks through spatial correlation.
+This expects FSL and nilearn installed and available; external commands are
+invoked via the utilities in this package.
+Further reading: see docs/references.md for reference list.
 
 References
 ----------
@@ -40,7 +45,6 @@ References
     Hollinshead, M., ... & Buckner, R. L. (2011). The organization of the 
     human cerebral cortex estimated by intrinsic functional connectivity. 
     Journal of Neurophysiology, 106(3), 1125-1165.
-
 """
 
 # Standard library imports
@@ -60,9 +64,8 @@ from scipy.stats import pearsonr
 
 # Local imports
 from pyrtnf.utils import (
-    compute_mean, compute_xfm, compute_xfm_to_mni, invert_xfm, apply_xfm, 
-    get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni,
-    compute_mean_ants, compute_xfm_ants, apply_xfm_ants
+    compute_mean, compute_xfm, compute_xfm_to_mni, apply_xfm,
+    get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni
 )
 
 # Configure module-level logger
@@ -121,10 +124,8 @@ def run_ica(
 
     """
 
-    # Log the command
     logger.info(f"CanICA...")
 
-    # Convert to Path object
     output_dir = Path(output_dir)
     components_file = output_dir / f"{output_name}_components.nii.gz"
     metadata_file = output_dir / f"{output_name}_metadata.npz"
@@ -135,7 +136,6 @@ def run_ica(
             logger.info(f"All output files exist and overwrite=False. Skipping CanICA.")
             return components_file, metadata_file
 
-    # Convert to Path object and validate
     input_file = Path(input_file)
     logger.info("Inputs:")
     if not input_file.exists():
@@ -146,16 +146,13 @@ def run_ica(
         raise FileNotFoundError(f"Mask file not found: {mask_file}")
     logger.info(f"  {str(mask_file)}")
 
-    # Create output directory
     logger.info(f"Output file:\n")
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"  {str(components_file)}")
 
-    # Log parameters
     logger.info("Parameters:")
     logger.info(f"  n_components: {n_components}")
 
-    # Extract the TR
     img = load(input_file)
     tr = img.header.get_zooms()[3] # type: ignore
 
@@ -443,24 +440,31 @@ def mask_extraction_rest(
     mnireg_dir = root_dir / "02_mnireg"
 
     # Step 2a: Register fMRI BOLD reference to MNI BOLD reference
-    output_name = mnireg_dir / Path(f"{ref_file.with_suffix('').stem}_to_MNI_boldref")
-    _, sub2mni_xfm = compute_xfm_to_mni(input_file=ref_file, output_name=output_name, cost='corratio', dof=6, overwrite=overwrite)
+    output_prefix = mnireg_dir / Path(f"{ref_file.with_suffix('').stem}_to_MNI_boldref")
+    _, sub2mni_xfm = compute_xfm_to_mni(
+        input_file=ref_file,
+        output_prefix=output_prefix,
+        overwrite=overwrite
+    )
 
-    # Step 2c: Invert transformation
-    mni2sub_xfm = mnireg_dir / Path(f"MNI_boldref_to_{ref_file.with_suffix('').stem}.mat")
-    invert_xfm(input_file=sub2mni_xfm, output_file=mni2sub_xfm, overwrite=overwrite)
-
-    
     yeo2sub = mnireg_dir / Path(f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz")
     if not yeo2sub.exists() or overwrite:
-        
-        # Step 2d: Interpolate the Yeo parcellation into MNI space
+
+        # Step 2b: Interpolate the Yeo parcellation into MNI space
         yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
         yeo_mni = Path(yeo).with_suffix('').parent / Path(Path(yeo).with_suffix('').stem + '_interp_to_fMRIPrep_boldref.nii.gz')
         apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp='nearestneighbour', overwrite=overwrite)
-    
-        # Step 2e: Register the Yeo parcellation to participant space
-        apply_xfm(input_file=yeo_mni, reference_file=ref_file, xfm_file=mni2sub_xfm, output_file=yeo2sub, interp='nearestneighbour', overwrite=overwrite)
+
+        # Step 2c: Transform Yeo parcellation to subject space (invert the sub→MNI transform)
+        apply_xfm(
+            moving=yeo_mni,
+            fixed=ref_file,
+            transform_files=sub2mni_xfm,
+            output_file=yeo2sub,
+            interpolator='nearestNeighbor',
+            invert=True,
+            overwrite=overwrite
+        )
 
     # Step 3: Extract masks
     masks_dir = root_dir / "03_masks"
@@ -607,24 +611,21 @@ def coregister_2vol(
         overwrite=overwrite
     )
 
-    # Step 3: Compute mean (using ANTs for speed)
+    # Step 3: Compute mean
     mean_file = twovol_dir / Path(f"{participant_id}_task-2vol_run-{str(next_run).zfill(2)}_mean.nii.gz")
-    compute_mean_ants(input_file=nifti_file, output_file=mean_file, overwrite=overwrite)
-    
-    # Step 4: Compute transformation (using ANTs for speed - ~28x faster than FLIRT)
-    xfm_dir = twovol_dir / "xfm"
-    output_name = xfm_dir / Path(f"{participant_id}_boldref_to_task-2vol_run-{str(next_run).zfill(2)}_mean")
-    _, xfm_files = compute_xfm_ants(input_file=ref_file, reference_file=mean_file, output_name=output_name, type_of_transform='Rigid', overwrite=overwrite)
+    compute_mean(input_file=nifti_file, output_file=mean_file, overwrite=overwrite)
 
-    # Step 5: Apply transformation (using ANTs)
+    # Step 4: Compute transformation (ANTs, ~28x faster than FLIRT)
+    xfm_dir = twovol_dir / "xfm"
+    output_prefix = xfm_dir / Path(f"{participant_id}_boldref_to_task-2vol_run-{str(next_run).zfill(2)}_mean")
+    _, xfm_files = compute_xfm(moving=ref_file, fixed=mean_file, output_prefix=output_prefix, type_of_transform='Rigid', overwrite=overwrite)
+
+    # Step 5: Apply transformation
     mask_dir = twovol_dir / "masks"
     network_coreg_files = []
     for network in network_paths:
         output_file = mask_dir / (network.with_suffix("").stem + f"_to_task-2vol_run-{str(next_run).zfill(2)}_mean.nii.gz")
-        apply_xfm_ants(input_file=network, reference_file=mean_file, transform_files=xfm_files, output_file=output_file, interpolator='nearestNeighbor', overwrite=overwrite)
+        apply_xfm(moving=network, fixed=mean_file, transform_files=xfm_files, output_file=output_file, interpolator='nearestNeighbor', overwrite=overwrite)
         network_coreg_files.append(output_file)
 
     return network_coreg_files
-
-
-

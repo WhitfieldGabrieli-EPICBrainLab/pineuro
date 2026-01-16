@@ -15,5 +15,6 @@ src/pyrtnf.egg-info/top_level.txt
 src/pyrtnf/tasks/__init__.py
 src/pyrtnf/tasks/ball.py
 src/pyrtnf/tasks/base.py
+src/pyrtnf/tasks/session.py
 src/pyrtnf/tasks/utils.py
 tests/test.py

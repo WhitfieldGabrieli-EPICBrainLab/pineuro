@@ -1,40 +1,54 @@
 """
 Real-time fMRI preprocessing pipeline for neurofeedback research.
 
-This module provides core preprocessing functions for real-time fMRI neurofeedback studies, including DICOM conversion, motion correction, brain extraction, and multi-run coregistration. The preprocessing pipeline creates standardized output structures organized by processing step.
+Summary
+-------
+DICOM conversion, motion correction, brain extraction, and multi-run
+coregistration with consistent, numbered output folders.
 
-Key Functions
--------------
-dicom_to_nifti : Convert DICOM files to NIfTI format
-motion_correction : Apply motion correction using FSL's mcflirt
-brain_extraction : Perform brain extraction using FSL's bet
-preprocessing : Complete preprocessing pipeline 
+Functions
+---------
+- dicom_to_nifti: Convert DICOM files to NIfTI
+- motion_correction: Apply motion correction using FSL's mcflirt
+- brain_extraction: Perform brain extraction using FSL's bet
+- preprocessing: Complete preprocessing pipeline
+
+Workflow
+--------
+- Convert raw DICOMs to NIfTI
+- Run motion correction and brain extraction
+- Optionally smooth/filter and coregister across runs
+- Produce standardized outputs for downstream mask extraction/feedback
 
 Dependencies
 ------------
-- FSL[1]
-- nibabel
-- numpy
+FSL, nibabel, numpy
 
 Notes
 -----
-The preprocessing pipeline creates a standardized directory structure:
+Outputs use a standard layout:
 - 01_nifti : Converted NIfTI files
 - 02_motion_correction : Motion-corrected data
-- 03_brain_extraction : Means and brain extracted data
+- 03_brain_extraction : Means and brain-extracted data
 - 04_coregistered : Coregistered and concatenated runs
+
+FSL binaries must be available in PATH. Each step honors overwrite=False to
+skip work when outputs already exist.
+Further reading: see docs/references.md for reference list.
 
 References
 ----------
-[1] Jenkinson, M., Beckmann, C. F., Behrens, T. E., Woolrich, M. W., & Smith, S. M. (2012). FSL. NeuroImage, 62(2), 782-790.
-
+Jenkinson, M., Beckmann, C. F., Behrens, T. E., Woolrich, M. W., & Smith, S. M. (2012). FSL. NeuroImage, 62(2), 782-790.
 """
 
 # Standard library imports
 from typing import Union, List, Optional
 from pathlib import Path
+import heapq
 import shutil
 import copy
+import threading
+import time
 
 # Third-party imports
 import numpy as np
@@ -43,9 +57,14 @@ from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
 from nilearn.image import smooth_img
 from scipy.signal import butter, filtfilt
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler, FileCreatedEvent, DirCreatedEvent
 
 # Local imports
-from pyrtnf.utils import run_command, dicom_to_nifti, compute_xfm, apply_xfm, compute_mean, apply_mask
+from pyrtnf.utils import (
+    run_command, dicom_to_nifti, compute_xfm, apply_xfm, compute_mean, apply_mask,
+    DICOM_EXTENSIONS, is_valid_dicom, get_tr_from_dicom
+)
 
 # Configure module-level logger
 import logging
@@ -71,14 +90,12 @@ def motion_correction(
 
     """
 
-    # Build mcflirt command
     cmd = [
         'mcflirt',
         '-in', str(input_file),
         '-out', str(output_file)
     ]
 
-    # Run mcflirt
     run_command(
         cmd_name='mcflirt',
         cmd=cmd,
@@ -426,12 +443,12 @@ def preprocessing(
             if run > 0:
                 logger.info(f"    Coregistering run {run+1}/{len(mean_files)}...")
                 # Compute transformation using the means
-                output_name = xfm_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mean_to_run-01_mean")
-                _, xfm_file = compute_xfm(input_file=mean_file, reference_file=sub_ref, output_name=output_name, cost='corratio', dof=6, overwrite=overwrite)
+                output_prefix = xfm_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mean_to_run-01_mean")
+                _, xfm_files = compute_xfm(moving=mean_file, fixed=sub_ref, output_prefix=output_prefix, type_of_transform='Rigid', overwrite=overwrite)
 
                 # Apply transformation
                 output_file = coreg_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_to_run-01.nii.gz")
-                apply_xfm(input_file=mcf_files[run], reference_file=sub_ref, xfm_file=xfm_file, output_file=output_file, interp='nearestneighbour', overwrite=overwrite)
+                apply_xfm(moving=mcf_files[run], fixed=sub_ref, transform_files=xfm_files, output_file=output_file, interpolator='linear', overwrite=overwrite)
                 concat_files.append(output_file)
 
         # Step 5b: Concatenate
@@ -461,6 +478,261 @@ def preprocessing(
     logger.info(f"  Preprocessed file: {preproc_file.name}")
     logger.info(f"  Brain mask: {mask_file.name}")
     logger.info(f"  BOLD reference: {ref_file.name}")
-    
+
     # Return preprocessed file
     return preproc_file, mask_file, ref_file
+
+
+# ==============================================================================
+# DICOM Collection - Watch for incoming DICOMs during scanner acquisition
+# ==============================================================================
+
+
+class _CollectorEventHandler(FileSystemEventHandler):
+    """Watchdog event handler for DICOM file detection during collection."""
+
+    def __init__(self, callback):
+        super().__init__()
+        self._callback = callback
+
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        src_path = event.src_path
+        if isinstance(src_path, bytes):
+            self._callback(Path(src_path.decode()))
+        elif isinstance(src_path, str):
+            self._callback(Path(src_path))
+
+
+def collect_dicoms(
+    watch_dir: Union[str, Path],
+    output_dir: Union[str, Path],
+    n_volumes: int,
+    timeout: float = 300.0,
+    clear_watch_dir: bool = True,
+    clear_output_dir: bool = True,
+    simulator_source_dir: Optional[Union[str, Path]] = None,
+    simulator_speed: float = 1.0,
+    poll_interval: float = 0.5,
+) -> Path:
+    """
+    Watch for incoming DICOMs during scanner acquisition and collect them.
+
+    This function mirrors MURFI's resting_state step - it watches an incoming
+    directory for DICOMs from the scanner, copies them to an output folder,
+    and returns when the expected number of volumes have been collected.
+
+    Works for both resting-state and task data collection.
+
+    Parameters
+    ----------
+    watch_dir : str or Path
+        Directory where scanner exports DICOM files (incoming folder).
+    output_dir : str or Path
+        Directory to copy collected DICOMs to.
+    n_volumes : int
+        Number of volumes to collect.
+    timeout : float, default=300.0
+        Maximum time to wait for all volumes (seconds).
+    clear_watch_dir : bool, default=True
+        Clear watch_dir before starting (like MURFI's rm -rf tmp/murfi_input).
+    clear_output_dir : bool, default=True
+        Clear output_dir before starting.
+    simulator_source_dir : str or Path, optional
+        If provided, runs DicomSimulator to feed files into watch_dir.
+        Useful for offline testing.
+    simulator_speed : float, default=1.0
+        Speed multiplier for simulation (e.g., 10.0 for 10x speed).
+        Only used if simulator_source_dir is provided.
+    poll_interval : float, default=0.5
+        How often to check for new files when queue is empty (seconds).
+
+    Returns
+    -------
+    Path
+        Path to output_dir containing collected DICOMs (ready for preprocessing).
+
+    Raises
+    ------
+    TimeoutError
+        If all volumes are not collected within timeout.
+    FileNotFoundError
+        If watch_dir does not exist (and not using simulator).
+
+    Examples
+    --------
+    Collect resting-state DICOMs from scanner:
+
+    >>> dicom_folder = collect_dicoms(
+    ...     watch_dir='/scanner/export/incoming',
+    ...     output_dir='/data/sub-01/raw/rest',
+    ...     n_volumes=200,
+    ...     clear_watch_dir=True,
+    ... )
+
+    Offline testing with simulator:
+
+    >>> dicom_folder = collect_dicoms(
+    ...     watch_dir='/tmp/incoming',
+    ...     output_dir='/data/sub-01/raw/rest',
+    ...     n_volumes=200,
+    ...     simulator_source_dir='/path/to/source_dicoms',
+    ...     simulator_speed=10.0,
+    ... )
+
+    """
+    watch_dir = Path(watch_dir)
+    output_dir = Path(output_dir)
+
+    # Validate or create directories
+    if simulator_source_dir is None:
+        if not watch_dir.exists():
+            raise FileNotFoundError(f"Watch directory not found: {watch_dir}")
+    else:
+        watch_dir.mkdir(parents=True, exist_ok=True)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clear directories if requested
+    if clear_watch_dir and watch_dir.exists():
+        for f in watch_dir.iterdir():
+            if f.is_file():
+                f.unlink()
+        logger.info(f"Cleared watch directory: {watch_dir}")
+
+    if clear_output_dir and output_dir.exists():
+        for f in output_dir.iterdir():
+            if f.is_file():
+                f.unlink()
+        logger.info(f"Cleared output directory: {output_dir}")
+
+    # Collection state
+    pending_heap: list[tuple[str, Path]] = []
+    processed_files: set[str] = set()
+    collected_count = 0
+    lock = threading.Lock()
+
+    def on_new_file(file_path: Path) -> None:
+        """Add file to pending queue."""
+        with lock:
+            if file_path.name not in processed_files:
+                existing_names = {item[0] for item in pending_heap}
+                if file_path.name not in existing_names:
+                    heapq.heappush(pending_heap, (file_path.name, file_path))
+
+    def scan_for_existing_files() -> None:
+        """Scan watch directory for any files not yet queued."""
+        found_files: list[Path] = []
+        for ext in DICOM_EXTENSIONS:
+            found_files.extend(watch_dir.glob(ext))
+
+        with lock:
+            existing_names = {item[0] for item in pending_heap}
+            for file_path in found_files:
+                if file_path.name not in processed_files:
+                    if file_path.name not in existing_names:
+                        heapq.heappush(pending_heap, (file_path.name, file_path))
+                        existing_names.add(file_path.name)
+
+    def get_next_file() -> Optional[Path]:
+        """Get the next valid DICOM file in order."""
+        with lock:
+            while pending_heap:
+                filename, file_path = pending_heap[0]
+
+                if filename in processed_files:
+                    heapq.heappop(pending_heap)
+                    continue
+
+                if is_valid_dicom(file_path):
+                    heapq.heappop(pending_heap)
+                    processed_files.add(filename)
+                    return file_path
+                else:
+                    heapq.heappop(pending_heap)
+                    logger.debug(f"Skipping invalid DICOM: {filename}")
+
+            return None
+
+    # Set up watchdog observer
+    event_handler = _CollectorEventHandler(on_new_file)
+    observer = Observer()
+    observer.schedule(event_handler, str(watch_dir), recursive=False)
+    observer.start()
+
+    # Set up simulator if requested
+    simulator = None
+    simulator_thread = None
+    if simulator_source_dir is not None:
+        from .simulator import DicomSimulator
+
+        simulator = DicomSimulator(
+            source_dir=simulator_source_dir,
+            target_dir=watch_dir,
+            speed=simulator_speed,
+            clear_target=False,  # We already cleared it
+            cleanup_on_complete=False,
+        )
+
+        def run_simulator():
+            for _ in simulator.copy_volumes_iter():
+                pass
+
+        simulator_thread = threading.Thread(target=run_simulator, daemon=True)
+        simulator_thread.start()
+        logger.info(f"Started DICOM simulator (speed={simulator_speed}x)")
+
+    logger.info(f"Collecting {n_volumes} volumes from {watch_dir}")
+    logger.info(f"Output directory: {output_dir}")
+
+    start_time = time.time()
+
+    try:
+        while collected_count < n_volumes:
+            # Check timeout
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                raise TimeoutError(
+                    f"Timeout after {elapsed:.1f}s: collected {collected_count}/{n_volumes} volumes"
+                )
+
+            # Scan for any missed files
+            scan_for_existing_files()
+
+            # Get next file to process
+            file_path = get_next_file()
+
+            if file_path is not None:
+                # Copy file to output directory
+                dest_path = output_dir / file_path.name
+                shutil.copy2(file_path, dest_path)
+                collected_count += 1
+
+                if collected_count % 10 == 0 or collected_count == n_volumes:
+                    logger.info(f"Collected {collected_count}/{n_volumes} volumes")
+            else:
+                # Wait for more files
+                time.sleep(poll_interval)
+
+    finally:
+        # Stop watchdog observer
+        observer.stop()
+        observer.join()
+
+        # Wait for simulator to finish copying all volumes (no early termination)
+        if simulator_thread is not None:
+            simulator_thread.join()  # No timeout - wait for completion
+            logger.debug("Simulator thread completed")
+
+        # Clean up watch directory (remove incoming DICOMs)
+        if clear_watch_dir and watch_dir.exists():
+            for f in watch_dir.iterdir():
+                if f.is_file():
+                    f.unlink()
+            logger.debug(f"Cleaned up watch directory: {watch_dir}")
+
+    elapsed = time.time() - start_time
+    logger.info(f"✓ Collection complete: {collected_count} volumes in {elapsed:.1f}s")
+
+    return output_dir

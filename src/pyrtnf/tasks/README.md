@@ -14,8 +14,6 @@ The task framework handles:
 
 ```python
 from pyrtnf import run_feedback_session, BallTask
-import time
-
 # Start feedback in background thread
 session_info = run_feedback_session(
     mask_paths=['/path/to/cen_mask.nii.gz', '/path/to/dmn_mask.nii.gz'],
@@ -30,7 +28,8 @@ session_info = run_feedback_session(
 )
 
 coordinator = session_info['coordinator']
-time.sleep(2)  # Wait for initialization
+coordinator.wait_until_ready(timeout=5)
+coordinator.send_trigger()  # In simulation mode this can be automatic
 
 # Run task in main thread
 task = BallTask(coordinator, mask_names=['CEN', 'DMN'])
@@ -113,11 +112,10 @@ Abstract base class providing:
 ### BallTask
 
 Example implementation with:
-- Dual-network feedback (CEN/DMN)
+- Dual-network feedback (e.g., CEN/DMN)
 - Ball movement based on activation
-- Hit detection
-- Adaptive difficulty scaling
-- Based on [MIND-BPD study](https://github.com/cccbauer/MIND-BPD)
+- Hit detection with circle shrink
+- Adaptive difficulty scaling; scale factors persist via SessionState
 
 ### ActivationSmoother
 
@@ -158,3 +156,4 @@ See [examples/run_feedback_with_task.py](../../../examples/run_feedback_with_tas
 - pyrtnf (this package)
 - psychopy
 - numpy
+- See `docs/references.md` for underlying method references.

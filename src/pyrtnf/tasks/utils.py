@@ -1,29 +1,29 @@
 """
 Utility functions for neurofeedback tasks.
 
-Provides helper classes for smoothing and normalizing activation values
-in real-time neurofeedback displays.
+Summary
+-------
+Helpers for smoothing and scaling activation values in real-time displays.
 
-Key Classes
------------
-ActivationSmoother : Exponential moving average smoother
-ActivationNormalizer : Percentile-based normalizer to [0, 1] range
+Components
+----------
+- ActivationSmoother: Exponential moving average for jitter reduction
+- ActivationNormalizer: Percentile-based scaling to [0, 1]
+
+Workflow
+--------
+- Update smoother each frame to damp spikes
+- Feed activations to normalizer to map to [0, 1] for display scaling
 
 Dependencies
 ------------
-- numpy
-- collections (standard library)
+numpy, collections (stdlib)
 
 Notes
 -----
-These utilities help reduce noise and jitter in visual feedback:
-
-- ActivationSmoother uses exponential moving average (EMA) to smooth
-  rapid fluctuations. Lower alpha = more smoothing but more lag.
-
-- ActivationNormalizer tracks recent values and maps to [0, 1] using
-  percentiles, providing robust scaling that adapts to the distribution.
-
+Smoother trades lag for stability via EMA; normalizer adapts scaling to the
+recent distribution using percentiles. Both are lightweight and safe to use
+in per-frame update loops.
 """
 
 # Standard library imports

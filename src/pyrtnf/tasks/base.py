@@ -1,30 +1,30 @@
 """
 Base class for PsychoPy neurofeedback tasks.
 
-Provides structure for tasks that integrate with the pyrtnf feedback system,
-handling thread-safe data access and continuous display refresh.
+Summary
+-------
+Thread-safe task scaffold that polls the coordinator for activations and drives
+PsychoPy displays at a target refresh rate.
 
-Key Classes
------------
-BaseTask : Abstract base class for neurofeedback tasks
+Components
+----------
+- BaseTask: Abstract base with setup/update/cleanup hooks
+
+Workflow
+--------
+- setup(): create window/stimuli
+- run(): poll coordinator at refresh_rate, call update() each frame
+- cleanup(): release resources when coordinator signals completion
 
 Dependencies
 ------------
-- threading (standard library)
-- PsychoPy (optional, for concrete implementations)
+threading (stdlib), PsychoPy (for concrete tasks)
 
 Notes
 -----
-Subclasses must implement setup(), update(), and cleanup() methods.
-The base class handles thread-safe access to activation data from the
-NeurofeedbackCoordinator running in a background thread.
-
-The run() method provides a standard main loop that:
-1. Calls setup() once
-2. Polls coordinator for activation data at refresh_rate Hz
-3. Calls update() each frame with latest data
-4. Calls cleanup() when session completes
-
+The run() loop calls setup(), then updates at refresh_rate Hz until the
+coordinator reports completion, then calls cleanup(). Use this when building
+PsychoPy tasks that need thread-safe access to live activations.
 """
 
 # Standard library imports

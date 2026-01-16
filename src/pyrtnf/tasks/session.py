@@ -1,8 +1,31 @@
 """
 Session state management for multi-run neurofeedback sessions.
 
-Provides persistent state across separate task runs (e.g., Transfer → Feedback × N → Transfer).
-State is saved to JSON at session root directory and loaded at the start of each run.
+Summary
+-------
+Persists adaptive task state (hit counts, scale factors, radii) across runs
+and saves/loads JSON in the session directory.
+
+Components
+----------
+- SessionState: Persistent state container with save/load/reset helpers
+- RunInfo: Metadata for completed runs
+
+Workflow
+--------
+- Load existing session_state.json or create defaults
+- Track hit counts/radii/scale_factor during runs
+- Adjust scale_factor after feedback runs based on thresholds
+- Save updated state to disk after each run
+
+Dependencies
+------------
+json (stdlib), dataclasses, pathlib
+
+Notes
+-----
+Adaptive difficulty mirrors the ball task thresholds; scale factors and hit
+counts persist run-to-run via JSON on disk.
 """
 
 import json
@@ -255,43 +278,34 @@ class SessionState:
         
         self.completed_runs.append(run_info)
         
-        # Update cumulative state
         self.hit_counters = [
             self.hit_counters[i] + hit_counters[i] 
             for i in range(len(hit_counters))
         ]
         self.circle_radii = circle_radii.copy()
         
-        # Apply adaptive difficulty adjustment for next run
-        # Only applies after FEEDBACK runs (not transfer runs where ball doesn't move)
-        # Based on MIND-BPD logic from rt-network_feedback_mgh.py
         if run_type == 'feedback':
             total_hits = sum(hit_counters)
             max_single_network_hits = max(hit_counters)
             
             old_scale = scale_factor
             if max_single_network_hits > max_hits_threshold:
-                # Too many hits in one direction - decrease scale factor (slower ball)
                 new_scale = scale_factor * (1 - scale_adjust_factor)
                 logger.info(f"  Adaptive difficulty: {max_single_network_hits} hits > {max_hits_threshold} max → "
                            f"decreasing scale_factor {old_scale:.1f} → {new_scale:.1f}")
             elif total_hits < min_hits_threshold:
-                # Not enough hits overall - increase scale factor (faster ball)
                 new_scale = scale_factor * (1 + scale_adjust_factor)
                 logger.info(f"  Adaptive difficulty: {total_hits} total hits < {min_hits_threshold} min → "
                            f"increasing scale_factor {old_scale:.1f} → {new_scale:.1f}")
             else:
-                # Hits in acceptable range - keep scale factor
                 new_scale = scale_factor
                 logger.info(f"  Adaptive difficulty: hits in range → keeping scale_factor at {new_scale:.1f}")
             
             self.scale_factor = new_scale
         else:
-            # Transfer run - no adaptive adjustment
             self.scale_factor = scale_factor
             logger.info(f"  Transfer run - no adaptive difficulty adjustment")
-        
-        # Save immediately
+
         self.save()
         
         logger.info(f"Recorded run {run_info.run_number} ({run_type})")

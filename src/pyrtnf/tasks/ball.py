@@ -1,10 +1,21 @@
 """
 Ball neurofeedback task.
 
-Displays a ball that moves based on activation level, adapted from the MIND-BPD
-study (https://github.com/cccbauer/MIND-BPD/blob/main/psychopy/balltask/rt-network_feedback_mgh.py).
+Summary
+-------
+Dual-network visual feedback task that moves a ball between two targets based
+on real-time activations, with optional adaptive difficulty.
 
-Simplified version focusing on core feedback mechanics integrated with pyrtnf coordinator.
+Features
+--------
+- Two target circles (top and bottom) with a central ball.
+- Movement driven by two mask activations streamed from the coordinator.
+- Adaptive scaling that speeds up or slows down movement based on hits.
+- Supports feedback mode (movement) and transfer mode (stationary for practice).
+
+Dependencies
+------------
+psychopy, numpy
 """
 
 # Standard library imports
@@ -68,8 +79,6 @@ class BallTask(BaseTask):
     white ball that moves based on brain activation. When the ball reaches a
     target, it resets to center and the target shrinks.
 
-    Based on MIND-BPD ball task with adaptive difficulty scaling.
-
     Parameters
     ----------
     coordinator : NeurofeedbackCoordinator
@@ -114,6 +123,12 @@ class BallTask(BaseTask):
     circles : list of visual.Circle
         Target circle stimuli
 
+    Workflow
+    --------
+    - setup(): open window, create circles/ball, start log
+    - update(): read latest activations, move ball, detect hits/shrink targets
+    - cleanup(): close window and persist per-run results to session state
+
     Examples
     --------
     >>> from pyrtnf import run_feedback_session, BallTask
@@ -121,10 +136,6 @@ class BallTask(BaseTask):
     >>> task = BallTask(session_info['coordinator'], mask_names=['CEN', 'DMN'])
     >>> task.run()
 
-    References
-    ----------
-    Adapted from MIND-BPD study ball task:
-    https://github.com/cccbauer/MIND-BPD/blob/main/psychopy/balltask/rt-network_feedback_mgh.py
     """
 
     def __init__(
@@ -148,18 +159,15 @@ class BallTask(BaseTask):
         max_hits_threshold: int = 5,
         scale_adjust_factor: float = 0.25,
     ):
-        # Don't call super().__init__() yet - need to set mask_names first
         self.coordinator = coordinator
         self._session_state = session_state
         self.run_number = run_number
         self.is_first_of_type = is_first_of_type
         
-        # Adaptive difficulty parameters
         self._min_hits_threshold = min_hits_threshold
         self._max_hits_threshold = max_hits_threshold
         self._scale_adjust_factor = scale_adjust_factor
 
-        # Validate dual-network requirement
         if len(coordinator.mask_names) < 2:
             raise ValueError(
                 f"BallTask requires at least 2 masks, got {len(coordinator.mask_names)}"
@@ -172,47 +180,35 @@ class BallTask(BaseTask):
 
         self.mask_names = mask_names
 
-        # Now initialize parent (which will use first mask_name for compatibility)
         super().__init__(coordinator, mask_name=mask_names[0])
 
-        # Ball movement parameters
         self.scale_factor = scale_factor
         self.internal_scaler = internal_scaler
         self.pda_outlier_threshold = pda_outlier_threshold
 
-        # Trigger configuration
         self.trigger_keys = trigger_keys if trigger_keys is not None else ['t']
-        self.instruction_advance_keys = ['space']  # Keys to advance instruction slides
+        self.instruction_advance_keys = ['space']
         
-        # Button configuration for slider questions
         self.left_button = left_button
         self.right_button = right_button
         self.enter_button = enter_button
 
-        # Window parameters
         self.fullscreen = fullscreen
 
-        # Feedback mode: controls whether ball actually moves
         self.feedback_mode = feedback_mode
 
-        # Task state
-        self.ball_pos = [0.0, 0.0]  # Start at center
-        self.hit_counters = [0, 0]  # Per-run hits (not cumulative)
-        self.circle_positions = [1.0 / 3, -1.0 / 3]  # Vertical positions (top, bottom)
-        self.circle_radii = [0.15, 0.15]  # Always reset to same size each run
+        self.ball_pos = [0.0, 0.0]
+        self.hit_counters = [0, 0]
+        self.circle_positions = [1.0 / 3, -1.0 / 3]
+        self.circle_radii = [0.15, 0.15]
         self.circle_colors = ['yellow', 'lightblue']
         
-        # Restore scale_factor from session if provided (for multi-run continuity)
-        # Note: circle_radii reset each run per MIND-BPD design
         if session_state is not None:
             self.scale_factor = session_state.scale_factor
             logger.info(f"Restored scale_factor from session: {self.scale_factor}")
 
-        # Network positions for movement calculation
-        # Top circle (index 0), Bottom circle (index 1)
         self.network_directions = np.array([1, -1])  # +1 = up, -1 = down
 
-        # Override parent's data tracking to handle dual networks
         self._latest_data = {
             'activations': {name: 0.0 for name in self.mask_names},
             'volume': 0,
@@ -220,7 +216,6 @@ class BallTask(BaseTask):
             'is_baseline': True,
         }
 
-        # PsychoPy log setup with BIDS-style naming
         run_str = f"{coordinator.run_number:02d}"
         output_dir = Path(coordinator.output_dir)
         self._psychopy_log_path = output_dir / f"{coordinator.subject}_task-{coordinator.task}_run-{run_str}_psychopylog.tsv"
@@ -228,14 +223,13 @@ class BallTask(BaseTask):
         self._psychopy_log_writer = None
         self._frame_counter = 0
 
-        # Movement state (persists across frames for smooth animation)
-        self.current_activity = 0.0  # Magnitude of movement speed
+        self.current_activity = 0.0
         self.current_direction = 0   # +1 (up) or -1 (down)
-        self.pause_movement = False  # True when ball crosses circle center
-        self.is_baseline = True      # True during baseline period
-        self.current_volume = 0      # Current volume number
-        self._task_start_time: float = 0.0  # Task start time for frame timestamps
-        self._last_frame_time: float = 0.0  # For time-based movement (dt calculation)
+        self.pause_movement = False
+        self.is_baseline = True
+        self.current_volume = 0
+        self._task_start_time: float = 0.0
+        self._last_frame_time: float = 0.0
 
     def _update_data(
         self,
