@@ -67,6 +67,12 @@ from .utils import DICOM_EXTENSIONS, is_valid_dicom, get_tr_from_dicom
 # Configure module-level logger
 logger = logging.getLogger(__name__)
 
+
+# ==============================================================================
+# INCREMENTAL GLM - Online least squares using Gentleman's algorithm
+# ==============================================================================
+
+
 class IncrementalGLM:
     """Incremental least squares solver using Gentleman's algorithm.
 
@@ -637,6 +643,7 @@ class FeedbackEstimator:
         coords : set of tuple
             Set of (i, j, k) coordinates where mask > 0.
         """
+        # type: ignore[assignment] - nibabel load() returns SpatialImage, not Nifti1Image
         img: Nifti1Image = nib.loadsave.load(path)  # type: ignore[assignment]
         data = np.asarray(img.dataobj)
 
@@ -723,7 +730,8 @@ class FeedbackEstimator:
         This orchestrates loading all masks, building a master voxel index,
         and creating mappings from each mask to the master index.
         """
-        # Load first mask to get reference shape
+        # Load first mask to get reference shape for validation
+        # type: ignore[assignment] - nibabel load() returns SpatialImage, not Nifti1Image
         first_img: Nifti1Image = nib.loadsave.load(mask_paths[0])  # type: ignore[assignment]
         self._shape = first_img.shape[:3]
 
@@ -888,6 +896,7 @@ class FeedbackEstimator:
         nifti_path = Path(nifti_path)
 
         # ===== 1. Load volume data =====
+        # type: ignore[assignment] - nibabel load() returns SpatialImage, not Nifti1Image
         img: Nifti1Image = nib.loadsave.load(nifti_path)  # type: ignore[assignment]
         data = np.asarray(img.dataobj, dtype=np.float64)
 
@@ -1742,6 +1751,9 @@ class NeurofeedbackCoordinator:
             }
 
 
+# ==============================================================================
+# HIGH-LEVEL SESSION ORCHESTRATION - Run complete feedback sessions
+# ==============================================================================
 
 
 def run_feedback_session(

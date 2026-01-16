@@ -65,6 +65,110 @@ import pydicom
 import logging
 logger = logging.getLogger(__name__)
 
+# Performance timing infrastructure
+import time
+import json
+from typing import Dict, Any
+from contextlib import contextmanager
+
+# Global timing storage
+_timing_data: Dict[str, Any] = {}
+_timing_enabled = False
+
+
+def enable_timing() -> None:
+    """Enable performance timing for all operations."""
+    global _timing_enabled
+    _timing_enabled = True
+    _timing_data.clear()
+    logger.info("Performance timing enabled")
+
+
+def disable_timing() -> None:
+    """Disable performance timing."""
+    global _timing_enabled
+    _timing_enabled = False
+
+
+def get_timing_data() -> Dict[str, Any]:
+    """
+    Get collected timing data.
+
+    Returns
+    -------
+    dict
+        Timing data with operation names as keys and timing info as values.
+    """
+    return _timing_data.copy()
+
+
+def save_timing_report(output_path: Union[str, Path]) -> None:
+    """
+    Save timing report to JSON file.
+
+    Parameters
+    ----------
+    output_path : str or Path
+        Path to save timing report (JSON format)
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, 'w') as f:
+        json.dump(_timing_data, f, indent=2)
+
+    logger.info(f"Timing report saved to {output_path}")
+
+
+@contextmanager
+def Timer(name: str, category: str = "general"):
+    """
+    Context manager for timing code blocks.
+
+    Parameters
+    ----------
+    name : str
+        Name of the operation being timed
+    category : str, default="general"
+        Category for grouping operations (e.g., "preprocessing", "mask_extraction")
+
+    Yields
+    ------
+    dict
+        Timing information dictionary that gets populated
+
+    Examples
+    --------
+    >>> with Timer("Motion correction", "preprocessing"):
+    ...     # Code to time
+    ...     pass
+    """
+    if not _timing_enabled:
+        yield {}
+        return
+
+    start_time = time.time()
+    timing_info = {
+        "name": name,
+        "category": category,
+        "start_time": start_time
+    }
+
+    try:
+        yield timing_info
+    finally:
+        end_time = time.time()
+        elapsed = end_time - start_time
+        timing_info["end_time"] = end_time
+        timing_info["elapsed_seconds"] = elapsed
+
+        # Store in global timing data
+        if category not in _timing_data:
+            _timing_data[category] = []
+        _timing_data[category].append(timing_info)
+
+        logger.info(f"[TIMING] {name}: {elapsed:.2f}s")
+
 # ==============================================================
 # Installation Check
 # ==============================================================
@@ -188,7 +292,8 @@ def run_command(
         inputs: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
         outputs: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
         overwrite: bool = False,
-        verbose: bool = True
+        verbose: bool = True,
+        timing_category: str = "commands"
 ) -> None:
     """
     Run a shell command with error handling and logging
@@ -210,6 +315,8 @@ def run_command(
         If False, skip command if all output files already exist.
     verbose : bool, default=True
         If False, suppresses informational logging messages.
+    timing_category : str, default="commands"
+        Category for timing data (e.g., "preprocessing", "mask_extraction")
 
     Raises
     ------
@@ -223,11 +330,11 @@ def run_command(
     # Log the command
     if verbose:
         logger.info(f"{description}...")
-    
+
     # Convert outputs to list if single file provided
     if isinstance(outputs, (str, Path)):
         outputs = [outputs]
-    
+
     # Check if outputs exist and skip if overwrite=False
     if not overwrite and outputs is not None:
         output_paths_check = [Path(f) for f in outputs]
@@ -235,14 +342,14 @@ def run_command(
             if verbose:
                 logger.info(f"All output files exist and overwrite=False. Skipping {description}.")
             return
-    
+
     # Log the command
     if verbose:
         logger.info(f"Running command: {' '.join(cmd)}")
 
     # Check if command is installed
     _check_command_installation(cmd_name)
-    
+
     # Convert inputs to list if single file provided
     if isinstance(inputs, (str, Path)):
         inputs = [inputs]
@@ -270,35 +377,36 @@ def run_command(
             if verbose:
                 logger.info(f"  {f}")
 
-    # Run command
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
+    # Run command with timing
+    with Timer(f"{cmd_name}: {description}", timing_category):
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
 
-        # Log output
-        if result.stdout and verbose:
-            logger.debug(f"stdout:\n{result.stdout}")
-        if result.stderr and verbose:
-            logger.debug(f"stderr:\n{result.stderr}")
-        
-        if verbose:
-            logger.info(f"{description} completed successfully")
-    
-    except subprocess.CalledProcessError as e:
-        error_msg = (
-            f"{description} failed:\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"Return code: {e.returncode}\n"
-            f"stdout: {e.stdout}"
-            f"stderr: {e.stderr}"
-        )
-        logger.error(error_msg)
-        raise RuntimeError(error_msg) from e
-    
+            # Log output
+            if result.stdout and verbose:
+                logger.debug(f"stdout:\n{result.stdout}")
+            if result.stderr and verbose:
+                logger.debug(f"stderr:\n{result.stderr}")
+
+            if verbose:
+                logger.info(f"{description} completed successfully")
+
+        except subprocess.CalledProcessError as e:
+            error_msg = (
+                f"{description} failed:\n"
+                f"Command: {' '.join(cmd)}\n"
+                f"Return code: {e.returncode}\n"
+                f"stdout: {e.stdout}"
+                f"stderr: {e.stderr}"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
     # Verify output files if specified
     if outputs is not None:
         missing_files: List[Path] = []
@@ -312,6 +420,110 @@ def run_command(
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
+
+# Module-level helper for parallel_run_command (must be at module level for pickling)
+def _run_job_worker(job_spec: dict) -> dict:
+    """
+    Worker function for parallel command execution.
+    Must be at module level to be picklable by multiprocessing.
+
+    Parameters
+    ----------
+    job_spec : dict
+        Job specification containing cmd_name, cmd, description, inputs, outputs, etc.
+
+    Returns
+    -------
+    dict
+        Result dictionary with 'success', 'description', and optionally 'error'
+    """
+    try:
+        run_command(
+            cmd_name=job_spec.get('cmd_name'),
+            cmd=job_spec.get('cmd'),
+            description=job_spec.get('description'),
+            inputs=job_spec.get('inputs'),
+            outputs=job_spec.get('outputs'),
+            overwrite=job_spec.get('overwrite', False),
+            verbose=job_spec.get('verbose', True),
+            timing_category=job_spec.get('timing_category', 'parallel')
+        )
+        return {'success': True, 'description': job_spec.get('description')}
+    except Exception as e:
+        return {'success': False, 'description': job_spec.get('description'), 'error': str(e)}
+
+def parallel_run_command(
+        jobs: List[dict],
+        n_jobs: int = -1,
+        timing_category: str = "parallel"
+) -> None:
+    """
+    Run multiple commands in parallel using multiprocessing.
+
+    Parameters
+    ----------
+    jobs : list of dict
+        List of job specifications. Each dict should contain the same
+        parameters as run_command (cmd_name, cmd, description, inputs, outputs, overwrite, verbose)
+    n_jobs : int, default=-1
+        Number of parallel jobs. -1 uses all available CPUs.
+    timing_category : str, default="parallel"
+        Category for timing data
+
+    Examples
+    --------
+    >>> jobs = [
+    ...     {
+    ...         'cmd_name': 'mcflirt',
+    ...         'cmd': ['mcflirt', '-in', 'run1.nii.gz', '-out', 'run1_mc.nii.gz'],
+    ...         'description': 'Motion correction run 1',
+    ...         'inputs': 'run1.nii.gz',
+    ...         'outputs': 'run1_mc.nii.gz',
+    ...         'overwrite': False
+    ...     },
+    ...     {
+    ...         'cmd_name': 'mcflirt',
+    ...         'cmd': ['mcflirt', '-in', 'run2.nii.gz', '-out', 'run2_mc.nii.gz'],
+    ...         'description': 'Motion correction run 2',
+    ...         'inputs': 'run2.nii.gz',
+    ...         'outputs': 'run2_mc.nii.gz',
+    ...         'overwrite': False
+    ...     }
+    ... ]
+    >>> parallel_run_command(jobs, n_jobs=2)
+    """
+    import multiprocessing as mp
+
+    if not jobs:
+        return
+
+    # Determine number of workers
+    if n_jobs == -1:
+        n_workers = mp.cpu_count()
+    else:
+        n_workers = min(n_jobs, len(jobs), mp.cpu_count())
+
+    logger.info(f"Running {len(jobs)} jobs in parallel with {n_workers} workers")
+
+    # Add timing_category to each job spec
+    jobs_with_category = []
+    for job in jobs:
+        job_copy = job.copy()
+        job_copy['timing_category'] = timing_category
+        jobs_with_category.append(job_copy)
+
+    # Run jobs in parallel
+    with Timer(f"Parallel execution ({len(jobs)} jobs)", timing_category):
+        with mp.Pool(processes=n_workers) as pool:
+            results = pool.map(_run_job_worker, jobs_with_category)
+
+    # Check for failures
+    failures = [r for r in results if not r['success']]
+    if failures:
+        error_msgs = [f"{r['description']}: {r['error']}" for r in failures]
+        raise RuntimeError(f"Parallel execution failed for {len(failures)} jobs:\n" + "\n".join(error_msgs))
+
+    logger.info(f"All {len(jobs)} parallel jobs completed successfully")
 
 def dicom_to_nifti(
         dicom_dir: Union[str, Path],
@@ -530,27 +742,28 @@ def compute_xfm(
     logger.info(f"Moving: {moving}")
     logger.info(f"Fixed: {fixed}")
 
-    fixed_img = ants.image_read(str(fixed))
-    moving_img = ants.image_read(str(moving))
+    with Timer(f"ANTs registration ({type_of_transform})", "registration"):
+        fixed_img = ants.image_read(str(fixed))
+        moving_img = ants.image_read(str(moving))
 
-    registration = ants.registration(
-        fixed=fixed_img,
-        moving=moving_img,
-        type_of_transform=type_of_transform,
-        verbose=False
-    )
+        registration = ants.registration(
+            fixed=fixed_img,
+            moving=moving_img,
+            type_of_transform=type_of_transform,
+            verbose=False
+        )
 
-    ants.image_write(registration['warpedmovout'], str(output_file))
-    logger.info(f"Output: {output_file}")
+        ants.image_write(registration['warpedmovout'], str(output_file))
+        logger.info(f"Output: {output_file}")
 
-    # Copy transform files to output directory
-    transform_files: list[str] = []
-    for i, xfm in enumerate(registration['fwdtransforms']):
-        suffix = Path(xfm).suffix
-        new_path = xfm_dir / f"{Path(output_prefix).stem}_{i}{suffix}"
-        shutil.copy(xfm, new_path)
-        transform_files.append(str(new_path))
-        logger.info(f"Transform: {new_path}")
+        # Copy transform files to output directory
+        transform_files: list[str] = []
+        for i, xfm in enumerate(registration['fwdtransforms']):
+            suffix = Path(xfm).suffix
+            new_path = xfm_dir / f"{Path(output_prefix).stem}_{i}{suffix}"
+            shutil.copy(xfm, new_path)
+            transform_files.append(str(new_path))
+            logger.info(f"Transform: {new_path}")
 
     return output_file, transform_files
 
@@ -671,10 +884,11 @@ def apply_xfm_sform_to_mni(
             f"Valid options are: {', '.join(valid_interps)}"
         )
 
-    # Load in the MNI152 BOLD reference
+    # Load MNI152 BOLD reference template from templateflow
+    # type: ignore - templateflow.get() returns str, not Path, but we cast it
     epi_tpl_path = cast(Path, tflow.get(
         "MNI152NLin2009cAsym",
-        resolution=2,          # 2 mm
+        resolution=2,          # 2 mm resolution
         desc="fMRIPrep",       # fMRIPrep-style boldref
         suffix="boldref"
     )) # type: ignore
@@ -737,6 +951,8 @@ def compute_xfm_to_mni(
         logger.info("Output files exist and overwrite=False. Skipping MNI registration.")
         return sub2mni_file, [str(p) for p in existing_xfm]
 
+    # Load MNI152 BOLD reference template from templateflow
+    # type: ignore - templateflow.get() returns str, not Path, but we cast it
     epi_tpl_path = cast(Path, tflow.get(
         "MNI152NLin2009cAsym",
         resolution=2,

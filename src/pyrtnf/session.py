@@ -84,23 +84,30 @@ class PathConfig:
     collection_dir: Optional[Path] = None
 
     def __post_init__(self):
+        """Convert all paths to Path objects and set defaults for optional directories."""
         self.base_dir = Path(self.base_dir)
+
+        # Set default paths relative to base_dir if not provided
         if self.session_dir is None:
             self.session_dir = self.base_dir / "feedback"
         else:
             self.session_dir = Path(self.session_dir)
+
         if self.preprocessing_dir is None:
             self.preprocessing_dir = self.base_dir / "preprocessing"
         else:
             self.preprocessing_dir = Path(self.preprocessing_dir)
+
         if self.mask_extraction_dir is None:
             self.mask_extraction_dir = self.base_dir / "mask_extraction"
         else:
             self.mask_extraction_dir = Path(self.mask_extraction_dir)
+
         if self.feedback_output_dir is None:
             self.feedback_output_dir = self.session_dir / "02_feedback_output"
         else:
             self.feedback_output_dir = Path(self.feedback_output_dir)
+
         if self.collection_dir is None:
             self.collection_dir = self.base_dir / "collection"
         else:
@@ -158,6 +165,7 @@ class ScanConfig:
     simulator_speed: float = 1.0
 
     def __post_init__(self):
+        """Convert all DICOM source paths to Path objects."""
         self.rest_source_dicoms = [Path(p) for p in self.rest_source_dicoms]
         if self.twovol_dicoms is not None:
             self.twovol_dicoms = Path(self.twovol_dicoms)

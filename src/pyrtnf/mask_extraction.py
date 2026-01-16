@@ -65,7 +65,7 @@ from scipy.stats import pearsonr
 # Local imports
 from pyrtnf.utils import (
     compute_mean, compute_xfm, compute_xfm_to_mni, apply_xfm,
-    get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni
+    get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni, Timer
 )
 
 # Configure module-level logger
@@ -154,6 +154,8 @@ def run_ica(
     logger.info(f"  n_components: {n_components}")
 
     img = load(input_file)
+    # Extract TR from 4th dimension of zooms (temporal spacing)
+    # type: ignore - nibabel typing doesn't recognize header.get_zooms()[3]
     tr = img.header.get_zooms()[3] # type: ignore
 
     # Initialize CanICA
@@ -161,10 +163,10 @@ def run_ica(
     canica: Any = CanICA(
         mask=mask_file,
         n_components=n_components,
-        smoothing_fwhm=smooth_fwhm, # type: ignore
+        smoothing_fwhm=smooth_fwhm, # type: ignore - nilearn accepts None or float
         high_pass=highpass,
         low_pass=lowpass,
-        threshold=None,  # type: ignore
+        threshold=None,  # type: ignore - nilearn accepts None or float
         t_r=tr,
         n_jobs=-1, # Use all CPUs
         random_state=0, # For reproducibility
@@ -175,13 +177,14 @@ def run_ica(
 
     # Fit CanICA
     logger.info("Computing ICA components... (this may take several minutes)")
-    try:
-        canica.fit(input_file)
-        logger.info("CanICA computation completed successfully")
-    except Exception as e:
-        error_msg = f"CanICA computation failed: {str(e)}"
-        logger.error(error_msg)
-        raise RuntimeError(error_msg) from e
+    with Timer("CanICA decomposition", "mask_extraction"):
+        try:
+            canica.fit(input_file)
+            logger.info("CanICA computation completed successfully")
+        except Exception as e:
+            error_msg = f"CanICA computation failed: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
     
     # Get components as image
     components_img: SpatialImage = canica.components_img_  # type: ignore
@@ -297,23 +300,22 @@ def spatial_correlation(
 
     # Compute spatial correlations
     logger.info("Correlating...")
-    correlation_matrix: np.ndarray = np.zeros((n, len(labels)))
-    for j, net_id in enumerate(labels):
-        
-        # Extract and demean
-        y = (data_parcellation == j+1).astype(float)
-        y_dm = y - y.mean()
-        y_norm = np.sqrt((y_dm**2).sum())
+    with Timer("Spatial correlation (vectorized)", "mask_extraction"):
+        # Vectorized approach: compute all network correlations at once
+        # Create matrix of all network masks: Y shape (m, V) where m is number of networks
+        Y = np.stack([(data_parcellation == j+1).astype(float) for j in range(len(labels))])
 
-        # Numerator
-        num = X_dm.T @ y_dm
+        # Demean all networks at once
+        Y_dm = Y - Y.mean(axis=1, keepdims=True)
 
-        # Denominator
-        den = x_norm * y_norm
+        # Compute all norms at once
+        Y_norm = np.sqrt((Y_dm**2).sum(axis=1))
 
-        # Compute the correlation
-        corr = num / den
-        correlation_matrix[:, j] = corr
+        # Single matrix multiply: (n, V) @ (V, m) = (n, m)
+        num = X_dm.T @ Y_dm.T
+
+        # Broadcast division: (n, 1) * (1, m) = (n, m)
+        correlation_matrix = num / (x_norm[:, None] * Y_norm[None, :])
 
     # Create DataFrame and save
     logger.info(f"Saving correlations to {output_file}")
@@ -436,10 +438,13 @@ def mask_extraction_rest(
     components_img = load(components_file)
     components_data = get_data(components_img)
 
-    # Step 2: MNI registration
+    # Step 2: MNI registration - bring Yeo atlas into participant space
+    # Overview: We need the Yeo atlas in the same space as our ICA components
+    # to perform spatial correlation. This requires: participant → MNI → Yeo → participant
     mnireg_dir = root_dir / "02_mnireg"
 
-    # Step 2a: Register fMRI BOLD reference to MNI BOLD reference
+    # Step 2a: Compute transformation from participant space to MNI space
+    # Uses ANTs rigid+affine registration between BOLD reference volumes
     output_prefix = mnireg_dir / Path(f"{ref_file.with_suffix('').stem}_to_MNI_boldref")
     _, sub2mni_xfm = compute_xfm_to_mni(
         input_file=ref_file,
@@ -450,35 +455,46 @@ def mask_extraction_rest(
     yeo2sub = mnireg_dir / Path(f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz")
     if not yeo2sub.exists() or overwrite:
 
-        # Step 2b: Interpolate the Yeo parcellation into MNI space
+        # Step 2b: Resample Yeo atlas to MNI BOLD reference space
+        # Yeo atlas comes in FSL MNI space; we need it in fMRIPrep MNI BOLD space
+        # Uses sform matrix to interpolate between MNI template spaces
         yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
         yeo_mni = Path(yeo).with_suffix('').parent / Path(Path(yeo).with_suffix('').stem + '_interp_to_fMRIPrep_boldref.nii.gz')
         apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp='nearestneighbour', overwrite=overwrite)
 
-        # Step 2c: Transform Yeo parcellation to subject space (invert the sub→MNI transform)
+        # Step 2c: Transform Yeo atlas from MNI space to participant space
+        # Inverts the participant→MNI transformation computed in Step 2a
+        # Uses nearest neighbor interpolation to preserve integer network labels
         apply_xfm(
             moving=yeo_mni,
             fixed=ref_file,
             transform_files=sub2mni_xfm,
             output_file=yeo2sub,
             interpolator='nearestNeighbor',
-            invert=True,
+            invert=True,  # Apply inverse transform: MNI → participant
             overwrite=overwrite
         )
 
-    # Step 3: Extract masks
+    # Step 3: Extract network masks using ICA-atlas correlation
+    # Now that ICA components and Yeo atlas are in same space, identify which
+    # ICA components best represent each target network
     masks_dir = root_dir / "03_masks"
-    
-    # Step 3a: Spatial correlation
+
+    # Step 3a: Compute spatial correlation between ICA components and Yeo networks
+    # Each ICA component is correlated with each Yeo network region
+    # Result is a component × network matrix showing which components match which networks
     sc_file = masks_dir / Path(f"Yeo_IC_spatial_correlation.csv")
     sc_df = spatial_correlation(input_file=components_file, mask_file=mask_file, parcellation_file=yeo2sub, labels=labels, output_file=sc_file, overwrite=overwrite)
 
-    # Step 3b: Extract component with maximum correlation
+    # Step 3b: Select ICA component with highest correlation for each target network
+    # For each target network (e.g., DMN), find the ICA component that best matches it
     network_files = []
     for target in yeo_targets:
         network_file = masks_dir / Path(f"{participant_id}_{target}.nii.gz")
         if not network_file.exists() or overwrite:
+            # Find component index with maximum correlation for this network
             ic_ind = sc_df[target].idxmax()
+            # Extract that component's spatial map as the network mask
             ic_data = components_data[..., ic_ind] # type: ignore
             ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header) # type: ignore
             save(ic_img, network_file)
@@ -486,7 +502,8 @@ def mask_extraction_rest(
             logger.info(f"Output file exists and overwrite=False. Skipping network extraction.")
         network_files.append(network_file)
 
-    # Step 3c: Threshold by number of voxels
+    # Step 3c: Threshold masks to retain only top N voxels by activation magnitude
+    # Reduces each network mask to its strongest voxels for focused neurofeedback
     network_thr_files = []
     for network_file in network_files:
         thr_file = network_file.with_name(network_file.with_suffix("").stem + "_thr.nii.gz")
@@ -494,6 +511,7 @@ def mask_extraction_rest(
             img: SpatialImage = load(network_file)  # type: ignore
             data = img.get_fdata()
             flat = data.ravel()
+            # Use argpartition to efficiently find top N voxels without full sort
             mask = np.zeros(flat.shape, dtype=bool)
             mask[np.argpartition(flat, -threshold)[-threshold:]] = True
             mask = mask.reshape(data.shape)

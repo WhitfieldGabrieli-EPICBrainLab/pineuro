@@ -246,6 +246,8 @@ class BallTask(BaseTask):
                 'time': elapsed,
                 'is_baseline': is_baseline,
             }
+            # Keep current_volume in sync even if the main loop exits right after the last callback
+            self.current_volume = volume
 
     def setup(self):
         """Initialize PsychoPy window and ball task stimuli."""
@@ -358,11 +360,12 @@ class BallTask(BaseTask):
                 "And the top button to enter your response\n"
                 "Press any button to continue"
             ),
-            pos=(0, 0.2),
+            pos=(0, 0),
             height=0.06,
             wrapWidth=1.2,
             color='white',
             font=None,
+            anchorVert='center',
         )
         
         # Setup questions CSV file with BIDS-style naming
@@ -629,6 +632,11 @@ class BallTask(BaseTask):
         This should be called when NEW data arrives from the GLM (once per TR).
         Does NOT update position - that happens in apply_movement().
 
+        Movement logic:
+        - Ball moves toward the network with higher activation
+        - Speed is proportional to the difference between network activations
+        - Outliers are rejected to prevent spurious movements
+
         Parameters
         ----------
         activations : dict
@@ -636,58 +644,69 @@ class BallTask(BaseTask):
         """
         acts = [activations[name] for name in self.mask_names]
 
-        # Check for outlier - skip update but preserve existing activity
+        # Reject outliers to prevent extreme activations from dominating movement
+        # Preserves existing activity direction/magnitude if outlier detected
         if np.max(np.abs(acts)) > self.pda_outlier_threshold:
             logger.debug(f"Outlier activation skipped: {acts[0]:.2f}, {acts[1]:.2f} (threshold: {self.pda_outlier_threshold})")
             return
 
-        # Determine which network has higher activation
+        # Determine which network has higher activation (direction of movement)
         max_idx = np.argmax(acts)
 
-        # If mean of activations is zero, keep existing activity
-        # Handles edge cases like [0.5, -0.5] where mean=0
+        # Handle edge case: if activations balance out to zero mean, preserve current activity
+        # Example: [0.5, -0.5] would give mean=0, indicating no clear winner
         if np.nanmean(acts) == 0:
             return
 
-        # Update activity magnitude (always positive)
+        # Compute movement magnitude from activation difference
+        # Division by 10 scales to reasonable movement speed
+        # Always positive - direction is determined separately
         self.current_activity = np.abs(acts[0] - acts[1]) / 10.0
 
         # Update direction based on which network has higher activation
+        # network_directions[i] is +1 (upward) or -1 (downward) for each network
         self.current_direction = self.network_directions[max_idx]
 
     def apply_movement(self) -> None:
         """Apply movement to ball position based on elapsed time.
 
-        Called every frame to create smooth movement. Movement is time-based
+        Called every frame (~60 Hz) to create smooth movement. Movement is time-based
         (proportional to dt) for frame-rate independence and reproducibility.
         Uses current_activity and current_direction set by calculate_ball_movement().
+
+        Movement formula:
+        - dy = direction × (activity × scale_factor / internal_scaler / TR) × dt
+        - Scales movement to be consistent per TR interval
+        - Higher scale_factor = faster movement (adjusted adaptively between runs)
+        - internal_scaler normalizes across different TR values
         """
         # Calculate time delta since last frame
         current_time = core.getTime()
         dt = current_time - self._last_frame_time
         self._last_frame_time = current_time
 
-        # Don't move if paused (waiting for hit to be processed)
+        # Don't move if paused (ball passed circle center, waiting for hit detection)
         if self.pause_movement:
             return
 
-        # Don't move during baseline
+        # Don't move during baseline period (collecting normalization data)
         if self.is_baseline:
             return
 
-        # Don't move if in non-feedback mode (but still compute everything)
+        # Don't move in non-feedback mode (transfer runs - ball frozen at center)
         if not self.feedback_mode:
             return
 
-        # Calculate movement based on elapsed time (time-based, not frame-based)
-        # Movement per second = activity * scale_factor / internal_scaler / TR
-        # This ensures same total movement per TR regardless of frame rate
+        # Calculate movement for this frame based on elapsed time
+        # Movement per second = activity × scale_factor / internal_scaler / TR
+        # This ensures consistent total movement per TR interval regardless of frame rate
         movement_per_second = (
             self.current_activity
             * (self.scale_factor / self.internal_scaler)
             / self.coordinator.tr
         )
 
+        # Apply directional movement scaled by time delta
         dy = self.current_direction * movement_per_second * dt
 
         # Update position cumulatively
@@ -697,6 +716,18 @@ class BallTask(BaseTask):
     def check_hits(self) -> bool:
         """Check if ball has hit either target circle.
 
+        Hit detection:
+        - Ball "hits" when it reaches the circle's center position
+        - Top circle: hit when ball_y >= circle_y
+        - Bottom circle: hit when ball_y <= circle_y
+
+        On hit:
+        - Increment hit counter for that network
+        - Flash circle white briefly
+        - Reset ball to center (0, 0)
+        - Shrink circle by 10% (min radius 0.03) - increases difficulty
+        - Resume movement immediately
+
         Returns
         -------
         bool
@@ -705,31 +736,32 @@ class BallTask(BaseTask):
         for i, circle in enumerate(self.circles):
             circle_y = self.circle_positions[i]
 
-            # Check if ball has passed the circle center
-            if self.network_directions[i] > 0:  # Top circle (upward)
+            # Check if ball has reached the circle center
+            if self.network_directions[i] > 0:  # Top circle (upward movement)
                 hit = self.ball_pos[1] >= circle_y
-            else:  # Bottom circle (downward)
+            else:  # Bottom circle (downward movement)
                 hit = self.ball_pos[1] <= circle_y
 
             if hit:
-                # Register hit
+                # Register hit in counter
                 self.hit_counters[i] += 1
-                
+
                 # Log hit event
                 network_name = self.mask_names[i]
                 logger.info(f"✓ Hit! {network_name} target (total: {self.hit_counters[i]})")
 
-                # Flash circle
+                # Flash circle white for visual feedback
                 self.circles[i].fillColor = 'white'
 
-                # Reset ball to center (preserve velocity for immediate continued movement)
+                # Reset ball to center position (game continues immediately)
                 self.ball_pos = [0.0, 0.0]
                 self.pause_movement = False  # Resume movement after reset
 
-                # Reset frame time to prevent large dt jump after hit
+                # Reset frame time to prevent large dt jump after hit processing
                 self._last_frame_time = core.getTime()
 
-                # Shrink circle
+                # Shrink circle to increase difficulty (10% reduction per hit, min 0.03)
+                # Makes it progressively harder to hit the same target repeatedly
                 self.circle_radii[i] = max(self.circle_radii[i] * 0.9, 0.03)
                 self.circles[i].radius = self.circle_radii[i]
 
