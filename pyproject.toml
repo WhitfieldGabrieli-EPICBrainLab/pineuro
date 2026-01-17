@@ -13,11 +13,17 @@
       "nilearn",
       "scipy",
       "pandas",
+      "matplotlib",
       "pydicom",
       "templateflow",
       "psychopy",
       "watchdog",
+      "pyyaml",
    ]
 
    [project.optional-dependencies]
    dev = []
+   gui = ["flet>=0.23.0"]
+
+   [project.scripts]
+   pyrtnf-gui = "pyrtnf.gui.app:main"

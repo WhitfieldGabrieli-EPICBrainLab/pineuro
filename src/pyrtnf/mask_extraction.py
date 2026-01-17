@@ -48,6 +48,7 @@ References
 """
 
 # Standard library imports
+import re
 from typing import Union, Any, List, Optional, Sequence
 from pathlib import Path
 
@@ -63,6 +64,7 @@ from nibabel.spatialimages import SpatialImage
 from scipy.stats import pearsonr
 
 # Local imports
+from pyrtnf import qc
 from pyrtnf.utils import (
     compute_mean, compute_xfm, compute_xfm_to_mni, apply_xfm,
     get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni, Timer
@@ -88,7 +90,7 @@ def run_ica(
 
     Parameters
     ----------
-    input_file : str or Path 
+    input_file : str or Path
         Path to a NIfTI file
     mask_file : str or Path
         Path to a NIfTI file to use as a mask
@@ -96,7 +98,7 @@ def run_ica(
         Directory to save output files (components and reports)
     output_name : str
         Base name for output file (without extension)
-    n_components : int, default = 30
+    n_components : int, default = 20
         Number of independent components to extract
     smooth_fwhm : float, optional
         FWHM of Gaussian smoothing kernel in mm for ICA. If None, no smoothing is applied
@@ -114,13 +116,13 @@ def run_ica(
         Path to NIfTI file containing spatial components (4D)
     metadata_file : Path
         Path to numpy file containing component metadata and loadings
-    
+
     Raises
     ------
     FileNotFoundError
         If input_files does not exist
     RuntimeError
-        If CanICA command fails  
+        If CanICA command fails
 
     """
 
@@ -129,7 +131,7 @@ def run_ica(
     output_dir = Path(output_dir)
     components_file = output_dir / f"{output_name}_components.nii.gz"
     metadata_file = output_dir / f"{output_name}_metadata.npz"
-    
+
     outputs = [components_file, metadata_file]
     if not overwrite:
         if all(p.exists() for p in outputs):
@@ -185,7 +187,7 @@ def run_ica(
             error_msg = f"CanICA computation failed: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
-    
+
     # Get components as image
     components_img: SpatialImage = canica.components_img_  # type: ignore
 
@@ -259,6 +261,8 @@ def spatial_correlation(
         if output_file.exists():
             logger.info(f"Output file exists and overwrite=False. Skipping spatial correlations.")
             corr_df = pd.read_csv(output_file)
+            # Drop any auto-created index columns from prior saves
+            corr_df = corr_df.loc[:, ~corr_df.columns.str.contains("^Unnamed")]
             return corr_df
 
     # Validate files
@@ -320,7 +324,7 @@ def spatial_correlation(
     # Create DataFrame and save
     logger.info(f"Saving correlations to {output_file}")
     corr_df = pd.DataFrame(correlation_matrix, columns=labels)
-    corr_df.to_csv(output_file)
+    corr_df.to_csv(output_file, index=False)
 
     return corr_df
 
@@ -337,7 +341,9 @@ def mask_extraction_rest(
         smooth_fwhm: Optional[float] = None,
         highpass: Optional[float] = None,
         lowpass: Optional[float] = None,
-        overwrite: bool = False
+        overwrite: bool = False,
+        qc_enabled: bool = True,
+        qc_dir: Optional[Union[str, Path]] = None
 ) -> List[Path]:
     """
     Run the mask extraction pipeline for resting-state fMRI data.
@@ -380,6 +386,10 @@ def mask_extraction_rest(
     overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
+    qc_enabled : bool, default=True
+        If True, generate QC artifacts (PNG overlays, correlation heatmap, HTML report)
+    qc_dir : str or Path, optional
+        Custom QC output directory. Defaults to the parent of root_dir (e.g., base_dir/qc)
 
     Returns
     -------
@@ -446,22 +456,20 @@ def mask_extraction_rest(
     # Step 2a: Compute transformation from participant space to MNI space
     # Uses ANTs rigid+affine registration between BOLD reference volumes
     output_prefix = mnireg_dir / Path(f"{ref_file.with_suffix('').stem}_to_MNI_boldref")
-    _, sub2mni_xfm = compute_xfm_to_mni(
+    mni_ref_file, sub2mni_xfm = compute_xfm_to_mni(
         input_file=ref_file,
         output_prefix=output_prefix,
         overwrite=overwrite
     )
 
-    yeo2sub = mnireg_dir / Path(f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz")
-    if not yeo2sub.exists() or overwrite:
+    yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
+    yeo_mni = Path(yeo).with_suffix('').parent / Path(Path(yeo).with_suffix('').stem + '_interp_to_fMRIPrep_boldref.nii.gz')
 
-        # Step 2b: Resample Yeo atlas to MNI BOLD reference space
-        # Yeo atlas comes in FSL MNI space; we need it in fMRIPrep MNI BOLD space
-        # Uses sform matrix to interpolate between MNI template spaces
-        yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
-        yeo_mni = Path(yeo).with_suffix('').parent / Path(Path(yeo).with_suffix('').stem + '_interp_to_fMRIPrep_boldref.nii.gz')
+    yeo2sub = mnireg_dir / Path(f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz")
+    if not yeo_mni.exists() or overwrite:
         apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp='nearestneighbour', overwrite=overwrite)
 
+    if not yeo2sub.exists() or overwrite:
         # Step 2c: Transform Yeo atlas from MNI space to participant space
         # Inverts the participant→MNI transformation computed in Step 2a
         # Uses nearest neighbor interpolation to preserve integer network labels
@@ -485,6 +493,7 @@ def mask_extraction_rest(
     # Result is a component × network matrix showing which components match which networks
     sc_file = masks_dir / Path(f"Yeo_IC_spatial_correlation.csv")
     sc_df = spatial_correlation(input_file=components_file, mask_file=mask_file, parcellation_file=yeo2sub, labels=labels, output_file=sc_file, overwrite=overwrite)
+    chosen_components = {target: int(sc_df[target].idxmax()) for target in yeo_targets}
 
     # Step 3b: Select ICA component with highest correlation for each target network
     # For each target network (e.g., DMN), find the ICA component that best matches it
@@ -493,7 +502,7 @@ def mask_extraction_rest(
         network_file = masks_dir / Path(f"{participant_id}_{target}.nii.gz")
         if not network_file.exists() or overwrite:
             # Find component index with maximum correlation for this network
-            ic_ind = sc_df[target].idxmax()
+            ic_ind = chosen_components[target]
             # Extract that component's spatial map as the network mask
             ic_data = components_data[..., ic_ind] # type: ignore
             ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header) # type: ignore
@@ -520,7 +529,23 @@ def mask_extraction_rest(
         else:
             logger.info(f"Output file exists and overwrite=False. Skipping network thresholding.")
         network_thr_files.append(thr_file)
-        
+
+    # Step 4: Generate QC report
+    if qc_enabled:
+        qc_output_dir = Path(qc_dir) if qc_dir is not None else root_dir.parent / "qc"
+
+        # Use high-level API to generate comprehensive QC report
+        network_names = [str(target) for target in yeo_targets]
+        report_path = qc.generate_mask_extraction_report(
+            mask_extraction_dir=root_dir,
+            participant_id=participant_id,
+            network_names=network_names,
+            output_dir=qc_output_dir,
+            overwrite=overwrite,
+            open_browser=True  # Automatically open for initial QC review
+        )
+        logger.info(f"QC report saved to: {report_path}")
+
     return network_thr_files
 
 def coregister_2vol(
@@ -529,7 +554,9 @@ def coregister_2vol(
         input_dicom: Union[str, Path],
         network_files: Union[str, Path, Sequence[Union[str, Path]]],
         ref_file: Union[str, Path],
-        overwrite: bool = False
+        overwrite: bool = False,
+        run_id: Optional[int] = None,
+        output_subdir: str = "01_2vol"
 ) -> List[Path]:
     """
     Coregister extracted networks to participant's current position in the scanner
@@ -550,6 +577,14 @@ def coregister_2vol(
     overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
+    run_id : int, optional
+        Explicit run number to use. If None, derived from the DICOM folder
+        name (run-XX). Falls back to the latest run (max of existing outputs
+        and inferred run), or the next available run if none are found.
+    output_subdir : str, default="01_2vol"
+        Subdirectory name under root_dir for outputs. Use "04_2vol" for
+        initial coregistration (mask_extraction), "01_2vol" for realtime
+        coregistration (feedback).
 
     Returns
     -------
@@ -598,52 +633,159 @@ def coregister_2vol(
     if not ref_file.exists():
         raise FileNotFoundError(f"File not found: {ref_file}")
 
-    # Step 1: Check for existing 2vol and get largest run number
-    # Current behavior: Increments run number if overwrite=True
-    # Future enhancement: Could track 2vol acquisitions by timestamp or session metadata
-    # for more robust handling of multiple coregistration runs
-    twovol_dir = root_dir / "01_2vol"
-    last_run = 0
-    if twovol_dir.exists() and overwrite:
-        pattern = f"{participant_id}_task-2vol_run-*.nii.gz"
-        matching_files = list(twovol_dir.glob(pattern))
-        run_numbers = []
-        for file in matching_files:
-            for part in file.stem.split('_'):
-                if part.startswith('run-'):
-                    try:
-                        run_numbers.append(int(part.split('-')[1]))
-                    except ValueError:
-                        pass
-        if run_numbers:
-            last_run = max(run_numbers)
+    # Step 1: Determine run number (use latest 2vol if multiple exist)
+    twovol_dir = root_dir / output_subdir
+    twovol_dir.mkdir(parents=True, exist_ok=True)
+
+    def _extract_run_number_from_path(path: Path) -> Optional[int]:
+        for part in reversed(path.parts):
+            match = re.search(r"run-(\d+)", part)
+            if match:
+                try:
+                    return int(match.group(1))
+                except ValueError:
+                    return None
+        return None
+
+    pattern = re.compile(r"run-(\d+)")
+    existing_runs: list[int] = []
+    for file in twovol_dir.glob(f"{participant_id}_task-2vol_run-*.nii.gz"):
+        match = pattern.search(file.stem)
+        if match:
+            try:
+                existing_runs.append(int(match.group(1)))
+            except ValueError:
+                continue
+
+    latest_existing_run = max(existing_runs) if existing_runs else None
+    inferred_run = _extract_run_number_from_path(input_path) if run_id is None else None
+
+    if run_id is not None:
+        run_number = run_id
+    elif inferred_run is not None:
+        # Prefer the latest of inferred and existing runs
+        run_number = inferred_run if latest_existing_run is None else max(inferred_run, latest_existing_run)
     else:
-        twovol_dir.mkdir(parents=True, exist_ok=True)
-    next_run = last_run + 1
+        # No hint from path; pick the next run after the latest existing
+        run_number = (latest_existing_run or 0) + 1
+
+    run_str = str(run_number).zfill(2)
+    logger.info(f"Using 2vol run {run_str} (existing runs: {sorted(existing_runs) if existing_runs else 'none'})")
 
     # Step 2: Convert DICOMs to NIfTI
     nifti_file = dicom_to_nifti(
         dicom_dir=input_path,
         output_dir=twovol_dir,
-        output_name=f"{participant_id}_task-2vol_run-{str(next_run).zfill(2)}",
+        output_name=f"{participant_id}_task-2vol_run-{run_str}",
         overwrite=overwrite
     )
 
     # Step 3: Compute mean
-    mean_file = twovol_dir / Path(f"{participant_id}_task-2vol_run-{str(next_run).zfill(2)}_mean.nii.gz")
+    mean_file = twovol_dir / Path(f"{participant_id}_task-2vol_run-{run_str}_mean.nii.gz")
     compute_mean(input_file=nifti_file, output_file=mean_file, overwrite=overwrite)
 
     # Step 4: Compute transformation (ANTs, ~28x faster than FLIRT)
     xfm_dir = twovol_dir / "xfm"
-    output_prefix = xfm_dir / Path(f"{participant_id}_boldref_to_task-2vol_run-{str(next_run).zfill(2)}_mean")
+    output_prefix = xfm_dir / Path(f"{participant_id}_boldref_to_task-2vol_run-{run_str}_mean")
     _, xfm_files = compute_xfm(moving=ref_file, fixed=mean_file, output_prefix=output_prefix, type_of_transform='Rigid', overwrite=overwrite)
 
     # Step 5: Apply transformation
     mask_dir = twovol_dir / "masks"
     network_coreg_files = []
     for network in network_paths:
-        output_file = mask_dir / (network.with_suffix("").stem + f"_to_task-2vol_run-{str(next_run).zfill(2)}_mean.nii.gz")
+        output_file = mask_dir / (network.with_suffix("").stem + f"_to_task-2vol_run-{run_str}_mean.nii.gz")
         apply_xfm(moving=network, fixed=mean_file, transform_files=xfm_files, output_file=output_file, interpolator='nearestNeighbor', overwrite=overwrite)
         network_coreg_files.append(output_file)
 
     return network_coreg_files
+
+
+def generate_2vol_qc_overlays(
+        participant_id: str,
+        session_dir: Path,
+        ref_file: Path,
+        mask_extraction_dir: Path,
+        network_coreg_files: Sequence[Path],
+        run_str: str,
+        overwrite: bool = False
+) -> None:
+    """
+    Generate QC overlays in 2vol space using the Yeo atlas warped to 2vol.
+    """
+    if not network_coreg_files:
+        return
+
+    twovol_dir = session_dir / "01_2vol"
+    mean_file = twovol_dir / f"{participant_id}_task-2vol_run-{run_str}_mean.nii.gz"
+    if not mean_file.exists():
+        logger.info(f"Skipping 2vol QC overlays; mean file not found at {mean_file}")
+        return
+
+    xfm_dir = twovol_dir / "xfm"
+    xfm_files = sorted(xfm_dir.glob(f"{participant_id}_boldref_to_task-2vol_run-{run_str}_mean_*"))
+    if not xfm_files:
+        logger.info(f"Skipping 2vol QC overlays; transforms not found in {xfm_dir}")
+        return
+
+    yeo_sub = mask_extraction_dir / "02_mnireg" / f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz"
+    if not yeo_sub.exists():
+        logger.info(f"Skipping 2vol QC overlays; atlas not found at {yeo_sub}")
+        return
+
+    atlas_2vol = twovol_dir / "masks" / f"Yeo_to_task-2vol_run-{run_str}_mean.nii.gz"
+    apply_xfm(
+        moving=yeo_sub,
+        fixed=mean_file,
+        transform_files=xfm_files,
+        output_file=atlas_2vol,
+        interpolator='nearestNeighbor',
+        overwrite=overwrite
+    )
+
+    atlas_data = load(atlas_2vol).get_fdata()
+    n_labels = int(np.max(atlas_data))
+    labels = get_yeo_labels(n_networks=17 if n_labels > 7 else 7)
+
+    qc_dir = session_dir.parent / "qc"
+    overlays_dir = qc_dir / "overlays" / "2vol"
+    overlays: list[tuple[str, Path]] = []
+    for network in network_coreg_files:
+        stem = network.stem
+        try:
+            target = stem.split(f"{participant_id}_", 1)[1].split("_thr")[0]
+        except IndexError:
+            target = stem
+
+        atlas_slices = qc.select_slices_from_atlas(
+            atlas_path=atlas_2vol,
+            labels=labels,
+            target_label=str(target),
+            top_n_per_plane=1,
+            mask_path=network  # Use mask for slice selection
+        )
+        overlay_png = overlays_dir / f"{stem}_overlay.png"
+        qc.plot_mask_overlay_tripanel(
+            mask_path=network,
+            ref_path=mean_file,
+            out_path=overlay_png,
+            slices=atlas_slices,
+            title=f"{target} (2vol run {run_str})"
+        )
+        overlays.append((target, overlay_png))
+
+    # Regenerate QC report to include 2vol overlays
+    logger.info(f"Generated {len(overlays)} 2vol overlays in {overlays_dir}")
+    logger.info("Regenerating QC report with 2vol overlays...")
+
+    # Extract network names from the overlay list
+    network_names = [name for name, _ in overlays]
+
+    # Regenerate report with 2vol overlays and open in browser
+    qc.generate_mask_extraction_report(
+        mask_extraction_dir=mask_extraction_dir,
+        participant_id=participant_id,
+        network_names=network_names,
+        output_dir=qc_dir,
+        overwrite=True,  # Force regeneration to include new 2vol overlays
+        open_browser=True  # Automatically open for user review before feedback
+    )

@@ -1,0 +1,422 @@
+"""Main Flet application entry point.
+
+This module provides the root application class (PyrtnfApp) and navigation
+between screens:
+- Study Manager: Browse, create, duplicate, and delete studies
+- Study Editor: Configure study parameters with tabbed interface
+- Participant Workflow: Execute pipeline steps per participant (Phase 4+)
+
+The app manages screen transitions, study state, and provides consistent
+UI layout across all screens.
+
+Entry point: main() function calls ft.run() with the app factory.
+"""
+
+import logging
+from pathlib import Path
+from typing import Optional
+
+import flet as ft
+
+from .config_manager import ConfigManager
+from .models import StudyConfig
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+
+class PyrtnfApp:
+    """Main application class managing screen navigation and state."""
+
+    def __init__(self, page: ft.Page):
+        """Initialize the application.
+
+        Args:
+            page: Flet Page object
+        """
+        self.page = page
+        self.config_manager = ConfigManager()
+        self.current_study: Optional[StudyConfig] = None
+
+        # Configure page
+        self._setup_page()
+
+        # Initialize with study manager screen
+        self.show_study_manager()
+
+    def _setup_page(self):
+        """Configure the Flet page properties."""
+        self.page.title = "pyrtnf - Real-time fMRI Neurofeedback"
+        self.page.window_width = 1400
+        self.page.window_height = 900
+        self.page.padding = 0
+        self.page.theme_mode = ft.ThemeMode.LIGHT
+
+        logger.info("pyrtnf GUI initialized")
+
+    def show_study_manager(self):
+        """Show the study manager screen."""
+        logger.info("Navigating to Study Manager")
+
+        # Clear current content
+        self.page.controls.clear()
+
+        # Create study manager screen
+        self.page.add(
+            ft.Container(
+                content=ft.Column(
+                    [
+                        # Header
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    ft.Text(
+                                        "pyrtnf Study Manager",
+                                        size=24,
+                                        weight=ft.FontWeight.BOLD,
+                                    ),
+                                    ft.FilledButton(
+                                        "+ New Study",
+                                        on_click=lambda _: self.show_study_editor(None),
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            ),
+                            padding=20,
+                            bgcolor=ft.Colors.BLUE_50,
+                        ),
+                        # Study list
+                        ft.Container(
+                            content=self._build_study_list(),
+                            padding=20,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=0,
+                ),
+                expand=True,
+            )
+        )
+
+        self.page.update()
+
+    def _build_study_list(self) -> ft.Control:
+        """Build the grid of study cards.
+
+        Returns:
+            Flet control containing study cards
+        """
+        studies = self.config_manager.list_studies()
+
+        if not studies:
+            return ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Icon(ft.icons.Icons.FOLDER_OPEN, size=100, color=ft.Colors.GREY_400),
+                        ft.Text(
+                            "No studies found",
+                            size=20,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Text(
+                            "Create your first study to get started!",
+                            size=14,
+                            color=ft.Colors.GREY_500,
+                        ),
+                        ft.ElevatedButton(
+                            "Create New Study",
+                            icon=ft.icons.Icons.CREATE,
+                            on_click=lambda _: self.show_study_editor(None),
+                        ),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=10,
+                ),
+                alignment=ft.alignment.Alignment.CENTER,
+            )
+
+        # Create study cards in a grid
+        cards = []
+        for study_meta in studies:
+            cards.append(self._create_study_card(study_meta))
+
+        return ft.GridView(
+            controls=cards,
+            runs_count=3,
+            max_extent=400,
+            child_aspect_ratio=1.2,
+            spacing=10,
+            run_spacing=10,
+        )
+
+    def _create_study_card(self, study_meta) -> ft.Card:
+        """Create a card for a single study.
+
+        Args:
+            study_meta: StudyMetadata object
+
+        Returns:
+            Flet Card control
+        """
+        from .utils import format_timestamp, truncate_text
+
+        return ft.Card(
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            study_meta.name,
+                            size=18,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Divider(),
+                        ft.Container(
+                            content=ft.Text(
+                                truncate_text(study_meta.description, 80),
+                                size=12,
+                                color=ft.Colors.GREY_700,
+                            ),
+                            height=40,
+                        ),
+                        ft.Text(
+                            f"Modified: {format_timestamp(study_meta.modified)}",
+                            size=10,
+                            color=ft.Colors.GREY_500,
+                        ),
+                        ft.Divider(),
+                        ft.Row(
+                            [
+                                ft.IconButton(
+                                    icon=ft.icons.Icons.EDIT,
+                                    icon_size=20,
+                                    tooltip="Edit Study Configuration",
+                                    on_click=lambda _, name=study_meta.name: self.show_study_editor(name),
+                                ),
+                                ft.IconButton(
+                                    icon=ft.icons.Icons.CONTENT_COPY,
+                                    icon_size=20,
+                                    tooltip="Duplicate",
+                                    on_click=lambda _, name=study_meta.name: self._duplicate_study(name),
+                                ),
+                                ft.IconButton(
+                                    icon=ft.icons.Icons.DELETE_OUTLINE,
+                                    icon_size=20,
+                                    tooltip="Delete",
+                                    on_click=lambda _, name=study_meta.name: self._confirm_delete_study(name),
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            spacing=5,
+                        ),
+                    ],
+                    spacing=8,
+                ),
+                padding=15,
+                ink=True,
+                on_click=lambda _, name=study_meta.name: self._prompt_start_session(name),
+            ),
+        )
+
+    def _prompt_start_session(self, study_name: str):
+        """Prompt for participant ID to start a session.
+
+        Args:
+            study_name: Name of the study to start
+        """
+        logger.info(f"Starting session for study: {study_name}")
+
+        # Load study to get subject prefix
+        study_config = self.config_manager.load_study(study_name)
+        if not study_config:
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text(f"Failed to load study: {study_name}"),
+                open=True,
+            )
+            self.page.update()
+            return
+
+        subject_prefix = study_config.session_config.get("paths", {}).get("subject_prefix", "sub-")
+
+        # Create text field for participant ID
+        participant_id_field = ft.TextField(
+            label="Participant ID",
+            hint_text=f"e.g., {subject_prefix}0001",
+            autofocus=True,
+        )
+
+        def start_session(e):
+            participant_id = participant_id_field.value.strip()
+
+            if not participant_id:
+                participant_id_field.error_text = "Participant ID is required"
+                participant_id_field.update()
+                return
+
+            self.page.pop_dialog()
+
+            # Start workflow with already-loaded study config
+            self.show_participant_workflow(study_config, participant_id)
+
+        def cancel_start(e):
+            self.page.pop_dialog()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Start Participant Session"),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            f"Study: {study_name}",
+                            size=14,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Divider(),
+                        participant_id_field,
+                        ft.Text(
+                            "Enter the participant ID to begin the neurofeedback session.",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                            italic=True,
+                        ),
+                    ],
+                    tight=True,
+                    spacing=10,
+                ),
+                width=400,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=cancel_start),
+                ft.FilledButton("Start", icon=ft.icons.Icons.PLAY_ARROW, on_click=start_session),
+            ],
+        )
+
+        self.page.show_dialog(dialog)
+
+    def _duplicate_study(self, study_name: str):
+        """Duplicate a study.
+
+        Args:
+            study_name: Name of the study to duplicate
+        """
+        logger.info(f"Duplicating study: {study_name}")
+        new_study = self.config_manager.duplicate_study(study_name)
+
+        if new_study:
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text(f"Study duplicated: {new_study.metadata.name}"),
+                open=True,
+            )
+            self.show_study_manager()  # Refresh
+
+    def _confirm_delete_study(self, study_name: str):
+        """Show confirmation dialog before deleting a study.
+
+        Args:
+            study_name: Name of the study to delete
+        """
+        def delete_confirmed(e):
+            self.page.pop_dialog()
+
+            success = self.config_manager.delete_study(study_name)
+            if success:
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text(f"Study deleted: {study_name}"),
+                    open=True,
+                )
+                self.show_study_manager()  # Refresh
+
+        def cancel_delete(e):
+            self.page.pop_dialog()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Delete Study?"),
+            content=ft.Text(f"Are you sure you want to delete '{study_name}'? This cannot be undone."),
+            actions=[
+                ft.TextButton("Cancel", on_click=cancel_delete),
+                ft.TextButton("Delete", on_click=delete_confirmed),
+            ],
+        )
+
+        self.page.show_dialog(dialog)
+
+    def show_study_editor(self, study_name: Optional[str]):
+        """Show the study editor screen.
+
+        Args:
+            study_name: Name of study to edit, or None for new study
+        """
+        from .screens.study_editor import StudyEditorScreen
+
+        logger.info(f"Navigating to Study Editor (study: {study_name})")
+
+        # Load study if editing
+        if study_name:
+            self.current_study = self.config_manager.load_study(study_name)
+        else:
+            self.current_study = None
+
+        # Clear current content
+        self.page.controls.clear()
+
+        # Create study editor
+        editor = StudyEditorScreen(
+            page=self.page,
+            config_manager=self.config_manager,
+            study_config=self.current_study,
+            on_cancel=lambda: self.show_study_manager(),
+            on_save=lambda: self.show_study_manager(),
+            on_start_session=lambda participant_id: self.show_participant_workflow(
+                self.current_study, participant_id
+            )
+        )
+
+        # Add editor UI
+        self.page.add(editor.build())
+        self.page.update()
+
+    def show_participant_workflow(self, study_config: StudyConfig, participant_id: str):
+        """Show the participant workflow screen.
+
+        Args:
+            study_config: Study configuration to use
+            participant_id: Participant ID
+        """
+        from .screens.participant_workflow import ParticipantWorkflowScreen
+
+        logger.info(f"Navigating to Participant Workflow (participant: {participant_id})")
+
+        self.current_study = study_config
+
+        # Clear current content
+        self.page.controls.clear()
+
+        # Create participant workflow screen
+        workflow = ParticipantWorkflowScreen(
+            page=self.page,
+            config_manager=self.config_manager,
+            study_config=study_config,
+            participant_id=participant_id,
+            on_back=lambda: self.show_study_manager(),
+        )
+
+        # Add workflow UI
+        self.page.add(workflow.build())
+        self.page.update()
+
+
+def main():
+    """Main entry point for the Flet app."""
+    def create_app(page: ft.Page):
+        PyrtnfApp(page)
+
+    # Note: ft.app() is deprecated but ft.run() has different signature in 0.80.2
+    # Using ft.app() for now (works with deprecation warning)
+    ft.app(target=create_app)
+
+
+if __name__ == "__main__":
+    main()

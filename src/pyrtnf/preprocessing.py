@@ -93,7 +93,8 @@ def motion_correction(
     cmd = [
         'mcflirt',
         '-in', str(input_file),
-        '-out', str(output_file)
+        '-out', str(output_file),
+        '-plots'  # Generate .par file with motion parameters for QC
     ]
 
     run_command(
@@ -101,7 +102,7 @@ def motion_correction(
         cmd=cmd,
         description='Motion correction',
         inputs=input_file,
-        outputs=output_file,
+        outputs=[output_file, str(output_file) + '.par'],  # Include .par file in outputs
         overwrite=overwrite,
         timing_category='preprocessing'
     )
@@ -319,7 +320,8 @@ def preprocessing(
         root_dir: Union[str, Path],
         input_dicoms: Union[str, Path, List[Union[str, Path]]],
         overwrite: bool = False,
-        n_jobs: int = -1
+        n_jobs: int = -1,
+        qc_enabled: bool = True
 ) -> tuple[Path, Path, Path]:
     """
     Run the preprocessing pipeline for fMRI data (task or rest).
@@ -340,6 +342,10 @@ def preprocessing(
     n_jobs : int, default=-1
         Number of parallel jobs for DICOM conversion and motion correction.
         -1 uses all available CPUs. Set to 1 for sequential processing.
+    qc_enabled : bool, default=True
+        If True, generate QC report after preprocessing completes.
+        Report includes motion parameters, framewise displacement, brain mask coverage,
+        and multi-run coregistration overlays (if applicable).
 
     Returns
     -------
@@ -533,6 +539,21 @@ def preprocessing(
     logger.info(f"  Preprocessed file: {preproc_file.name}")
     logger.info(f"  Brain mask: {mask_file.name}")
     logger.info(f"  BOLD reference: {ref_file.name}")
+
+    # Generate QC report
+    if qc_enabled:
+        logger.info("Generating preprocessing QC report...")
+        try:
+            from . import qc
+            qc_report = qc.generate_preprocessing_report(
+                preprocessing_dir=root_dir,
+                participant_id=participant_id,
+                task=task,
+                overwrite=overwrite
+            )
+            logger.info(f"  QC report: {qc_report}")
+        except Exception as e:
+            logger.warning(f"QC report generation failed: {e}")
 
     # Return preprocessed file
     return preproc_file, mask_file, ref_file

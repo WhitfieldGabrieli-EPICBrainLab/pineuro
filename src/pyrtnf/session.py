@@ -706,11 +706,12 @@ def run_coregistration(
 
     return coregister_2vol(
         participant_id=config.paths.participant_id,
-        root_dir=str(config.paths.session_dir),
+        root_dir=str(config.paths.mask_extraction_dir),
         input_dicom=str(twovol_dir),
         network_files=network_files,
         ref_file=ref_file,
-        overwrite=overwrite
+        overwrite=overwrite,
+        output_subdir="04_2vol"
     )
 
 
@@ -831,7 +832,7 @@ def run_single_task(
         Run results including hits, scale_factor, volumes_processed
     """
     from .feedback import run_feedback_session
-    from .tasks.ball import BallTask
+    from .tasks.ball import BallTask, compute_boxcar_task_regressor
 
     run_number = session_state.next_run_number
     task_run_number = session_state.next_run_number_for_type(run_type)
@@ -844,6 +845,14 @@ def run_single_task(
     logger.info(f"Mode: {'FEEDBACK' if feedback_mode else 'TRANSFER (no feedback)'}")
     logger.info(f"Scale factor: {session_state.scale_factor}")
     logger.info(f"Circle radii: {session_state.circle_radii}")
+
+    # Compute task regressor for ball task (HRF-convolved boxcar)
+    task_regressors = compute_boxcar_task_regressor(
+        n_baseline=config.feedback.n_baseline,
+        n_volumes=config.feedback.n_volumes,
+        tr=config.scan.tr,
+    )
+    logger.info(f"Computed boxcar task regressor (baseline={config.feedback.n_baseline}, volumes={config.feedback.n_volumes})")
 
     # Set up simulator parameters if using simulator
     simulator_kwargs = {}
@@ -866,6 +875,7 @@ def run_single_task(
         n_baseline=config.feedback.n_baseline,
         n_volumes=config.feedback.n_volumes,
         tr=config.scan.tr,
+        task_regressors=task_regressors,
         mask_names=config.mask.mask_names,
         use_efficiency_weights=config.feedback.use_efficiency_weights,
         **simulator_kwargs
@@ -984,6 +994,22 @@ def coregister_before_first_transfer(
         twovol_dicom_dir=twovol_dicoms[0],
         overwrite=True,
     )
+
+    # Generate 2vol QC overlays (only at this pre-transfer step)
+    try:
+        from .mask_extraction import generate_2vol_qc_overlays
+        run_str = re.search(r"run-(\d+)", coreg_mask_files[0].stem).group(1) if coreg_mask_files else "01"  # type: ignore
+        generate_2vol_qc_overlays(
+            participant_id=config.paths.participant_id,
+            session_dir=config.paths.session_dir,
+            ref_file=ref_file,
+            mask_extraction_dir=config.paths.mask_extraction_dir,
+            network_coreg_files=coreg_mask_files,
+            run_str=run_str,
+            overwrite=True
+        )
+    except Exception as e:
+        logger.warning(f"2vol QC overlay generation skipped: {e}")
 
     return [Path(f) for f in coreg_mask_files]
 

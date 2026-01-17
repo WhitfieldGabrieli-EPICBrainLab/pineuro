@@ -27,7 +27,12 @@ from typing import Optional, TYPE_CHECKING
 
 # Third-party imports
 import numpy as np
-from psychopy import visual, core, event, monitors
+from numpy.typing import NDArray
+from psychopy import visual, core, event, monitors, prefs, logging as psychopy_logging
+from scipy.stats import gamma as gamma_dist
+
+# Silence PsychoPy warnings about monitor specifications and fonts
+psychopy_logging.console.setLevel(psychopy_logging.ERROR)
 
 # Local imports
 from .base import BaseTask
@@ -37,6 +42,110 @@ if TYPE_CHECKING:
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
+
+
+# ==============================================================================
+# HRF and Task Regressor Computation (Ball Task Specific)
+# ==============================================================================
+
+
+def compute_hrf(tr: float, duration: float = 32.0) -> NDArray[np.float64]:
+    """Compute canonical double-gamma HRF (SPM-style).
+
+    Parameters
+    ----------
+    tr : float
+        Repetition time in seconds.
+    duration : float, optional
+        Duration of HRF in seconds. Default is 32s.
+
+    Returns
+    -------
+    hrf : ndarray
+        HRF sampled at TR intervals, normalized to peak at 1.0.
+
+    Notes
+    -----
+    Uses SPM canonical HRF parameters:
+    - Positive gamma: shape=6, scale=1 (peak ~5s)
+    - Negative gamma: shape=16, scale=1 (peak ~16s)
+    - Undershoot ratio: 1/6
+    """
+    # Time points at TR intervals
+    t = np.arange(0, duration, tr)
+
+    # SPM canonical HRF parameters
+    # Positive response: gamma(6, 1) peaks at ~5s
+    # Undershoot: gamma(16, 1) peaks at ~16s
+    a1, b1 = 6.0, 1.0  # shape, scale for positive response
+    a2, b2 = 16.0, 1.0  # shape, scale for undershoot
+    c = 1.0 / 6.0  # undershoot ratio
+
+    # Double-gamma HRF
+    hrf = gamma_dist.pdf(t, a1, scale=b1) - c * gamma_dist.pdf(t, a2, scale=b2)
+
+    # Normalize to peak at 1.0
+    hrf = hrf / np.max(hrf)
+
+    return hrf.astype(np.float64)
+
+
+def compute_boxcar_task_regressor(
+    n_baseline: int,
+    n_volumes: int,
+    tr: float,
+) -> NDArray[np.float64]:
+    """Compute HRF-convolved boxcar task regressor for ball task.
+
+    Creates a task regressor where:
+    - Baseline period (0 to n_baseline-1): task = 0
+    - Feedback period (n_baseline onwards): task = 1 convolved with HRF
+
+    This is specific to the ball task design with a single baseline/active
+    block structure.
+
+    Parameters
+    ----------
+    n_baseline : int
+        Number of baseline volumes (task = 0).
+    n_volumes : int
+        Total number of volumes.
+    tr : float
+        Repetition time in seconds.
+
+    Returns
+    -------
+    regressor : ndarray, shape (n_volumes,)
+        Task regressor values for each volume.
+
+    Notes
+    -----
+    The convolution produces the characteristic HRF response shape:
+    - Stays at 0 during baseline
+    - Ramps up after baseline onset following HRF shape
+    - Reaches steady state (~1.0) after ~25-30s
+    """
+    # Create boxcar: 0 during baseline, 1 during feedback
+    boxcar = np.zeros(n_volumes, dtype=np.float64)
+    boxcar[n_baseline:] = 1.0
+
+    # Compute HRF kernel
+    hrf = compute_hrf(tr)
+
+    # Convolve boxcar with HRF
+    convolved = np.convolve(boxcar, hrf, mode='full')
+
+    # Trim to original length
+    regressor = convolved[:n_volumes]
+
+    # Normalize so steady-state is ~1.0 (divide by sum of HRF)
+    # This ensures the regressor reaches 1.0 after the HRF response settles
+    hrf_sum = np.sum(hrf)
+    if hrf_sum > 0:
+        regressor = regressor / hrf_sum
+
+    return regressor.astype(np.float64)
+
 
 # Instruction text constants
 INSTRUCTIONS_FIRST_TRANSFER = (
@@ -231,14 +340,27 @@ class BallTask(BaseTask):
         self._task_start_time: float = 0.0
         self._last_frame_time: float = 0.0
 
+        # Outlier tracking
+        self.outlier_count = 0
+        self._current_is_outlier = False
+
     def _update_data(
         self,
         activations: dict,
         volume: int,
         elapsed: float,
-        is_baseline: bool
+        is_baseline: bool,
+        is_outlier: bool
     ):
-        """Internal callback to update latest data for dual networks."""
+        """Internal callback to update latest data for dual networks.
+
+        Performs outlier detection and reports to coordinator if detected.
+        """
+        # Check for outliers based on activation threshold
+        acts = [activations.get(name, 0.0) for name in self.mask_names]
+        if np.max(np.abs(acts)) > self.pda_outlier_threshold:
+            self.coordinator.report_outlier(volume)
+
         with self._lock:
             self._latest_data = {
                 'activations': {name: activations.get(name, 0.0) for name in self.mask_names},
@@ -249,8 +371,31 @@ class BallTask(BaseTask):
             # Keep current_volume in sync even if the main loop exits right after the last callback
             self.current_volume = volume
 
+    def _move_window_to_secondary(self):
+        """Move PsychoPy window to secondary monitor using Xlib.
+
+        This is a workaround for Flet/XWayland ignoring PsychoPy's screen parameter.
+        Only works on Linux/X11 systems.
+        """
+        try:
+            # Get target screen position
+            screens = self.win.winHandle.display.get_screens()
+            target = screens[1] if len(screens) > 1 else screens[0]
+
+            # Move window using Xlib
+            from Xlib import display as xlib_display
+            d = xlib_display.Display()
+            x_win = d.create_resource_object('window', self.win.winHandle._window)
+            x_win.configure(x=target.x, y=target.y)
+            d.sync()
+            d.close()
+        except Exception as e:
+            logger.warning(f"Could not move window to secondary: {e}")
+
     def setup(self):
         """Initialize PsychoPy window and ball task stimuli."""
+        from psychopy import visual
+
         # Initialize PsychoPy log file
         self._psychopy_log_file = open(self._psychopy_log_path, 'w', newline='')
         self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter='\t')
@@ -271,15 +416,36 @@ class BallTask(BaseTask):
         # Create minimal monitor to avoid "Monitor specification not found" warning
         mon = monitors.Monitor('neurofeedback')
 
-        self.win = visual.Window(
-            fullscr=self.fullscreen,
-            screen=1,  # Display on secondary monitor
-            monitor=mon,
-            units='height',  # Use height units for consistent scaling
-            color='black',
-            allowGUI=False,
-            waitBlanking=False,  # Disable frame rate measurement (using dt-based timing)
-        )
+        # Platform-specific window creation for secondary monitor
+        import sys
+        if sys.platform == 'darwin':
+            # macOS: screen parameter works directly
+            self.win = visual.Window(
+                fullscr=self.fullscreen,
+                monitor=mon,
+                screen=1,
+                units='height',
+                color='black',
+                allowGUI=False,
+                waitBlanking=False,
+            )
+        else:
+            # Linux (including WSL2): Need Xlib workaround for Flet/XWayland
+            import pyglet
+            screens = pyglet.canvas.Display().get_screens()
+            target = screens[1] if len(screens) > 1 else screens[0]
+
+            self.win = visual.Window(
+                fullscr=False,
+                size=(target.width, target.height),
+                monitor=mon,
+                screen=1,
+                units='height',
+                color='black',
+                allowGUI=False,
+                waitBlanking=False,
+            )
+            self._move_window_to_secondary()
 
         # Use default frame duration for display loop timing (prevents CPU spinning)
         # Movement is time-based (dt) so actual frame rate doesn't affect physics
@@ -647,8 +813,13 @@ class BallTask(BaseTask):
         # Reject outliers to prevent extreme activations from dominating movement
         # Preserves existing activity direction/magnitude if outlier detected
         if np.max(np.abs(acts)) > self.pda_outlier_threshold:
-            logger.debug(f"Outlier activation skipped: {acts[0]:.2f}, {acts[1]:.2f} (threshold: {self.pda_outlier_threshold})")
+            self.outlier_count += 1
+            self._current_is_outlier = True
+            logger.info(f"Outlier detected: {acts[0]:.2f}, {acts[1]:.2f} (threshold: {self.pda_outlier_threshold})")
             return
+
+        # Not an outlier - clear flag
+        self._current_is_outlier = False
 
         # Determine which network has higher activation (direction of movement)
         max_idx = np.argmax(acts)
@@ -900,15 +1071,20 @@ class BallTask(BaseTask):
 
     def cleanup(self):
         """Close window and quit."""
+        # Log outlier summary statistics
+        if self.current_volume > 0:
+            outlier_pct = (self.outlier_count / self.current_volume) * 100
+            logger.info(f"Outlier summary: {self.outlier_count}/{self.current_volume} volumes ({outlier_pct:.1f}%)")
+
         # Save state before cleanup if session_state was provided
         self.save_state()
-        
+
         # Close PsychoPy log file
         if self._psychopy_log_file is not None:
             self._psychopy_log_file.close()
             self._psychopy_log_file = None
             self._psychopy_log_writer = None
-        
+
         # Close questions file
         if self._questions_file is not None:
             self._questions_file.close()
@@ -996,11 +1172,123 @@ class BallTask(BaseTask):
                 avg_frames_per_vol = self._frame_counter / self.current_volume
                 logger.info(f"Average frames per volume: {avg_frames_per_vol:.1f}")
             logger.info(f"PsychoPy log saved: {self._psychopy_log_path}")
-            
-            # Show post-run slider questions
-            try:
-                self._show_post_run_questions()
-            except KeyboardInterrupt:
-                logger.info("Questions interrupted by user")
-            
+
+            # Show post-run slider questions (only if session completed naturally)
+            if not self.coordinator.was_stopped():
+                try:
+                    self._show_post_run_questions()
+                except KeyboardInterrupt:
+                    logger.info("Questions interrupted by user")
+            else:
+                logger.info("Session was stopped - skipping post-run questions")
+
             self.cleanup()
+
+
+# ==============================================================================
+# Task Metadata for GUI Configuration
+# ==============================================================================
+
+from .task_registry import TaskMetadata, TaskParameter, register_task
+from typing import Dict, Any
+
+
+def _validate_ball_hits(config: Dict[str, Any]) -> None:
+    """Cross-parameter validator for ball task hit thresholds."""
+    min_hits = config.get("min_hits_threshold")
+    max_hits = config.get("max_hits_threshold")
+
+    if min_hits is not None and max_hits is not None:
+        if min_hits >= max_hits:
+            raise ValueError("Min hits threshold must be < max hits threshold")
+
+
+BALL_TASK_METADATA = TaskMetadata(
+    task_id="ball",
+    display_name="Ball Task",
+    description="Dual-network neurofeedback with ball control",
+    parameters=[
+        TaskParameter(
+            key="use_transfer_runs",
+            label="Use Transfer Runs",
+            type="bool",
+            default=True,
+            hint="Include transfer runs (1 before feedback, 1 after)",
+        ),
+        TaskParameter(
+            key="initial_scale_factor",
+            label="Initial Scale Factor",
+            type="float",
+            default=10.0,
+            min_value=1.0,
+            max_value=50.0,
+            hint="Starting difficulty (larger = easier)",
+        ),
+        TaskParameter(
+            key="min_hits_threshold",
+            label="Min Hits (Too Slow)",
+            type="int",
+            default=3,
+            min_value=0,
+            max_value=10,
+            hint="If hits < this, increase scale factor 25%",
+        ),
+        TaskParameter(
+            key="max_hits_threshold",
+            label="Max Hits (Too Fast)",
+            type="int",
+            default=5,
+            min_value=0,
+            max_value=10,
+            hint="If hits > this, decrease scale factor 25%",
+        ),
+        TaskParameter(
+            key="fullscreen",
+            label="Fullscreen Mode",
+            type="bool",
+            default=True,
+            hint="Run task in fullscreen",
+        ),
+        TaskParameter(
+            key="trigger_keys",
+            label="Scanner Trigger Keys",
+            type="list[str]",
+            default=["t", "+", "5", "equal"],
+            hint="Keys that trigger volume acquisition (comma-separated)",
+        ),
+        TaskParameter(
+            key="left_button",
+            label="Left Control Button",
+            type="str",
+            default="1",
+            hint="Key for moving ball left",
+        ),
+        TaskParameter(
+            key="right_button",
+            label="Right Control Button",
+            type="str",
+            default="2",
+            hint="Key for moving ball right",
+        ),
+        TaskParameter(
+            key="enter_button",
+            label="Enter/Confirm Button",
+            type="str",
+            default="0",
+            hint="Key for confirming selections",
+        ),
+        TaskParameter(
+            key="scale_adjust_factor",
+            label="Scale Adjustment Factor",
+            type="float",
+            default=0.25,
+            min_value=0.01,
+            max_value=1.0,
+            hint="How much to adjust scale (0.25 = 25% change)",
+        ),
+    ],
+    cross_parameter_validator=_validate_ball_hits,
+)
+
+# Auto-register on import
+register_task(BALL_TASK_METADATA)

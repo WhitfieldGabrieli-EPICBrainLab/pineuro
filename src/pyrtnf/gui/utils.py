@@ -1,0 +1,265 @@
+"""
+Utility functions for GUI operations.
+
+Includes validation helpers, threading utilities, and common UI functions.
+"""
+
+import logging
+from pathlib import Path
+from typing import Any, Optional, Tuple
+import threading
+
+logger = logging.getLogger(__name__)
+
+
+# Yeo network labels
+YEO_7_LABELS = [
+    "Visual",
+    "SomMot",
+    "DorsAttn",
+    "SalVentAttn",
+    "Limbic",
+    "Cont",
+    "Default"
+]
+
+YEO_17_LABELS = [
+    "VisCent",
+    "VisPeri",
+    "SomMotA",
+    "SomMotB",
+    "DorsAttnA",
+    "DorsAttnB",
+    "SalVentAttnA",
+    "SalVentAttnB",
+    "LimbicA",
+    "LimbicB",
+    "ContA",
+    "ContB",
+    "ContC",
+    "DefaultA",
+    "DefaultB",
+    "DefaultC",
+    "TempPar"
+]
+
+
+class ValidationError(Exception):
+    """Raised when a configuration parameter fails validation."""
+    pass
+
+
+def validate_positive_number(value: Any, name: str) -> float:
+    """Validate that a value is a positive number.
+
+    Args:
+        value: Value to validate
+        name: Parameter name (for error messages)
+
+    Returns:
+        Validated float value
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        raise ValidationError(f"{name} must be a number, got: {value}")
+
+    if num <= 0:
+        raise ValidationError(f"{name} must be positive, got: {num}")
+
+    return num
+
+
+def validate_positive_int(value: Any, name: str) -> int:
+    """Validate that a value is a positive integer.
+
+    Args:
+        value: Value to validate
+        name: Parameter name (for error messages)
+
+    Returns:
+        Validated int value
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        raise ValidationError(f"{name} must be an integer, got: {value}")
+
+    if num <= 0:
+        raise ValidationError(f"{name} must be positive, got: {num}")
+
+    return num
+
+
+def validate_path(value: Any, name: str, must_exist: bool = False) -> Path:
+    """Validate that a value is a valid path.
+
+    Args:
+        value: Value to validate
+        name: Parameter name (for error messages)
+        must_exist: If True, path must exist
+
+    Returns:
+        Validated Path object
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    if not value:
+        raise ValidationError(f"{name} cannot be empty")
+
+    try:
+        path = Path(value)
+    except (TypeError, ValueError) as e:
+        raise ValidationError(f"{name} is not a valid path: {e}")
+
+    if must_exist and not path.exists():
+        raise ValidationError(f"{name} does not exist: {path}")
+
+    return path
+
+
+def validate_yeo_networks(n_yeo: int, selected_networks: list) -> Tuple[int, list]:
+    """Validate Yeo network configuration.
+
+    Args:
+        n_yeo: Number of Yeo networks (7 or 17)
+        selected_networks: List of selected network names
+
+    Returns:
+        Tuple of (validated n_yeo, validated network list)
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    if n_yeo not in [7, 17]:
+        raise ValidationError(f"n_yeo must be 7 or 17, got: {n_yeo}")
+
+    if not selected_networks:
+        raise ValidationError("At least one network must be selected")
+
+    if len(selected_networks) < 2:
+        raise ValidationError(
+            f"At least 2 networks must be selected for feedback, got: {len(selected_networks)}"
+        )
+
+    return n_yeo, selected_networks
+
+
+def validate_session_config(config_dict: dict) -> Tuple[bool, Optional[str]]:
+    """Validate a complete session configuration.
+
+    Args:
+        config_dict: Dictionary representation of SessionConfig
+
+    Returns:
+        Tuple of (is_valid, error_message)
+        If is_valid is True, error_message is None
+        If is_valid is False, error_message contains the validation error
+    """
+    try:
+        # Validate scanner parameters
+        scan = config_dict.get("scan", {})
+        validate_positive_number(scan.get("tr", 0), "TR")
+        validate_positive_int(scan.get("n_volumes", 0), "n_volumes")
+        validate_positive_int(scan.get("n_baseline", 0), "n_baseline")
+
+        # Validate rest runs
+        rest_n_volumes = scan.get("rest_n_volumes", [])
+        if not isinstance(rest_n_volumes, list) or len(rest_n_volumes) < 2:
+            raise ValidationError("rest_n_volumes must be a list with at least 2 values")
+
+        # Validate mask parameters
+        mask = config_dict.get("mask", {})
+        n_yeo = mask.get("n_yeo", 0)
+        yeo_targets = mask.get("yeo_targets", [])
+        validate_yeo_networks(n_yeo, yeo_targets)
+
+        validate_positive_number(mask.get("smooth_fwhm", 0), "smooth_fwhm")
+        validate_positive_number(mask.get("highpass", 0), "highpass")
+
+        # Validate feedback parameters
+        feedback = config_dict.get("feedback", {})
+        validate_positive_int(feedback.get("n_baseline", 0), "feedback.n_baseline")
+        validate_positive_int(feedback.get("n_volumes", 0), "feedback.n_volumes")
+
+        # Validate task parameters
+        task = config_dict.get("task", {})
+        validate_positive_number(task.get("initial_scale_factor", 0), "initial_scale_factor")
+        validate_positive_int(task.get("min_hits_threshold", 0), "min_hits_threshold")
+        validate_positive_int(task.get("max_hits_threshold", 0), "max_hits_threshold")
+
+        # All validations passed
+        return True, None
+
+    except ValidationError as e:
+        return False, str(e)
+    except Exception as e:
+        logger.error(f"Unexpected validation error: {e}")
+        return False, f"Validation error: {e}"
+
+
+class ThreadSafeCallback:
+    """Wrapper for thread-safe GUI callbacks in Flet.
+
+    Flet requires page.update() calls to happen from the main thread.
+    This class helps manage callbacks from background threads.
+    """
+
+    def __init__(self, page):
+        """Initialize with a Flet page object.
+
+        Args:
+            page: Flet Page object
+        """
+        self.page = page
+        self._lock = threading.Lock()
+
+    def update(self, callback):
+        """Execute a callback and update the page thread-safely.
+
+        Args:
+            callback: Function to execute (should modify page controls)
+        """
+        with self._lock:
+            callback()
+            self.page.update()
+
+
+def format_timestamp(iso_timestamp: str) -> str:
+    """Format an ISO timestamp for display.
+
+    Args:
+        iso_timestamp: ISO format timestamp string
+
+    Returns:
+        Formatted date string (e.g., "2026-01-16 14:30")
+    """
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(iso_timestamp)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, AttributeError):
+        return iso_timestamp
+
+
+def truncate_text(text: str, max_length: int = 100) -> str:
+    """Truncate text with ellipsis if too long.
+
+    Args:
+        text: Text to truncate
+        max_length: Maximum length before truncation
+
+    Returns:
+        Truncated text with "..." if needed
+    """
+    if len(text) <= max_length:
+        return text
+    return text[:max_length - 3] + "..."

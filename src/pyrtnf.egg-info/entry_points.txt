@@ -1,0 +1,2 @@
+[console_scripts]
+pyrtnf-gui = pyrtnf.gui.app:main

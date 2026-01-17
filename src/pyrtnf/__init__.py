@@ -54,10 +54,11 @@ Examples
 ... )
 """
 
-from .feedback import run_feedback_session
+from .feedback import run_feedback_session, get_next_run_number
 from .preprocessing import preprocessing, collect_dicoms
 from .mask_extraction import mask_extraction_rest, coregister_2vol
 from .tasks import BaseTask, BallTask, ActivationSmoother, ActivationNormalizer
+from .tasks.ball import compute_hrf, compute_boxcar_task_regressor
 from .tasks.session import SessionState, RunInfo
 from .session import (
     # Configuration dataclasses
@@ -86,6 +87,7 @@ from .utils import (
 __all__ = [
     # Core functions
     'run_feedback_session',
+    'get_next_run_number',
     'preprocessing',
     'collect_dicoms',
     'mask_extraction_rest',
@@ -95,6 +97,9 @@ __all__ = [
     'BallTask',
     'ActivationSmoother',
     'ActivationNormalizer',
+    # Task regressor computation (ball task)
+    'compute_hrf',
+    'compute_boxcar_task_regressor',
     # Session state
     'SessionState',
     'RunInfo',

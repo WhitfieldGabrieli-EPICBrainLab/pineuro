@@ -106,7 +106,8 @@ class BaseTask(ABC):
         activations: dict,
         volume: int,
         elapsed: float,
-        is_baseline: bool
+        is_baseline: bool,
+        is_outlier: bool
     ):
         """Internal callback to update latest data (thread-safe).
 

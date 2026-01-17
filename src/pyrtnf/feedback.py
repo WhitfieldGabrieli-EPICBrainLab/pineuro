@@ -41,12 +41,14 @@ Hinds, O., et al. (2011). Computing moment-to-moment BOLD activation for
 
 # Standard library imports
 import csv
+from datetime import datetime
 import json
 import logging
 from pathlib import Path
+import shutil
 import threading
 import time
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional, Sequence, TextIO
 from collections import OrderedDict
 import heapq
 import re
@@ -510,10 +512,6 @@ class FeedbackEstimator:
     signals and estimate BOLD activation. Supports multiple masks with
     optional voxel efficiency weighting.
 
-    The task regressor is automatically computed as an HRF-convolved boxcar:
-    - Baseline period (0 to n_baseline-1): task = 0
-    - Feedback period (n_baseline onwards): task = 1 convolved with canonical HRF
-
     Parameters
     ----------
     mask_paths : list of Path or str
@@ -521,9 +519,14 @@ class FeedbackEstimator:
     n_baseline : int
         Number of initial volumes for baseline period. Default is 25.
     n_volumes : int
-        Total expected number of volumes. Used to pre-compute task regressor.
+        Total expected number of volumes. Used to validate task regressors length.
     tr : float
-        Repetition time in seconds. Required for HRF computation.
+        Repetition time in seconds.
+    task_regressors : ndarray, shape (n_volumes, n_task_regressors), optional
+        Pre-computed task regressors (columns of interest in design matrix).
+        If None, no task regressors are included (nuisance-only model).
+        Task-specific designs (e.g., boxcar+HRF for ball task) should be
+        computed externally and passed here.
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
@@ -540,10 +543,8 @@ class FeedbackEstimator:
     Notes
     -----
     The GLM design matrix structure:
-    - Column 0: Task regressor (of interest, NOT subtracted from error)
-    - Column 1: Intercept (constant) - nuisance
-    - Column 2: Linear drift - nuisance
-    - Columns 3-8: 6 motion parameters (differential) - nuisance
+    - Columns 0 to n_task_regressors-1: Task regressors (of interest, NOT subtracted from error)
+    - Remaining columns: Nuisance regressors (intercept, drift, 6 motion parameters)
 
     Activation is computed using continuous normalization (Hinds et al., 2011):
     - Error = y - X_nuisance @ beta_nuisance (removing nuisance only)
@@ -564,6 +565,7 @@ class FeedbackEstimator:
         n_baseline: int,
         n_volumes: int,
         tr: float,
+        task_regressors: Optional[NDArray[np.float64]] = None,
         mask_names: Optional[list[str]] = None,
         use_efficiency_weights: bool = False,
     ) -> None:
@@ -582,12 +584,28 @@ class FeedbackEstimator:
         self.n_volumes = 0
         self.use_efficiency_weights = use_efficiency_weights
 
-        # Compute task regressor (HRF-convolved boxcar)
-        self._task_regressor = _compute_task_regressor(n_baseline, n_volumes, tr)
-        self._n_regressors = self.N_NUISANCE_REGRESSORS + 1  # task + nuisance
+        # Validate and store task regressors
+        if task_regressors is not None:
+            task_regressors = np.asarray(task_regressors, dtype=np.float64)
+            if task_regressors.ndim == 1:
+                # Single task regressor provided as 1D array
+                task_regressors = task_regressors.reshape(-1, 1)
+            if task_regressors.shape[0] != n_volumes:
+                raise ValueError(
+                    f"task_regressors has {task_regressors.shape[0]} rows, "
+                    f"expected {n_volumes} to match n_volumes"
+                )
+            self._task_regressors = task_regressors
+            self._n_task_regressors = task_regressors.shape[1]
+        else:
+            # No task regressors - nuisance-only model
+            self._task_regressors = None
+            self._n_task_regressors = 0
+
+        # Compute total number of regressors
+        self._n_regressors = self._n_task_regressors + self.N_NUISANCE_REGRESSORS
         self._n_nuisance = self.N_NUISANCE_REGRESSORS  # only nuisance columns
-        self._task_col_idx = 0  # task regressor is first column
-        self._nuisance_start_idx = 1  # nuisance starts at column 1
+        self._nuisance_start_idx = self._n_task_regressors  # nuisance starts after task columns
 
         # Set up mask names
         mask_paths_resolved: list[Path] = [Path(p) for p in mask_paths]
@@ -621,6 +639,7 @@ class FeedbackEstimator:
             f"FeedbackEstimator initialized with {len(mask_paths)} masks, "
             f"{self._n_voxels} total voxels, "
             f"n_baseline={n_baseline}, n_volumes={n_volumes}, tr={tr:.3f}s, "
+            f"task_regressors={self._n_task_regressors}, "
             f"efficiency_weights={'enabled' if use_efficiency_weights else 'disabled'}"
         )
 
@@ -808,7 +827,7 @@ class FeedbackEstimator:
         Returns
         -------
         X : ndarray, shape (n_regressors,)
-            Design row: [task, intercept, drift, motion_diff...]
+            Design row: [task_cols..., intercept, drift, motion_diff...]
         """
         # Use frame-to-frame motion
         if self.n_volumes == 0:
@@ -825,15 +844,19 @@ class FeedbackEstimator:
         # Current volume index (0-based for array access)
         vol_idx = self.n_volumes  # This is the volume we're about to process
 
-        # Design row: [task, intercept, drift, motion_diff...]
-        if vol_idx < len(self._task_regressor):
-            X[0] = self._task_regressor[vol_idx]
-        else:
-            # Extrapolate with last value if we exceed design length
-            X[0] = self._task_regressor[-1]
-        X[1] = 1.0  # intercept
-        X[2] = float(vol_idx + 1)  # linear drift (1-indexed volume number)
-        X[3:9] = motion_diff  # differential motion
+        # Fill in task regressors (if any)
+        if self._task_regressors is not None:
+            if vol_idx < len(self._task_regressors):
+                X[:self._n_task_regressors] = self._task_regressors[vol_idx, :]
+            else:
+                # Extrapolate with last row if we exceed design length
+                X[:self._n_task_regressors] = self._task_regressors[-1, :]
+
+        # Fill in nuisance regressors (after task columns)
+        nuisance_idx = self._nuisance_start_idx
+        X[nuisance_idx] = 1.0  # intercept
+        X[nuisance_idx + 1] = float(vol_idx + 1)  # linear drift (1-indexed volume number)
+        X[nuisance_idx + 2:nuisance_idx + 8] = motion_diff  # differential motion
 
         return X
 
@@ -980,6 +1003,231 @@ class _DicomEventHandler(FileSystemEventHandler):
 
 
 # ==============================================================================
+# Interrupted Run Handling - Detection, Archiving, and Run Number Management
+# ==============================================================================
+
+
+def _detect_interrupted_run(
+    output_dir: Path,
+    subject: str,
+    task: str,
+    run: int,
+    n_volumes: int
+) -> Optional[dict]:
+    """Check if a previous interrupted run exists for this task/run combination.
+
+    A run is considered interrupted if:
+    - feedbacklog file exists with > 0 but < n_volumes data rows
+
+    Parameters
+    ----------
+    output_dir : Path
+        Base output directory for feedback sessions
+    subject : str
+        Subject identifier (e.g., 'sub-01')
+    task : str
+        Task name (e.g., 'feedback', 'transfer')
+    run : int
+        Run number to check
+    n_volumes : int
+        Expected number of volumes for a complete run
+
+    Returns
+    -------
+    dict or None
+        If interrupted run found, returns dict with:
+        - feedbacklog_path: Path to feedbacklog TSV
+        - design_path: Path to design matrix TSV
+        - nifti_dir: Path to NIfTI directory
+        - volumes_completed: Number of volumes in feedbacklog
+        Returns None if no incomplete run found.
+    """
+    run_str = f"{run:02d}"
+    feedbacklog_path = output_dir / f"{subject}_task-{task}_run-{run_str}_feedbacklog.tsv"
+    design_path = output_dir / f"{subject}_task-{task}_run-{run_str}_design.tsv"
+    nifti_dir = output_dir / f"nifti_task-{task}_run-{run_str}"
+
+    if not feedbacklog_path.exists():
+        return None
+
+    # Count data rows (excluding header)
+    try:
+        with open(feedbacklog_path, 'r') as f:
+            row_count = sum(1 for _ in f) - 1  # Subtract header
+    except Exception:
+        return None
+
+    # Complete if row count matches expected volumes
+    if row_count >= n_volumes:
+        return None
+
+    # Interrupted if has some data but not all
+    if row_count > 0:
+        return {
+            'feedbacklog_path': feedbacklog_path,
+            'design_path': design_path,
+            'nifti_dir': nifti_dir,
+            'volumes_completed': row_count,
+        }
+
+    return None
+
+
+def _archive_interrupted_run(
+    output_dir: Path,
+    subject: str,
+    task: str,
+    run: int,
+) -> Path:
+    """Move interrupted run files to an archive subfolder with timestamp.
+
+    Creates: output_dir/interrupted_YYYYMMDD_HHMMSS/
+    Moves: feedbacklog, design matrix, nifti directory, qc directory
+
+    Parameters
+    ----------
+    output_dir : Path
+        Base output directory containing the interrupted run files
+    subject : str
+        Subject identifier
+    task : str
+        Task name
+    run : int
+        Run number
+
+    Returns
+    -------
+    Path
+        Path to the created archive directory
+    """
+    run_str = f"{run:02d}"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_dir = output_dir / f"interrupted_{timestamp}"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    # Files/directories to archive
+    items_to_move = [
+        output_dir / f"{subject}_task-{task}_run-{run_str}_feedbacklog.tsv",
+        output_dir / f"{subject}_task-{task}_run-{run_str}_design.tsv",
+        output_dir / f"nifti_task-{task}_run-{run_str}",
+    ]
+
+    # Also check for QC directory
+    qc_dir = output_dir / "qc"
+    if qc_dir.exists():
+        items_to_move.append(qc_dir)
+
+    for item in items_to_move:
+        if item.exists():
+            dest = archive_dir / item.name
+            shutil.move(str(item), str(dest))
+            logger.debug(f"Archived {item.name} to {archive_dir}")
+
+    logger.info(f"Archived interrupted run to: {archive_dir}")
+    return archive_dir
+
+
+def _generate_partial_qc(
+    output_dir: Path,
+    subject: str,
+    task: str,
+    run: int,
+) -> Optional[Path]:
+    """Generate QC report for interrupted session before archiving.
+
+    Uses existing QC infrastructure with current partial data.
+
+    Parameters
+    ----------
+    output_dir : Path
+        Base output directory
+    subject : str
+        Subject identifier
+    task : str
+        Task name
+    run : int
+        Run number
+
+    Returns
+    -------
+    Path or None
+        Path to generated QC report, or None if generation failed
+    """
+    try:
+        from pyrtnf import qc
+
+        qc_output_dir = output_dir / "qc"
+        qc_output_dir.mkdir(parents=True, exist_ok=True)
+
+        report_path = qc.generate_feedback_report(
+            feedback_dir=output_dir,
+            subject=subject,
+            task=task,
+            run=run,
+            output_dir=qc_output_dir,
+            open_browser=False,
+        )
+        logger.info(f"Generated partial QC report: {report_path}")
+        return report_path
+    except Exception as e:
+        logger.warning(f"Failed to generate partial QC report: {e}")
+        return None
+
+
+def get_next_run_number(
+    output_dir: Path,
+    subject: str,
+    task: str,
+) -> int:
+    """Scan output directory for existing runs and return next available number.
+
+    Looks for feedbacklog files matching the pattern:
+    {subject}_task-{task}_run-{NN}_feedbacklog.tsv
+
+    Returns the next sequential run number after any existing runs.
+    Also considers archived interrupted runs.
+
+    Parameters
+    ----------
+    output_dir : Path
+        Base output directory for feedback sessions
+    subject : str
+        Subject identifier (e.g., 'sub-01')
+    task : str
+        Task name (e.g., 'feedback', 'transfer')
+
+    Returns
+    -------
+    int
+        Next available run number (1 if no existing runs found)
+    """
+    if not output_dir.exists():
+        return 1
+
+    pattern = f"{subject}_task-{task}_run-*_feedbacklog.tsv"
+    existing_runs: set[int] = set()
+
+    # Check main output directory
+    for f in output_dir.glob(pattern):
+        match = re.search(r'run-(\d+)_feedbacklog', f.name)
+        if match:
+            existing_runs.add(int(match.group(1)))
+
+    # Also check archived directories for runs
+    for archive_dir in output_dir.glob("interrupted_*"):
+        if archive_dir.is_dir():
+            for f in archive_dir.glob(pattern):
+                match = re.search(r'run-(\d+)_feedbacklog', f.name)
+                if match:
+                    existing_runs.add(int(match.group(1)))
+
+    if not existing_runs:
+        return 1
+
+    return max(existing_runs) + 1
+
+
+# ==============================================================================
 # NeurofeedbackCoordinator - Watch for DICOMs and coordinate processing
 # ==============================================================================
 
@@ -1018,7 +1266,11 @@ class NeurofeedbackCoordinator:
     n_volumes : int
         Total number of volumes to process.
     tr : float
-        Repetition time in seconds. Required for HRF computation.
+        Repetition time in seconds.
+    task_regressors : ndarray, shape (n_volumes, n_task_regressors), optional
+        Pre-computed task regressors to include in the GLM. If None, uses
+        nuisance-only model. Task-specific designs should be computed
+        externally and passed here.
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
@@ -1036,8 +1288,8 @@ class NeurofeedbackCoordinator:
     triggers conversion via dcm2niix and processing through FeedbackEstimator.
     Results are logged to CSV after each volume.
 
-    The task regressor is automatically computed as an HRF-convolved boxcar
-    based on n_baseline and n_volumes.
+    Task regressors should be pre-computed and passed to the constructor.
+    If not provided, a nuisance-only model is used (intercept + drift + motion).
 
     Examples
     --------
@@ -1067,11 +1319,13 @@ class NeurofeedbackCoordinator:
         n_baseline: int,
         n_volumes: int,
         tr: float,
+        task_regressors: Optional[NDArray[np.float64]] = None,
         mask_names: Optional[list[str]] = None,
         use_efficiency_weights: bool = False,
-        activation_callback: Optional[Callable[[dict[str, float], int, float, bool], None]] = None,
+        activation_callback: Optional[Callable[[dict[str, float], int, float, bool, bool], None]] = None,
         error_callback: Optional[Callable[[Exception], None]] = None,
         simulator=None,  # DicomSimulator instance for simulation mode
+        qc_enabled: bool = True,  # Generate QC report after session completes
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -1081,6 +1335,7 @@ class NeurofeedbackCoordinator:
         self.n_baseline = n_baseline
         self.n_volumes = n_volumes
         self._tr = tr
+        self._qc_enabled = qc_enabled
 
         # Validate watch directory
         if not self.watch_dir.exists():
@@ -1108,6 +1363,7 @@ class NeurofeedbackCoordinator:
             n_baseline=n_baseline,
             n_volumes=n_volumes,
             tr=tr,
+            task_regressors=task_regressors,
             mask_names=mask_names,
             use_efficiency_weights=use_efficiency_weights,
         )
@@ -1151,12 +1407,14 @@ class NeurofeedbackCoordinator:
         self._latest_volume: int = 0
         self._latest_time: float = 0.0
         self._latest_is_baseline: bool = True
+        self._latest_is_outlier: bool = False
         self._activation_callback = activation_callback
         self._error_callback = error_callback
 
         # CSV log setup with BIDS-style naming
         self._csv_path = self.output_dir / f"{self.subject}_task-{self.task}_run-{run_str}_feedbacklog.tsv"
         self._design_matrix_path = self.output_dir / f"{self.subject}_task-{self.task}_run-{run_str}_design.tsv"
+        self._design_file: Optional[TextIO] = None  # File handle for incremental design matrix writes
 
         logger.info(
             f"NeurofeedbackCoordinator initialized: "
@@ -1164,12 +1422,14 @@ class NeurofeedbackCoordinator:
         )
 
     def _init_csv(self) -> None:
-        """Initialize CSV log file with header."""
+        """Initialize CSV log file and design matrix file with headers."""
         self._csv_file = open(self._csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file, delimiter='\t')
-        header = ["volume", "time", "is_baseline"] + self.mask_names
+        header = ["volume", "time", "is_baseline", "is_outlier"] + self.mask_names
         self._csv_writer.writerow(header)
         self._csv_file.flush()
+        # Initialize incremental design matrix file
+        self._init_design_matrix()
 
     def _close_csv(self) -> None:
         """Close CSV log file."""
@@ -1204,6 +1464,34 @@ class NeurofeedbackCoordinator:
             for row in design_array:
                 row_str = '\t'.join(f'{val:.6f}' for val in row)
                 f.write(row_str + '\n')
+
+    def _init_design_matrix(self) -> None:
+        """Initialize design matrix TSV file with header for incremental writes."""
+        self._design_file = open(self._design_matrix_path, "w", newline="")
+        column_names = ['task', 'intercept', 'drift',
+                       'motion_x', 'motion_y', 'motion_z',
+                       'motion_rx', 'motion_ry', 'motion_rz']
+        self._design_file.write('\t'.join(column_names) + '\n')
+        self._design_file.flush()
+
+    def _append_design_row(self, row: NDArray[np.float64]) -> None:
+        """Append a single design matrix row to TSV file.
+
+        Parameters
+        ----------
+        row : NDArray
+            Design matrix row to append (9 values: task, intercept, drift, 6 motion params)
+        """
+        if self._design_file is not None:
+            row_str = '\t'.join(f'{val:.6f}' for val in row)
+            self._design_file.write(row_str + '\n')
+            self._design_file.flush()
+
+    def _close_design_matrix(self) -> None:
+        """Close design matrix file handle."""
+        if self._design_file is not None:
+            self._design_file.close()
+            self._design_file = None
 
     @property
     def tr(self) -> float:
@@ -1315,6 +1603,27 @@ class NeurofeedbackCoordinator:
         if self._error is not None:
             raise self._error
 
+    def report_outlier(self, volume: int) -> None:
+        """
+        Report that the current volume is an outlier.
+
+        This method should be called by tasks (e.g., BallTask) when they detect
+        an outlier activation that exceeds their threshold. The outlier flag will
+        be included in the feedback log TSV for the specified volume.
+
+        Parameters
+        ----------
+        volume : int
+            Volume number that is an outlier
+
+        Notes
+        -----
+        This method is typically called from the task's activation callback
+        after processing activations and detecting outliers.
+        """
+        if volume == self._latest_volume:
+            self._latest_is_outlier = True
+
     def is_complete(self) -> bool:
         """
         Check if the feedback session is complete or stopped.
@@ -1341,6 +1650,29 @@ class NeurofeedbackCoordinator:
             or self._stop_event.is_set()
             or self._error is not None
         )
+
+    def was_stopped(self) -> bool:
+        """
+        Check if the session was stopped via stop() method.
+
+        This differs from is_complete() in that it specifically checks
+        if the stop() method was called, rather than natural completion.
+
+        Returns
+        -------
+        bool
+            True if stop() was called, False otherwise
+
+        Examples
+        --------
+        >>> coordinator = NeurofeedbackCoordinator(...)
+        >>> # ... run session ...
+        >>> if coordinator.was_stopped():
+        ...     print("Session was interrupted by user")
+        ... else:
+        ...     print("Session completed naturally")
+        """
+        return self._stop_event.is_set()
 
     def _on_new_file(self, file_path: Path) -> None:
         """Callback when a new file is detected.
@@ -1442,6 +1774,8 @@ class NeurofeedbackCoordinator:
         try:
             activations = self._estimator.process_volume(nifti_path, json_path)
             self.design_matrix.append(self._estimator._last_design_row)
+            # Write design row incrementally (so it's not lost on interrupt)
+            self._append_design_row(self._estimator._last_design_row)
         except Exception as e:
             logger.error(f"Failed to process volume {volume_num}: {e}")
             return
@@ -1467,10 +1801,11 @@ class NeurofeedbackCoordinator:
             self._latest_volume = self.n_processed
             self._latest_time = elapsed_time
             self._latest_is_baseline = is_baseline
+            self._latest_is_outlier = False  # Reset before callback
 
         if self._activation_callback is not None:
             try:
-                self._activation_callback(activations, self.n_processed, elapsed_time, is_baseline)
+                self._activation_callback(activations, self.n_processed, elapsed_time, is_baseline, False)
             except Exception as e:
                 logger.error(f"Error in activation callback: {e}")
                 if self._error_callback is not None:
@@ -1479,7 +1814,11 @@ class NeurofeedbackCoordinator:
                     except:
                         pass
 
-        row = [self.n_processed, f"{elapsed_time:.2f}", is_baseline]
+        # Read outlier status (may have been set by callback via report_outlier())
+        with self._lock:
+            is_outlier = self._latest_is_outlier
+
+        row = [self.n_processed, f"{elapsed_time:.2f}", is_baseline, is_outlier]
         row.extend([f"{activations[name]:.4f}" for name in self.mask_names])
         if self._csv_writer is not None:
             self._csv_writer.writerow(row)
@@ -1491,15 +1830,16 @@ class NeurofeedbackCoordinator:
         activation_str = "  ".join(
             f"{name}={activations[name]:+.3f}" for name in self.mask_names
         )
-        
+
         queue_warning = f" [QUEUE:{queue_depth}]" if queue_depth > 0 else ""
         timing_drift_ms = timing_drift * 1000  # Convert to ms for consistency
         drift_str = f"+{timing_drift_ms:.0f}" if timing_drift_ms >= 0 else f"{timing_drift_ms:.0f}"
-        
+        outlier_indicator = " OUTLIER" if is_outlier else ""
+
         logger.info(
             f"[{elapsed_time:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
             f"({status}): {activation_str} "
-            f"[proc:{total_duration:.0f}ms drift:{drift_str}ms]{queue_warning}"
+            f"[proc:{total_duration:.0f}ms drift:{drift_str}ms{outlier_indicator}]{queue_warning}"
         )
 
     def _run_simulator(self) -> None:
@@ -1601,7 +1941,7 @@ class NeurofeedbackCoordinator:
             observer.stop()
             observer.join()
             self._close_csv()
-            self._save_design_matrix()
+            self._close_design_matrix()  # Design matrix was written incrementally
 
             elapsed = time.time() - self._start_time if self._start_time else 0.0
             logger.info(
@@ -1609,9 +1949,13 @@ class NeurofeedbackCoordinator:
             )
             logger.info(f"Log saved to: {self._csv_path}")
             logger.info(f"Design matrix saved to: {self._design_matrix_path}")
-            
+
             # Log timing statistics
             self._log_timing_summary()
+
+            # Generate QC report if requested
+            if self._qc_enabled:
+                self._generate_qc_report()
 
             # Cleanup temporary directories if requested
             self._cleanup_directories()
@@ -1654,7 +1998,27 @@ class NeurofeedbackCoordinator:
             logger.info(f"Max queue depth: {max_queue}")
         
         logger.info("=" * 60)
-    
+
+    def _generate_qc_report(self) -> None:
+        """Generate QC report after session completes."""
+        try:
+            from . import qc
+
+            logger.info("Generating feedback QC report...")
+            report_path = qc.generate_feedback_report(
+                feedback_dir=self.output_dir,
+                subject=self.subject,
+                task=self.task,
+                run=self.run_number,
+                output_dir=self.output_dir / 'qc',
+                overwrite=True,
+                open_browser=False
+            )
+            logger.info(f"QC report saved to: {report_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate QC report: {e}")
+            logger.debug("QC report generation error", exc_info=True)
+
     def get_timing_stats(self) -> dict:
         """Get timing statistics for analysis.
         
@@ -1766,6 +2130,7 @@ def run_feedback_session(
     n_baseline: int,
     n_volumes: int,
     tr: float,
+    task_regressors: Optional[NDArray[np.float64]] = None,
     incoming_dir: Optional[Path | str] = None,
     mask_names: Optional[list[str]] = None,
     use_efficiency_weights: bool = False,
@@ -1773,16 +2138,14 @@ def run_feedback_session(
     simulator_speed: float = 1.0,
     simulator_clear_target: bool = True,
     simulator_cleanup: bool = True,
-    activation_callback: Optional[Callable[[dict[str, float], int, float, bool], None]] = None,
+    activation_callback: Optional[Callable[[dict[str, float], int, float, bool, bool], None]] = None,
     error_callback: Optional[Callable[[Exception], None]] = None,
+    qc_enabled: bool = True,
 ) -> dict:
     """Run a complete feedback session with optional DICOM simulation.
 
     This is the main entry point for running neurofeedback sessions. It handles
     both simulated (offline) and real-time (scanner) acquisition modes.
-
-    The task regressor is automatically computed as an HRF-convolved boxcar
-    based on n_baseline and n_volumes.
 
     Parameters
     ----------
@@ -1806,7 +2169,11 @@ def run_feedback_session(
     n_volumes : int
         Total number of volumes to process.
     tr : float
-        Repetition time in seconds. Required for HRF computation.
+        Repetition time in seconds.
+    task_regressors : ndarray, shape (n_volumes, n_task_regressors), optional
+        Pre-computed task regressors to include in the GLM. If None, uses
+        nuisance-only model. Task-specific designs (e.g., boxcar+HRF for ball task)
+        should be computed externally and passed here.
     incoming_dir : Path or str, optional
         Directory to watch for incoming DICOMs. If None, uses collection_dir/incoming.
         For scanner acquisition, this should be the directory where the scanner
@@ -1831,12 +2198,16 @@ def run_feedback_session(
         Only used if simulator_source_dir is provided.
     activation_callback : callable, optional
         Function called after each volume with signature:
-        callback(activations: dict, volume: int, elapsed: float, is_baseline: bool).
+        callback(activations: dict, volume: int, elapsed: float, is_baseline: bool, is_outlier: bool).
         Use this to update PsychoPy displays immediately when new data arrives.
         Default is None.
     error_callback : callable, optional
         Function called if activation_callback raises an exception.
         Signature: callback(exception: Exception). Default is None.
+    qc_enabled : bool, optional
+        If True, generate a QC report after the session completes. The report
+        includes activation timeseries, baseline distributions, and design matrix
+        visualizations. Default is True.
 
     Returns
     -------
@@ -1921,6 +2292,25 @@ def run_feedback_session(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Check for and archive any interrupted run before starting fresh
+    interrupted = _detect_interrupted_run(
+        output_dir=output_dir,
+        subject=subject,
+        task=task,
+        run=run,
+        n_volumes=n_volumes,
+    )
+    if interrupted is not None:
+        logger.warning(
+            f"Found interrupted run with {interrupted['volumes_completed']} volumes "
+            f"(expected {n_volumes})"
+        )
+        # Generate partial QC before archiving
+        _generate_partial_qc(output_dir, subject, task, run)
+        # Archive interrupted data
+        archive_path = _archive_interrupted_run(output_dir, subject, task, run)
+        logger.info(f"Archived interrupted run to: {archive_path}")
+
     # Set up collection directory (required)
     collection_dir = Path(collection_dir)
     collection_dir.mkdir(parents=True, exist_ok=True)
@@ -1986,11 +2376,13 @@ def run_feedback_session(
         n_baseline=n_baseline,
         n_volumes=n_volumes,
         tr=tr,
+        task_regressors=task_regressors,
         mask_names=mask_names,
         use_efficiency_weights=use_efficiency_weights,
         activation_callback=activation_callback,
         error_callback=error_callback,
         simulator=simulator,
+        qc_enabled=qc_enabled,
     )
 
     # Set cleanup flags for simulation mode
