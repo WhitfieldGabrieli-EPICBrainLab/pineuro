@@ -11,3 +11,4 @@ venv/
 envs/
 tests
 examples
+data
