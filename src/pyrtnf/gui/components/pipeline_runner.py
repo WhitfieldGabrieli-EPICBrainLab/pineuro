@@ -11,7 +11,8 @@ from typing import Optional, Callable, Dict, Any
 
 from pyrtnf.preprocessing import collect_dicoms, preprocessing
 from pyrtnf.mask_extraction import mask_extraction_rest, coregister_2vol
-from pyrtnf.feedback import run_feedback_session, get_next_run_number
+from pyrtnf.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
+from pyrtnf.tasks.ball import compute_boxcar_task_regressor
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,22 @@ class PipelineRunner:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._current_coordinator = None  # Track coordinator for feedback tasks
+        self._task_mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    def set_task_mirror_callback(
+        self, callback: Optional[Callable[[Dict[str, Any]], None]]
+    ) -> None:
+        """Set callback for task visual state mirroring.
+
+        The callback receives visual state dictionaries from tasks
+        for rendering in a GUI mirror component.
+
+        Parameters
+        ----------
+        callback : Callable or None
+            Function that receives visual state dict from task.get_mirror_state()
+        """
+        self._task_mirror_callback = callback
 
     def run_step(self, step_id: str) -> None:
         """Execute a pipeline step in background thread.
@@ -66,16 +83,23 @@ class PipelineRunner:
         self._thread.start()
         logger.info(f"Started background thread for step: {step_id}")
 
-    def stop(self) -> None:
-        """Signal the current step to stop (if running)."""
+    def stop(self, show_questions: bool = False) -> None:
+        """Signal the current step to stop (if running).
+
+        Parameters
+        ----------
+        show_questions : bool, optional
+            If True and a feedback task is running, show post-run questions
+            to the participant before stopping. Default is False.
+        """
         if self._thread is not None and self._thread.is_alive():
-            logger.info("Signaling pipeline step to stop")
+            logger.info(f"Signaling pipeline step to stop (show_questions={show_questions})")
             self._stop_event.set()
 
             # If a feedback task is running, stop the coordinator
             if self._current_coordinator is not None:
                 logger.info("Stopping feedback coordinator")
-                self._current_coordinator.stop()
+                self._current_coordinator.stop(show_questions=show_questions)
 
     def _run_step_impl(self, step_id: str) -> None:
         """Implementation of step execution (runs in background thread).
@@ -389,27 +413,43 @@ class PipelineRunner:
         task_type = task_type_map[step_id]
         feedback_mode = (task_type == "feedback")
 
-        # Get output directory for auto-detecting run number
+        # Get output directory for slot-based run info
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         feedback_dir = base_dir / "feedback"
         output_dir = feedback_dir / "02_feedback_output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Auto-detect next run number for this task type
-        # This ensures run numbers align with scanner acquisitions even after interruptions
-        task_run_number = get_next_run_number(
+        # Use slot-based run numbering with acq entity for retry tracking
+        run_info = get_slot_run_info(
             output_dir=output_dir,
             subject=self.participant_id,
             task=task_type,
+            step_id=step_id,
         )
+        task_run_number = run_info["run"]
+        task_acq = run_info["acq"]
 
-        self._emit_progress(f"Starting {task_type} run {task_run_number} (auto-detected)...")
+        self._emit_progress(f"Starting {task_type} run-{task_run_number:02d} acq-{task_acq:02d}...")
 
         # Get coregistered mask files (use thresholded masks from realtime 2vol run-02)
+        # IMPORTANT: Match files to mask_names order, not alphabetically sorted
         twovol_masks_dir = feedback_dir / "01_2vol" / "masks"
-        mask_files = sorted(list(twovol_masks_dir.glob("*_thr_to_task-2vol_run-02_*.nii.gz")))
         mask_names = config["mask"]["mask_names"]
+
+        # Find mask files matching each mask name in order
+        mask_files = []
+        for mask_name in mask_names:
+            pattern = f"*_{mask_name}_thr_to_task-2vol_run-02_*.nii.gz"
+            matches = list(twovol_masks_dir.glob(pattern))
+            if not matches:
+                raise ValueError(
+                    f"Could not find mask file for '{mask_name}' in {twovol_masks_dir}. "
+                    f"Expected pattern: {pattern}"
+                )
+            if len(matches) > 1:
+                logger.warning(f"Multiple mask files found for '{mask_name}', using first: {matches[0]}")
+            mask_files.append(matches[0])
 
         # Verify mask count matches
         if len(mask_files) != len(mask_names):
@@ -420,13 +460,19 @@ class PipelineRunner:
             )
 
         # Create temporary watch directory
-        watch_dir = base_dir / "tmp" / f"incoming_{task_type}_{task_run_number}"
+        watch_dir = base_dir / "tmp" / f"incoming_{task_type}_acq-{task_acq:02d}_run-{task_run_number:02d}"
         watch_dir.mkdir(parents=True, exist_ok=True)
 
         # Collection directory for this run
         collection_dir = base_dir / "collection"
 
         self._emit_progress(f"Preparing {task_type} run (feedback={'ON' if feedback_mode else 'OFF'})...")
+
+        # Compute task regressor (HRF-convolved boxcar for ball task)
+        n_baseline = config["feedback"]["n_baseline"]
+        n_volumes = config["feedback"]["n_volumes"]
+        tr = config["scan"]["tr"]
+        task_regressor = compute_boxcar_task_regressor(n_baseline, n_volumes, tr)
 
         # Run feedback session (this will handle DICOM collection + processing)
         try:
@@ -438,15 +484,16 @@ class PipelineRunner:
                 output_dir=output_dir,
                 collection_dir=collection_dir,
                 incoming_dir=watch_dir,
-                n_baseline=config["feedback"]["n_baseline"],
-                n_volumes=config["feedback"]["n_volumes"],
-                tr=config["scan"]["tr"],
+                n_baseline=n_baseline,
+                n_volumes=n_volumes,
+                tr=tr,
+                task_regressors=task_regressor,  # Pass the computed task regressor
                 mask_names=mask_names,
                 use_efficiency_weights=config["feedback"].get("use_efficiency_weights", True),
                 simulator_source_dir=config["scan"]["feedback_dicoms"],
                 simulator_speed=config["scan"].get("simulator_speed", 1.0),
+                step_id=step_id,  # Use slot-based naming with acq entity
                 qc_enabled=True,
-                # TODO: Pass task configuration (scale factor, etc.) when PsychoPy integration is ready
             )
 
             # Wait for the coordinator thread to complete
@@ -483,6 +530,10 @@ class PipelineRunner:
 
             # Register callback so coordinator updates task with new activations
             coordinator._activation_callback = task._update_data
+
+            # Connect GUI mirror callback if set
+            if self._task_mirror_callback is not None:
+                task.set_mirror_callback(self._task_mirror_callback)
 
             # Run task in separate thread (task will call coordinator.send_trigger())
             def run_task():

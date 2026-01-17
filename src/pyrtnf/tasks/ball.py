@@ -325,9 +325,15 @@ class BallTask(BaseTask):
             'is_baseline': True,
         }
 
-        run_str = f"{coordinator.run_number:02d}"
         output_dir = Path(coordinator.output_dir)
-        self._psychopy_log_path = output_dir / f"{coordinator.subject}_task-{coordinator.task}_run-{run_str}_psychopylog.tsv"
+        # Use acq-based naming if coordinator has acq attribute
+        if hasattr(coordinator, 'acq') and coordinator.acq is not None:
+            # Format acq as 2-digit number if int
+            acq_str = f"{coordinator.acq:02d}" if isinstance(coordinator.acq, int) else coordinator.acq
+            run_acq_str = f"acq-{acq_str}_run-{coordinator.run_number:02d}"
+        else:
+            run_acq_str = f"run-{coordinator.run_number:02d}"
+        self._psychopy_log_path = output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_psychopylog.tsv"
         self._psychopy_log_file = None
         self._psychopy_log_writer = None
         self._frame_counter = 0
@@ -534,10 +540,15 @@ class BallTask(BaseTask):
             anchorVert='center',
         )
         
-        # Setup questions CSV file with BIDS-style naming
-        run_str = f"{self.coordinator.run_number:02d}"
+        # Setup questions CSV file with BIDS-style naming (use acq if available)
         output_dir = Path(self.coordinator.output_dir)
-        self._questions_file_path = output_dir / f"{self.coordinator.subject}_task-{self.coordinator.task}_run-{run_str}_questions.tsv"
+        if hasattr(self.coordinator, 'acq') and self.coordinator.acq is not None:
+            # Format acq as 2-digit number if int
+            acq_str = f"{self.coordinator.acq:02d}" if isinstance(self.coordinator.acq, int) else self.coordinator.acq
+            run_acq_str = f"acq-{acq_str}_run-{self.coordinator.run_number:02d}"
+        else:
+            run_acq_str = f"run-{self.coordinator.run_number:02d}"
+        self._questions_file_path = output_dir / f"{self.coordinator.subject}_task-{self.coordinator.task}_{run_acq_str}_questions.tsv"
         self._questions_file = open(self._questions_file_path, 'w', newline='')
         self._questions_writer = csv.writer(self._questions_file, delimiter='\t')
         self._questions_writer.writerow(['subject', 'run', 'feedback_mode', 'question_text', 'response', 'rt'])
@@ -1032,6 +1043,9 @@ class BallTask(BaseTask):
         # Flip window
         self.win.flip()
 
+        # Emit visual state to GUI mirror if callback is set
+        self._emit_mirror_state()
+
         # Increment frame counter
         self._frame_counter += 1
 
@@ -1069,6 +1083,78 @@ class BallTask(BaseTask):
             scale_adjust_factor=self._scale_adjust_factor,
         )
 
+    def get_mirror_state(self) -> dict:
+        """Return current visual state for GUI mirroring.
+
+        Returns a dictionary describing the current visual display using
+        normalized coordinates (0-1) that can be rendered by a generic
+        GUI mirror component.
+
+        Returns
+        -------
+        dict
+            Dictionary with 'background' color and 'shapes' list.
+            Coordinates are normalized: x (0=left, 1=right), y (0=top, 1=bottom).
+        """
+        shapes = []
+
+        # Use the instance variable that's updated in update() from the main loop
+        # This is guaranteed to be in sync with what PsychoPy is displaying
+        is_baseline = self.is_baseline
+
+        if is_baseline:
+            # Fixation cross during baseline
+            cross_size = 0.1  # Size in normalized units
+            shapes.extend([
+                {
+                    'type': 'line',
+                    'x1': 0.5 - cross_size, 'y1': 0.5,
+                    'x2': 0.5 + cross_size, 'y2': 0.5,
+                    'stroke': 'white', 'stroke_width': 3
+                },
+                {
+                    'type': 'line',
+                    'x1': 0.5, 'y1': 0.5 - cross_size,
+                    'x2': 0.5, 'y2': 0.5 + cross_size,
+                    'stroke': 'white', 'stroke_width': 3
+                },
+            ])
+        else:
+            # Active task: show circles and ball
+            # Convert PsychoPy height units to normalized 0-1 coordinates
+            # PsychoPy: y in [-0.5, 0.5], we need [0, 1] with y inverted
+            for pos, color, radius in zip(
+                self.circle_positions, self.circle_colors, self.circle_radii
+            ):
+                # +0.33 -> 0.17 (top), -0.33 -> 0.83 (bottom)
+                y = 0.5 - pos
+                shapes.append({
+                    'type': 'circle',
+                    'x': 0.5, 'y': y,
+                    'radius': radius,
+                    'stroke': color, 'stroke_width': 3
+                })
+
+            # Ball
+            ball_y = 0.5 - self.ball_pos[1]
+            shapes.append({
+                'type': 'circle',
+                'x': 0.5, 'y': ball_y,
+                'radius': 0.03,
+                'fill': 'white'
+            })
+
+            # Hit counter text
+            shapes.append({
+                'type': 'text',
+                'content': f"{self.mask_names[0]}: {self.hit_counters[0]}  "
+                           f"{self.mask_names[1]}: {self.hit_counters[1]}",
+                'x': 0.5, 'y': 0.95,
+                'size': 10, 'color': 'gray'
+            })
+
+        return {'background': 'black', 'shapes': shapes}
+
     def cleanup(self):
         """Close window and quit."""
         # Log outlier summary statistics
@@ -1092,8 +1178,31 @@ class BallTask(BaseTask):
             self._questions_writer = None
             logger.info(f"Questions saved: {self._questions_file_path}")
 
-        self.win.close()
-        core.quit()
+        # Close window without quitting PsychoPy runtime
+        # (core.quit() prevents window recreation in the same process)
+        if hasattr(self, 'win') and self.win is not None:
+            self.win.close()
+            self.win = None
+
+        # Clear pending events for clean state
+        from psychopy import event
+        event.clearEvents()
+
+        # Reset pyglet's gl_info state to allow clean window recreation
+        # Without this, gl_info retains stale OpenGL version info that causes
+        # "string index out of range" errors when creating a new window
+        try:
+            import pyglet.gl.gl_info as gl_info
+            # Reset the global GLInfo instance to initial state
+            gl_info.remove_active_context()
+            # Also reset the cached version/renderer info so it re-queries on next window
+            gl_info._have_info = False
+            gl_info.version = '0.0.0'
+            gl_info.vendor = ''
+            gl_info.renderer = ''
+            gl_info.extensions = set()
+        except Exception as e:
+            logger.debug(f"Could not reset pyglet gl_info state: {e}")
 
     def run(self):
         """Main task loop - runs in main thread for PsychoPy.
@@ -1145,10 +1254,6 @@ class BallTask(BaseTask):
                 # Update display at target frame rate
                 self.update_frame()
 
-                # Check for quit
-                if event.getKeys(['escape']):
-                    break
-
                 # Frame timing - use core.wait for more precise timing
                 remaining = self.frame_duration - frame_clock.getTime()
                 if remaining > 0:
@@ -1173,8 +1278,9 @@ class BallTask(BaseTask):
                 logger.info(f"Average frames per volume: {avg_frames_per_vol:.1f}")
             logger.info(f"PsychoPy log saved: {self._psychopy_log_path}")
 
-            # Show post-run slider questions (only if session completed naturally)
-            if not self.coordinator.was_stopped():
+            # Show post-run slider questions if requested
+            # (either session completed naturally, or stop was called with show_questions=True)
+            if self.coordinator.should_show_questions():
                 try:
                     self._show_post_run_questions()
                 except KeyboardInterrupt:

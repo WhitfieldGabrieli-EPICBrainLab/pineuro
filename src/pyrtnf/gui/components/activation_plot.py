@@ -91,7 +91,7 @@ class ActivationPlot:
     def __init__(
         self,
         mask_names: List[str],
-        max_display_points: int = 150,
+        n_volumes: int,
         height: float = 250,
         y_min: float = -2.0,
         y_max: float = 2.0,
@@ -100,13 +100,13 @@ class ActivationPlot:
 
         Args:
             mask_names: Names of network masks (one line per mask)
-            max_display_points: Maximum points to show (rolling window)
+            n_volumes: Total expected number of volumes (fixes x-axis range)
             height: Chart height in pixels
             y_min: Minimum Y axis value
             y_max: Maximum Y axis value
         """
         self.mask_names = mask_names
-        self.max_display_points = max_display_points
+        self.n_volumes = n_volumes
         self.height = height
         self.y_min = y_min
         self.y_max = y_max
@@ -143,9 +143,8 @@ class ActivationPlot:
                 activations = self.data.activations[mask_name]
                 volumes = self.data.volumes
 
-                # Apply rolling window
-                start_idx = max(0, len(volumes) - self.max_display_points)
-                for i in range(start_idx, len(volumes)):
+                # Plot all data points
+                for i in range(len(volumes)):
                     data_points.append(
                         LineChartDataPoint(
                             x=float(volumes[i]),
@@ -155,32 +154,25 @@ class ActivationPlot:
 
             series.append(
                 LineChartData(
-                    data_points=data_points,
+                    points=data_points,
                     color=self.mask_colors[mask_name],
                     stroke_width=2,
                     curved=True,
-                    stroke_cap_round=True,
+                    rounded_stroke_cap=True,
                 )
             )
 
         return series
 
     def _calculate_axis_range(self) -> tuple[float, float, float, float]:
-        """Calculate axis ranges based on current data.
+        """Calculate axis ranges based on expected volumes.
 
         Returns:
             Tuple of (min_x, max_x, min_y, max_y)
         """
-        if not self.data.volumes:
-            return (0, self.max_display_points, self.y_min, self.y_max)
-
-        # X axis: show rolling window
-        max_vol = max(self.data.volumes)
-        min_vol = max(0, max_vol - self.max_display_points)
-
-        # Y axis: use fixed range or auto-scale
-        # For now, use fixed range for stability
-        return (min_vol, max(max_vol, min_vol + 10), self.y_min, self.y_max)
+        # X axis: fixed range from 1 to n_volumes
+        # Y axis: fixed range for stability
+        return (1, self.n_volumes, self.y_min, self.y_max)
 
     def build(self) -> ft.Container:
         """Build the chart control.
@@ -225,14 +217,14 @@ class ActivationPlot:
                 width=1,
             ),
             left_axis=ChartAxis(
-                labels_size=40,
+                label_size=40,
                 title=ft.Text("Activation (normalized)", size=12),
             ),
             bottom_axis=ChartAxis(
-                labels_size=32,
+                label_size=32,
                 title=ft.Text("Volume", size=12),
             ),
-            tooltip_bgcolor=ft.Colors.with_opacity(0.8, ft.Colors.GREY_900),
+            bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.GREY_500),
             expand=True,
         )
 

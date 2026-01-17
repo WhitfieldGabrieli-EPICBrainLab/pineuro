@@ -143,10 +143,17 @@ class FeedbackLogPoller:
             try:
                 if header == "volume":
                     data[header] = int(value)
-                elif header.startswith("mask_") or header.startswith("motion_"):
+                elif header in ("time", "timestamp") or header.startswith("mask_") or header.startswith("motion_"):
                     data[header] = float(value)
+                elif header in ("is_baseline", "is_outlier"):
+                    # Handle boolean columns
+                    data[header] = value.lower() in ("true", "1", "yes")
                 else:
-                    data[header] = value
+                    # Try to parse as float for numeric columns (e.g., DefaultA, ContA)
+                    try:
+                        data[header] = float(value)
+                    except (ValueError, TypeError):
+                        data[header] = value
             except (ValueError, TypeError):
                 data[header] = value
 
@@ -224,11 +231,15 @@ class FeedbackMonitor:
         self._volumes_processed = volume
 
         # Extract mask activations
+        # Try both direct mask name and mask_ prefixed versions
         mask_activations = {}
         for mask_name in self.mask_names:
-            col_name = f"mask_{mask_name}"
-            if col_name in data:
-                mask_activations[mask_name] = data[col_name]
+            # First try direct column name (e.g., "DefaultA")
+            if mask_name in data:
+                mask_activations[mask_name] = data[mask_name]
+            # Fall back to prefixed version (e.g., "mask_DefaultA")
+            elif f"mask_{mask_name}" in data:
+                mask_activations[mask_name] = data[f"mask_{mask_name}"]
 
         # Extract motion parameters
         motion_params = {}

@@ -86,7 +86,7 @@ class StudyEditorScreen:
             "paths": {
                 "participant_id": "",
                 "base_dir": "/data/pyrtnf",
-                "subject_prefix": "sub-",
+                "example_participant_id": "sub-001",
             },
             "scan": {
                 "tr": 1.2,
@@ -155,10 +155,10 @@ class StudyEditorScreen:
             max_lines=4,
         )
 
-        self.subject_prefix_field = ft.TextField(
-            label="Subject ID Prefix",
-            value=config["paths"].get("subject_prefix", "sub-"),
-            hint_text="e.g., sub-mindbpd (numbers appended automatically)",
+        self.example_participant_id_field = ft.TextField(
+            label="Example Participant ID",
+            value=config["paths"].get("example_participant_id", "sub-001"),
+            hint_text="Shown as hint when starting a session (e.g., sub-001, sub-mindbpd001)",
         )
 
         # Scanner fields
@@ -574,7 +574,7 @@ class StudyEditorScreen:
                     ft.Text("Study Information", size=16, weight=ft.FontWeight.BOLD),
                     self.name_field,
                     self.description_field,
-                    self.subject_prefix_field,
+                    self.example_participant_id_field,
                     ft.Divider(),
                     ft.Text("Scanner Parameters", size=16, weight=ft.FontWeight.BOLD),
                     self.tr_field,
@@ -860,13 +860,13 @@ class StudyEditorScreen:
         """Handle start session button click."""
         logger.info("Start Session clicked")
 
-        # Get subject prefix from current form value (not saved config)
-        subject_prefix = self.subject_prefix_field.value.strip() or "sub-"
+        # Get example participant ID from current form value (not saved config)
+        example_id = self.example_participant_id_field.value.strip() or "sub-001"
 
         # Create text field for participant ID
         participant_id_field = ft.TextField(
             label="Participant ID",
-            hint_text=f"e.g., {subject_prefix}0001",
+            hint_text=f"e.g., {example_id}",
             autofocus=True,
         )
 
@@ -937,8 +937,8 @@ class StudyEditorScreen:
         # Update scanner config with validation
         config = self.study_config.session_config
 
-        # Update subject prefix
-        config["paths"]["subject_prefix"] = self.subject_prefix_field.value.strip() or "sub-"
+        # Update example participant ID
+        config["paths"]["example_participant_id"] = self.example_participant_id_field.value.strip() or "sub-001"
 
         try:
             config["scan"]["tr"] = float(self.tr_field.value)

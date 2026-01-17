@@ -51,8 +51,10 @@ class PyrtnfApp:
     def _setup_page(self):
         """Configure the Flet page properties."""
         self.page.title = "pyrtnf - Real-time fMRI Neurofeedback"
-        self.page.window_width = 1400
-        self.page.window_height = 900
+        self.page.window.width = 1400
+        self.page.window.height = 900
+        self.page.window.maximizable = True
+        self.page.window.maximized = True
         self.page.padding = 0
         self.page.theme_mode = ft.ThemeMode.LIGHT
 
@@ -229,7 +231,7 @@ class PyrtnfApp:
         """
         logger.info(f"Starting session for study: {study_name}")
 
-        # Load study to get subject prefix
+        # Load study to get example participant ID
         study_config = self.config_manager.load_study(study_name)
         if not study_config:
             self.page.snack_bar = ft.SnackBar(
@@ -239,12 +241,12 @@ class PyrtnfApp:
             self.page.update()
             return
 
-        subject_prefix = study_config.session_config.get("paths", {}).get("subject_prefix", "sub-")
+        example_id = study_config.session_config.get("paths", {}).get("example_participant_id", "sub-001")
 
         # Create text field for participant ID
         participant_id_field = ft.TextField(
             label="Participant ID",
-            hint_text=f"e.g., {subject_prefix}0001",
+            hint_text=f"e.g., {example_id}",
             autofocus=True,
         )
 

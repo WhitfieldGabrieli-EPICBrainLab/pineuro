@@ -28,7 +28,11 @@ import flet as ft
 from ..config_manager import ConfigManager
 from ..models import StudyConfig
 from ..components.pipeline_runner import PipelineRunner
-from pyrtnf.feedback import get_next_run_number
+from ..components.activation_plot import ActivationPlot
+from ..components.task_mirror import TaskMirror
+from ..components.csv_poller import FeedbackMonitor
+from ..components.qc_viewer import QCReportManager
+from pyrtnf.feedback import get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +112,7 @@ class ParticipantWorkflowScreen:
         self._dragging: bool = False  # Track if currently dragging
         self._drag_start_y: float = 0  # Starting Y position of drag
         self._is_running: bool = False  # Track if a pipeline step is running
+        self._current_step_id: Optional[str] = None  # Track current running step
 
     def _check_collection_status(self, collection_dir: Path, expected_volumes: int) -> StepStatus:
         """Check status of a DICOM collection step.
@@ -153,6 +158,69 @@ class ParticipantWorkflowScreen:
         if row_count >= expected_volumes:
             return StepStatus.COMPLETE
         elif row_count > 0:
+            return StepStatus.INTERRUPTED
+        else:
+            return StepStatus.PENDING
+
+    def _check_feedback_slot_status(
+        self, step_id: str, output_dir: Path, participant_id: str, expected_volumes: int
+    ) -> StepStatus:
+        """Check status of a feedback/transfer slot using acq-based naming.
+
+        Looks for any acq-* files for the given slot's run number and determines
+        if any attempt is complete or if there are interrupted attempts.
+
+        Args:
+            step_id: Workflow step ID (e.g., 'transfer_1', 'feedback_2')
+            output_dir: Feedback output directory
+            participant_id: Participant ID
+            expected_volumes: Expected number of volumes
+
+        Returns:
+            StepStatus based on best attempt status (COMPLETE if any complete,
+            INTERRUPTED if any partial, PENDING if none found)
+        """
+        if step_id not in STEP_TO_RUN_NUMBER:
+            return StepStatus.PENDING
+
+        run_num = STEP_TO_RUN_NUMBER[step_id]
+        task_type = "transfer" if "transfer" in step_id else "feedback"
+
+        if not output_dir.exists():
+            return StepStatus.PENDING
+
+        # Search for any acq-* files for this slot's run number
+        pattern = f"{participant_id}_task-{task_type}_acq-*_run-{run_num:02d}_feedbacklog.tsv"
+        log_files = list(output_dir.glob(pattern))
+
+        # Also check legacy naming (without acq) for backward compatibility
+        legacy_pattern = f"{participant_id}_task-{task_type}_run-{run_num:02d}_feedbacklog.tsv"
+        legacy_file = output_dir / legacy_pattern
+        if legacy_file.exists() and legacy_file not in log_files:
+            log_files.append(legacy_file)
+
+        if not log_files:
+            return StepStatus.PENDING
+
+        # Check each log file and return the best status
+        has_complete = False
+        has_interrupted = False
+
+        for log_path in log_files:
+            try:
+                with open(log_path, 'r') as f:
+                    row_count = sum(1 for _ in f) - 1  # subtract header
+                if row_count >= expected_volumes:
+                    has_complete = True
+                elif row_count > 0:
+                    has_interrupted = True
+            except Exception:
+                continue
+
+        # Return best status: complete > interrupted > pending
+        if has_complete:
+            return StepStatus.COMPLETE
+        elif has_interrupted:
             return StepStatus.INTERRUPTED
         else:
             return StepStatus.PENDING
@@ -244,37 +312,21 @@ class ParticipantWorkflowScreen:
             self.step_statuses["coregistration_realtime"] = StepStatus.COMPLETE
             logger.info("Detected complete: coregistration_realtime")
 
-        # Check feedback runs (transfer and feedback)
+        # Check feedback runs (transfer and feedback) using slot-based naming
         feedback_output_dir = feedback_dir / "02_feedback_output"
         expected_feedback_vols = config["feedback"]["n_volumes"]
 
-        # Check transfer_1 (run 1, transfer task)
-        transfer_1_log = feedback_output_dir / f"{participant_id}_task-transfer_run-01_feedbacklog.tsv"
-        status = self._check_feedback_step_status(transfer_1_log, expected_feedback_vols)
-        self.step_statuses["transfer_1"] = status
-        if status != StepStatus.PENDING:
-            logger.info(f"Detected {status.value}: transfer_1")
-
-        # Check feedback_1 (run 2, feedback task)
-        feedback_1_log = feedback_output_dir / f"{participant_id}_task-feedback_run-01_feedbacklog.tsv"
-        status = self._check_feedback_step_status(feedback_1_log, expected_feedback_vols)
-        self.step_statuses["feedback_1"] = status
-        if status != StepStatus.PENDING:
-            logger.info(f"Detected {status.value}: feedback_1")
-
-        # Check feedback_2 (run 3, feedback task)
-        feedback_2_log = feedback_output_dir / f"{participant_id}_task-feedback_run-02_feedbacklog.tsv"
-        status = self._check_feedback_step_status(feedback_2_log, expected_feedback_vols)
-        self.step_statuses["feedback_2"] = status
-        if status != StepStatus.PENDING:
-            logger.info(f"Detected {status.value}: feedback_2")
-
-        # Check transfer_2 (run 4, transfer task)
-        transfer_2_log = feedback_output_dir / f"{participant_id}_task-transfer_run-02_feedbacklog.tsv"
-        status = self._check_feedback_step_status(transfer_2_log, expected_feedback_vols)
-        self.step_statuses["transfer_2"] = status
-        if status != StepStatus.PENDING:
-            logger.info(f"Detected {status.value}: transfer_2")
+        # Check each feedback/transfer step using slot-based detection
+        for step_id in ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]:
+            status = self._check_feedback_slot_status(
+                step_id=step_id,
+                output_dir=feedback_output_dir,
+                participant_id=participant_id,
+                expected_volumes=expected_feedback_vols,
+            )
+            self.step_statuses[step_id] = status
+            if status != StepStatus.PENDING:
+                logger.info(f"Detected {status.value}: {step_id}")
 
         logger.info(f"Session loaded: {self.participant_id}")
 
@@ -988,27 +1040,29 @@ class ParticipantWorkflowScreen:
             "output_path": None,
         })
 
-        # For feedback/transfer steps, show actual run number and archive warning if needed
+        # For feedback/transfer steps, show slot-based run info with acq entity
         feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
         if step_id in feedback_steps:
             task_type = "transfer" if "transfer" in step_id else "feedback"
             output_dir = base_dir / "feedback" / "02_feedback_output"
 
-            # Detect what run number will actually be used
-            actual_run = get_next_run_number(
+            # Get slot-based run info with acquisition letter
+            run_info = get_slot_run_info(
                 output_dir=output_dir,
                 subject=participant_id,
                 task=task_type,
+                step_id=step_id,
             )
 
-            # Update parameters to show actual run number
-            info["parameters"]["Task"] = f"{task_type} (run-{actual_run:02d})"
+            # Update parameters to show run number and acquisition attempt
+            info["parameters"]["Task"] = f"{task_type} (run-{run_info['run']:02d})"
+            info["parameters"]["Attempt"] = f"acq-{run_info['acq']:02d}"
 
-            # If run number > 1, there were previous attempts - add archive notice
-            if actual_run > 1:
-                archive_notice = f" Previous interrupted attempt(s) will be archived."
-                info["description"] = info["description"] + archive_notice
-                info["parameters"]["Previous Runs"] = f"{actual_run - 1} (will be archived)"
+            # If there are previous attempts, show them
+            if run_info["existing_acqs"]:
+                attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+                info["parameters"]["Previous Attempts"] = attempts_str
+                info["description"] = info["description"] + f" Previous attempts ({attempts_str}) will be preserved."
 
         # Check if outputs exist
         output_path = info.get("output_path")
@@ -1063,8 +1117,15 @@ class ParticipantWorkflowScreen:
                 on_error=self._on_pipeline_error,
             )
 
-        # Show monitoring panel
+        # Show monitoring panel (creates task_mirror for feedback steps)
         self._show_monitoring_panel(step_id)
+
+        # Connect task mirror callback for feedback/transfer steps
+        feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
+        if step_id in feedback_steps:
+            self.pipeline_runner.set_task_mirror_callback(self._on_task_mirror_update)
+        else:
+            self.pipeline_runner.set_task_mirror_callback(None)
 
         # Execute the step in background thread
         self.pipeline_runner.run_step(step_id)
@@ -1227,57 +1288,393 @@ class ParticipantWorkflowScreen:
         Args:
             step_id: Step identifier
         """
-        # Build monitoring panel
-        monitoring_panel = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(
-                        f"Running: {step_id}",
-                        size=18,
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                    ft.Divider(),
-                    ft.Container(
-                        content=ft.Column(
+        self._current_step_id = step_id
+        config = self.study_config.session_config
+
+        # Check if this is a feedback/transfer step
+        feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
+        is_feedback_step = step_id in feedback_steps
+
+        if is_feedback_step:
+            # Create activation plot for feedback/transfer runs
+            mask_names = config["mask"]["mask_names"]
+            n_volumes = config["feedback"]["n_volumes"]
+
+            self.activation_plot = ActivationPlot(
+                mask_names=mask_names,
+                n_volumes=n_volumes,
+                height=200,
+                y_min=-2.0,
+                y_max=2.0,
+            )
+
+            # Create task mirror for visual feedback display
+            self.task_mirror = TaskMirror(width=180, height=250)
+
+            # Create progress and status UI elements
+            self._progress_bar = ft.ProgressBar(value=0, width=400)
+            self._progress_text = ft.Text("0 / 0 volumes", size=14)
+            self._status_text = ft.Text("Waiting for data...", size=14, color=ft.Colors.GREY_600)
+            self._hits_text = ft.Text("Hits: --", size=14)
+
+            # Build monitoring panel with activation plot and task mirror side by side
+            monitoring_panel = ft.Container(
+                content=ft.Column(
+                    [
+                        # Header
+                        ft.Text(
+                            self._get_step_label(step_id),
+                            size=18,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Divider(),
+
+                        # Side-by-side: Activation plot and Task mirror
+                        ft.Row(
                             [
-                                ft.ProgressRing(),
-                                ft.Text("Processing...", size=14),
+                                # Activation plot (expandable)
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text("Network Activation", size=14, weight=ft.FontWeight.W_500),
+                                            self.activation_plot.build(),
+                                        ],
+                                        spacing=5,
+                                    ),
+                                    expand=True,
+                                ),
+                                # Task mirror (fixed width)
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text("Task Display", size=14, weight=ft.FontWeight.W_500),
+                                            self.task_mirror.build(),
+                                        ],
+                                        spacing=5,
+                                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    ),
+                                    width=200,
+                                ),
                             ],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            spacing=20,
+                            vertical_alignment=ft.CrossAxisAlignment.START,
+                        ),
+
+                        # Progress section
+                        ft.Container(height=10),
+                        ft.Row(
+                            [
+                                ft.Text("Progress:", size=14, weight=ft.FontWeight.W_500),
+                                self._progress_bar,
+                                self._progress_text,
+                            ],
+                            spacing=10,
+                            alignment=ft.MainAxisAlignment.START,
+                        ),
+
+                        # Status section
+                        ft.Row(
+                            [
+                                ft.Text("Status:", size=14, weight=ft.FontWeight.W_500),
+                                self._status_text,
+                            ],
                             spacing=10,
                         ),
-                        alignment=ft.alignment.Alignment(0, 0),  # Center alignment
-                        expand=True,
-                    ),
-                    ft.Row(
-                        [
-                            ft.FilledButton(
-                                "Stop",
-                                icon=ft.icons.Icons.STOP,
-                                on_click=lambda e: self._on_stop_clicked(),
-                                bgcolor=ft.Colors.RED,
+                        ft.Row(
+                            [
+                                self._hits_text,
+                            ],
+                            spacing=10,
+                        ),
+
+                        # Stop button
+                        ft.Container(height=10),
+                        ft.Row(
+                            [
+                                ft.FilledButton(
+                                    "Stop",
+                                    icon=ft.icons.Icons.STOP,
+                                    on_click=lambda e: self._on_stop_clicked(),
+                                    bgcolor=ft.Colors.RED,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.END,
+                        ),
+                    ],
+                    spacing=10,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                padding=20,
+                expand=True,
+            )
+
+            # Start monitoring the feedback log file
+            self._start_feedback_monitoring(step_id)
+
+        else:
+            # Simple monitoring panel for non-feedback steps
+            monitoring_panel = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            f"Running: {self._get_step_label(step_id)}",
+                            size=18,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                        ft.Divider(),
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.ProgressRing(),
+                                    ft.Text("Processing...", size=14),
+                                ],
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                spacing=10,
                             ),
-                        ],
-                        alignment=ft.MainAxisAlignment.END,
-                    ),
-                ],
-                spacing=10,
-            ),
-            padding=20,
-            expand=True,
-        )
+                            alignment=ft.Alignment(0, 0),  # Center alignment
+                            expand=True,
+                        ),
+                        ft.Row(
+                            [
+                                ft.FilledButton(
+                                    "Stop",
+                                    icon=ft.icons.Icons.STOP,
+                                    on_click=lambda e: self._on_stop_clicked(),
+                                    bgcolor=ft.Colors.RED,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.END,
+                        ),
+                    ],
+                    spacing=10,
+                ),
+                padding=20,
+                expand=True,
+            )
 
         # Replace right panel content
         if self.right_panel_container is not None:
             self.right_panel_container.content = monitoring_panel
             self.right_panel_container.update()
 
+    def _get_step_label(self, step_id: str) -> str:
+        """Get human-readable label for a step.
+
+        Args:
+            step_id: Step identifier
+
+        Returns:
+            Human-readable label
+        """
+        labels = {
+            "2vol_initial": "Collect Initial 2vol",
+            "rest_run_1": "Collect Rest Run 1",
+            "rest_run_2": "Collect Rest Run 2",
+            "preprocessing": "Run Preprocessing",
+            "mask_extraction": "Extract Masks",
+            "coregistration": "Coregister to 2vol",
+            "2vol_realtime": "Collect Real-time 2vol",
+            "coregistration_realtime": "Coregister to Real-time 2vol",
+            "transfer_1": "Transfer Run 1",
+            "feedback_1": "Feedback Run 1",
+            "feedback_2": "Feedback Run 2",
+            "transfer_2": "Transfer Run 2",
+        }
+        return labels.get(step_id, step_id)
+
+    def _start_feedback_monitoring(self, step_id: str):
+        """Start monitoring feedback log file for real-time updates.
+
+        Args:
+            step_id: Step identifier (transfer_1, feedback_1, etc.)
+        """
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        mask_names = config["mask"]["mask_names"]
+        n_volumes = config["feedback"]["n_volumes"]
+
+        # Determine task type and get slot-based run info
+        task_type = "transfer" if "transfer" in step_id else "feedback"
+        output_dir = base_dir / "feedback" / "02_feedback_output"
+
+        # Get the slot-based run info (run number and acq letter)
+        run_info = get_slot_run_info(
+            output_dir=output_dir,
+            subject=self.participant_id,
+            task=task_type,
+            step_id=step_id,
+        )
+
+        # Construct log file path with acq entity (format as 2-digit number)
+        log_path = output_dir / f"{self.participant_id}_task-{task_type}_acq-{run_info['acq']:02d}_run-{run_info['run']:02d}_feedbacklog.tsv"
+        logger.info(f"Will monitor feedback log: {log_path}")
+
+        # Create and start feedback monitor
+        self.feedback_monitor = FeedbackMonitor(
+            log_path=log_path,
+            mask_names=mask_names,
+            n_volumes=n_volumes,
+            on_update=self._on_feedback_update,
+            poll_interval=0.5,
+        )
+        self.feedback_monitor.start()
+
+    def _stop_feedback_monitoring(self):
+        """Stop the feedback log monitor."""
+        if self.feedback_monitor:
+            self.feedback_monitor.stop()
+            self.feedback_monitor = None
+
+    def _on_task_mirror_update(self, state: Dict) -> None:
+        """Handle task visual state update for GUI mirroring.
+
+        Called from BallTask (or any task) with its current visual state.
+        This runs in a background thread, so we schedule UI update on main thread.
+
+        Args:
+            state: Visual state dictionary from task.get_mirror_state()
+        """
+        # Capture state in closure
+        state_copy = state.copy()
+
+        async def update_mirror():
+            try:
+                if hasattr(self, 'task_mirror') and self.task_mirror is not None:
+                    self.task_mirror.update_state(state_copy)
+            except Exception as e:
+                logger.debug(f"Task mirror update failed: {e}")
+
+        try:
+            self.page.run_task(update_mirror)
+        except Exception as e:
+            logger.debug(f"Failed to schedule task mirror update: {e}")
+
+    def _on_feedback_update(self, volume: int, mask_activations: Dict[str, float], motion_params: Dict[str, float]):
+        """Handle real-time feedback data update.
+
+        Args:
+            volume: Volume number
+            mask_activations: Dict mapping mask name to activation value
+            motion_params: Dict of motion parameters
+        """
+        logger.debug(f"Feedback update: vol={volume}, activations={mask_activations}")
+
+        # Schedule UI update on main thread
+        async def update_ui():
+            try:
+                # Update activation plot
+                if self.activation_plot and mask_activations:
+                    self.activation_plot.add_data(volume, mask_activations)
+
+                # Update progress
+                n_volumes = self.study_config.session_config["feedback"]["n_volumes"]
+                progress = min(1.0, volume / n_volumes) if n_volumes > 0 else 0
+
+                if self._progress_bar:
+                    self._progress_bar.value = progress
+                    self._progress_bar.update()
+
+                if self._progress_text:
+                    self._progress_text.value = f"{volume} / {n_volumes} volumes"
+                    self._progress_text.update()
+
+                if self._status_text:
+                    n_baseline = self.study_config.session_config["feedback"]["n_baseline"]
+                    if volume < n_baseline:
+                        self._status_text.value = f"Baseline ({volume}/{n_baseline})"
+                    else:
+                        self._status_text.value = "Feedback Active"
+                    self._status_text.color = ft.Colors.GREEN_600 if volume >= n_baseline else ft.Colors.ORANGE_600
+                    self._status_text.update()
+
+                # Update hits/activation display
+                if self._hits_text and mask_activations:
+                    # Show current activation values
+                    act_strs = [f"{k}: {v:.2f}" for k, v in mask_activations.items()]
+                    self._hits_text.value = "Current: " + ", ".join(act_strs)
+                    self._hits_text.update()
+
+            except Exception as e:
+                logger.error(f"Error updating feedback UI: {e}")
+
+        try:
+            self.page.run_task(update_ui)
+        except Exception as e:
+            logger.debug(f"Failed to schedule feedback UI update: {e}")
+
     def _on_stop_clicked(self):
-        """Handle stop button click during execution."""
-        logger.info("Stop button clicked")
-        if self.pipeline_runner is not None:
-            self.pipeline_runner.stop()
-            self._add_log("[WARNING] Stop requested by user")
+        """Handle stop button click during execution - shows confirmation dialog."""
+        logger.info("Stop button clicked - showing confirmation dialog")
+
+        # Check if this is a feedback/transfer step (which has post-run questions)
+        is_feedback_step = self._current_step_id in (
+            "transfer_1", "feedback_1", "feedback_2", "transfer_2"
+        )
+
+        # Checkbox for showing questions (only relevant for feedback steps)
+        show_questions_checkbox = ft.Checkbox(
+            label="Show post-run questions to participant",
+            value=False,  # Default to not showing questions on stop
+        )
+
+        def confirm_stop(e):
+            self.page.pop_dialog()
+            show_questions = show_questions_checkbox.value if is_feedback_step else False
+            logger.info(f"Stop confirmed (show_questions={show_questions})")
+
+            # Stop feedback monitoring
+            self._stop_feedback_monitoring()
+
+            if self.pipeline_runner is not None:
+                self.pipeline_runner.stop(show_questions=show_questions)
+                if show_questions:
+                    self._add_log("[WARNING] Stop requested - showing questions first")
+                else:
+                    self._add_log("[WARNING] Stop requested by user")
+
+        def cancel_stop(e):
+            self.page.pop_dialog()
+            logger.info("Stop cancelled")
+
+        # Build dialog content
+        content_items = [
+            ft.Text(
+                "Are you sure you want to stop the current run?",
+                size=14,
+            ),
+        ]
+
+        if is_feedback_step:
+            content_items.extend([
+                ft.Divider(),
+                show_questions_checkbox,
+                ft.Text(
+                    "If checked, the participant will still see the post-run questionnaire.",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+            ])
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Stop Run"),
+            content=ft.Container(
+                content=ft.Column(content_items, tight=True, spacing=10),
+                width=400,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=cancel_stop),
+                ft.FilledButton(
+                    "Stop",
+                    icon=ft.Icons.STOP,
+                    color=ft.Colors.WHITE,
+                    bgcolor=ft.Colors.RED_700,
+                    on_click=confirm_stop,
+                ),
+            ],
+        )
+
+        self.page.show_dialog(dialog)
 
     def _on_step_clicked(self, step_id: str):
         """Handle step button click.

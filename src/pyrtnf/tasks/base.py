@@ -29,7 +29,7 @@ PsychoPy tasks that need thread-safe access to live activations.
 
 # Standard library imports
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
 import logging
 import threading
 import time
@@ -100,6 +100,53 @@ class BaseTask(ABC):
         }
 
         self._running = False
+
+        # Mirror callback for GUI visualization
+        self._mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    def set_mirror_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
+        """Set callback for GUI mirroring.
+
+        The callback receives visual state each frame for rendering in a GUI mirror.
+
+        Parameters
+        ----------
+        callback : Callable[[Dict[str, Any]], None]
+            Function that receives the visual state dictionary from get_mirror_state()
+        """
+        self._mirror_callback = callback
+
+    def get_mirror_state(self) -> Dict[str, Any]:
+        """Return current visual state for GUI mirroring.
+
+        Subclasses should override this to provide their visual representation.
+        Default implementation returns an empty state.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Dictionary with:
+            - 'background': str - background color (default: 'black')
+            - 'shapes': List[dict] - list of drawable primitives
+
+            Each shape dict has 'type' and type-specific properties.
+            All coordinates are normalized 0-1 (x: left-right, y: top-bottom).
+
+            Supported shape types:
+            - circle: x, y, radius, fill or stroke, stroke_width
+            - line: x1, y1, x2, y2, stroke, stroke_width
+            - rect: x, y, width, height, fill or stroke, stroke_width
+            - text: x, y, content, size, color
+        """
+        return {'background': 'black', 'shapes': []}
+
+    def _emit_mirror_state(self) -> None:
+        """Emit current visual state to mirror callback if set."""
+        if self._mirror_callback is not None:
+            try:
+                self._mirror_callback(self.get_mirror_state())
+            except Exception as e:
+                logger.debug(f"Mirror callback failed: {e}")
 
     def _update_data(
         self,
@@ -190,6 +237,9 @@ class BaseTask(ABC):
                 # Get latest data and update display
                 data = self.get_latest_data()
                 self.update(data)
+
+                # Emit visual state to GUI mirror if callback is set
+                self._emit_mirror_state()
 
                 # Frame timing
                 elapsed = time.time() - frame_start

@@ -54,7 +54,7 @@ Examples
 ... )
 """
 
-from .feedback import run_feedback_session, get_next_run_number
+from .feedback import run_feedback_session, get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
 from .preprocessing import preprocessing, collect_dicoms
 from .mask_extraction import mask_extraction_rest, coregister_2vol
 from .tasks import BaseTask, BallTask, ActivationSmoother, ActivationNormalizer
@@ -88,6 +88,8 @@ __all__ = [
     # Core functions
     'run_feedback_session',
     'get_next_run_number',
+    'get_slot_run_info',
+    'STEP_TO_RUN_NUMBER',
     'preprocessing',
     'collect_dicoms',
     'mask_extraction_rest',

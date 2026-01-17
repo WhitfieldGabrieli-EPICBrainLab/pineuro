@@ -1685,6 +1685,7 @@ def generate_feedback_report(
         overwrite: bool = False,
         open_browser: bool = False,
         expected_volumes: int | None = None,
+        acq: str | None = None,
 ) -> Path:
     """
     Generate comprehensive QC report for feedback session outputs.
@@ -1712,6 +1713,9 @@ def generate_feedback_report(
         Expected number of volumes for a complete run. If provided, used to
         determine COMPLETE vs PARTIAL status. If None, status shows as PARTIAL
         with a note that target is unknown.
+    acq : str, optional
+        Acquisition letter (e.g., 'a', 'b'). If provided, uses BIDS acq entity
+        in file naming pattern. If None, uses legacy naming without acq.
 
     Returns
     -------
@@ -1739,11 +1743,17 @@ def generate_feedback_report(
     output_dir = Path(output_dir) if output_dir is not None else feedback_dir / 'qc'
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Generating feedback QC report for {subject}, task={task}, run={run}")
+    logger.info(f"Generating feedback QC report for {subject}, task={task}, run={run}, acq={acq}")
 
-    # Auto-discover outputs
-    feedback_log_pattern = f"{subject}_task-{task}_run-{run:02d}_feedbacklog.tsv"
-    design_pattern = f"{subject}_task-{task}_run-{run:02d}_design.tsv"
+    # Auto-discover outputs - use acq-based naming if acq provided
+    if acq is not None:
+        # Format acq as 2-digit number if int
+        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
+        feedback_log_pattern = f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_feedbacklog.tsv"
+        design_pattern = f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_design.tsv"
+    else:
+        feedback_log_pattern = f"{subject}_task-{task}_run-{run:02d}_feedbacklog.tsv"
+        design_pattern = f"{subject}_task-{task}_run-{run:02d}_design.tsv"
 
     feedback_log = feedback_dir / feedback_log_pattern
     design_file = feedback_dir / design_pattern
@@ -1756,6 +1766,7 @@ def generate_feedback_report(
         'Subject': subject,
         'Task': task,
         'Run': f'{run:02d}',
+        'Acquisition': f'{acq:02d}' if isinstance(acq, int) else (acq if acq else 'N/A'),
         'Feedback log': str(feedback_log.exists()),
         'Design matrix': str(design_file.exists())
     }
