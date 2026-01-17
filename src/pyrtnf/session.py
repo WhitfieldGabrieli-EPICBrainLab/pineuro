@@ -1001,12 +1001,13 @@ def coregister_before_first_transfer(
         run_str = re.search(r"run-(\d+)", coreg_mask_files[0].stem).group(1) if coreg_mask_files else "01"  # type: ignore
         generate_2vol_qc_overlays(
             participant_id=config.paths.participant_id,
-            session_dir=config.paths.session_dir,
+            session_dir=config.paths.mask_extraction_dir,  # 2vol outputs are in mask_extraction/04_2vol
             ref_file=ref_file,
             mask_extraction_dir=config.paths.mask_extraction_dir,
             network_coreg_files=coreg_mask_files,
             run_str=run_str,
-            overwrite=True
+            overwrite=True,
+            twovol_subdir="04_2vol",  # Match the output_subdir used in coregister_2vol
         )
     except Exception as e:
         logger.warning(f"2vol QC overlay generation skipped: {e}")

@@ -321,7 +321,8 @@ def preprocessing(
         input_dicoms: Union[str, Path, List[Union[str, Path]]],
         overwrite: bool = False,
         n_jobs: int = -1,
-        qc_enabled: bool = True
+        qc_enabled: bool = True,
+        progress_callback: Optional[callable] = None
 ) -> tuple[Path, Path, Path]:
     """
     Run the preprocessing pipeline for fMRI data (task or rest).
@@ -346,6 +347,9 @@ def preprocessing(
         If True, generate QC report after preprocessing completes.
         Report includes motion parameters, framewise displacement, brain mask coverage,
         and multi-run coregistration overlays (if applicable).
+    progress_callback : callable, optional
+        Callback function for progress updates. Called with (step, detail) arguments.
+        Used by GUI to display real-time progress in log console.
 
     Returns
     -------
@@ -363,16 +367,25 @@ def preprocessing(
 
     """
 
+    # Helper to emit progress to both logger and callback
+    def emit_progress(step: str, detail: str = ""):
+        if detail:
+            logger.info(f"{step}: {detail}")
+        else:
+            logger.info(step)
+        if progress_callback:
+            progress_callback(step, detail)
+
     # Log the command
-    logger.info(f"Running preprocessing for {participant_id}...")
-    
+    emit_progress(f"Running preprocessing for {participant_id}")
+
     # Convert to Path object
     root_dir = Path(root_dir)
-    
+
     # Convert inputs to list if single file provided
     if isinstance(input_dicoms, (str, Path)):
         input_dicoms = [input_dicoms]
-    
+
     # Convert to strings and validate
     input_paths: list[str] = []
     logger.info(f"Input DICOM folders:\n")
@@ -386,14 +399,15 @@ def preprocessing(
             raise FileNotFoundError(f"Directory is empty: {path}")
         input_paths.append(str(path))
         logger.info(f"  {str(path)}")
-    
+
     # Step 1: Convert DICOMs to NIfTI
-    logger.info("Step 1/4: Converting DICOMs to NIfTI...")
+    emit_progress("Step 1/4: DICOM to NIfTI conversion")
     nifti_dir = root_dir / "01_nifti"
     nifti_files = []
 
     # Use parallel processing for DICOM conversion if multiple runs
     if n_jobs != 1 and len(input_paths) > 1:
+        emit_progress("Step 1/4", f"Converting {len(input_paths)} runs in parallel...")
         # Build job list for parallel execution
         dcm_jobs = []
         nifti_file_paths = []
@@ -417,7 +431,7 @@ def preprocessing(
     else:
         # Sequential processing
         for run, path in enumerate(input_paths):
-            logger.info(f"  Processing run {run+1}/{len(input_paths)}...")
+            emit_progress("Step 1/4", f"Converting run {run+1}/{len(input_paths)}...")
             nifti_file = dicom_to_nifti(
                 dicom_dir=path,
                 output_dir=nifti_dir,
@@ -426,15 +440,16 @@ def preprocessing(
             )
             nifti_files.append(nifti_file)
 
-    logger.info(f"✓ DICOM to NIfTI conversion complete ({len(nifti_files)} runs)")
+    emit_progress("Step 1/4", f"Complete ({len(nifti_files)} runs converted)")
 
     # Step 2: Motion correction
-    logger.info("Step 2/4: Running motion correction...")
+    emit_progress("Step 2/4: Motion correction (mcflirt)")
     mcf_dir = root_dir / "02_motion_correction"
     mcf_files = []
 
     # Use parallel processing for motion correction if multiple runs
     if n_jobs != 1 and len(nifti_files) > 1:
+        emit_progress("Step 2/4", f"Running mcflirt on {len(nifti_files)} runs in parallel...")
         # Build job list for parallel execution
         mc_jobs = []
         mcf_file_paths = []
@@ -457,18 +472,19 @@ def preprocessing(
     else:
         # Sequential processing
         for run, nifti in enumerate(nifti_files):
-            logger.info(f"  Processing run {run+1}/{len(nifti_files)}...")
+            emit_progress("Step 2/4", f"Running mcflirt on run {run+1}/{len(nifti_files)}...")
             mcf_file = mcf_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mcf.nii.gz")
             motion_correction(input_file=nifti, output_file=mcf_file, overwrite=overwrite)
             mcf_files.append(mcf_file)
 
-    logger.info(f"✓ Motion correction complete ({len(mcf_files)} runs)")
+    emit_progress("Step 2/4", f"Complete ({len(mcf_files)} runs corrected)")
 
     # Step 3: Brain extraction - compute temporal means and extract brain mask
-    logger.info("Step 3/4: Computing temporal means and brain extraction...")
+    emit_progress("Step 3/4: Brain extraction (bet)")
     bet_dir = root_dir / "03_brain_extraction"
 
     # Compute mean of each motion-corrected run for use in coregistration
+    emit_progress("Step 3/4", "Computing temporal mean images...")
     mean_files = []
     for run, nifti in enumerate(mcf_files):
         mean_file = bet_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mean.nii.gz")
@@ -476,25 +492,25 @@ def preprocessing(
         mean_files.append(mean_file)
 
     # Extract brain mask from first run's mean (used for all runs)
-    logger.info(f"  Extracting brain mask from run 1...")
+    emit_progress("Step 3/4", "Running brain extraction (bet)...")
     sub_ref = mean_files[0]
     _, mean_mask = brain_extraction(input_file=sub_ref, output_dir=bet_dir, overwrite=overwrite)
-    logger.info(f"✓ Brain extraction complete")
+    emit_progress("Step 3/4", "Complete (brain mask extracted)")
 
     # Step 4: Co-registration across runs (if more than one)
-    logger.info("Step 4/4: Coregistering runs and applying masks...")
+    emit_progress("Step 4/4: Coregistration and finalization")
     coreg_dir = root_dir / "04_coregistered"
     coreg_file = coreg_dir / Path(f"{participant_id}_task-{task}.nii.gz")
     xfm_dir = coreg_dir / "xfm"
 
     if len(mcf_files) == 1:
         # Single run: skip coregistration and use motion-corrected data directly
-        logger.info(f"  Single run detected, skipping coregistration")
+        emit_progress("Step 4/4", "Single run - skipping coregistration")
         coreg_file = mcf_files[0]
 
     else:
         # Multiple runs: coregister each to the first run's mean, then concatenate
-        logger.info(f"  Coregistering {len(mcf_files)} runs to run 1...")
+        emit_progress("Step 4/4", f"Coregistering {len(mcf_files)} runs to run 1...")
         sub_ref = mean_files[0]
         concat_files = []
 
@@ -506,21 +522,22 @@ def preprocessing(
 
             else:
                 # Compute rigid transformation from this run's mean to reference mean
-                logger.info(f"    Coregistering run {run+1}/{len(mean_files)}...")
+                emit_progress("Step 4/4", f"Computing transform for run {run+1}/{len(mean_files)}...")
                 output_prefix = xfm_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mean_to_run-01_mean")
                 _, xfm_files = compute_xfm(moving=mean_file, fixed=sub_ref, output_prefix=output_prefix, type_of_transform='Rigid', overwrite=overwrite)
 
                 # Apply transformation to full 4D timeseries (not just mean)
+                emit_progress("Step 4/4", f"Applying transform to run {run+1}/{len(mean_files)}...")
                 output_file = coreg_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_to_run-01.nii.gz")
                 apply_xfm(moving=mcf_files[run], fixed=sub_ref, transform_files=xfm_files, output_file=output_file, interpolator='linear', overwrite=overwrite)
                 concat_files.append(output_file)
 
         # Concatenate all coregistered runs along time axis
-        logger.info(f"  Concatenating {len(concat_files)} runs...")
+        emit_progress("Step 4/4", f"Concatenating {len(concat_files)} runs...")
         concat(input_files=concat_files, output_file=coreg_file, overwrite=overwrite)
 
     # Copy brain mask to final output location
-    logger.info(f"  Applying brain mask to outputs...")
+    emit_progress("Step 4/4", "Applying brain mask to outputs...")
     mask_file = root_dir / Path(f"{participant_id}_task-{task}_preproc_mask.nii.gz")
     if not mask_file.exists() or overwrite:
         shutil.copy(mean_mask, mask_file)
@@ -534,15 +551,12 @@ def preprocessing(
     ref_file = root_dir / Path(f"{participant_id}_task-{task}_boldref.nii.gz")
     if not ref_file.exists() or overwrite:
         apply_mask(input_file=sub_ref, mask_file=mask_file, output_file=ref_file, overwrite=overwrite)
-    
-    logger.info(f"✓ Preprocessing complete!")
-    logger.info(f"  Preprocessed file: {preproc_file.name}")
-    logger.info(f"  Brain mask: {mask_file.name}")
-    logger.info(f"  BOLD reference: {ref_file.name}")
+
+    emit_progress("Step 4/4", "Complete")
 
     # Generate QC report
     if qc_enabled:
-        logger.info("Generating preprocessing QC report...")
+        emit_progress("Generating QC report...")
         try:
             from . import qc
             qc_report = qc.generate_preprocessing_report(
@@ -551,7 +565,7 @@ def preprocessing(
                 task=task,
                 overwrite=overwrite
             )
-            logger.info(f"  QC report: {qc_report}")
+            emit_progress("QC report", f"Saved to {qc_report.name}")
         except Exception as e:
             logger.warning(f"QC report generation failed: {e}")
 

@@ -174,7 +174,7 @@ class FeedbackMonitor:
         log_path: Path,
         mask_names: List[str],
         n_volumes: int,
-        on_update: Callable[[int, Dict[str, float], Dict[str, float]], None],
+        on_update: Callable[[int, Dict[str, float], Dict[str, float], Optional[float]], None],
         poll_interval: float = 0.5,
     ):
         """Initialize the feedback monitor.
@@ -183,7 +183,7 @@ class FeedbackMonitor:
             log_path: Path to the feedbacklog.tsv file
             mask_names: List of expected mask names
             n_volumes: Expected total number of volumes
-            on_update: Callback (volume, mask_activations, motion_params)
+            on_update: Callback (volume, mask_activations, motion_params, fd)
             poll_interval: Polling interval in seconds
         """
         self.log_path = Path(log_path)
@@ -247,5 +247,8 @@ class FeedbackMonitor:
             if key.startswith("motion_") and isinstance(value, (int, float)):
                 motion_params[key] = value
 
+        # Extract framewise displacement
+        fd: Optional[float] = data.get("fd")
+
         # Call update callback
-        self.on_update(volume, mask_activations, motion_params)
+        self.on_update(volume, mask_activations, motion_params, fd)

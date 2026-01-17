@@ -20,6 +20,7 @@ try:
     LineChartDataPoint = fch.LineChartDataPoint
     ChartGridLines = fch.ChartGridLines
     ChartAxis = fch.ChartAxis
+    ChartAxisLabel = fch.ChartAxisLabel
     CHARTS_AVAILABLE = True
 except ImportError:
     # Fallback: charts not available
@@ -28,6 +29,7 @@ except ImportError:
     LineChartDataPoint = None
     ChartGridLines = None
     ChartAxis = None
+    ChartAxisLabel = None
     CHARTS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -165,14 +167,99 @@ class ActivationPlot:
         return series
 
     def _calculate_axis_range(self) -> tuple[float, float, float, float]:
-        """Calculate axis ranges based on expected volumes.
+        """Calculate axis ranges based on expected volumes and current data.
 
         Returns:
             Tuple of (min_x, max_x, min_y, max_y)
         """
         # X axis: fixed range from 1 to n_volumes
-        # Y axis: fixed range for stability
-        return (1, self.n_volumes, self.y_min, self.y_max)
+        min_x, max_x = 1, self.n_volumes
+
+        # Y axis: dynamic based on data
+        if self.data.n_points == 0:
+            # No data yet, use defaults
+            return (min_x, max_x, self.y_min, self.y_max)
+
+        # Find min/max across all activations
+        all_values = []
+        for values in self.data.activations.values():
+            all_values.extend(values)
+
+        if not all_values:
+            return (min_x, max_x, self.y_min, self.y_max)
+
+        data_min = min(all_values)
+        data_max = max(all_values)
+
+        # Add padding (10% of range on each side)
+        data_range = data_max - data_min
+        padding = max(data_range * 0.1, 0.1)  # At least 0.1 padding
+
+        # Ensure minimum range for readability
+        min_range = 0.5
+        if data_range < min_range:
+            center = (data_max + data_min) / 2
+            data_min = center - min_range / 2
+            data_max = center + min_range / 2
+
+        return (min_x, max_x, data_min - padding, data_max + padding)
+
+    def _create_y_axis_labels(self, min_y: float, max_y: float) -> list:
+        """Create custom Y axis labels with smaller font size.
+
+        Args:
+            min_y: Minimum Y value
+            max_y: Maximum Y value
+
+        Returns:
+            List of ChartAxisLabel objects
+        """
+        if ChartAxisLabel is None:
+            return []
+
+        labels = []
+        # Create labels at regular intervals
+        y_range = max_y - min_y
+        # Use 5 labels for a nice distribution
+        interval = y_range / 4
+        for i in range(5):
+            value = min_y + i * interval
+            labels.append(
+                ChartAxisLabel(
+                    value=value,
+                    label=ft.Text(f"{value:.1f}", size=10),
+                )
+            )
+        return labels
+
+    def _create_x_axis_labels(self, min_x: float, max_x: float) -> list:
+        """Create custom X axis labels with smaller font size.
+
+        Args:
+            min_x: Minimum X value
+            max_x: Maximum X value
+
+        Returns:
+            List of ChartAxisLabel objects
+        """
+        if ChartAxisLabel is None:
+            return []
+
+        labels = []
+        # Create labels at regular intervals (every 25 volumes or so)
+        x_range = max_x - min_x
+        num_labels = min(6, max(2, int(x_range / 25) + 1))
+        interval = x_range / (num_labels - 1) if num_labels > 1 else x_range
+
+        for i in range(num_labels):
+            value = min_x + i * interval
+            labels.append(
+                ChartAxisLabel(
+                    value=value,
+                    label=ft.Text(f"{int(value)}", size=10),
+                )
+            )
+        return labels
 
     def build(self) -> ft.Container:
         """Build the chart control.
@@ -199,6 +286,10 @@ class ActivationPlot:
         self._data_series = self._create_data_series()
         min_x, max_x, min_y, max_y = self._calculate_axis_range()
 
+        # Create custom axis labels with smaller font
+        y_labels = self._create_y_axis_labels(min_y, max_y)
+        x_labels = self._create_x_axis_labels(min_x, max_x)
+
         # Create chart
         self.chart = LineChart(
             data_series=self._data_series,
@@ -217,11 +308,13 @@ class ActivationPlot:
                 width=1,
             ),
             left_axis=ChartAxis(
-                label_size=40,
+                label_size=30,
+                labels=y_labels,
                 title=ft.Text("Activation (normalized)", size=12),
             ),
             bottom_axis=ChartAxis(
-                label_size=32,
+                label_size=24,
+                labels=x_labels,
                 title=ft.Text("Volume", size=12),
             ),
             bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.GREY_500),
@@ -285,12 +378,16 @@ class ActivationPlot:
         # Update data series
         self.chart.data_series = self._create_data_series()
 
-        # Update axis ranges
+        # Update axis ranges and labels
         min_x, max_x, min_y, max_y = self._calculate_axis_range()
         self.chart.min_x = min_x
         self.chart.max_x = max_x
         self.chart.min_y = min_y
         self.chart.max_y = max_y
+
+        # Update axis labels for new range
+        if self.chart.left_axis:
+            self.chart.left_axis.labels = self._create_y_axis_labels(min_y, max_y)
 
         try:
             self.chart.update()

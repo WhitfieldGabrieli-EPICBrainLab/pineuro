@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
 from pyrtnf.preprocessing import collect_dicoms, preprocessing
-from pyrtnf.mask_extraction import mask_extraction_rest, coregister_2vol
+from pyrtnf.mask_extraction import mask_extraction_rest, coregister_2vol, generate_2vol_qc_overlays
 from pyrtnf.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
 from pyrtnf.tasks.ball import compute_boxcar_task_regressor
 
@@ -258,8 +258,6 @@ class PipelineRunner:
 
     def _run_preprocessing(self) -> None:
         """Run preprocessing on collected rest runs."""
-        self._emit_progress("Running preprocessing (motion correction, brain extraction)...")
-
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         preprocessing_dir = base_dir / "preprocessing"
@@ -273,7 +271,12 @@ class PipelineRunner:
         if rest_run_2_dir.exists():
             input_dicoms.append(rest_run_2_dir)
 
-        self._emit_progress(f"Preprocessing {len(input_dicoms)} rest runs...")
+        # Set up progress callback for preprocessing to show in GUI log console
+        def progress_callback(step: str, detail: str = ""):
+            if detail:
+                self._emit_progress(f"{step}: {detail}")
+            else:
+                self._emit_progress(step)
 
         preproc_file, mask_file, ref_file = preprocessing(
             participant_id=self.participant_id,
@@ -282,14 +285,11 @@ class PipelineRunner:
             input_dicoms=input_dicoms,
             overwrite=True,  # Overwrite since user clicked "Start"
             qc_enabled=True,  # Generate QC report
+            progress_callback=progress_callback,
         )
-
-        self._emit_progress(f"Preprocessing complete. Output: {preproc_file}")
 
     def _run_mask_extraction(self) -> None:
         """Extract network masks using ICA."""
-        self._emit_progress("Extracting network masks (ICA-based)...")
-
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         preprocessing_dir = base_dir / "preprocessing"
@@ -307,7 +307,12 @@ class PipelineRunner:
         highpass = config["mask"]["highpass"]
         lowpass = config["mask"].get("lowpass")
 
-        self._emit_progress(f"Extracting {len(yeo_targets)} networks from {n_yeo}-network Yeo atlas...")
+        # Set up progress callback for mask extraction to show in GUI log console
+        def progress_callback(step: str, detail: str = ""):
+            if detail:
+                self._emit_progress(f"{step}: {detail}")
+            else:
+                self._emit_progress(step)
 
         mask_files = mask_extraction_rest(
             participant_id=self.participant_id,
@@ -322,9 +327,8 @@ class PipelineRunner:
             lowpass=lowpass,
             overwrite=True,
             qc_enabled=True,
+            progress_callback=progress_callback,
         )
-
-        self._emit_progress(f"Extracted {len(mask_files)} network masks")
 
     def _run_coregistration(self, run_id: int = 1) -> None:
         """Coregister masks to 2vol feedback space.
@@ -371,6 +375,34 @@ class PipelineRunner:
         )
 
         self._emit_progress(f"Coregistered {len(coreg_masks)} masks to 2vol {run_str}")
+
+        # Generate 2vol QC overlays for visual approval
+        self._emit_progress(f"Generating 2vol QC overlays for {run_str}...")
+        try:
+            # Determine session_dir and twovol_subdir based on run_id
+            # For run-01 (initial): session_dir is mask_extraction, subdir is 04_2vol
+            # For run-02 (realtime): session_dir is feedback, subdir is 01_2vol
+            if run_id == 1:
+                session_dir = mask_extraction_dir
+                twovol_subdir = "04_2vol"
+            else:
+                session_dir = feedback_dir
+                twovol_subdir = "01_2vol"
+
+            generate_2vol_qc_overlays(
+                participant_id=self.participant_id,
+                session_dir=session_dir,
+                ref_file=ref_file,
+                mask_extraction_dir=mask_extraction_dir,
+                network_coreg_files=coreg_masks,
+                run_str=str(run_id).zfill(2),
+                overwrite=True,
+                twovol_subdir=twovol_subdir,
+            )
+            self._emit_progress(f"QC overlays generated for 2vol {run_str}")
+        except Exception as e:
+            logger.warning(f"2vol QC overlay generation failed: {e}")
+            self._emit_progress(f"Warning: QC overlay generation failed: {e}")
 
     def _run_2vol_realtime(self) -> None:
         """Collect real-time 2vol before feedback session."""

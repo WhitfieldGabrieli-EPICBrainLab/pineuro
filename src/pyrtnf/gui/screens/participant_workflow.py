@@ -29,6 +29,7 @@ from ..config_manager import ConfigManager
 from ..models import StudyConfig
 from ..components.pipeline_runner import PipelineRunner
 from ..components.activation_plot import ActivationPlot
+from ..components.fd_plot import FDPlot
 from ..components.task_mirror import TaskMirror
 from ..components.csv_poller import FeedbackMonitor
 from ..components.qc_viewer import QCReportManager
@@ -113,6 +114,58 @@ class ParticipantWorkflowScreen:
         self._drag_start_y: float = 0  # Starting Y position of drag
         self._is_running: bool = False  # Track if a pipeline step is running
         self._current_step_id: Optional[str] = None  # Track current running step
+
+        # QC report manager for detecting and opening reports
+        self.qc_manager = QCReportManager(
+            base_dir=participant_base_dir,
+            participant_id=participant_id,
+        )
+
+        # QC approval state (two gates)
+        self._initial_qc_approved = self._check_qc_approval("initial")
+        self._realtime_qc_approved = self._check_qc_approval("realtime")
+
+    def _check_qc_approval(self, approval_type: str) -> bool:
+        """Check if QC has been approved for a checkpoint.
+
+        Args:
+            approval_type: "initial" (after coregistration) or "realtime" (after coregistration_realtime)
+
+        Returns:
+            True if the approval marker file exists
+        """
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        if approval_type == "initial":
+            marker_path = base_dir / "mask_extraction" / ".qc_approved_initial"
+        else:  # realtime
+            marker_path = base_dir / "feedback" / ".qc_approved_realtime"
+        return marker_path.exists()
+
+    def _set_qc_approved(self, approval_type: str, approved: bool):
+        """Set QC approval state for a checkpoint.
+
+        Args:
+            approval_type: "initial" or "realtime"
+            approved: True to approve, False to revoke
+        """
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        if approval_type == "initial":
+            marker_path = base_dir / "mask_extraction" / ".qc_approved_initial"
+        else:  # realtime
+            marker_path = base_dir / "feedback" / ".qc_approved_realtime"
+
+        if approved:
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.touch()
+            logger.info(f"QC approval marker created: {marker_path}")
+        elif marker_path.exists():
+            marker_path.unlink()
+            logger.info(f"QC approval marker removed: {marker_path}")
+
+        if approval_type == "initial":
+            self._initial_qc_approved = approved
+        else:
+            self._realtime_qc_approved = approved
 
     def _check_collection_status(self, collection_dir: Path, expected_volumes: int) -> StepStatus:
         """Check status of a DICOM collection step.
@@ -406,19 +459,34 @@ class ParticipantWorkflowScreen:
             Container with button and status icon
         """
         status = self.step_statuses.get(step_id, StepStatus.PENDING)
-        is_complete = status == StepStatus.COMPLETE
+
+        # Gate 1: Initial QC approval required for feedback session start
+        gate1_steps = ["2vol_realtime", "coregistration_realtime"]
+        requires_initial_approval = step_id in gate1_steps and not self._initial_qc_approved
+
+        # Gate 2: Realtime QC approval required for feedback/transfer runs
+        gate2_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
+        requires_realtime_approval = step_id in gate2_steps and not self._realtime_qc_approved
+
+        requires_approval = requires_initial_approval or requires_realtime_approval
 
         button = ft.ElevatedButton(
             label,
             on_click=on_click,
-            disabled=self._is_running or status == StepStatus.RUNNING,
+            disabled=self._is_running or status == StepStatus.RUNNING or requires_approval,
         )
+
+        # Show lock icon if blocked by QC approval, otherwise show status icon
+        if requires_approval:
+            icon = ft.Icon(ft.Icons.LOCK, color=ft.Colors.ORANGE_500, size=20)
+        else:
+            icon = self._get_status_icon(status)
 
         return ft.Container(
             content=ft.Row(
                 [
                     button,
-                    self._get_status_icon(status),
+                    icon,
                 ],
                 spacing=10,
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -468,33 +536,70 @@ class ParticipantWorkflowScreen:
         Returns:
             ExpansionPanel control
         """
+        # Build controls list
+        controls = [
+            ft.Text("Preprocessing", size=14, weight=ft.FontWeight.W_500),
+            self._create_step_button(
+                "preprocessing",
+                "Run Preprocessing",
+                lambda e: self._on_step_clicked("preprocessing"),
+            ),
+            ft.Divider(),
+            ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
+            self._create_step_button(
+                "mask_extraction",
+                "Extract Masks",
+                lambda e: self._on_step_clicked("mask_extraction"),
+            ),
+            ft.Divider(),
+            ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+            self._create_step_button(
+                "coregistration",
+                "Coregister to 2vol",
+                lambda e: self._on_step_clicked("coregistration"),
+            ),
+        ]
+
+        # Add QC review/approval after coregistration if complete
+        if self.step_statuses.get("coregistration") == StepStatus.COMPLETE:
+            if self._initial_qc_approved:
+                # Approved - show "View QC" button with checkmark
+                controls.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.TextButton(
+                                    "View QC",
+                                    icon=ft.Icons.ASSESSMENT,
+                                    on_click=lambda e: self._show_qc_approval_dialog("initial"),
+                                ),
+                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                            ],
+                            spacing=5,
+                        ),
+                        padding=ft.padding.only(left=10),
+                    )
+                )
+            else:
+                # Not approved - show prominent approval button
+                controls.append(
+                    ft.Container(
+                        content=ft.FilledButton(
+                            "Review & Approve Masks",
+                            icon=ft.Icons.APPROVAL,
+                            bgcolor=ft.Colors.ORANGE,
+                            on_click=lambda e: self._show_qc_approval_dialog("initial"),
+                        ),
+                        padding=ft.padding.only(left=10, top=5),
+                    )
+                )
+
         return ft.ExpansionPanel(
             header=ft.ListTile(
                 title=ft.Text("Mask Extraction", weight=ft.FontWeight.BOLD),
             ),
             content=ft.Column(
-                [
-                    ft.Text("Preprocessing", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        "preprocessing",
-                        "Run Preprocessing",
-                        lambda e: self._on_step_clicked("preprocessing"),
-                    ),
-                    ft.Divider(),
-                    ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        "mask_extraction",
-                        "Extract Masks",
-                        lambda e: self._on_step_clicked("mask_extraction"),
-                    ),
-                    ft.Divider(),
-                    ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        "coregistration",
-                        "Coregister to 2vol",
-                        lambda e: self._on_step_clicked("coregistration"),
-                    ),
-                ],
+                controls,
                 spacing=10,
             ),
             expanded=self._get_session_for_next_step() == "mask_extraction",
@@ -506,90 +611,148 @@ class ParticipantWorkflowScreen:
         Returns:
             ExpansionPanel control
         """
+        # Build controls list
+        controls = [
+            ft.Text("Real-time 2vol", size=14, weight=ft.FontWeight.W_500),
+            self._create_step_button(
+                "2vol_realtime",
+                "Collect",
+                lambda e: self._on_step_clicked("2vol_realtime"),
+            ),
+            ft.Divider(),
+            ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+            self._create_step_button(
+                "coregistration_realtime",
+                "Coregister",
+                lambda e: self._on_step_clicked("coregistration_realtime"),
+            ),
+        ]
+
+        # Add QC review/approval after coregistration_realtime if complete
+        if self.step_statuses.get("coregistration_realtime") == StepStatus.COMPLETE:
+            if self._realtime_qc_approved:
+                # Approved - show "View QC" button with checkmark
+                controls.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.TextButton(
+                                    "View QC",
+                                    icon=ft.Icons.ASSESSMENT,
+                                    on_click=lambda e: self._show_qc_approval_dialog("realtime"),
+                                ),
+                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                            ],
+                            spacing=5,
+                        ),
+                        padding=ft.padding.only(left=10),
+                    )
+                )
+            else:
+                # Not approved - show prominent approval button
+                controls.append(
+                    ft.Container(
+                        content=ft.FilledButton(
+                            "Review & Approve Masks",
+                            icon=ft.Icons.APPROVAL,
+                            bgcolor=ft.Colors.ORANGE,
+                            on_click=lambda e: self._show_qc_approval_dialog("realtime"),
+                        ),
+                        padding=ft.padding.only(left=10, top=5),
+                    )
+                )
+
+        # Add feedback runs section
+        controls.extend([
+            ft.Divider(),
+            ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500),
+            self._create_step_button(
+                "transfer_1",
+                "Transfer Run 1",
+                lambda e: self._on_step_clicked("transfer_1"),
+            ),
+            self._create_step_button(
+                "feedback_1",
+                "Feedback Run 1",
+                lambda e: self._on_step_clicked("feedback_1"),
+            ),
+            self._create_step_button(
+                "feedback_2",
+                "Feedback Run 2",
+                lambda e: self._on_step_clicked("feedback_2"),
+            ),
+            self._create_step_button(
+                "transfer_2",
+                "Transfer Run 2",
+                lambda e: self._on_step_clicked("transfer_2"),
+            ),
+        ])
+
         return ft.ExpansionPanel(
             header=ft.ListTile(
                 title=ft.Text("Feedback Session", weight=ft.FontWeight.BOLD),
             ),
             content=ft.Column(
-                [
-                    ft.Text("Real-time 2vol", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        "2vol_realtime",
-                        "Collect",
-                        lambda e: self._on_step_clicked("2vol_realtime"),
-                    ),
-                    ft.Divider(),
-                    ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        "coregistration_realtime",
-                        "Coregister",
-                        lambda e: self._on_step_clicked("coregistration_realtime"),
-                    ),
-                    ft.Divider(),
-                    ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        "transfer_1",
-                        "Transfer Run 1",
-                        lambda e: self._on_step_clicked("transfer_1"),
-                    ),
-                    self._create_step_button(
-                        "feedback_1",
-                        "Feedback Run 1",
-                        lambda e: self._on_step_clicked("feedback_1"),
-                    ),
-                    self._create_step_button(
-                        "feedback_2",
-                        "Feedback Run 2",
-                        lambda e: self._on_step_clicked("feedback_2"),
-                    ),
-                    self._create_step_button(
-                        "transfer_2",
-                        "Transfer Run 2",
-                        lambda e: self._on_step_clicked("transfer_2"),
-                    ),
-                ],
+                controls,
                 spacing=10,
             ),
             expanded=self._get_session_for_next_step() == "feedback",
         )
 
-    def _build_qc_section(self) -> ft.ExpansionPanel:
-        """Build the QC reports section.
+    def _show_qc_approval_dialog(self, approval_type: str):
+        """Show mandatory QC approval dialog after coregistration.
 
-        Returns:
-            ExpansionPanel control
+        Args:
+            approval_type: "initial" (after coregistration) or "realtime" (after coregistration_realtime)
         """
-        return ft.ExpansionPanel(
-            header=ft.ListTile(
-                title=ft.Text("Quality Control", weight=ft.FontWeight.BOLD),
-            ),
-            content=ft.Column(
-                [
-                    ft.TextButton(
-                        "Preprocessing QC",
-                        icon=ft.icons.Icons.DESCRIPTION,
-                        disabled=True,  # TODO: Enable when QC exists
-                    ),
-                    ft.TextButton(
-                        "Mask Extraction QC",
-                        icon=ft.icons.Icons.DESCRIPTION,
-                        disabled=True,
-                    ),
-                    ft.TextButton(
-                        "2vol Coregistration QC",
-                        icon=ft.icons.Icons.DESCRIPTION,
-                        disabled=True,
-                    ),
-                    ft.TextButton(
-                        "Feedback Runs QC",
-                        icon=ft.icons.Icons.DESCRIPTION,
-                        disabled=True,
-                    ),
-                ],
-                spacing=5,
-            ),
-            expanded=False,
+        from ..components.qc_plot_viewer import QCPlotViewer
+
+        logger.info(f"Opening QC approval dialog: {approval_type}")
+
+        # Get appropriate plots based on approval type
+        # Initial: show ICA, subject space, and 2vol overlays (full mask extraction review)
+        # Realtime: show ONLY 2vol overlays (since ICA and subject space didn't change)
+        if approval_type == "initial":
+            plots = self.qc_manager.get_mask_extraction_plots()
+            title = "Initial 2vol QC - Review Required"
+            success_msg = "Initial coregistration approved! You can now collect real-time 2vol."
+        else:
+            plots = self.qc_manager.get_2vol_qc_plots()
+            title = "Real-time 2vol QC - Review Required"
+            success_msg = "Real-time coregistration approved! You can now run feedback."
+
+        html_path = self.qc_manager.get_mask_extraction_qc()
+
+        def on_approve():
+            self._set_qc_approved(approval_type, True)
+            self._add_log(f"[SUCCESS] {title.split(' -')[0]} approved")
+            self._refresh_step_list()
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text(success_msg),
+                bgcolor=ft.Colors.GREEN,
+                open=True,
+            )
+            self.page.update()
+
+        def on_reject():
+            self._add_log(f"[WARNING] {title.split(' -')[0]} rejected")
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Masks rejected. Please review and re-run coregistration."),
+                bgcolor=ft.Colors.ORANGE,
+                open=True,
+            )
+            self.page.update()
+
+        viewer = QCPlotViewer(
+            page=self.page,
+            title=title,
+            plots=plots,
+            html_report_path=html_path,
+            require_approval=True,
+            on_approve=on_approve,
+            on_reject=on_reject,
         )
+        viewer.show()
 
     def _build_log_console(self) -> ft.Column:
         """Build the log console component with draggable divider.
@@ -1153,6 +1316,9 @@ class ParticipantWorkflowScreen:
             success: Whether step completed successfully
             result_message: Result or error message
         """
+        # Capture current step ID before it gets cleared
+        completed_step_id = self._current_step_id
+
         # This callback runs in the background thread
         # We need to schedule the UI update on the main thread
         async def update_ui():
@@ -1182,6 +1348,12 @@ class ParticipantWorkflowScreen:
                 bgcolor=ft.Colors.GREEN if success else ft.Colors.RED,
             )
             self.page.update()
+
+            # Auto-show QC approval dialog after coregistration steps
+            if success and completed_step_id == "coregistration":
+                self._show_qc_approval_dialog("initial")
+            elif success and completed_step_id == "coregistration_realtime":
+                self._show_qc_approval_dialog("realtime")
 
         # Schedule the UI update on the main thread
         try:
@@ -1303,9 +1475,16 @@ class ParticipantWorkflowScreen:
             self.activation_plot = ActivationPlot(
                 mask_names=mask_names,
                 n_volumes=n_volumes,
-                height=200,
+                height=180,
                 y_min=-2.0,
                 y_max=2.0,
+            )
+
+            # Create FD plot for motion monitoring
+            self.fd_plot = FDPlot(
+                n_volumes=n_volumes,
+                height=120,
+                threshold=0.5,
             )
 
             # Create task mirror for visual feedback display
@@ -1317,7 +1496,7 @@ class ParticipantWorkflowScreen:
             self._status_text = ft.Text("Waiting for data...", size=14, color=ft.Colors.GREY_600)
             self._hits_text = ft.Text("Hits: --", size=14)
 
-            # Build monitoring panel with activation plot and task mirror side by side
+            # Build monitoring panel with plots and task mirror side by side
             monitoring_panel = ft.Container(
                 content=ft.Column(
                     [
@@ -1329,15 +1508,17 @@ class ParticipantWorkflowScreen:
                         ),
                         ft.Divider(),
 
-                        # Side-by-side: Activation plot and Task mirror
+                        # Side-by-side: Plots column and Task mirror
                         ft.Row(
                             [
-                                # Activation plot (expandable)
+                                # Plots column (expandable)
                                 ft.Container(
                                     content=ft.Column(
                                         [
                                             ft.Text("Network Activation", size=14, weight=ft.FontWeight.W_500),
                                             self.activation_plot.build(),
+                                            ft.Text("Framewise Displacement", size=14, weight=ft.FontWeight.W_500),
+                                            self.fd_plot.build(),
                                         ],
                                         spacing=5,
                                     ),
@@ -1549,15 +1730,16 @@ class ParticipantWorkflowScreen:
         except Exception as e:
             logger.debug(f"Failed to schedule task mirror update: {e}")
 
-    def _on_feedback_update(self, volume: int, mask_activations: Dict[str, float], motion_params: Dict[str, float]):
+    def _on_feedback_update(self, volume: int, mask_activations: Dict[str, float], motion_params: Dict[str, float], fd: Optional[float]):
         """Handle real-time feedback data update.
 
         Args:
             volume: Volume number
             mask_activations: Dict mapping mask name to activation value
             motion_params: Dict of motion parameters
+            fd: Framewise displacement in mm (None if not available)
         """
-        logger.debug(f"Feedback update: vol={volume}, activations={mask_activations}")
+        logger.debug(f"Feedback update: vol={volume}, activations={mask_activations}, fd={fd}")
 
         # Schedule UI update on main thread
         async def update_ui():
@@ -1565,6 +1747,10 @@ class ParticipantWorkflowScreen:
                 # Update activation plot
                 if self.activation_plot and mask_activations:
                     self.activation_plot.add_data(volume, mask_activations)
+
+                # Update FD plot
+                if hasattr(self, 'fd_plot') and self.fd_plot and fd is not None:
+                    self.fd_plot.add_data(volume, fd)
 
                 # Update progress
                 n_volumes = self.study_config.session_config["feedback"]["n_volumes"]
@@ -1828,7 +2014,6 @@ class ParticipantWorkflowScreen:
             self._build_localizer_session_section(),
             self._build_mask_extraction_section(),
             self._build_feedback_section(),
-            self._build_qc_section(),
         ]
 
         # Force updates in the correct order
@@ -1924,7 +2109,6 @@ class ParticipantWorkflowScreen:
                 self._build_localizer_session_section(),
                 self._build_mask_extraction_section(),
                 self._build_feedback_section(),
-                self._build_qc_section(),
             ],
         )
 

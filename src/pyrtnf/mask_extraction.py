@@ -343,7 +343,8 @@ def mask_extraction_rest(
         lowpass: Optional[float] = None,
         overwrite: bool = False,
         qc_enabled: bool = True,
-        qc_dir: Optional[Union[str, Path]] = None
+        qc_dir: Optional[Union[str, Path]] = None,
+        progress_callback: Optional[callable] = None
 ) -> List[Path]:
     """
     Run the mask extraction pipeline for resting-state fMRI data.
@@ -390,6 +391,9 @@ def mask_extraction_rest(
         If True, generate QC artifacts (PNG overlays, correlation heatmap, HTML report)
     qc_dir : str or Path, optional
         Custom QC output directory. Defaults to the parent of root_dir (e.g., base_dir/qc)
+    progress_callback : callable, optional
+        Callback function for progress updates. Called with (step, detail) arguments.
+        Used by GUI to display real-time progress in log console.
 
     Returns
     -------
@@ -405,9 +409,18 @@ def mask_extraction_rest(
 
     """
 
+    # Helper to emit progress to both logger and callback
+    def emit_progress(step: str, detail: str = ""):
+        if detail:
+            logger.info(f"{step}: {detail}")
+        else:
+            logger.info(step)
+        if progress_callback:
+            progress_callback(step, detail)
+
     # Log the command
-    logger.info(f"Extracting resting-state masks for {participant_id}...")
-    
+    emit_progress(f"Mask extraction for {participant_id}")
+
     # Convert to Path object and validate
     root_dir = Path(root_dir)
     input_file = Path(input_file)
@@ -433,6 +446,7 @@ def mask_extraction_rest(
             raise ValueError(f"Label {target} not in labels for Yeo {n_yeo} network parcellation")
     
     # Step 1: ICA
+    emit_progress("Step 1/3: Running ICA decomposition", f"{n_components} components")
     ica_dir = root_dir / "01_ica"
     components_file, _ = run_ica(
         input_file=input_file,
@@ -447,10 +461,12 @@ def mask_extraction_rest(
     )
     components_img = load(components_file)
     components_data = get_data(components_img)
+    emit_progress("Step 1/3", "ICA complete")
 
     # Step 2: MNI registration - bring Yeo atlas into participant space
     # Overview: We need the Yeo atlas in the same space as our ICA components
     # to perform spatial correlation. This requires: participant → MNI → Yeo → participant
+    emit_progress("Step 2/3: MNI registration", "Computing transforms...")
     mnireg_dir = root_dir / "02_mnireg"
 
     # Step 2a: Compute transformation from participant space to MNI space
@@ -462,6 +478,7 @@ def mask_extraction_rest(
         overwrite=overwrite
     )
 
+    emit_progress("Step 2/3", f"Transforming Yeo {n_yeo}-network atlas to participant space...")
     yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
     yeo_mni = Path(yeo).with_suffix('').parent / Path(Path(yeo).with_suffix('').stem + '_interp_to_fMRIPrep_boldref.nii.gz')
 
@@ -482,21 +499,25 @@ def mask_extraction_rest(
             invert=True,  # Apply inverse transform: MNI → participant
             overwrite=overwrite
         )
+    emit_progress("Step 2/3", "Registration complete")
 
     # Step 3: Extract network masks using ICA-atlas correlation
     # Now that ICA components and Yeo atlas are in same space, identify which
     # ICA components best represent each target network
+    emit_progress("Step 3/3: Extracting network masks", f"Targets: {', '.join(yeo_targets)}")
     masks_dir = root_dir / "03_masks"
 
     # Step 3a: Compute spatial correlation between ICA components and Yeo networks
     # Each ICA component is correlated with each Yeo network region
     # Result is a component × network matrix showing which components match which networks
+    emit_progress("Step 3/3", "Computing spatial correlations...")
     sc_file = masks_dir / Path(f"Yeo_IC_spatial_correlation.csv")
     sc_df = spatial_correlation(input_file=components_file, mask_file=mask_file, parcellation_file=yeo2sub, labels=labels, output_file=sc_file, overwrite=overwrite)
     chosen_components = {target: int(sc_df[target].idxmax()) for target in yeo_targets}
 
     # Step 3b: Select ICA component with highest correlation for each target network
     # For each target network (e.g., DMN), find the ICA component that best matches it
+    emit_progress("Step 3/3", "Selecting best ICA components for each network...")
     network_files = []
     for target in yeo_targets:
         network_file = masks_dir / Path(f"{participant_id}_{target}.nii.gz")
@@ -513,6 +534,7 @@ def mask_extraction_rest(
 
     # Step 3c: Threshold masks to retain only top N voxels by activation magnitude
     # Reduces each network mask to its strongest voxels for focused neurofeedback
+    emit_progress("Step 3/3", f"Thresholding masks ({threshold} voxels)...")
     network_thr_files = []
     for network_file in network_files:
         thr_file = network_file.with_name(network_file.with_suffix("").stem + "_thr.nii.gz")
@@ -530,8 +552,11 @@ def mask_extraction_rest(
             logger.info(f"Output file exists and overwrite=False. Skipping network thresholding.")
         network_thr_files.append(thr_file)
 
-    # Step 4: Generate QC report
+    emit_progress("Step 3/3", f"Complete ({len(network_thr_files)} masks extracted)")
+
+    # Generate QC report
     if qc_enabled:
+        emit_progress("Generating QC report...")
         qc_output_dir = Path(qc_dir) if qc_dir is not None else root_dir.parent / "qc"
 
         # Use high-level API to generate comprehensive QC report
@@ -542,9 +567,9 @@ def mask_extraction_rest(
             network_names=network_names,
             output_dir=qc_output_dir,
             overwrite=overwrite,
-            open_browser=True  # Automatically open for initial QC review
+            open_browser=False
         )
-        logger.info(f"QC report saved to: {report_path}")
+        emit_progress("QC report", f"Saved to {report_path.name}")
 
     return network_thr_files
 
@@ -707,15 +732,37 @@ def generate_2vol_qc_overlays(
         mask_extraction_dir: Path,
         network_coreg_files: Sequence[Path],
         run_str: str,
-        overwrite: bool = False
+        overwrite: bool = False,
+        twovol_subdir: str = "01_2vol",
 ) -> None:
     """
     Generate QC overlays in 2vol space using the Yeo atlas warped to 2vol.
+
+    Parameters
+    ----------
+    participant_id : str
+        Participant ID
+    session_dir : Path
+        Session directory (mask_extraction for run-01, feedback for run-02+)
+    ref_file : Path
+        Path to BOLD reference file
+    mask_extraction_dir : Path
+        Path to mask extraction directory (for Yeo atlas)
+    network_coreg_files : Sequence[Path]
+        List of coregistered network mask files
+    run_str : str
+        Run number string (e.g., "01" or "02")
+    overwrite : bool, default=False
+        If True, overwrite existing files
+    twovol_subdir : str, default="01_2vol"
+        Subdirectory name under session_dir where 2vol outputs are stored.
+        Use "04_2vol" for initial coregistration (mask_extraction),
+        "01_2vol" for realtime coregistration (feedback).
     """
     if not network_coreg_files:
         return
 
-    twovol_dir = session_dir / "01_2vol"
+    twovol_dir = session_dir / twovol_subdir
     mean_file = twovol_dir / f"{participant_id}_task-2vol_run-{run_str}_mean.nii.gz"
     if not mean_file.exists():
         logger.info(f"Skipping 2vol QC overlays; mean file not found at {mean_file}")
@@ -787,5 +834,5 @@ def generate_2vol_qc_overlays(
         network_names=network_names,
         output_dir=qc_dir,
         overwrite=True,  # Force regeneration to include new 2vol overlays
-        open_browser=True  # Automatically open for user review before feedback
+        open_browser=False
     )

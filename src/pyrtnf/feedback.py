@@ -628,6 +628,9 @@ class FeedbackEstimator:
         # Motion parameter tracking for differential motion
         self._prev_motion: Optional[NDArray[np.float64]] = None
 
+        # Framewise displacement tracking (computed each volume)
+        self._latest_fd: float = 0.0
+
         # Dict to store efficiency weights per mask: {mask_name: weights_array}
         # Weights are computed from residual MSE for inverse-variance weighting
         self._weights: dict[str, NDArray[np.float64]] = {}
@@ -814,6 +817,42 @@ class FeedbackEstimator:
             logger.error(f"Error reading JSON {json_path}: {e}")
             return np.zeros(6, dtype=np.float64)
 
+    def _compute_fd(self, motion_params: NDArray[np.float64]) -> float:
+        """Compute framewise displacement from current motion parameters.
+
+        FD is the sum of absolute frame-to-frame differences across all 6 motion
+        parameters. Rotations are converted to mm using arc projection at 50mm
+        head radius.
+
+        Parameters
+        ----------
+        motion_params : ndarray, shape (6,)
+            Motion parameters: [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z].
+            Translations in mm, rotations in degrees.
+
+        Returns
+        -------
+        fd : float
+            Framewise displacement in mm.
+        """
+        if self._prev_motion is None:
+            # First volume - no previous frame to compare
+            return 0.0
+
+        # Compute frame-to-frame difference
+        diff = motion_params - self._prev_motion
+
+        # Format: [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z]
+        # Translations (indices 0-2) are already in mm
+        # Rotations (indices 3-5) are in degrees - convert to mm arc length
+        # Arc length = radius * angle_in_radians = 50 * (angle_degrees * pi/180)
+        diff_mm = diff.copy()
+        diff_mm[3:6] *= 50.0 * np.pi / 180.0
+
+        # FD is sum of absolute values
+        fd = float(np.sum(np.abs(diff_mm)))
+        return fd
+
     def _build_design_row(
         self, motion_params: NDArray[np.float64]
     ) -> NDArray[np.float64]:
@@ -945,7 +984,10 @@ class FeedbackEstimator:
             # Treat as JSON file path
             motion_params = self._extract_motion_params_from_json(motion_path)
 
-        # ===== 3. Build design matrix and update GLM =====
+        # ===== 3. Compute FD and build design matrix =====
+        # FD must be computed before _build_design_row (which updates _prev_motion)
+        self._latest_fd = self._compute_fd(motion_params)
+
         X = self._build_design_row(motion_params)
         self._last_design_row = X
         result = self._glm.update(X, voxel_values)
@@ -1567,7 +1609,7 @@ class NeurofeedbackCoordinator:
         """Initialize CSV log file and design matrix file with headers."""
         self._csv_file = open(self._csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file, delimiter='\t')
-        header = ["volume", "time", "is_baseline", "is_outlier"] + self.mask_names
+        header = ["volume", "time", "is_baseline", "is_outlier", "fd"] + self.mask_names
         self._csv_writer.writerow(header)
         self._csv_file.flush()
         # Initialize incremental design matrix file
@@ -1975,7 +2017,10 @@ class NeurofeedbackCoordinator:
         with self._lock:
             is_outlier = self._latest_is_outlier
 
-        row = [self.n_processed, f"{elapsed_time:.2f}", is_baseline, is_outlier]
+        # Get FD from estimator (computed during process_volume)
+        fd = self._estimator._latest_fd
+
+        row = [self.n_processed, f"{elapsed_time:.2f}", is_baseline, is_outlier, f"{fd:.4f}"]
         row.extend([f"{activations[name]:.4f}" for name in self.mask_names])
         if self._csv_writer is not None:
             self._csv_writer.writerow(row)

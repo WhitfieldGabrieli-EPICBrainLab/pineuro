@@ -9,7 +9,7 @@ import logging
 import subprocess
 import webbrowser
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 import platform
 
 logger = logging.getLogger(__name__)
@@ -98,17 +98,32 @@ class QCReportManager:
         Returns:
             Path to report if exists, None otherwise
         """
-        qc_dir = self.base_dir / "mask_extraction" / "qc"
+        # Primary location: participant-level qc/ directory
+        # (This is where qc.generate_mask_extraction_report() outputs by default)
+        qc_dir = self.base_dir / "qc"
         report_path = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
 
         if report_path.exists():
             return report_path
 
-        # Try alternative naming
-        for pattern in ["*mask_extraction_qc.html", "*masks_qc.html"]:
-            matches = list(qc_dir.glob(pattern))
-            if matches:
-                return matches[0]
+        # Try alternative patterns in participant-level qc/
+        if qc_dir.exists():
+            for pattern in ["*mask_extraction_qc.html", "*masks_qc.html"]:
+                matches = list(qc_dir.glob(pattern))
+                if matches:
+                    return matches[0]
+
+        # Fallback: check step-level directory (mask_extraction/qc/)
+        step_qc_dir = self.base_dir / "mask_extraction" / "qc"
+        if step_qc_dir.exists():
+            step_report = step_qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
+            if step_report.exists():
+                return step_report
+
+            for pattern in ["*mask_extraction_qc.html", "*masks_qc.html"]:
+                matches = list(step_qc_dir.glob(pattern))
+                if matches:
+                    return matches[0]
 
         return None
 
@@ -266,3 +281,159 @@ class QCReportManager:
         else:
             logger.warning(f"Report not found: {report_type}")
             return False
+
+    # =========================================================================
+    # Plot Discovery Methods (for inline QC viewing)
+    # =========================================================================
+
+    def get_preprocessing_plots(self) -> List[Tuple[str, Path]]:
+        """Get key preprocessing QC plots.
+
+        Returns:
+            List of (label, path) tuples for available plots
+        """
+        plots = []
+        qc_dir = self.base_dir / "preprocessing" / "qc"
+
+        if not qc_dir.exists():
+            return plots
+
+        # Brain mask coverage (most important)
+        mask_plot = qc_dir / "brain_mask_coverage.png"
+        if mask_plot.exists():
+            plots.append(("Brain Mask Coverage", mask_plot))
+
+        # Motion timeseries plots (show first run only for brevity in modal)
+        motion_plots = sorted(qc_dir.glob("motion_timeseries_*.png"))
+        if motion_plots:
+            plots.append(("Motion Parameters", motion_plots[0]))
+
+        # Framewise displacement plots (show first run only)
+        fd_plots = sorted(qc_dir.glob("framewise_displacement_*.png"))
+        if fd_plots:
+            plots.append(("Framewise Displacement", fd_plots[0]))
+
+        # Registration overlay (if multi-run)
+        reg_plot = qc_dir / "registration_overlay.png"
+        if reg_plot.exists():
+            plots.append(("Multi-Run Registration", reg_plot))
+
+        return plots
+
+    def get_mask_extraction_plots(self) -> List[Tuple[str, Path]]:
+        """Get key mask extraction QC plots.
+
+        Returns:
+            List of (label, path) tuples for available plots
+        """
+        plots = []
+        qc_dir = self.base_dir / "qc"
+
+        if not qc_dir.exists():
+            return plots
+
+        # ICA component grid
+        ica_grid = qc_dir / "ica_component_grid.png"
+        if ica_grid.exists():
+            plots.append(("ICA Components", ica_grid))
+
+        # Subject space overlays (all networks)
+        overlay_dir = qc_dir / "overlays" / "subject"
+        if overlay_dir.exists():
+            for overlay in sorted(overlay_dir.glob("*_overlay.png")):
+                # Extract network name from filename
+                # e.g., "sub-01_DefaultA_overlay.png" -> "DefaultA"
+                network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
+                plots.append((f"{network} Mask (Subject Space)", overlay))
+
+        # MNI space overlays (registration quality check)
+        mni_dir = qc_dir / "overlays" / "mni"
+        if mni_dir.exists():
+            for overlay in sorted(mni_dir.glob("*_overlay.png")):
+                network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
+                plots.append((f"{network} Mask (MNI Space)", overlay))
+
+        # 2vol overlays (coregistration) - only run-01 for initial QC
+        twovol_dir = qc_dir / "overlays" / "2vol"
+        if twovol_dir.exists():
+            for overlay in sorted(twovol_dir.glob("*_overlay.png")):
+                # Only include run-01 overlays for initial mask extraction QC
+                if "run-01" not in overlay.stem:
+                    continue
+                # Extract network name (e.g., "DefaultA" from "sub-01_DefaultA_thr_to_task-2vol_run-01_mean_overlay")
+                network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
+                # Clean up the network name to remove the thr_to_task-2vol_run-XX_mean suffix
+                if "_thr_to_task-2vol" in network:
+                    network = network.split("_thr_to_task-2vol")[0]
+                plots.append((f"{network} Mask (2vol Space)", overlay))
+
+        return plots
+
+    def get_2vol_qc_plots(self, run_id: int = 2) -> List[Tuple[str, Path]]:
+        """Get ONLY 2vol coregistration QC plots for a specific run.
+
+        Use this for realtime coregistration approval where only
+        the 2vol overlays are relevant (ICA and subject space didn't change).
+
+        Args:
+            run_id: Run number to filter overlays (default 2 for realtime).
+                    Only overlays containing "run-{run_id:02d}" in filename are included.
+
+        Returns:
+            List of (label, path) tuples for 2vol overlay images
+        """
+        plots = []
+        qc_dir = self.base_dir / "qc"
+
+        if not qc_dir.exists():
+            return plots
+
+        # 2vol overlays only - filter by run number
+        twovol_dir = qc_dir / "overlays" / "2vol"
+        run_pattern = f"run-{run_id:02d}"
+        if twovol_dir.exists():
+            for overlay in sorted(twovol_dir.glob("*_overlay.png")):
+                # Only include overlays for the specified run
+                if run_pattern not in overlay.stem:
+                    continue
+                # Extract network name (e.g., "DefaultA" from "sub-01_DefaultA_thr_to_task-2vol_run-02_mean_overlay")
+                network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
+                # Clean up the network name to remove the thr_to_task-2vol_run-XX_mean suffix
+                if "_thr_to_task-2vol" in network:
+                    network = network.split("_thr_to_task-2vol")[0]
+                plots.append((f"{network} Mask (2vol Space)", overlay))
+
+        return plots
+
+    def get_feedback_plots(self, task: str, run: int) -> List[Tuple[str, Path]]:
+        """Get key feedback QC plots.
+
+        Args:
+            task: Task type ("feedback" or "transfer")
+            run: Run number
+
+        Returns:
+            List of (label, path) tuples for available plots
+        """
+        plots = []
+        qc_dir = self.base_dir / "feedback" / "qc"
+
+        if not qc_dir.exists():
+            return plots
+
+        # Activation timeseries
+        ts_plot = qc_dir / "activation_timeseries.png"
+        if ts_plot.exists():
+            plots.append(("Activation Timeseries", ts_plot))
+
+        # Baseline distributions
+        baseline_plot = qc_dir / "baseline_distributions.png"
+        if baseline_plot.exists():
+            plots.append(("Baseline Distributions", baseline_plot))
+
+        # Design matrix
+        design_plot = qc_dir / "design_matrix.png"
+        if design_plot.exists():
+            plots.append(("GLM Design Matrix", design_plot))
+
+        return plots
