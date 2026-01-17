@@ -415,8 +415,6 @@ def main():
     def create_app(page: ft.Page):
         PyrtnfApp(page)
 
-    # Note: ft.app() is deprecated but ft.run() has different signature in 0.80.2
-    # Using ft.app() for now (works with deprecation warning)
     ft.app(target=create_app)
 
 
