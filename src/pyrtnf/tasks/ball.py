@@ -29,7 +29,6 @@ from typing import Optional, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 from psychopy import visual, core, event, monitors, prefs, logging as psychopy_logging
-from scipy.stats import gamma as gamma_dist
 
 # Silence PsychoPy warnings about monitor specifications and fonts
 psychopy_logging.console.setLevel(psychopy_logging.ERROR)
@@ -45,106 +44,14 @@ logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
-# HRF and Task Regressor Computation (Ball Task Specific)
+# HRF and Task Regressor Computation
 # ==============================================================================
 
+# Import from utils for backward compatibility (these were originally defined here)
+from pyrtnf.utils import compute_hrf, compute_boxcar_task_regressor
 
-def compute_hrf(tr: float, duration: float = 32.0) -> NDArray[np.float64]:
-    """Compute canonical double-gamma HRF (SPM-style).
-
-    Parameters
-    ----------
-    tr : float
-        Repetition time in seconds.
-    duration : float, optional
-        Duration of HRF in seconds. Default is 32s.
-
-    Returns
-    -------
-    hrf : ndarray
-        HRF sampled at TR intervals, normalized to peak at 1.0.
-
-    Notes
-    -----
-    Uses SPM canonical HRF parameters:
-    - Positive gamma: shape=6, scale=1 (peak ~5s)
-    - Negative gamma: shape=16, scale=1 (peak ~16s)
-    - Undershoot ratio: 1/6
-    """
-    # Time points at TR intervals
-    t = np.arange(0, duration, tr)
-
-    # SPM canonical HRF parameters
-    # Positive response: gamma(6, 1) peaks at ~5s
-    # Undershoot: gamma(16, 1) peaks at ~16s
-    a1, b1 = 6.0, 1.0  # shape, scale for positive response
-    a2, b2 = 16.0, 1.0  # shape, scale for undershoot
-    c = 1.0 / 6.0  # undershoot ratio
-
-    # Double-gamma HRF
-    hrf = gamma_dist.pdf(t, a1, scale=b1) - c * gamma_dist.pdf(t, a2, scale=b2)
-
-    # Normalize to peak at 1.0
-    hrf = hrf / np.max(hrf)
-
-    return hrf.astype(np.float64)
-
-
-def compute_boxcar_task_regressor(
-    n_baseline: int,
-    n_volumes: int,
-    tr: float,
-) -> NDArray[np.float64]:
-    """Compute HRF-convolved boxcar task regressor for ball task.
-
-    Creates a task regressor where:
-    - Baseline period (0 to n_baseline-1): task = 0
-    - Feedback period (n_baseline onwards): task = 1 convolved with HRF
-
-    This is specific to the ball task design with a single baseline/active
-    block structure.
-
-    Parameters
-    ----------
-    n_baseline : int
-        Number of baseline volumes (task = 0).
-    n_volumes : int
-        Total number of volumes.
-    tr : float
-        Repetition time in seconds.
-
-    Returns
-    -------
-    regressor : ndarray, shape (n_volumes,)
-        Task regressor values for each volume.
-
-    Notes
-    -----
-    The convolution produces the characteristic HRF response shape:
-    - Stays at 0 during baseline
-    - Ramps up after baseline onset following HRF shape
-    - Reaches steady state (~1.0) after ~25-30s
-    """
-    # Create boxcar: 0 during baseline, 1 during feedback
-    boxcar = np.zeros(n_volumes, dtype=np.float64)
-    boxcar[n_baseline:] = 1.0
-
-    # Compute HRF kernel
-    hrf = compute_hrf(tr)
-
-    # Convolve boxcar with HRF
-    convolved = np.convolve(boxcar, hrf, mode='full')
-
-    # Trim to original length
-    regressor = convolved[:n_volumes]
-
-    # Normalize so steady-state is ~1.0 (divide by sum of HRF)
-    # This ensures the regressor reaches 1.0 after the HRF response settles
-    hrf_sum = np.sum(hrf)
-    if hrf_sum > 0:
-        regressor = regressor / hrf_sum
-
-    return regressor.astype(np.float64)
+# Re-export for backward compatibility with existing imports from this module
+__all__ = ['BallTask', 'compute_hrf', 'compute_boxcar_task_regressor']
 
 
 # Instruction text constants
@@ -377,16 +284,24 @@ class BallTask(BaseTask):
             # Keep current_volume in sync even if the main loop exits right after the last callback
             self.current_volume = volume
 
-    def _move_window_to_secondary(self):
-        """Move PsychoPy window to secondary monitor using Xlib.
+    def _move_window_to_secondary(self, target_screen: int):
+        """Move PsychoPy window to a specific monitor using Xlib.
 
         This is a workaround for Flet/XWayland ignoring PsychoPy's screen parameter.
-        Only works on Linux/X11 systems.
+        Works on Linux/X11 systems including WSL2 with XWayland.
+
+        Parameters
+        ----------
+        target_screen : int
+            Screen index to move window to (0 = primary, 1 = secondary)
         """
         try:
             # Get target screen position
             screens = self.win.winHandle.display.get_screens()
-            target = screens[1] if len(screens) > 1 else screens[0]
+            if target_screen >= len(screens):
+                logger.warning(f"Screen {target_screen} not found, using screen 0")
+                target_screen = 0
+            target = screens[target_screen]
 
             # Move window using Xlib
             from Xlib import display as xlib_display
@@ -395,12 +310,20 @@ class BallTask(BaseTask):
             x_win.configure(x=target.x, y=target.y)
             d.sync()
             d.close()
+            logger.debug(f"Moved window to screen {target_screen} at ({target.x}, {target.y})")
+        except ImportError:
+            logger.info("Xlib not available - window positioning disabled")
         except Exception as e:
-            logger.warning(f"Could not move window to secondary: {e}")
+            logger.warning(f"Could not move window to screen {target_screen}: {e}")
 
     def setup(self):
         """Initialize PsychoPy window and ball task stimuli."""
         from psychopy import visual
+        from pyrtnf import config
+
+        # Get target screen from config
+        target_screen = config.PSYCHOPY_SCREEN
+        platform = config.get_platform()
 
         # Initialize PsychoPy log file
         self._psychopy_log_file = open(self._psychopy_log_path, 'w', newline='')
@@ -422,14 +345,13 @@ class BallTask(BaseTask):
         # Create minimal monitor to avoid "Monitor specification not found" warning
         mon = monitors.Monitor('neurofeedback')
 
-        # Platform-specific window creation for secondary monitor
-        import sys
-        if sys.platform == 'darwin':
+        # Platform-specific window creation
+        if platform == 'darwin':
             # macOS: screen parameter works directly
             self.win = visual.Window(
                 fullscr=self.fullscreen,
                 monitor=mon,
-                screen=1,
+                screen=target_screen,
                 units='height',
                 color='black',
                 allowGUI=False,
@@ -439,19 +361,19 @@ class BallTask(BaseTask):
             # Linux (including WSL2): Need Xlib workaround for Flet/XWayland
             import pyglet
             screens = pyglet.canvas.Display().get_screens()
-            target = screens[1] if len(screens) > 1 else screens[0]
+            target = screens[target_screen] if len(screens) > target_screen else screens[0]
 
             self.win = visual.Window(
                 fullscr=False,
                 size=(target.width, target.height),
                 monitor=mon,
-                screen=1,
+                screen=target_screen,
                 units='height',
                 color='black',
                 allowGUI=False,
                 waitBlanking=False,
             )
-            self._move_window_to_secondary()
+            self._move_window_to_secondary(target_screen)
 
         # Use default frame duration for display loop timing (prevents CPU spinning)
         # Movement is time-based (dt) so actual frame rate doesn't affect physics

@@ -1484,7 +1484,6 @@ class ParticipantWorkflowScreen:
             self.fd_plot = FDPlot(
                 n_volumes=n_volumes,
                 height=120,
-                threshold=0.5,
             )
 
             # Create task mirror for visual feedback display

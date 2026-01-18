@@ -58,7 +58,6 @@ from .feedback import run_feedback_session, get_next_run_number, get_slot_run_in
 from .preprocessing import preprocessing, collect_dicoms
 from .mask_extraction import mask_extraction_rest, coregister_2vol
 from .tasks import BaseTask, BallTask, ActivationSmoother, ActivationNormalizer
-from .tasks.ball import compute_hrf, compute_boxcar_task_regressor
 from .tasks.session import SessionState, RunInfo
 from .session import (
     # Configuration dataclasses
@@ -82,7 +81,16 @@ from .utils import (
     get_timing_data,
     save_timing_report,
     Timer,
+    # Platform checks
+    check_platform_requirements,
+    # Utilities
+    outputs_exist,
+    ProgressEmitter,
+    # HRF computation
+    compute_hrf,
+    compute_boxcar_task_regressor,
 )
+from . import config
 
 __all__ = [
     # Core functions
@@ -124,4 +132,11 @@ __all__ = [
     'get_timing_data',
     'save_timing_report',
     'Timer',
+    # Platform checks
+    'check_platform_requirements',
+    # Utilities
+    'outputs_exist',
+    'ProgressEmitter',
+    # Configuration
+    'config',
 ]

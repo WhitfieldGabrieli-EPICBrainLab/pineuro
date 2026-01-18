@@ -99,12 +99,13 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
         Path to the HTML file to open
     screen : int, optional
         Screen number to display browser on (0 = primary, 1 = secondary, etc.).
-        Defaults to 0 (primary screen).
+        Defaults to pyrtnf.config.QC_BROWSER_SCREEN.
     """
     import logging
-    import os
     import platform
     import subprocess
+
+    from . import config
 
     logger = logging.getLogger(__name__)
 
@@ -112,9 +113,9 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
         logger.warning(f"Cannot open HTML: file does not exist: {html_path}")
         return
 
-    # Use primary screen if not specified
+    # Use config default if not specified
     if screen is None:
-        screen = 0
+        screen = config.QC_BROWSER_SCREEN
 
     try:
         # Convert to file:// URL for cross-platform compatibility
@@ -124,8 +125,10 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
         webbrowser.open(file_url)
         logger.info(f"Opened QC report in browser: {html_path}")
 
-        # On Linux, attempt to position browser window on specified screen
-        if platform.system() == 'Linux' and screen != 0:
+        # On Linux X11, attempt to position browser window on specified screen
+        # Skip on WSL2 and Wayland where xrandr/wmctrl won't work correctly
+        if (platform.system() == 'Linux' and screen != 0
+                and not config.is_wsl() and not config.is_wayland()):
             try:
                 # Get screen geometry using xrandr to handle different monitor setups
                 result = subprocess.run(
@@ -179,7 +182,13 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
                 # xrandr or wmctrl not available - browser still opened successfully
                 logger.debug(f"Window positioning unavailable: {type(e).__name__}")
         elif screen != 0:
-            logger.debug(f"Window positioning not supported on {platform.system()}")
+            # Log why window positioning was skipped
+            if config.is_wsl():
+                logger.debug("Window positioning skipped (WSL2 detected)")
+            elif config.is_wayland():
+                logger.debug("Window positioning skipped (Wayland detected)")
+            else:
+                logger.debug(f"Window positioning not supported on {platform.system()}")
 
     except Exception as e:
         logger.warning(f"Failed to open HTML in browser: {e}")

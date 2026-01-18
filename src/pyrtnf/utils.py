@@ -170,6 +170,279 @@ def Timer(name: str, category: str = "general"):
         logger.info(f"[TIMING] {name}: {elapsed:.2f}s")
 
 # ==============================================================
+# Platform Compatibility Check
+# ==============================================================
+
+def check_platform_requirements() -> list[str]:
+    """Check platform requirements and return list of warnings/errors.
+
+    This function checks for required external tools (FSL, dcm2niix) and
+    platform-specific limitations that may affect pyrtnf functionality.
+
+    Returns
+    -------
+    list[str]
+        List of warning messages. Empty list if all requirements are met.
+
+    Examples
+    --------
+    >>> from pyrtnf.utils import check_platform_requirements
+    >>> warnings = check_platform_requirements()
+    >>> for warning in warnings:
+    ...     print(f"Warning: {warning}")
+    """
+    from . import config
+
+    warnings = []
+    platform = config.get_platform()
+
+    # Check FSL availability (required for preprocessing)
+    fsl_commands = ['mcflirt', 'bet', 'fslmaths']
+    fsl_missing = [cmd for cmd in fsl_commands if shutil.which(cmd) is None]
+    if fsl_missing:
+        if platform == 'windows':
+            warnings.append(
+                f"FSL not available on native Windows. Use WSL2 for preprocessing. "
+                f"Missing: {', '.join(fsl_missing)}"
+            )
+        else:
+            warnings.append(
+                f"FSL commands not found in PATH: {', '.join(fsl_missing)}. "
+                f"Preprocessing requires FSL. See: https://fsl.fmrib.ox.ac.uk/fsl/"
+            )
+
+    # Check dcm2niix availability (required for DICOM conversion)
+    if shutil.which('dcm2niix') is None:
+        warnings.append(
+            "dcm2niix not found in PATH. DICOM conversion requires dcm2niix. "
+            "Install via: apt install dcm2niix (Linux) or brew install dcm2niix (macOS)"
+        )
+
+    # Platform-specific warnings
+    if platform == 'wsl':
+        warnings.append(
+            "Running under WSL2: Multi-monitor PsychoPy display may not work correctly. "
+            "Single-monitor mode is recommended (pyrtnf.config.PSYCHOPY_SCREEN = 0)."
+        )
+
+    if platform == 'linux' and config.is_wayland():
+        warnings.append(
+            "Wayland display server detected. Some X11-based features (window positioning) "
+            "may not work. Consider using an X11/Xorg session for full compatibility."
+        )
+
+    if platform == 'windows':
+        warnings.append(
+            "Native Windows is not supported. FSL and ANTsPy are not available. "
+            "Please use WSL2 (Windows Subsystem for Linux) instead."
+        )
+
+    return warnings
+
+
+def outputs_exist(
+    outputs: Union[Path, List[Path], str, List[str]],
+    overwrite: bool = False
+) -> bool:
+    """Check if all outputs exist and overwrite is False.
+
+    This is a utility to standardize the common pattern of skipping
+    computation when outputs already exist.
+
+    Parameters
+    ----------
+    outputs : Path, str, or list of Path/str
+        Output file(s) to check for existence
+    overwrite : bool, default False
+        If True, always return False (outputs should be regenerated)
+
+    Returns
+    -------
+    bool
+        True if all outputs exist and overwrite=False, False otherwise
+
+    Examples
+    --------
+    >>> from pyrtnf.utils import outputs_exist
+    >>> if outputs_exist(output_path, overwrite=False):
+    ...     logger.info("Skipping - output exists")
+    ...     return output_path
+    """
+    if overwrite:
+        return False
+
+    if isinstance(outputs, (str, Path)):
+        outputs = [Path(outputs)]
+    else:
+        outputs = [Path(o) for o in outputs]
+
+    return all(p.exists() for p in outputs)
+
+
+class ProgressEmitter:
+    """Utility for emitting progress to both logger and optional callback.
+
+    This standardizes the common pattern of logging progress and optionally
+    calling a callback function for GUI updates.
+
+    Parameters
+    ----------
+    callback : callable, optional
+        Callback function with signature (step: str, detail: str) -> None
+    log : logging.Logger, optional
+        Logger to use. Defaults to module logger if not provided.
+
+    Examples
+    --------
+    >>> from pyrtnf.utils import ProgressEmitter
+    >>> emitter = ProgressEmitter(progress_callback, logger)
+    >>> emitter.emit("Step 1", "Processing files...")
+    >>> emitter.emit("Step 2")  # detail is optional
+    """
+
+    def __init__(
+        self,
+        callback: Optional[callable] = None,
+        log: Optional[logging.Logger] = None
+    ):
+        self._callback = callback
+        self._logger = log or logger
+
+    def emit(self, step: str, detail: str = "") -> None:
+        """Emit progress message to logger and callback.
+
+        Parameters
+        ----------
+        step : str
+            Step name or description
+        detail : str, optional
+            Additional detail about the step
+        """
+        if detail:
+            self._logger.info(f"{step}: {detail}")
+        else:
+            self._logger.info(step)
+
+        if self._callback:
+            self._callback(step, detail)
+
+
+# ==============================================================
+# HRF and Task Regressor Computation
+# ==============================================================
+
+def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
+    """Compute canonical double-gamma HRF (SPM-style).
+
+    Parameters
+    ----------
+    tr : float
+        Repetition time in seconds.
+    duration : float, optional
+        Duration of HRF in seconds. Default is 32s.
+
+    Returns
+    -------
+    hrf : ndarray
+        HRF sampled at TR intervals, normalized to peak at 1.0.
+
+    Notes
+    -----
+    Uses SPM canonical HRF parameters:
+    - Positive gamma: shape=6, scale=1 (peak ~5s)
+    - Negative gamma: shape=16, scale=1 (peak ~16s)
+    - Undershoot ratio: 1/6
+
+    Examples
+    --------
+    >>> from pyrtnf.utils import compute_hrf
+    >>> hrf = compute_hrf(tr=1.2)
+    >>> print(hrf.shape)  # (27,) for 32s duration at TR=1.2
+    """
+    from scipy.stats import gamma as gamma_dist
+
+    # Time points at TR intervals
+    t = np.arange(0, duration, tr)
+
+    # SPM canonical HRF parameters
+    # Positive response: gamma(6, 1) peaks at ~5s
+    # Undershoot: gamma(16, 1) peaks at ~16s
+    a1, b1 = 6.0, 1.0  # shape, scale for positive response
+    a2, b2 = 16.0, 1.0  # shape, scale for undershoot
+    c = 1.0 / 6.0  # undershoot ratio
+
+    # Double-gamma HRF
+    hrf = gamma_dist.pdf(t, a1, scale=b1) - c * gamma_dist.pdf(t, a2, scale=b2)
+
+    # Normalize to peak at 1.0
+    hrf = hrf / np.max(hrf)
+
+    return hrf.astype(np.float64)
+
+
+def compute_boxcar_task_regressor(
+    n_baseline: int,
+    n_volumes: int,
+    tr: float,
+) -> np.ndarray:
+    """Compute HRF-convolved boxcar task regressor.
+
+    Creates a task regressor where:
+    - Baseline period (0 to n_baseline-1): task = 0
+    - Active period (n_baseline onwards): task = 1 convolved with HRF
+
+    This is useful for block designs with a single baseline/active structure.
+
+    Parameters
+    ----------
+    n_baseline : int
+        Number of baseline volumes (task = 0).
+    n_volumes : int
+        Total number of volumes.
+    tr : float
+        Repetition time in seconds.
+
+    Returns
+    -------
+    regressor : ndarray, shape (n_volumes,)
+        Task regressor values for each volume.
+
+    Notes
+    -----
+    The convolution produces the characteristic HRF response shape:
+    - Stays at 0 during baseline
+    - Ramps up after baseline onset following HRF shape
+    - Reaches steady state (~1.0) after ~25-30s
+
+    Examples
+    --------
+    >>> from pyrtnf.utils import compute_boxcar_task_regressor
+    >>> regressor = compute_boxcar_task_regressor(n_baseline=25, n_volumes=150, tr=1.2)
+    >>> print(regressor.shape)  # (150,)
+    """
+    # Create boxcar: 0 during baseline, 1 during active period
+    boxcar = np.zeros(n_volumes, dtype=np.float64)
+    boxcar[n_baseline:] = 1.0
+
+    # Compute HRF kernel
+    hrf = compute_hrf(tr)
+
+    # Convolve boxcar with HRF
+    convolved = np.convolve(boxcar, hrf, mode='full')
+
+    # Trim to original length
+    regressor = convolved[:n_volumes]
+
+    # Normalize so steady-state is ~1.0 (divide by sum of HRF)
+    # This ensures the regressor reaches 1.0 after the HRF response settles
+    hrf_sum = np.sum(hrf)
+    if hrf_sum > 0:
+        regressor = regressor / hrf_sum
+
+    return regressor.astype(np.float64)
+
+
+# ==============================================================
 # Installation Check
 # ==============================================================
 
