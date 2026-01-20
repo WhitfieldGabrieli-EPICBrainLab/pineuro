@@ -11,6 +11,7 @@ This package contains reusable components and utilities for the GUI:
 - CollectionProgressPanel: Progress display for DICOM collection
 - RunSelectionDialog: Dialog for selecting runs for preprocessing
 - MaskSelectionDialog: Dialog for reviewing and customizing network masks
+- VisitSelectionDialog: Dialog for selecting/creating visits in multi-visit studies
 """
 
 from .pipeline_runner import PipelineRunner
@@ -22,6 +23,7 @@ from .qc_viewer import QCReportManager, open_qc_report
 from .collection_progress import CollectionProgressPanel
 from .run_selection_dialog import RunSelectionDialog, RunInfo
 from .mask_selection_dialog import MaskSelectionDialog, MaskReviewInfo
+from .visit_selection_dialog import VisitSelectionDialog
 
 __all__ = [
     "PipelineRunner",
@@ -39,4 +41,5 @@ __all__ = [
     "RunInfo",
     "MaskSelectionDialog",
     "MaskReviewInfo",
+    "VisitSelectionDialog",
 ]

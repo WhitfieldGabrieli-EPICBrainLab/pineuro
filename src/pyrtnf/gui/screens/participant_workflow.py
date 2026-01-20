@@ -61,6 +61,8 @@ class ParticipantWorkflowScreen:
         config_manager: ConfigManager,
         study_config: StudyConfig,
         participant_id: str,
+        visit_id: Optional[str] = None,
+        visit_config: Optional["VisitConfig"] = None,
         on_back=None,
     ):
         """Initialize the participant workflow screen.
@@ -70,25 +72,47 @@ class ParticipantWorkflowScreen:
             config_manager: ConfigManager instance
             study_config: Study configuration to use
             participant_id: Participant ID (e.g., "sub-01")
+            visit_id: Visit identifier (e.g., "ses-01"). None for single-visit mode.
+            visit_config: VisitConfig for new visits. None when continuing existing visit.
             on_back: Callback when back button is clicked
         """
         self.page = page
         self.config_manager = config_manager
         self.participant_id = participant_id
+        self.visit_id = visit_id
+        self.visit_config = visit_config
         self.on_back_callback = on_back
 
         # Create participant-specific base directory
-        # Modify study config to include participant ID in base_dir path
+        # Modify study config to include participant ID (and visit ID) in base_dir path
         self.study_config = study_config
         base_dir = Path(study_config.session_config["paths"]["base_dir"])
-        participant_base_dir = base_dir / participant_id
+
+        if visit_id:
+            # Multi-visit mode: base_dir/participant_id/visit_id/
+            participant_base_dir = base_dir / participant_id / visit_id
+        else:
+            # Single-visit mode: base_dir/participant_id/
+            participant_base_dir = base_dir / participant_id
 
         # Update the session config with participant-specific base directory
         self.study_config.session_config["paths"]["base_dir"] = str(participant_base_dir)
 
+        # Store visit config info in session config if provided
+        if visit_config:
+            self.study_config.session_config["visit"] = {
+                "visit_id": visit_config.visit_id,
+                "visit_number": visit_config.visit_number,
+                "mask_source": visit_config.mask_source,
+                "mask_source_visit": visit_config.mask_source_visit,
+                "localizer_enabled": visit_config.localizer_enabled,
+                "notes": visit_config.notes,
+            }
+
         # Create the participant directory if it doesn't exist
         participant_base_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Participant data directory: {participant_base_dir}")
+        visit_str = f" ({visit_id})" if visit_id else ""
+        logger.info(f"Participant data directory{visit_str}: {participant_base_dir}")
 
         # Initialize step statuses
         self.step_statuses: Dict[str, StepStatus] = {}
@@ -558,28 +582,46 @@ class ParticipantWorkflowScreen:
         twovol_initial_enabled = config["scan"].get("twovol_initial_enabled", True)
         twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
 
+        # Check if this is a mask-reuse visit
+        visit_config = config.get("visit", {})
+        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+
         # Build dynamic steps list
         steps = []
-        if twovol_initial_enabled:
-            steps.append("2vol_initial")
-        # Add rest runs dynamically
-        for i in range(1, n_localizer_runs + 1):
-            steps.append(f"rest_run_{i}")
-        steps.extend([
-            "preprocessing",
-            "mask_extraction",
-        ])
-        # Add coregistration only if initial 2vol is enabled
-        if twovol_initial_enabled:
-            steps.append("coregistration")
-        if twovol_realtime_enabled:
-            steps.extend(["2vol_realtime", "coregistration_realtime"])
-        steps.extend([
-            "transfer_1",
-            "feedback_1",
-            "feedback_2",
-            "transfer_2",
-        ])
+
+        if is_mask_reuse:
+            # Mask reuse mode: only need 2vol + coregistration + feedback
+            # Skip localizer, preprocessing, mask extraction
+            if twovol_realtime_enabled:
+                steps.extend(["2vol_realtime", "coregistration_realtime"])
+            steps.extend([
+                "transfer_1",
+                "feedback_1",
+                "feedback_2",
+                "transfer_2",
+            ])
+        else:
+            # Standard mode: full pipeline
+            if twovol_initial_enabled:
+                steps.append("2vol_initial")
+            # Add rest runs dynamically
+            for i in range(1, n_localizer_runs + 1):
+                steps.append(f"rest_run_{i}")
+            steps.extend([
+                "preprocessing",
+                "mask_extraction",
+            ])
+            # Add coregistration only if initial 2vol is enabled
+            if twovol_initial_enabled:
+                steps.append("coregistration")
+            if twovol_realtime_enabled:
+                steps.extend(["2vol_realtime", "coregistration_realtime"])
+            steps.extend([
+                "transfer_1",
+                "feedback_1",
+                "feedback_2",
+                "transfer_2",
+            ])
 
         for step in steps:
             self.step_statuses[step] = StepStatus.PENDING

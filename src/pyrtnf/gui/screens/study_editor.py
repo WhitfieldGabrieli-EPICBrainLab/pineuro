@@ -192,6 +192,12 @@ class StudyEditorScreen:
             hint_text="Shown as hint when starting a session (e.g., sub-001, sub-mindbpd001)",
         )
 
+        # Multi-visit mode toggle (Study tab)
+        self.multi_visit_enabled_checkbox = ft.Checkbox(
+            label="Enable Multiple Visits",
+            value=config.get("study", {}).get("multi_visit_enabled", False),
+        )
+
         # Simulator mode toggle (Study tab)
         self.simulator_enabled_checkbox = ft.Checkbox(
             label="Simulator Mode",
@@ -803,6 +809,16 @@ class StudyEditorScreen:
                     self.description_field,
                     self.example_participant_id_field,
                     ft.Divider(),
+                    ft.Text("Study Design", size=16, weight=ft.FontWeight.BOLD),
+                    self.multi_visit_enabled_checkbox,
+                    ft.Text(
+                        "When enabled, participants can have multiple visits (ses-01, ses-02, etc.). "
+                        "Masks from the first visit can be reused in subsequent visits.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    ft.Divider(),
                     ft.Text("Acquisition Mode", size=16, weight=ft.FontWeight.BOLD),
                     self.simulator_enabled_checkbox,
                     ft.Row([
@@ -1251,6 +1267,9 @@ class StudyEditorScreen:
 
     def _on_start_session(self, e):
         """Handle start session button click."""
+        from pathlib import Path
+        from ..components.visit_selection_dialog import VisitSelectionDialog
+
         logger.info("Start Session clicked")
 
         # Get example participant ID from current form value (not saved config)
@@ -1302,9 +1321,29 @@ class StudyEditorScreen:
 
             logger.info(f"Starting session for participant: {participant_id}")
 
-            # Call the start session callback
-            if self.on_start_session_callback:
-                self.on_start_session_callback(participant_id)
+            # Check if multi-visit mode is enabled (use checkbox value, not saved config)
+            multi_visit_enabled = self.multi_visit_enabled_checkbox.value
+
+            if multi_visit_enabled:
+                # Get base directory from config
+                base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+
+                # Show visit selection dialog
+                def on_visit_selected(visit_id, visit_config):
+                    if self.on_start_session_callback:
+                        self.on_start_session_callback(participant_id, visit_id, visit_config)
+
+                visit_dialog = VisitSelectionDialog(
+                    page=self.page,
+                    participant_id=participant_id,
+                    base_dir=base_dir,
+                    on_select=on_visit_selected,
+                )
+                visit_dialog.show()
+            else:
+                # Single-visit mode - go directly to workflow
+                if self.on_start_session_callback:
+                    self.on_start_session_callback(participant_id, None, None)
 
         def cancel_start(e):
             self.page.pop_dialog()
@@ -1312,7 +1351,7 @@ class StudyEditorScreen:
         # Add actions to dialog
         dialog.actions = [
             ft.TextButton("Cancel", on_click=cancel_start),
-            ft.FilledButton("Start", icon=ft.icons.Icons.PLAY_ARROW, on_click=start_session),
+            ft.FilledButton("Start", icon=ft.Icons.PLAY_ARROW, on_click=start_session),
         ]
 
         self.page.show_dialog(dialog)
@@ -1332,6 +1371,11 @@ class StudyEditorScreen:
 
         # Update example participant ID
         config["paths"]["example_participant_id"] = self.example_participant_id_field.value.strip() or "sub-001"
+
+        # Update study design settings
+        if "study" not in config:
+            config["study"] = {}
+        config["study"]["multi_visit_enabled"] = self.multi_visit_enabled_checkbox.value
 
         try:
             # Localizer parameters

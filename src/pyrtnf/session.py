@@ -7,43 +7,77 @@ This module provides type-safe configuration dataclasses and high-level orchestr
 functions for running neurofeedback sessions. It separates configuration from execution,
 making it suitable for both scripted usage and future GUI integration.
 
+Multi-Visit Support
+------------------
+The module supports longitudinal studies with multiple visits per participant:
+- Single-visit mode: Traditional layout with all data in participant directory
+- Multi-visit mode: Data organized in ses-XX subdirectories
+
+For multi-visit studies, masks can be:
+- Computed fresh each visit (mask_source='compute')
+- Reused from a previous visit (mask_source='reuse')
+
 Components
 ----------
 Configuration Dataclasses:
-- PathConfig: Paths for session directories
+- PathConfig: Paths for session directories (with optional visit_id)
 - ScanConfig: Scanner/acquisition parameters
 - MaskConfig: Mask extraction parameters
 - FeedbackConfig: Feedback session parameters
 - TaskConfig: BallTask parameters
+- VisitConfig: Visit-level configuration for multi-visit studies
 - SessionConfig: Top-level config combining all above
 
 Orchestration Functions:
 - setup_session(): Run all setup steps (collection, preprocessing, mask extraction)
+- setup_visit_with_reused_masks(): Set up visit reusing masks from another visit
 - run_single_task(): Run one transfer/feedback task
 - run_full_session(): Run complete workflow (Transfer -> Feedback x N -> Transfer)
 - run_next_task(): Run next task in sequence (for incremental progression)
 - reset_session_state(): Reset session for new participant
 
+Multi-Visit Support Functions:
+- resolve_mask_source(): Get mask paths based on visit configuration
+- detect_existing_visits(): List visits for a participant
+- next_visit_id(): Get next visit ID (ses-01, ses-02, etc.)
+- is_single_visit_data(): Check if data uses single-visit layout
+- migrate_to_multi_visit(): Convert single-visit to multi-visit structure
+
 Workflow
 --------
-1. Create or load SessionConfig
+Single-visit (traditional):
+1. Create SessionConfig with PathConfig(visit_id=None)
 2. Call setup_session() to prepare masks
 3. Call run_next_task() repeatedly to progress through session
 
+Multi-visit with fresh masks:
+1. Create SessionConfig with PathConfig(visit_id='ses-01') and VisitConfig(mask_source='compute')
+2. Call setup_session() for full pipeline
+3. Run feedback session
+
+Multi-visit with mask reuse:
+1. Create SessionConfig with PathConfig(visit_id='ses-02') and
+   VisitConfig(mask_source='reuse', mask_source_visit='ses-01')
+2. Call setup_session() - only runs 2vol collection + coregistration
+3. Run feedback session
+
 Dependencies
 ------------
-dataclasses, pathlib, json, yaml (optional), logging
+dataclasses, pathlib, json, shutil, datetime, yaml (optional), logging
 
 Notes
 -----
 This module works alongside tasks/session.py which contains SessionState for
 persisting task-level state (hits, scale factors) between runs.
+Session state resets each visit (visits are independent).
 """
 
 import json
 import logging
 import re
+import shutil
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -55,51 +89,107 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 @dataclass
+class VisitConfig:
+    """Visit-level configuration for multi-visit studies.
+
+    Parameters
+    ----------
+    visit_id : str
+        Visit identifier (e.g., 'ses-01', 'ses-02')
+    visit_number : int
+        1-indexed visit number
+    mask_source : str
+        How masks are obtained: 'compute' (run localizer + extraction)
+        or 'reuse' (reuse from another visit)
+    mask_source_visit : str, optional
+        If mask_source='reuse', the visit ID to copy masks from (e.g., 'ses-01')
+    localizer_enabled : bool
+        Whether to run localizer (resting-state) collection
+    notes : str
+        Optional notes about this visit
+    created : str
+        ISO timestamp of visit creation
+    """
+    visit_id: str
+    visit_number: int
+    mask_source: str = "compute"  # "compute" or "reuse"
+    mask_source_visit: Optional[str] = None
+    localizer_enabled: bool = True
+    notes: str = ""
+    created: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def __post_init__(self):
+        """Validate configuration."""
+        if self.mask_source not in ("compute", "reuse"):
+            raise ValueError(f"mask_source must be 'compute' or 'reuse', got '{self.mask_source}'")
+        if self.mask_source == "reuse" and not self.mask_source_visit:
+            raise ValueError("mask_source_visit is required when mask_source='reuse'")
+        if self.mask_source == "reuse":
+            # Disable localizer when reusing masks
+            self.localizer_enabled = False
+
+
+@dataclass
 class PathConfig:
     """Path configuration for session directories.
 
     Parameters
     ----------
     base_dir : Path
-        Base directory for all session data
+        Base directory for all session data (study-level, not participant-specific)
     participant_id : str
         Participant identifier (e.g., 'sub-01')
+    visit_id : str, optional
+        Visit identifier (e.g., 'ses-01'). If None, uses single-visit mode
+        (backward compatible with existing data).
     session_dir : Path, optional
-        Directory for session state and feedback outputs. Defaults to base_dir/feedback
+        Directory for session state and feedback outputs. Defaults to participant_visit_dir/feedback
     preprocessing_dir : Path, optional
-        Directory for preprocessing outputs. Defaults to base_dir/preprocessing
+        Directory for preprocessing outputs. Defaults to participant_visit_dir/preprocessing
     mask_extraction_dir : Path, optional
-        Directory for mask extraction outputs. Defaults to base_dir/mask_extraction
+        Directory for mask extraction outputs. Defaults to participant_visit_dir/mask_extraction
     feedback_output_dir : Path, optional
         Directory for feedback run outputs. Defaults to session_dir/02_feedback_output
     collection_dir : Path, optional
-        Directory for DICOM collection. Defaults to base_dir/collection
+        Directory for DICOM collection. Defaults to participant_visit_dir/collection
+    mask_source_dir : Path, optional
+        If reusing masks from another visit, the source mask_extraction directory
     """
     base_dir: Path
     participant_id: str
+    visit_id: Optional[str] = None  # None = single-visit mode (backward compat)
     session_dir: Optional[Path] = None
     preprocessing_dir: Optional[Path] = None
     mask_extraction_dir: Optional[Path] = None
     feedback_output_dir: Optional[Path] = None
     collection_dir: Optional[Path] = None
+    mask_source_dir: Optional[Path] = None  # For mask reuse across visits
 
     def __post_init__(self):
         """Convert all paths to Path objects and set defaults for optional directories."""
         self.base_dir = Path(self.base_dir)
 
-        # Set default paths relative to base_dir if not provided
+        # Compute participant + visit directory
+        if self.visit_id:
+            # Multi-visit mode: base_dir/participant_id/visit_id/
+            self._participant_visit_dir = self.base_dir / self.participant_id / self.visit_id
+        else:
+            # Single-visit mode (backward compatible): base_dir/participant_id/
+            self._participant_visit_dir = self.base_dir / self.participant_id
+
+        # Set default paths relative to participant_visit_dir if not provided
         if self.session_dir is None:
-            self.session_dir = self.base_dir / "feedback"
+            self.session_dir = self._participant_visit_dir / "feedback"
         else:
             self.session_dir = Path(self.session_dir)
 
         if self.preprocessing_dir is None:
-            self.preprocessing_dir = self.base_dir / "preprocessing"
+            self.preprocessing_dir = self._participant_visit_dir / "preprocessing"
         else:
             self.preprocessing_dir = Path(self.preprocessing_dir)
 
         if self.mask_extraction_dir is None:
-            self.mask_extraction_dir = self.base_dir / "mask_extraction"
+            self.mask_extraction_dir = self._participant_visit_dir / "mask_extraction"
         else:
             self.mask_extraction_dir = Path(self.mask_extraction_dir)
 
@@ -109,9 +199,22 @@ class PathConfig:
             self.feedback_output_dir = Path(self.feedback_output_dir)
 
         if self.collection_dir is None:
-            self.collection_dir = self.base_dir / "collection"
+            self.collection_dir = self._participant_visit_dir / "collection"
         else:
             self.collection_dir = Path(self.collection_dir)
+
+        if self.mask_source_dir is not None:
+            self.mask_source_dir = Path(self.mask_source_dir)
+
+    @property
+    def participant_visit_dir(self) -> Path:
+        """Return the participant + visit directory."""
+        return self._participant_visit_dir
+
+    @property
+    def is_multi_visit(self) -> bool:
+        """Check if this is a multi-visit configuration."""
+        return self.visit_id is not None
 
 
 @dataclass
@@ -341,21 +444,36 @@ class SessionConfig:
         Feedback session parameters
     task : TaskConfig
         BallTask parameters
+    visit : VisitConfig, optional
+        Visit-specific configuration for multi-visit studies.
+        If None, uses single-visit mode (backward compatible).
 
     Examples
     --------
+    >>> # Single-visit mode (backward compatible)
     >>> config = SessionConfig(
-    ...     paths=PathConfig(base_dir="/data/sub-01", participant_id="sub-01"),
+    ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01"),
     ...     scan=ScanConfig(tr=1.2, feedback_dicoms="/data/dicoms/feedback"),
     ... )
-    >>> config.to_yaml("/data/sub-01/config.yaml")
-    >>> config = SessionConfig.from_yaml("/data/sub-01/config.yaml")
+
+    >>> # Multi-visit mode
+    >>> config = SessionConfig(
+    ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", visit_id="ses-01"),
+    ...     visit=VisitConfig(visit_id="ses-01", visit_number=1, mask_source="compute"),
+    ... )
+
+    >>> # Multi-visit with mask reuse
+    >>> config = SessionConfig(
+    ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", visit_id="ses-02"),
+    ...     visit=VisitConfig(visit_id="ses-02", visit_number=2, mask_source="reuse", mask_source_visit="ses-01"),
+    ... )
     """
     paths: PathConfig
     scan: ScanConfig = field(default_factory=ScanConfig)
     mask: MaskConfig = field(default_factory=MaskConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     task: TaskConfig = field(default_factory=TaskConfig)
+    visit: Optional[VisitConfig] = None
 
     @classmethod
     def from_yaml(cls, path: Path) -> "SessionConfig":
@@ -394,7 +512,10 @@ class SessionConfig:
         task_data = data.get('task', {})
         task = TaskConfig(**task_data) if task_data else TaskConfig()
 
-        return cls(paths=paths, scan=scan, mask=mask, feedback=feedback, task=task)
+        visit_data = data.get('visit', None)
+        visit = VisitConfig(**visit_data) if visit_data else None
+
+        return cls(paths=paths, scan=scan, mask=mask, feedback=feedback, task=task, visit=visit)
 
     def to_yaml(self, path: Path) -> None:
         """Save configuration to YAML file."""
@@ -415,13 +536,16 @@ class SessionConfig:
 
     def _to_dict(self) -> dict:
         """Convert to dictionary with Path objects as strings."""
-        return {
+        result = {
             'paths': _path_to_str(asdict(self.paths)),
             'scan': _path_to_str(asdict(self.scan)),
             'mask': _path_to_str(asdict(self.mask)),
             'feedback': _path_to_str(asdict(self.feedback)),
             'task': _path_to_str(asdict(self.task)),
         }
+        if self.visit is not None:
+            result['visit'] = asdict(self.visit)
+        return result
 
     def validate(self) -> list[str]:
         """Validate configuration, returning list of error messages.
@@ -455,7 +579,7 @@ class SessionConfig:
 # Helper Functions
 # =============================================================================
 
-def ref_file_path(config: SessionConfig, task: str = "rest") -> Path:
+def ref_file_path(config: SessionConfig, task: str = "rest", source_visit: Optional[str] = None) -> Path:
     """Return the expected BOLD reference path based on config.
 
     Parameters
@@ -464,13 +588,20 @@ def ref_file_path(config: SessionConfig, task: str = "rest") -> Path:
         Session configuration
     task : str
         Task name (default: 'rest')
+    source_visit : str, optional
+        If specified, return ref path from this visit instead of current visit
 
     Returns
     -------
     Path
         Path to BOLD reference file
     """
-    return config.paths.preprocessing_dir / f"{config.paths.participant_id}_task-{task}_boldref.nii.gz"
+    if source_visit:
+        # Get ref from a different visit
+        preprocessing_dir = config.paths.base_dir / config.paths.participant_id / source_visit / "preprocessing"
+    else:
+        preprocessing_dir = config.paths.preprocessing_dir
+    return preprocessing_dir / f"{config.paths.participant_id}_task-{task}_boldref.nii.gz"
 
 
 def get_mask_run_number(mask_files: list[Path]) -> Optional[int]:
@@ -516,6 +647,186 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
                 if match:
                     max_run = max(max_run, int(match.group(1)))
     return max_run + 1
+
+
+# =============================================================================
+# Multi-Visit Support Functions
+# =============================================================================
+
+def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
+    """Resolve mask file paths based on visit configuration.
+
+    For visits that compute their own masks, returns paths from the current visit's
+    mask_extraction directory. For visits that reuse masks from another visit,
+    returns paths from the source visit.
+
+    Parameters
+    ----------
+    config : SessionConfig
+        Session configuration
+
+    Returns
+    -------
+    tuple[list[Path], Path]
+        (mask_files, ref_file) where mask_files are thresholded network masks
+        and ref_file is the BOLD reference from preprocessing
+    """
+    if config.visit is None or config.visit.mask_source == "compute":
+        # Masks computed in this visit
+        mask_dir = config.paths.mask_extraction_dir / "03_masks"
+        mask_files = sorted(mask_dir.glob("*_thr.nii.gz")) if mask_dir.exists() else []
+        ref = ref_file_path(config)
+        return (mask_files, ref)
+    elif config.visit.mask_source == "reuse":
+        # Masks from another visit
+        source_visit = config.visit.mask_source_visit
+        source_mask_dir = (
+            config.paths.base_dir / config.paths.participant_id /
+            source_visit / "mask_extraction" / "03_masks"
+        )
+        mask_files = sorted(source_mask_dir.glob("*_thr.nii.gz")) if source_mask_dir.exists() else []
+        ref = ref_file_path(config, source_visit=source_visit)
+        return (mask_files, ref)
+    else:
+        raise ValueError(f"Unknown mask_source: {config.visit.mask_source}")
+
+
+def is_single_visit_data(participant_dir: Path) -> bool:
+    """Check if participant data uses single-visit layout.
+
+    Single-visit layout has mask_extraction/preprocessing directly in participant dir.
+    Multi-visit layout has ses-* subdirectories.
+
+    Parameters
+    ----------
+    participant_dir : Path
+        Path to participant directory
+
+    Returns
+    -------
+    bool
+        True if single-visit layout, False if multi-visit
+    """
+    has_direct_masks = (participant_dir / "mask_extraction").exists()
+    has_visit_dirs = any(
+        d.name.startswith("ses-")
+        for d in participant_dir.iterdir()
+        if d.is_dir()
+    ) if participant_dir.exists() else False
+    return has_direct_masks and not has_visit_dirs
+
+
+def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict]:
+    """Detect existing visit directories for a participant.
+
+    Parameters
+    ----------
+    base_dir : Path
+        Study base directory
+    participant_id : str
+        Participant identifier
+
+    Returns
+    -------
+    list[dict]
+        List of visit info dicts with keys:
+        - visit_id: str or None (None for single-visit mode)
+        - has_masks: bool
+        - has_feedback: bool
+        - masks_approved: bool
+    """
+    participant_dir = base_dir / participant_id
+    visits = []
+
+    if not participant_dir.exists():
+        return visits
+
+    # Look for ses-* directories (multi-visit)
+    for entry in sorted(participant_dir.iterdir()):
+        if entry.is_dir() and entry.name.startswith("ses-"):
+            visit_info = {
+                "visit_id": entry.name,
+                "has_masks": (entry / "mask_extraction" / "03_masks").exists(),
+                "has_feedback": (entry / "feedback" / "session_state.json").exists(),
+                "masks_approved": (entry / "mask_extraction" / "03_masks" / ".masks_approved").exists(),
+            }
+            visits.append(visit_info)
+
+    # Also check for single-visit mode (no ses-* directory)
+    if is_single_visit_data(participant_dir):
+        visits.insert(0, {
+            "visit_id": None,  # Single-visit mode
+            "has_masks": (participant_dir / "mask_extraction" / "03_masks").exists(),
+            "has_feedback": (participant_dir / "feedback" / "session_state.json").exists(),
+            "masks_approved": (participant_dir / "mask_extraction" / "03_masks" / ".masks_approved").exists(),
+        })
+
+    return visits
+
+
+def next_visit_id(base_dir: Path, participant_id: str) -> str:
+    """Get the next visit ID for a participant.
+
+    Parameters
+    ----------
+    base_dir : Path
+        Study base directory
+    participant_id : str
+        Participant identifier
+
+    Returns
+    -------
+    str
+        Next visit ID (e.g., 'ses-01', 'ses-02')
+    """
+    visits = detect_existing_visits(base_dir, participant_id)
+    # Filter to only multi-visit entries (those with actual visit_id)
+    multi_visits = [v for v in visits if v["visit_id"] is not None]
+    next_num = len(multi_visits) + 1
+    return f"ses-{next_num:02d}"
+
+
+def migrate_to_multi_visit(
+    participant_dir: Path,
+    target_visit_id: str = "ses-01",
+) -> Path:
+    """Migrate single-visit data to multi-visit structure.
+
+    Moves existing data from participant directory into a visit subdirectory.
+
+    Parameters
+    ----------
+    participant_dir : Path
+        Path to participant directory with single-visit data
+    target_visit_id : str
+        Visit ID to migrate data to (default: 'ses-01')
+
+    Returns
+    -------
+    Path
+        Path to the new visit directory
+
+    Raises
+    ------
+    ValueError
+        If participant already uses multi-visit structure
+    """
+    participant_dir = Path(participant_dir)
+
+    if not is_single_visit_data(participant_dir):
+        raise ValueError("Participant already uses multi-visit structure or has no data")
+
+    target_dir = participant_dir / target_visit_id
+    target_dir.mkdir(exist_ok=True)
+
+    # Move standard directories
+    for dirname in ["collection", "preprocessing", "mask_extraction", "feedback", "qc"]:
+        src = participant_dir / dirname
+        if src.exists():
+            shutil.move(str(src), str(target_dir / dirname))
+
+    logger.info(f"Migrated {participant_dir} to {target_dir}")
+    return target_dir
 
 
 # =============================================================================
@@ -768,6 +1079,90 @@ def run_coregistration(
     )
 
 
+def setup_visit_with_reused_masks(
+    config: SessionConfig,
+    twovol_dicoms: Path,
+    overwrite: bool = False,
+) -> list[Path]:
+    """Set up a visit that reuses masks from a previous visit.
+
+    This is used when config.visit.mask_source='reuse'. Only collects 2vol
+    and coregisters masks from the source visit - skips localizer, preprocessing,
+    and mask extraction.
+
+    Parameters
+    ----------
+    config : SessionConfig
+        Session configuration with visit.mask_source='reuse'
+    twovol_dicoms : Path
+        Path to collected 2vol DICOMs for this visit
+    overwrite : bool
+        Whether to overwrite existing coregistration outputs
+
+    Returns
+    -------
+    list[Path]
+        Coregistered mask files in current visit's feedback/01_2vol/masks/
+    """
+    from .mask_extraction import coregister_2vol
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("MASK REUSE: Coregistering masks from previous visit")
+    logger.info("=" * 60)
+
+    if config.visit is None or config.visit.mask_source != "reuse":
+        raise ValueError("setup_visit_with_reused_masks requires config.visit.mask_source='reuse'")
+
+    source_visit = config.visit.mask_source_visit
+    logger.info(f"Source visit: {source_visit}")
+
+    # Resolve source masks and reference
+    source_masks, source_ref = resolve_mask_source(config)
+
+    if not source_masks:
+        raise FileNotFoundError(
+            f"No masks found in source visit {source_visit}. "
+            f"Expected masks in: {config.paths.base_dir / config.paths.participant_id / source_visit / 'mask_extraction' / '03_masks'}"
+        )
+
+    if not source_ref.exists():
+        raise FileNotFoundError(
+            f"Reference file not found in source visit {source_visit}: {source_ref}"
+        )
+
+    logger.info(f"Found {len(source_masks)} masks from {source_visit}")
+    logger.info(f"Reference file: {source_ref}")
+
+    # Coregister source masks to current visit's 2vol
+    # Output goes to session_dir (feedback/) instead of mask_extraction_dir
+    coreg_masks = coregister_2vol(
+        participant_id=config.paths.participant_id,
+        root_dir=str(config.paths.session_dir),  # feedback/ directory
+        input_dicom=str(twovol_dicoms),
+        network_files=source_masks,
+        ref_file=source_ref,
+        output_subdir="01_2vol",
+        overwrite=overwrite,
+    )
+
+    # Copy mask_selections.json from source visit for reference
+    source_selections = source_masks[0].parent / "mask_selections.json"
+    dest_dir = config.paths.session_dir / "01_2vol"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    if source_selections.exists():
+        dest_selections = dest_dir / "mask_selections.json"
+        shutil.copy2(source_selections, dest_selections)
+        logger.info(f"Copied mask selections from source visit")
+
+    logger.info("")
+    logger.info("Mask reuse complete! Coregistered masks ready for feedback:")
+    for f in coreg_masks:
+        logger.info(f"  {f}")
+
+    return coreg_masks
+
+
 def setup_session(
     config: SessionConfig,
     overwrite: bool = False,
@@ -776,7 +1171,9 @@ def setup_session(
 ) -> list[Path]:
     """Run all setup steps: collection, preprocessing, mask extraction, coregistration.
 
-    This should be run once per participant before the feedback session.
+    This should be run once per participant/visit before the feedback session.
+    For visits with mask_source='reuse', skips localizer/preprocessing/extraction
+    and only runs 2vol collection + coregistration.
 
     Parameters
     ----------
@@ -799,6 +1196,32 @@ def setup_session(
     logger.info("=" * 60)
     logger.info("SESSION SETUP")
     logger.info("=" * 60)
+
+    # Check if this is a mask-reuse visit
+    if config.visit and config.visit.mask_source == "reuse":
+        logger.info(f"Visit {config.visit.visit_id}: Reusing masks from {config.visit.mask_source_visit}")
+
+        # Only need 2vol collection for mask reuse
+        if skip_collection:
+            logger.info("Skipping 2vol collection (using source DICOMs directly)")
+            twovol_dicoms = config.scan.twovol_realtime_dicoms or config.scan.twovol_dicoms
+        else:
+            twovol_list = run_dicom_collection(
+                config,
+                use_simulator=use_simulator,
+                task_name="2vol",
+                source_dirs=[config.scan.twovol_realtime_dicoms or config.scan.twovol_dicoms],
+                n_volumes_list=[config.scan.twovol_n_volumes],
+                start_run=1,
+                max_runs=1,
+            )
+            twovol_dicoms = twovol_list[0]
+
+        return setup_visit_with_reused_masks(config, twovol_dicoms, overwrite=overwrite)
+
+    # Standard setup: full pipeline (compute masks)
+    if config.visit:
+        logger.info(f"Visit {config.visit.visit_id}: Computing new masks")
 
     # Step 0: Initial 2vol (pre-scan positioning check)
     if skip_collection:

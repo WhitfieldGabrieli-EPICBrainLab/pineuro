@@ -67,12 +67,20 @@ from .session import (
     MaskConfig,
     FeedbackConfig,
     TaskConfig,
+    VisitConfig,
     # Orchestration functions
     setup_session,
     run_single_task,
     run_full_session,
     run_next_task,
     reset_session_state,
+    # Multi-visit support functions
+    resolve_mask_source,
+    detect_existing_visits,
+    next_visit_id,
+    is_single_visit_data,
+    migrate_to_multi_visit,
+    setup_visit_with_reused_masks,
 )
 from .utils import (
     # Timing functions
@@ -124,12 +132,20 @@ __all__ = [
     'MaskConfig',
     'FeedbackConfig',
     'TaskConfig',
+    'VisitConfig',
     # Orchestration functions
     'setup_session',
     'run_single_task',
     'run_full_session',
     'run_next_task',
     'reset_session_state',
+    # Multi-visit support functions
+    'resolve_mask_source',
+    'detect_existing_visits',
+    'next_visit_id',
+    'is_single_visit_data',
+    'migrate_to_multi_visit',
+    'setup_visit_with_reused_masks',
     # Timing functions
     'enable_timing',
     'disable_timing',

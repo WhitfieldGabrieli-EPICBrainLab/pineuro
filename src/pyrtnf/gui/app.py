@@ -229,6 +229,9 @@ class PyrtnfApp:
         Args:
             study_name: Name of the study to start
         """
+        from pathlib import Path
+        from .components.visit_selection_dialog import VisitSelectionDialog
+
         logger.info(f"Starting session for study: {study_name}")
 
         # Load study to get example participant ID
@@ -260,8 +263,27 @@ class PyrtnfApp:
 
             self.page.pop_dialog()
 
-            # Start workflow with already-loaded study config
-            self.show_participant_workflow(study_config, participant_id)
+            # Check if multi-visit mode is enabled for this study
+            multi_visit_enabled = study_config.session_config.get("study", {}).get("multi_visit_enabled", False)
+
+            if multi_visit_enabled:
+                # Get base directory from config
+                base_dir = Path(study_config.session_config["paths"]["base_dir"])
+
+                # Show visit selection dialog
+                def on_visit_selected(visit_id, visit_config):
+                    self.show_participant_workflow(study_config, participant_id, visit_id, visit_config)
+
+                visit_dialog = VisitSelectionDialog(
+                    page=self.page,
+                    participant_id=participant_id,
+                    base_dir=base_dir,
+                    on_select=on_visit_selected,
+                )
+                visit_dialog.show()
+            else:
+                # Single-visit mode - go directly to workflow
+                self.show_participant_workflow(study_config, participant_id)
 
         def cancel_start(e):
             self.page.pop_dialog()
@@ -292,7 +314,7 @@ class PyrtnfApp:
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=cancel_start),
-                ft.FilledButton("Start", icon=ft.icons.Icons.PLAY_ARROW, on_click=start_session),
+                ft.FilledButton("Start", icon=ft.Icons.PLAY_ARROW, on_click=start_session),
             ],
         )
 
@@ -371,8 +393,8 @@ class PyrtnfApp:
             study_config=self.current_study,
             on_cancel=lambda: self.show_study_manager(),
             on_save=lambda: self.show_study_manager(),
-            on_start_session=lambda participant_id: self.show_participant_workflow(
-                self.current_study, participant_id
+            on_start_session=lambda participant_id, visit_id=None, visit_config=None: self.show_participant_workflow(
+                self.current_study, participant_id, visit_id, visit_config
             )
         )
 
@@ -380,16 +402,25 @@ class PyrtnfApp:
         self.page.add(editor.build())
         self.page.update()
 
-    def show_participant_workflow(self, study_config: StudyConfig, participant_id: str):
+    def show_participant_workflow(
+        self,
+        study_config: StudyConfig,
+        participant_id: str,
+        visit_id: str = None,
+        visit_config: "VisitConfig" = None,
+    ):
         """Show the participant workflow screen.
 
         Args:
             study_config: Study configuration to use
             participant_id: Participant ID
+            visit_id: Visit identifier (e.g., 'ses-01'). None for single-visit mode.
+            visit_config: VisitConfig for new visits. None when continuing existing visit.
         """
         from .screens.participant_workflow import ParticipantWorkflowScreen
 
-        logger.info(f"Navigating to Participant Workflow (participant: {participant_id})")
+        visit_str = f", visit: {visit_id}" if visit_id else ""
+        logger.info(f"Navigating to Participant Workflow (participant: {participant_id}{visit_str})")
 
         self.current_study = study_config
 
@@ -402,6 +433,8 @@ class PyrtnfApp:
             config_manager=self.config_manager,
             study_config=study_config,
             participant_id=participant_id,
+            visit_id=visit_id,
+            visit_config=visit_config,
             on_back=lambda: self.show_study_manager(),
         )
 
