@@ -12,6 +12,13 @@ SessionState : Persistent state management for multi-run sessions
 ActivationSmoother : Exponential moving average smoother
 ActivationNormalizer : Percentile-based activation normalizer
 
+Task Designs
+------------
+TaskDesign : Abstract base class for GLM task designs
+BlockDesign : Block design with baseline and active periods
+NuisanceOnlyDesign : No task regressors (resting state)
+EventRelatedDesign : Event-related design with discrete onsets
+
 Task Registry
 -------------
 TaskMetadata : Metadata describing a task's configurable parameters
@@ -28,6 +35,12 @@ See examples/run_feedback_with_task.py for complete integration example.
 from .base import BaseTask
 from .session import SessionState
 from .utils import ActivationSmoother, ActivationNormalizer
+from .designs import (
+    TaskDesign,
+    BlockDesign,
+    NuisanceOnlyDesign,
+    EventRelatedDesign,
+)
 from .task_registry import (
     TaskMetadata,
     TaskParameter,
@@ -35,20 +48,36 @@ from .task_registry import (
     get_task_metadata,
     list_available_tasks,
 )
+from .factory import (
+    create_task,
+    register_task_class,
+    get_registered_task_ids,
+)
 
 # Import tasks to trigger auto-registration
 # Task modules register themselves via register_task() at import time
 from .ball import BallTask  # Registers "ball" task
 
 __all__ = [
+    # Base classes
     'BaseTask',
     'BallTask',
     'SessionState',
     'ActivationSmoother',
     'ActivationNormalizer',
+    # Task designs
+    'TaskDesign',
+    'BlockDesign',
+    'NuisanceOnlyDesign',
+    'EventRelatedDesign',
+    # Task registry
     'TaskMetadata',
     'TaskParameter',
     'register_task',
     'get_task_metadata',
     'list_available_tasks',
+    # Task factory
+    'create_task',
+    'register_task_class',
+    'get_registered_task_ids',
 ]

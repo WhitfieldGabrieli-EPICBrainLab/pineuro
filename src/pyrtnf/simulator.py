@@ -148,15 +148,17 @@ class DicomSimulator:
         self.delay = self.tr / self.speed
         logger.info(f"Effective delay: {self.delay:.3f}s (speed={self.speed}x)")
     
-    def _sleep_until_deadline(self, deadline: float) -> float:
+    def _sleep_until_deadline(self, deadline: float, stop_event=None) -> float:
         """
         Sleep until the specified deadline time.
-        
+
         Parameters
         ----------
         deadline : float
             Absolute time (from time.time()) to sleep until.
-            
+        stop_event : threading.Event, optional
+            If provided, check this event periodically and return early if set.
+
         Returns
         -------
         float
@@ -165,7 +167,17 @@ class DicomSimulator:
         now = time.time()
         sleep_duration = deadline - now
         if sleep_duration > 0:
-            time.sleep(sleep_duration)
+            if stop_event is not None:
+                # Sleep in short intervals to check stop_event
+                interval = 0.1  # Check every 100ms
+                while sleep_duration > 0:
+                    if stop_event.is_set():
+                        return 0.0
+                    chunk = min(interval, sleep_duration)
+                    time.sleep(chunk)
+                    sleep_duration -= chunk
+            else:
+                time.sleep(sleep_duration)
             return sleep_duration
         else:
             # Deadline already passed - we're running behind
@@ -193,14 +205,14 @@ class DicomSimulator:
             shutil.rmtree(self.target_dir)
             logger.info(f"Deleted target directory: {self.target_dir}")
 
-    def copy_volumes_iter(self, n_volumes: Optional[int] = None):
+    def copy_volumes_iter(self, n_volumes: Optional[int] = None, stop_event=None):
         """
         Generator that copies volumes one at a time, yielding after each.
 
         This method is designed for integration with the feedback coordinator,
         allowing the simulator to run in the same thread/process while yielding
         control between volume copies.
-        
+
         Uses deadline-based timing: each volume has an expected arrival time,
         and we sleep until that deadline rather than sleeping a fixed duration.
         This ensures consistent TR intervals regardless of copy operation duration.
@@ -209,6 +221,8 @@ class DicomSimulator:
         ----------
         n_volumes : int, optional
             Number of volumes to simulate. If None, simulates all available volumes.
+        stop_event : threading.Event, optional
+            If provided, the simulator will stop when this event is set.
 
         Yields
         ------
@@ -236,28 +250,40 @@ class DicomSimulator:
         if self.start_time is None:
             self.start_time = time.time()
 
+        volumes_copied = 0
         for i, src_file in enumerate(files_to_send):
+            # Check for stop signal
+            if stop_event is not None and stop_event.is_set():
+                logger.info(f"Simulator stopped by user after {volumes_copied}/{n_total} volumes")
+                return
+
             # Compute deadline for this volume (0-indexed, so vol 0 arrives at t=delay)
             # Volume arrives after one TR (simulating acquisition time)
             expected_time = (i + 1) * self.delay
             deadline = self.start_time + expected_time
-            
-            # Sleep until deadline
-            self._sleep_until_deadline(deadline)
+
+            # Sleep until deadline (interruptible if stop_event provided)
+            self._sleep_until_deadline(deadline, stop_event)
+
+            # Check again after sleep in case we were interrupted
+            if stop_event is not None and stop_event.is_set():
+                logger.info(f"Simulator stopped by user after {volumes_copied}/{n_total} volumes")
+                return
 
             # Copy the file
             dst_file = self.target_dir / src_file.name
             copy_start = time.time()
             shutil.copy2(src_file, dst_file)
             copy_duration = time.time() - copy_start
-            
+            volumes_copied += 1
+
             actual_elapsed = time.time() - self.start_time
             logger.debug(
                 f"Copied volume {i+1}/{n_total}: {src_file.name} "
                 f"(expected={expected_time:.3f}s, actual={actual_elapsed:.3f}s, "
                 f"copy={copy_duration*1000:.1f}ms)"
             )
-            
+
             # Invoke callback if set
             if self.volume_copied_callback is not None:
                 try:
@@ -268,7 +294,7 @@ class DicomSimulator:
             # Yield control back to caller
             yield i + 1
 
-        logger.info(f"Simulator complete: {n_total} volumes copied")
+        logger.info(f"Simulator complete: {volumes_copied} volumes copied")
 
         if self.cleanup_on_complete:
             self.cleanup()

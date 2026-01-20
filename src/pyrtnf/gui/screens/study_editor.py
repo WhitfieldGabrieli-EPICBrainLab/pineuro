@@ -67,6 +67,12 @@ class StudyEditorScreen:
 
         # Dynamic task parameter fields (populated based on task type)
         self.task_param_fields: Dict[str, ft.Control] = {}
+        # Dynamic localizer task parameter fields
+        self.localizer_task_param_fields: Dict[str, ft.Control] = {}
+
+        # Track Networks tab for conditional visibility
+        self.networks_tab = None
+        self.networks_tab_content = None
 
         # Create form fields
         self._create_form_fields()
@@ -89,18 +95,28 @@ class StudyEditorScreen:
                 "example_participant_id": "sub-001",
             },
             "scan": {
-                "tr": 1.2,
-                "n_volumes": 150,
-                "n_baseline": 25,
-                "rest_source_dicoms": ["", ""],
-                "rest_n_volumes": [200, 200],
-                "rest_max_runs": 2,
+                # Localizer parameters
+                "localizer_tr": 1.2,
+                "localizer_n_volumes": 200,
+                "localizer_n_runs": 2,
+                "localizer_task_type": "rest",
+                # Feedback parameters
+                "feedback_tr": 1.2,
+                "feedback_n_volumes": 150,
+                # 2vol parameters (independently optional, always 2 volumes)
+                "twovol_initial_enabled": True,
+                "twovol_initial_n_volumes": 2,
+                "twovol_realtime_enabled": True,
+                "twovol_realtime_n_volumes": 2,
                 "twovol_initial_dicoms": "",
                 "twovol_realtime_dicoms": "",
-                "twovol_n_volumes": 2,
+                # Simulator/acquisition
+                "localizer_source_dicoms": ["", ""],
                 "feedback_dicoms": "",
-                "collection_speed": 10.0,
-                "simulator_speed": 1.0,
+                "simulator_enabled": True,
+                "collection_speed": 10.0,  # Speed for localizer/collection
+                "feedback_simulator_speed": 10.0,  # Speed for feedback runs
+                "scanner_dicom_dir": "/BOLD_DICOM",
             },
             "mask": {
                 "n_yeo": 17,
@@ -115,8 +131,23 @@ class StudyEditorScreen:
                 "n_volumes": 150,
                 "use_efficiency_weights": True,
             },
+            "localizer_task": {
+                # Localizer task parameters (when not rest)
+                "ball": {
+                    "use_transfer_runs": False,
+                    "initial_scale_factor": 10.0,
+                    "fullscreen": True,
+                    "trigger_keys": ["t", "+", "5", "equal"],
+                    "left_button": "1",
+                    "right_button": "2",
+                    "enter_button": "0",
+                    "min_hits_threshold": 3,
+                    "max_hits_threshold": 5,
+                    "scale_adjust_factor": 0.25,
+                },
+            },
             "task": {
-                "task_type": "ball",  # Task type identifier
+                "task_type": "ball",  # Feedback task type identifier
                 "max_feedback_runs": 2,
                 # Ball task parameters
                 "ball": {
@@ -161,42 +192,104 @@ class StudyEditorScreen:
             hint_text="Shown as hint when starting a session (e.g., sub-001, sub-mindbpd001)",
         )
 
-        # Scanner fields
-        self.tr_field = ft.TextField(
-            label="TR (seconds)",
-            value=str(config["scan"]["tr"]),
-            keyboard_type=ft.KeyboardType.NUMBER,
-            on_change=lambda _: self._validate_field("tr", self.tr_field, validate_positive_number),
-        )
-
-        self.n_volumes_field = ft.TextField(
-            label="Volumes per feedback run",
-            value=str(config["scan"]["n_volumes"]),
-            keyboard_type=ft.KeyboardType.NUMBER,
-            on_change=lambda _: self._validate_field("n_volumes", self.n_volumes_field, validate_positive_int),
-        )
-
-        self.n_baseline_field = ft.TextField(
-            label="Baseline volumes",
-            value=str(config["scan"]["n_baseline"]),
-            keyboard_type=ft.KeyboardType.NUMBER,
-            on_change=lambda _: self._validate_field("n_baseline", self.n_baseline_field, validate_positive_int),
-        )
-
-        self.rest_max_runs_field = ft.TextField(
-            label="Number of rest runs",
-            value=str(config["scan"]["rest_max_runs"]),
-            keyboard_type=ft.KeyboardType.NUMBER,
-            on_change=lambda _: self._validate_field("rest_max_runs", self.rest_max_runs_field, validate_positive_int),
+        # Simulator mode toggle (Study tab)
+        self.simulator_enabled_checkbox = ft.Checkbox(
+            label="Simulator Mode",
+            value=config["scan"].get("simulator_enabled", True),
+            on_change=self._on_simulator_mode_changed,
         )
 
         self.collection_speed_field = ft.TextField(
-            label="Simulator speed (collection, × realtime)",
-            value=str(config["scan"]["collection_speed"]),
+            label="Localizer speed (× realtime)",
+            value=str(config["scan"].get("collection_speed", config["scan"].get("simulator_speed", 10.0))),
             keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Speed for localizer/setup runs",
         )
 
-        # Network fields
+        self.feedback_simulator_speed_field = ft.TextField(
+            label="Feedback speed (× realtime)",
+            value=str(config["scan"].get("feedback_simulator_speed", config["scan"].get("simulator_speed", 10.0))),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Speed for feedback runs",
+        )
+
+        # Scanner DICOM directory for real-time mode
+        self.scanner_dicom_dir_field = ft.TextField(
+            label="Scanner DICOM Directory",
+            value=config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM"),
+            hint_text="Directory where scanner exports DICOMs (e.g., /BOLD_DICOM)",
+        )
+
+        # --- Localizer tab fields ---
+        # Localizer task type (rest or registered task)
+        available_tasks = list_available_tasks()
+        localizer_task_options = [ft.dropdown.Option(key="rest", text="Rest (ICA Network Extraction)")]
+        localizer_task_options.extend([
+            ft.dropdown.Option(key=task_id, text=f"{metadata.display_name} (GLM Contrast)")
+            for task_id, metadata in available_tasks.items()
+        ])
+        self.localizer_task_type_dropdown = ft.Dropdown(
+            label="Localizer Type",
+            options=localizer_task_options,
+            value=config["scan"].get("localizer_task_type", "rest"),
+        )
+        self.localizer_task_type_dropdown.on_change = self._on_localizer_task_type_changed
+
+        self.localizer_tr_field = ft.TextField(
+            label="TR (seconds)",
+            value=str(config["scan"].get("localizer_tr", 1.2)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=lambda _: self._validate_field("localizer_tr", self.localizer_tr_field, validate_positive_number),
+        )
+
+        self.localizer_n_volumes_field = ft.TextField(
+            label="Volumes per localizer run",
+            value=str(config["scan"].get("localizer_n_volumes", 200)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=lambda _: self._validate_field("localizer_n_volumes", self.localizer_n_volumes_field, validate_positive_int),
+        )
+
+        self.localizer_n_runs_field = ft.TextField(
+            label="Number of localizer runs",
+            value=str(config["scan"].get("localizer_n_runs", 2)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=self._on_localizer_n_runs_changed,
+        )
+
+        # 2vol Initial settings (for Localizer tab)
+        self.twovol_initial_enabled_checkbox = ft.Checkbox(
+            label="Enable Initial 2vol Collection",
+            value=config["scan"].get("twovol_initial_enabled", True),
+            on_change=self._on_twovol_initial_enabled_changed,
+        )
+
+        # 2vol Realtime settings (for Feedback tab)
+        self.twovol_realtime_enabled_checkbox = ft.Checkbox(
+            label="Enable Realtime 2vol Collection",
+            value=config["scan"].get("twovol_realtime_enabled", True),
+            on_change=self._on_twovol_realtime_enabled_changed,
+        )
+
+        # Create localizer task parameter fields
+        self._create_localizer_task_parameter_fields()
+
+        # --- Feedback tab fields ---
+        self.feedback_tr_field = ft.TextField(
+            label="TR (seconds)",
+            value=str(config["scan"].get("feedback_tr", 1.2)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=lambda _: self._validate_field("feedback_tr", self.feedback_tr_field, validate_positive_number),
+        )
+
+        self.feedback_n_volumes_field = ft.TextField(
+            label="Volumes per feedback run",
+            value=str(config["scan"].get("feedback_n_volumes", 150)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=lambda _: self._validate_field("feedback_n_volumes", self.feedback_n_volumes_field, validate_positive_int),
+        )
+
+
+        # Network fields (only shown when localizer is rest)
         self.n_yeo_radio = ft.RadioGroup(
             content=ft.Row([
                 ft.Radio(value="7", label="7 Networks"),
@@ -220,10 +313,9 @@ class StudyEditorScreen:
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
-        # Task type selection (populated from registry)
-        available_tasks = list_available_tasks()
+        # Feedback task type selection (populated from registry)
         self.task_type_dropdown = ft.Dropdown(
-            label="Task Type",
+            label="Feedback Task Type",
             options=[
                 ft.dropdown.Option(
                     key=task_id,
@@ -243,7 +335,20 @@ class StudyEditorScreen:
             hint_text="Total feedback runs (transfer runs are optional)",
         )
 
-        # Create dynamic task parameter fields for current task type
+        # Baseline volumes - task-specific but shown in Session Structure
+        # Get from task config (ball.n_baseline) or feedback config as fallback
+        task_type = config["task"].get("task_type", "ball")
+        n_baseline_default = config["task"].get(task_type, {}).get("n_baseline",
+                             config.get("feedback", {}).get("n_baseline", 25))
+        self.n_baseline_field = ft.TextField(
+            label="Baseline volumes",
+            value=str(n_baseline_default),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Number of baseline volumes at the start of each feedback run",
+            on_change=lambda _: self._validate_field("n_baseline", self.n_baseline_field, validate_positive_int),
+        )
+
+        # Create dynamic task parameter fields for current feedback task type
         self._create_task_parameter_fields()
 
         # Paths fields
@@ -252,34 +357,37 @@ class StudyEditorScreen:
             value=config["paths"]["base_dir"],
         )
 
-        # Simulator source paths
-        self.rest_source_1_field = ft.TextField(
-            label="Rest run 1 source DICOMs",
-            value=config["scan"]["rest_source_dicoms"][0] if len(config["scan"]["rest_source_dicoms"]) > 0 else "",
-            hint_text="Path to DICOM directory for simulator (optional)",
-        )
+        # Simulator source paths - create dynamically based on n_runs
+        localizer_dicoms = config["scan"].get("localizer_source_dicoms", ["", ""])
+        # Ensure we have enough entries for max possible runs
+        while len(localizer_dicoms) < 10:
+            localizer_dicoms.append("")
 
-        self.rest_source_2_field = ft.TextField(
-            label="Rest run 2 source DICOMs",
-            value=config["scan"]["rest_source_dicoms"][1] if len(config["scan"]["rest_source_dicoms"]) > 1 else "",
-            hint_text="Path to DICOM directory for simulator (optional)",
-        )
+        # Create localizer source fields (up to 10, visibility controlled dynamically)
+        self.localizer_source_fields = []
+        for i in range(10):
+            field = ft.TextField(
+                label=f"Localizer run {i+1} source DICOMs",
+                value=localizer_dicoms[i] if i < len(localizer_dicoms) else "",
+                hint_text="Path to DICOM directory for simulator (optional)",
+            )
+            self.localizer_source_fields.append(field)
 
         self.twovol_initial_field = ft.TextField(
             label="Initial 2vol source DICOMs",
-            value=config["scan"]["twovol_initial_dicoms"],
+            value=config["scan"].get("twovol_initial_dicoms", ""),
             hint_text="Path to DICOM directory for simulator (optional)",
         )
 
         self.twovol_realtime_field = ft.TextField(
             label="Real-time 2vol source DICOMs",
-            value=config["scan"]["twovol_realtime_dicoms"],
+            value=config["scan"].get("twovol_realtime_dicoms", ""),
             hint_text="Path to DICOM directory for simulator (optional)",
         )
 
         self.feedback_source_field = ft.TextField(
             label="Feedback runs source DICOMs",
-            value=config["scan"]["feedback_dicoms"],
+            value=config["scan"].get("feedback_dicoms", ""),
             hint_text="Path to DICOM directory for simulator (optional)",
         )
 
@@ -338,8 +446,45 @@ class StudyEditorScreen:
 
         self.name_field.update()
 
+    def _on_simulator_mode_changed(self, e):
+        """Handle simulator mode checkbox change."""
+        is_simulator = self.simulator_enabled_checkbox.value
+
+        # Update visibility of simulator-specific fields
+        self.collection_speed_field.visible = is_simulator
+        self.feedback_simulator_speed_field.visible = is_simulator
+        self.scanner_dicom_dir_field.visible = not is_simulator
+        self.scanner_dicom_dir_browse_btn.visible = not is_simulator
+
+        # Update simulator paths container visibility
+        if hasattr(self, 'simulator_paths_container'):
+            self.simulator_paths_container.visible = is_simulator
+
+        self.page.update()
+
+    def _create_localizer_task_parameter_fields(self):
+        """Create form fields for localizer task type's parameters (when not rest)."""
+        localizer_task_type = self.localizer_task_type_dropdown.value
+
+        self.localizer_task_param_fields.clear()
+
+        if localizer_task_type == "rest":
+            return  # No task parameters for rest
+
+        try:
+            metadata = get_task_metadata(localizer_task_type)
+        except ValueError:
+            return
+
+        config = self.study_config.session_config
+        localizer_task_config = config.get("localizer_task", {}).get(localizer_task_type, {})
+
+        for param in metadata.parameters:
+            field = self._create_field_for_parameter(param, localizer_task_config)
+            self.localizer_task_param_fields[param.key] = field
+
     def _create_task_parameter_fields(self):
-        """Create form fields for current task type's parameters."""
+        """Create form fields for current feedback task type's parameters."""
         task_type = self.task_type_dropdown.value
         metadata = get_task_metadata(task_type)
 
@@ -395,8 +540,8 @@ class StudyEditorScreen:
             )
 
     def _on_task_type_changed(self, e):
-        """Handle task type dropdown change (dynamic tab rebuild)."""
-        logger.info(f"Task type changed to: {self.task_type_dropdown.value}")
+        """Handle feedback task type dropdown change (dynamic tab rebuild)."""
+        logger.info(f"Feedback task type changed to: {self.task_type_dropdown.value}")
 
         # Recreate task parameter fields for new task type
         self._create_task_parameter_fields()
@@ -405,10 +550,72 @@ class StudyEditorScreen:
         # Find the TabsWidget and update its content
         # For now, show a message that changes will appear on save
         self.page.snack_bar = ft.SnackBar(
-            ft.Text(f"Task type changed to {self.task_type_dropdown.value}. Task parameters will update when you reopen this study."),
+            ft.Text(f"Feedback task type changed to {self.task_type_dropdown.value}. Task parameters will update when you reopen this study."),
             open=True,
         )
         self.page.update()
+
+    def _on_localizer_task_type_changed(self, e):
+        """Handle localizer task type dropdown change."""
+        localizer_task_type = self.localizer_task_type_dropdown.value
+        logger.info(f"Localizer task type changed to: {localizer_task_type}")
+
+        # Recreate localizer task parameter fields
+        self._create_localizer_task_parameter_fields()
+
+        # Update Networks tab visibility
+        is_rest = localizer_task_type == "rest"
+        if self.networks_tab is not None:
+            self.networks_tab.visible = is_rest
+            self.networks_tab.update()
+
+        # Show message about the change
+        if is_rest:
+            msg = "Localizer set to Rest. Networks tab is now available for ICA-based mask extraction."
+        else:
+            msg = f"Localizer set to {localizer_task_type}. GLM-based mask extraction coming soon."
+
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg), open=True)
+        self.page.update()
+
+    def _on_localizer_n_runs_changed(self, e):
+        """Handle localizer n_runs field change - update paths tab visibility."""
+        # Validate the field first
+        self._validate_field("localizer_n_runs", self.localizer_n_runs_field, validate_positive_int)
+
+        # Update localizer source field visibility if paths tab has been built
+        if hasattr(self, 'localizer_source_rows'):
+            try:
+                n_runs = int(self.localizer_n_runs_field.value)
+            except (ValueError, TypeError):
+                n_runs = 2
+
+            for i, row in enumerate(self.localizer_source_rows):
+                row.visible = (i < n_runs)
+                row.update()
+
+    def _on_twovol_initial_enabled_changed(self, e):
+        """Handle 2vol initial enable checkbox change - update paths tab."""
+        enabled = self.twovol_initial_enabled_checkbox.value
+
+        # Update paths tab row visibility if it has been built
+        if hasattr(self, 'twovol_initial_row'):
+            self.twovol_initial_row.visible = enabled
+            self.twovol_initial_row.update()
+
+    def _on_twovol_realtime_enabled_changed(self, e):
+        """Handle 2vol realtime enable checkbox change - update paths tab and note."""
+        enabled = self.twovol_realtime_enabled_checkbox.value
+
+        # Update paths tab row visibility if it has been built
+        if hasattr(self, 'twovol_realtime_row'):
+            self.twovol_realtime_row.visible = enabled
+            self.twovol_realtime_row.update()
+
+        # Show/hide note when disabled
+        if hasattr(self, 'twovol_realtime_note'):
+            self.twovol_realtime_note.visible = not enabled
+            self.twovol_realtime_note.update()
 
     def _create_browse_button(self, field: ft.TextField) -> ft.IconButton:
         """Create a browse button for directory selection.
@@ -477,22 +684,32 @@ class StudyEditorScreen:
         Returns:
             Flet control for the study editor
         """
-        # Create tab bar (headers)
+        # Determine initial Networks tab visibility
+        is_rest_localizer = self.localizer_task_type_dropdown.value == "rest"
+
+        # Create tab headers
+        self.networks_tab = ft.Tab(label="Networks", visible=is_rest_localizer)
+
         tab_bar = ft.TabBar(
             tabs=[
-                ft.Tab(label="Metadata & Scanner"),
-                ft.Tab(label="Networks"),
-                ft.Tab(label="Task"),
-                ft.Tab(label="File Paths"),
+                ft.Tab(label="Study"),
+                ft.Tab(label="Localizer"),
+                self.networks_tab,
+                ft.Tab(label="Feedback"),
+                ft.Tab(label="Paths"),
             ],
         )
 
         # Create tab content panels
+        self.networks_tab_content = self._build_networks_tab()
+        self.networks_tab_content.visible = is_rest_localizer
+
         tab_view = ft.TabBarView(
             controls=[
-                self._build_scanner_tab(),
-                self._build_networks_tab(),
-                self._build_task_tab(),
+                self._build_study_tab(),
+                self._build_localizer_tab(),
+                self.networks_tab_content,
+                self._build_feedback_tab(),
                 self._build_paths_tab(),
             ],
             expand=True,
@@ -508,7 +725,7 @@ class StudyEditorScreen:
         # Create Tabs control
         tabs = ft.Tabs(
             content=tabs_content,
-            length=4,  # Number of tabs
+            length=5,  # Number of tabs
         )
 
         # Create action buttons
@@ -566,8 +783,18 @@ class StudyEditorScreen:
             expand=True,
         )
 
-    def _build_scanner_tab(self) -> ft.Container:
-        """Build the scanner parameters tab."""
+    def _build_study_tab(self) -> ft.Container:
+        """Build the study information and acquisition mode tab."""
+        # Create browse button for scanner DICOM directory
+        self.scanner_dicom_dir_browse_btn = self._create_browse_button(self.scanner_dicom_dir_field)
+
+        # Set initial visibility based on simulator mode
+        is_simulator = self.simulator_enabled_checkbox.value
+        self.collection_speed_field.visible = is_simulator
+        self.feedback_simulator_speed_field.visible = is_simulator
+        self.scanner_dicom_dir_field.visible = not is_simulator
+        self.scanner_dicom_dir_browse_btn.visible = not is_simulator
+
         return ft.Container(
             content=ft.Column(
                 [
@@ -576,19 +803,122 @@ class StudyEditorScreen:
                     self.description_field,
                     self.example_participant_id_field,
                     ft.Divider(),
-                    ft.Text("Scanner Parameters", size=16, weight=ft.FontWeight.BOLD),
-                    self.tr_field,
-                    self.n_volumes_field,
-                    self.n_baseline_field,
-                    self.rest_max_runs_field,
-                    ft.Divider(),
-                    ft.Text("Simulator Settings", size=16, weight=ft.FontWeight.BOLD),
-                    self.collection_speed_field,
+                    ft.Text("Acquisition Mode", size=16, weight=ft.FontWeight.BOLD),
+                    self.simulator_enabled_checkbox,
+                    ft.Row([
+                        self.collection_speed_field,
+                        self.feedback_simulator_speed_field,
+                    ]),
+                    ft.Row([
+                        self.scanner_dicom_dir_field,
+                        self.scanner_dicom_dir_browse_btn,
+                    ]),
+                    ft.Text(
+                        "When simulator mode is disabled, the system watches the scanner DICOM directory for incoming files.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
                 ],
                 scroll=ft.ScrollMode.AUTO,
             ),
             padding=20,
         )
+
+    def _build_localizer_tab(self) -> ft.Container:
+        """Build the localizer parameters tab."""
+        # Build localizer task-specific parameters section
+        localizer_task_params = self._build_localizer_task_specific_params()
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Localizer Type", size=16, weight=ft.FontWeight.BOLD),
+                    self.localizer_task_type_dropdown,
+                    ft.Text(
+                        "Rest uses ICA for network mask extraction. Task-based localizers will use GLM contrasts (coming soon).",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    ft.Divider(),
+                    ft.Text("Scanner Parameters", size=16, weight=ft.FontWeight.BOLD),
+                    self.localizer_tr_field,
+                    self.localizer_n_volumes_field,
+                    self.localizer_n_runs_field,
+                    ft.Divider(),
+                    ft.Text("2vol Initial Reference", size=16, weight=ft.FontWeight.BOLD),
+                    self.twovol_initial_enabled_checkbox,
+                    ft.Text(
+                        "Collects a 2-volume scan before localizer runs for positioning verification.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    ft.Divider(),
+                ] + localizer_task_params,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            padding=20,
+        )
+
+    def _build_localizer_task_specific_params(self) -> list:
+        """Build localizer task-specific parameter controls.
+
+        Returns:
+            List of Flet controls for localizer task parameters
+        """
+        localizer_task_type = self.localizer_task_type_dropdown.value
+
+        if localizer_task_type == "rest":
+            return []  # No task parameters for rest
+
+        try:
+            metadata = get_task_metadata(localizer_task_type)
+        except ValueError:
+            return [
+                ft.Text(
+                    f"Unknown task type: {localizer_task_type}",
+                    size=14,
+                    color=ft.Colors.ORANGE_700,
+                ),
+            ]
+
+        controls = [
+            ft.Text(
+                f"{metadata.display_name} Localizer Parameters",
+                size=16,
+                weight=ft.FontWeight.BOLD,
+            ),
+            ft.Container(
+                content=ft.Text(
+                    "Note: GLM-based mask extraction from task localizers is coming soon.",
+                    size=12,
+                ),
+                bgcolor=ft.Colors.AMBER_100,
+                padding=10,
+                border_radius=5,
+            ),
+            ft.Divider(),
+        ]
+
+        # Add each parameter field
+        for param in metadata.parameters:
+            field = self.localizer_task_param_fields.get(param.key)
+            if field is not None:
+                controls.append(field)
+
+                if param.hint and param.type != "bool":
+                    controls.append(
+                        ft.Text(
+                            param.hint,
+                            size=11,
+                            color=ft.Colors.GREY_600,
+                            italic=True,
+                        )
+                    )
+
+        return controls
 
     def _build_networks_tab(self) -> ft.Container:
         """Build the networks parameters tab."""
@@ -610,15 +940,50 @@ class StudyEditorScreen:
             padding=20,
         )
 
-    def _build_task_tab(self) -> ft.Container:
-        """Build the task parameters tab."""
-        # Common task configuration (all tasks)
-        common_section = [
-            ft.Text("Task Selection", size=16, weight=ft.FontWeight.BOLD),
+    def _build_feedback_tab(self) -> ft.Container:
+        """Build the feedback parameters tab."""
+        # Scanner parameters for feedback
+        scanner_section = [
+            ft.Text("Scanner Parameters", size=16, weight=ft.FontWeight.BOLD),
+            self.feedback_tr_field,
+            self.feedback_n_volumes_field,
+            ft.Divider(),
+        ]
+
+        # 2vol Realtime section
+        # Create note for when 2vol is disabled
+        self.twovol_realtime_note = ft.Container(
+            content=ft.Text(
+                "When disabled, feedback uses masks from subject boldref space (no day-of registration).",
+                size=12,
+            ),
+            bgcolor=ft.Colors.AMBER_100,
+            padding=10,
+            border_radius=5,
+            visible=not self.twovol_realtime_enabled_checkbox.value,
+        )
+
+        twovol_section = [
+            ft.Text("2vol Realtime Reference", size=16, weight=ft.FontWeight.BOLD),
+            self.twovol_realtime_enabled_checkbox,
+            self.twovol_realtime_note,
+            ft.Text(
+                "Collects a 2-volume scan before feedback runs for day-of registration.",
+                size=11,
+                color=ft.Colors.GREY_600,
+                italic=True,
+            ),
+            ft.Divider(),
+        ]
+
+        # Task configuration
+        task_section = [
+            ft.Text("Feedback Task", size=16, weight=ft.FontWeight.BOLD),
             self.task_type_dropdown,
             ft.Divider(),
             ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
             self.max_feedback_runs_field,
+            self.n_baseline_field,
             ft.Text(
                 "Note: Transfer runs are optional (configure in task-specific parameters below)",
                 size=12,
@@ -633,7 +998,7 @@ class StudyEditorScreen:
 
         return ft.Container(
             content=ft.Column(
-                common_section + task_specific_section,
+                scanner_section + twovol_section + task_section + task_specific_section,
                 scroll=ft.ScrollMode.AUTO,
             ),
             padding=20,
@@ -695,6 +1060,61 @@ class StudyEditorScreen:
 
     def _build_paths_tab(self) -> ft.Container:
         """Build the file paths tab."""
+        is_simulator = self.simulator_enabled_checkbox.value
+
+        # Get current number of localizer runs
+        try:
+            n_localizer_runs = int(self.localizer_n_runs_field.value)
+        except (ValueError, TypeError):
+            n_localizer_runs = 2
+
+        # Create localizer source rows with visibility based on n_runs
+        self.localizer_source_rows = []
+        for i, field in enumerate(self.localizer_source_fields):
+            row = ft.Row(
+                [field, self._create_browse_button(field)],
+                visible=(i < n_localizer_runs),
+            )
+            self.localizer_source_rows.append(row)
+
+        # Create 2vol rows with visibility based on enable checkboxes
+        self.twovol_initial_row = ft.Row(
+            [self.twovol_initial_field, self._create_browse_button(self.twovol_initial_field)],
+            visible=self.twovol_initial_enabled_checkbox.value,
+        )
+
+        self.twovol_realtime_row = ft.Row(
+            [self.twovol_realtime_field, self._create_browse_button(self.twovol_realtime_field)],
+            visible=self.twovol_realtime_enabled_checkbox.value,
+        )
+
+        # Build simulator paths content
+        simulator_content = [
+            ft.Divider(),
+            ft.Text("Simulator Source Paths", size=16, weight=ft.FontWeight.BOLD),
+            ft.Text(
+                "Configure DICOM source directories for offline testing with the simulator",
+                size=12,
+                color=ft.Colors.GREY_600,
+                italic=True,
+            ),
+        ]
+        # Add localizer source rows
+        simulator_content.extend(self.localizer_source_rows)
+        # Add 2vol rows
+        simulator_content.append(self.twovol_initial_row)
+        simulator_content.append(self.twovol_realtime_row)
+        # Add feedback source
+        simulator_content.append(ft.Row([
+            self.feedback_source_field,
+            self._create_browse_button(self.feedback_source_field),
+        ]))
+
+        self.simulator_paths_container = ft.Column(
+            simulator_content,
+            visible=is_simulator,
+        )
+
         return ft.Container(
             content=ft.Column(
                 [
@@ -703,34 +1123,7 @@ class StudyEditorScreen:
                         self.base_dir_field,
                         self._create_browse_button(self.base_dir_field),
                     ]),
-                    ft.Divider(),
-                    ft.Text("Simulator Source Paths (Optional)", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Configure DICOM source directories for offline testing with the simulator",
-                        size=12,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
-                    ft.Row([
-                        self.rest_source_1_field,
-                        self._create_browse_button(self.rest_source_1_field),
-                    ]),
-                    ft.Row([
-                        self.rest_source_2_field,
-                        self._create_browse_button(self.rest_source_2_field),
-                    ]),
-                    ft.Row([
-                        self.twovol_initial_field,
-                        self._create_browse_button(self.twovol_initial_field),
-                    ]),
-                    ft.Row([
-                        self.twovol_realtime_field,
-                        self._create_browse_button(self.twovol_realtime_field),
-                    ]),
-                    ft.Row([
-                        self.feedback_source_field,
-                        self._create_browse_button(self.feedback_source_field),
-                    ]),
+                    self.simulator_paths_container,
                 ],
                 scroll=ft.ScrollMode.AUTO,
             ),
@@ -941,11 +1334,27 @@ class StudyEditorScreen:
         config["paths"]["example_participant_id"] = self.example_participant_id_field.value.strip() or "sub-001"
 
         try:
-            config["scan"]["tr"] = float(self.tr_field.value)
-            config["scan"]["n_volumes"] = int(self.n_volumes_field.value)
-            config["scan"]["n_baseline"] = int(self.n_baseline_field.value)
-            config["scan"]["rest_max_runs"] = int(self.rest_max_runs_field.value)
+            # Localizer parameters
+            config["scan"]["localizer_tr"] = float(self.localizer_tr_field.value)
+            config["scan"]["localizer_n_volumes"] = int(self.localizer_n_volumes_field.value)
+            config["scan"]["localizer_n_runs"] = int(self.localizer_n_runs_field.value)
+            config["scan"]["localizer_task_type"] = self.localizer_task_type_dropdown.value
+
+            # 2vol parameters (always 2 volumes)
+            config["scan"]["twovol_initial_enabled"] = self.twovol_initial_enabled_checkbox.value
+            config["scan"]["twovol_initial_n_volumes"] = 2
+            config["scan"]["twovol_realtime_enabled"] = self.twovol_realtime_enabled_checkbox.value
+            config["scan"]["twovol_realtime_n_volumes"] = 2
+
+            # Feedback parameters
+            config["scan"]["feedback_tr"] = float(self.feedback_tr_field.value)
+            config["scan"]["feedback_n_volumes"] = int(self.feedback_n_volumes_field.value)
+
+            # Acquisition mode
+            config["scan"]["simulator_enabled"] = self.simulator_enabled_checkbox.value
             config["scan"]["collection_speed"] = float(self.collection_speed_field.value)
+            config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value)
+            config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip()
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid scanner parameter: {e}")
             raise ValidationError(f"Invalid scanner parameter: {e}")
@@ -973,6 +1382,14 @@ class StudyEditorScreen:
 
         try:
             config["task"]["max_feedback_runs"] = int(self.max_feedback_runs_field.value)
+
+            # Save n_baseline to feedback config (used by pipeline)
+            n_baseline = int(self.n_baseline_field.value)
+            config["feedback"]["n_baseline"] = n_baseline
+            # Also save to task-specific config for reference
+            if task_type not in config["task"]:
+                config["task"][task_type] = {}
+            config["task"][task_type]["n_baseline"] = n_baseline
 
             # Update task-specific parameters dynamically
             metadata = get_task_metadata(task_type)
@@ -1008,13 +1425,51 @@ class StudyEditorScreen:
             logger.error(f"Invalid task parameter: {e}")
             raise ValidationError(f"Invalid task parameter: {e}")
 
+        # Update localizer task config (if not rest)
+        localizer_task_type = self.localizer_task_type_dropdown.value
+        if localizer_task_type != "rest":
+            try:
+                metadata = get_task_metadata(localizer_task_type)
+
+                # Initialize localizer_task config if missing
+                if "localizer_task" not in config:
+                    config["localizer_task"] = {}
+                if localizer_task_type not in config["localizer_task"]:
+                    config["localizer_task"][localizer_task_type] = {}
+
+                # Update each parameter from dynamic fields
+                for param in metadata.parameters:
+                    field = self.localizer_task_param_fields.get(param.key)
+                    if field is None:
+                        continue
+
+                    if param.type == "bool":
+                        config["localizer_task"][localizer_task_type][param.key] = field.value
+                    elif param.type == "int":
+                        config["localizer_task"][localizer_task_type][param.key] = int(field.value)
+                    elif param.type == "float":
+                        config["localizer_task"][localizer_task_type][param.key] = float(field.value)
+                    elif param.type == "str":
+                        config["localizer_task"][localizer_task_type][param.key] = field.value
+                    elif param.type == "list[str]":
+                        config["localizer_task"][localizer_task_type][param.key] = [
+                            s.strip() for s in field.value.split(",") if s.strip()
+                        ]
+
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid localizer task parameter: {e}")
+                raise ValidationError(f"Invalid localizer task parameter: {e}")
+
         # Update paths
         config["paths"]["base_dir"] = self.base_dir_field.value.strip()
 
-        # Update simulator source paths
-        config["scan"]["rest_source_dicoms"] = [
-            self.rest_source_1_field.value.strip(),
-            self.rest_source_2_field.value.strip(),
+        # Update simulator source paths (dynamic based on n_runs)
+        try:
+            n_localizer_runs = int(self.localizer_n_runs_field.value)
+        except (ValueError, TypeError):
+            n_localizer_runs = 2
+        config["scan"]["localizer_source_dicoms"] = [
+            field.value.strip() for field in self.localizer_source_fields[:n_localizer_runs]
         ]
         config["scan"]["twovol_initial_dicoms"] = self.twovol_initial_field.value.strip()
         config["scan"]["twovol_realtime_dicoms"] = self.twovol_realtime_field.value.strip()

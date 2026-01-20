@@ -8,6 +8,9 @@ This package contains reusable components and utilities for the GUI:
 - FeedbackLogPoller: Polls TSV files for new data
 - FeedbackMonitor: High-level monitor for feedback sessions
 - QCReportManager: Manages QC report discovery and viewing
+- CollectionProgressPanel: Progress display for DICOM collection
+- RunSelectionDialog: Dialog for selecting runs for preprocessing
+- MaskSelectionDialog: Dialog for reviewing and customizing network masks
 """
 
 from .pipeline_runner import PipelineRunner
@@ -16,6 +19,9 @@ from .fd_plot import FDPlot, FDData
 from .task_mirror import TaskMirror
 from .csv_poller import FeedbackLogPoller, FeedbackMonitor
 from .qc_viewer import QCReportManager, open_qc_report
+from .collection_progress import CollectionProgressPanel
+from .run_selection_dialog import RunSelectionDialog, RunInfo
+from .mask_selection_dialog import MaskSelectionDialog, MaskReviewInfo
 
 __all__ = [
     "PipelineRunner",
@@ -28,4 +34,9 @@ __all__ = [
     "FeedbackMonitor",
     "QCReportManager",
     "open_qc_report",
+    "CollectionProgressPanel",
+    "RunSelectionDialog",
+    "RunInfo",
+    "MaskSelectionDialog",
+    "MaskReviewInfo",
 ]

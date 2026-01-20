@@ -1080,6 +1080,7 @@ def generate_mask_extraction_report(
         participant_id: str,
         network_names: Sequence[str],
         output_dir: Path | None = None,
+        n_yeo: int | None = None,
         overwrite: bool = False,
         open_browser: bool = False
 ) -> Path:
@@ -1099,6 +1100,9 @@ def generate_mask_extraction_report(
         Names of extracted networks (e.g., ['Default', 'ContA', 'ContB'])
     output_dir : Path, optional
         QC output directory. Defaults to mask_extraction_dir.parent / 'qc'
+    n_yeo : int, optional
+        Yeo parcellation (7 or 17 networks). If not provided, infers from
+        network names by checking if any match 17-network labels.
     overwrite : bool, default=False
         Regenerate all plots even if they exist
     open_browser : bool, default=False
@@ -1220,7 +1224,15 @@ def generate_mask_extraction_report(
 
     # Determine number of networks and get Yeo labels (needed for both subject and MNI overlays)
     from pyrtnf.utils import get_yeo_labels
-    n_networks = 7 if len(network_names) <= 7 else 17
+    if n_yeo is not None:
+        n_networks = n_yeo
+    else:
+        # Infer from network names - check if any names match 17-network labels
+        labels_17 = get_yeo_labels(17)
+        if any(name in labels_17 for name in network_names):
+            n_networks = 17
+        else:
+            n_networks = 7
     labels = get_yeo_labels(n_networks)
 
     # Generate mask overlays if they don't exist
@@ -1272,20 +1284,14 @@ def generate_mask_extraction_report(
             suffix="boldref"
         ))
 
-        # Get Yeo atlas in MNI space
-        yeo_mni_result = tflow.get(
-            "MNI152NLin2009cAsym",
-            resolution=2,
-            atlas="Yeo2011",
-            desc=f"{n_networks}Networks" if n_networks == 17 else "7Networks",
-            suffix="dseg"
-        )
-        # tflow.get() may return a list, a single Path, or empty list if not found
-        if not yeo_mni_result or (isinstance(yeo_mni_result, list) and len(yeo_mni_result) == 0):
-            logger.warning(f"Yeo {n_networks}-network atlas not found in templateflow, skipping MNI overlays")
+        # Get Yeo atlas in MNI space from nilearn
+        from nilearn import datasets
+        try:
+            yeo_atlas = datasets.fetch_atlas_yeo_2011()
+            yeo_mni = Path(yeo_atlas[f"thick_{n_networks}"])
+        except Exception as e:
+            logger.warning(f"Failed to fetch Yeo {n_networks}-network atlas from nilearn: {e}")
             yeo_mni = None
-        else:
-            yeo_mni = Path(yeo_mni_result[0] if isinstance(yeo_mni_result, list) else yeo_mni_result)
 
         # Find MNI transform files (try multiple naming patterns)
         sub2mni_xfm_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "*sub2mni_*.mat")))
@@ -1479,6 +1485,292 @@ def generate_mask_extraction_report(
         _open_html_in_browser(html_report)
 
     return html_report
+
+
+def generate_alternative_overlays(
+        mask_extraction_dir: Path,
+        participant_id: str,
+        network_names: Sequence[str],
+        n_alternatives: int = 3,
+        output_dir: Path | None = None,
+        n_yeo: int | None = None,
+        overwrite: bool = False
+) -> Dict[str, Dict[int, Path]]:
+    """
+    Generate overlay images for alternative ICA components.
+
+    Creates overlay images for the top N alternative ICA components for each
+    network, enabling visual comparison in the mask selection dialog.
+
+    Parameters
+    ----------
+    mask_extraction_dir : Path
+        Root mask extraction directory (contains 01_ica/, 02_mnireg/, 03_masks/)
+    participant_id : str
+        Participant identifier
+    network_names : sequence of str
+        Names of extracted networks (e.g., ['DefaultA', 'ContA'])
+    n_alternatives : int, default=3
+        Number of alternative components to generate overlays for
+    output_dir : Path, optional
+        QC output directory. Defaults to mask_extraction_dir.parent / 'qc'
+    n_yeo : int, optional
+        Yeo parcellation (7 or 17 networks). If not provided, infers from
+        network names by checking if any match 17-network labels.
+    overwrite : bool, default=False
+        Regenerate overlays even if they exist
+
+    Returns
+    -------
+    dict
+        Dictionary mapping network_name -> {component_idx: overlay_path}
+    """
+    import logging
+    from glob import glob
+    from nibabel.nifti1 import Nifti1Image
+    from nibabel.loadsave import save
+
+    from pyrtnf.utils import get_yeo_labels
+
+    logger = logging.getLogger(__name__)
+
+    mask_extraction_dir = Path(mask_extraction_dir)
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    alternatives_dir = output_dir / "overlays" / "alternatives"
+    alternatives_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Generating alternative overlays for {participant_id}")
+
+    # Find required files
+    ica_dir = mask_extraction_dir / "01_ica"
+    masks_dir = mask_extraction_dir / "03_masks"
+
+    # Find components file
+    components_files = sorted(glob(str(ica_dir / "*_components.nii.gz")))
+    if not components_files:
+        logger.warning("No ICA components file found")
+        return {}
+    components_file = Path(components_files[0])
+
+    # Find BOLD reference
+    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+    if preprocessing_dir.exists():
+        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+    else:
+        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+
+    if not ref_files:
+        logger.warning("No BOLD reference found")
+        return {}
+    ref_file = Path(ref_files[0])
+
+    # Load correlation matrix
+    corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
+    if not corr_file.exists():
+        logger.warning("No correlation matrix found")
+        return {}
+    corr_df = pd.read_csv(corr_file)
+
+    # Find Yeo atlas in subject space for slice selection
+    yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
+    yeo2sub = Path(yeo2sub_files[0]) if yeo2sub_files else None
+
+    # Determine Yeo network count
+    if n_yeo is not None:
+        n_networks = n_yeo
+    else:
+        # Infer from network names - check if any names match 17-network labels
+        labels_17 = get_yeo_labels(17)
+        if any(name in labels_17 for name in network_names):
+            n_networks = 17
+        else:
+            n_networks = 7
+    labels = get_yeo_labels(n_networks)
+
+    # Load ICA components
+    components_img = load(components_file)
+    components_data = components_img.get_fdata()
+    n_components = components_data.shape[3]
+
+    result: Dict[str, Dict[int, Path]] = {}
+
+    for network in network_names:
+        if network not in corr_df.columns:
+            logger.warning(f"Network {network} not in correlation matrix")
+            continue
+
+        result[network] = {}
+
+        # Get top N+1 components for this network (including current best)
+        correlations = corr_df[network]
+        top_indices = correlations.argsort()[::-1][: n_alternatives + 1]
+
+        for comp_idx in top_indices:
+            comp_idx = int(comp_idx)
+            corr_val = float(correlations.iloc[comp_idx])
+
+            overlay_png = alternatives_dir / f"{participant_id}_{network}_IC{comp_idx}_overlay.png"
+
+            if not overwrite and overlay_png.exists():
+                result[network][comp_idx] = overlay_png
+                continue
+
+            logger.info(f"Generating {network} IC{comp_idx} overlay (r={corr_val:.3f})")
+
+            # Extract component and threshold
+            ic_data = components_data[..., comp_idx]
+            threshold = 2000
+            flat = ic_data.ravel()
+            mask = np.zeros(flat.shape, dtype=bool)
+            mask[np.argpartition(flat, -threshold)[-threshold:]] = True
+            mask = mask.reshape(ic_data.shape)
+            thresholded = ((ic_data * mask) > 0).astype("uint8")
+
+            # Save temporary mask
+            temp_mask = alternatives_dir / f"_temp_{network}_IC{comp_idx}.nii.gz"
+            save(Nifti1Image(thresholded, components_img.affine, components_img.header), temp_mask)
+
+            try:
+                # Select slices
+                atlas_slices = select_slices_from_atlas(
+                    atlas_path=yeo2sub if yeo2sub else ref_file,
+                    labels=labels,
+                    target_label=network,
+                    top_n_per_plane=1,
+                    mask_path=temp_mask
+                )
+
+                # Generate overlay
+                plot_mask_overlay_tripanel(
+                    mask_path=temp_mask,
+                    ref_path=ref_file,
+                    out_path=overlay_png,
+                    slices=atlas_slices,
+                    title=f"{network} IC {comp_idx} (r={corr_val:.2f})"
+                )
+
+                result[network][comp_idx] = overlay_png
+            finally:
+                # Clean up temp file
+                if temp_mask.exists():
+                    temp_mask.unlink()
+
+    return result
+
+
+def generate_yeo_network_overlay(
+        mask_extraction_dir: Path,
+        participant_id: str,
+        network_name: str,
+        output_dir: Path | None = None,
+        n_yeo: int = 17,
+        overwrite: bool = False
+) -> Path | None:
+    """
+    Generate overlay image for a Yeo atlas network (fallback option).
+
+    Parameters
+    ----------
+    mask_extraction_dir : Path
+        Root mask extraction directory
+    participant_id : str
+        Participant identifier
+    network_name : str
+        Name of the network (e.g., 'DefaultA')
+    output_dir : Path, optional
+        QC output directory
+    n_yeo : int, default=17
+        Yeo parcellation (7 or 17)
+    overwrite : bool, default=False
+        Regenerate overlay even if it exists
+
+    Returns
+    -------
+    Path or None
+        Path to generated overlay, or None if generation failed
+    """
+    import logging
+    from glob import glob
+    from nibabel.nifti1 import Nifti1Image
+    from nibabel.loadsave import save
+
+    from pyrtnf.utils import get_yeo_labels
+
+    logger = logging.getLogger(__name__)
+
+    mask_extraction_dir = Path(mask_extraction_dir)
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    alternatives_dir = output_dir / "overlays" / "alternatives"
+    alternatives_dir.mkdir(parents=True, exist_ok=True)
+
+    overlay_png = alternatives_dir / f"{participant_id}_{network_name}_yeo_overlay.png"
+
+    if not overwrite and overlay_png.exists():
+        return overlay_png
+
+    # Find required files
+    yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
+    if not yeo2sub_files:
+        logger.warning("No Yeo atlas in subject space found")
+        return None
+    yeo2sub = Path(yeo2sub_files[0])
+
+    # Find BOLD reference
+    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+    if preprocessing_dir.exists():
+        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+    else:
+        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+
+    if not ref_files:
+        logger.warning("No BOLD reference found")
+        return None
+    ref_file = Path(ref_files[0])
+
+    logger.info(f"Generating Yeo atlas overlay for {network_name}")
+
+    # Get network label index
+    labels = get_yeo_labels(n_networks=n_yeo)
+    if network_name not in labels:
+        logger.warning(f"Network {network_name} not in Yeo-{n_yeo} labels")
+        return None
+    network_index = labels.index(network_name) + 1
+
+    # Load atlas and extract network region
+    atlas_img = load(yeo2sub)
+    atlas_data = atlas_img.get_fdata()
+    network_mask = (atlas_data == network_index).astype("uint8")
+
+    # Save temporary mask
+    temp_mask = alternatives_dir / f"_temp_{network_name}_yeo.nii.gz"
+    save(Nifti1Image(network_mask, atlas_img.affine, atlas_img.header), temp_mask)
+
+    try:
+        # Select slices
+        atlas_slices = select_slices_from_atlas(
+            atlas_path=yeo2sub,
+            labels=labels,
+            target_label=network_name,
+            top_n_per_plane=1,
+            mask_path=temp_mask
+        )
+
+        n_voxels = int(network_mask.sum())
+
+        # Generate overlay
+        plot_mask_overlay_tripanel(
+            mask_path=temp_mask,
+            ref_path=ref_file,
+            out_path=overlay_png,
+            slices=atlas_slices,
+            title=f"{network_name} Yeo Atlas ({n_voxels} voxels)"
+        )
+
+        return overlay_png
+    finally:
+        # Clean up temp file
+        if temp_mask.exists():
+            temp_mask.unlink()
 
 
 # ============================================================================

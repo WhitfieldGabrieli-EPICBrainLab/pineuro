@@ -522,11 +522,11 @@ class FeedbackEstimator:
         Total expected number of volumes. Used to validate task regressors length.
     tr : float
         Repetition time in seconds.
-    task_regressors : ndarray, shape (n_volumes, n_task_regressors), optional
-        Pre-computed task regressors (columns of interest in design matrix).
-        If None, no task regressors are included (nuisance-only model).
-        Task-specific designs (e.g., boxcar+HRF for ball task) should be
-        computed externally and passed here.
+    task_regressors : ndarray or TaskDesign, optional
+        Task regressors for the GLM design matrix. Can be:
+        - ndarray, shape (n_volumes, n_task_regressors): Pre-computed regressors
+        - TaskDesign object: Will compute regressors using n_volumes and tr
+        - None: No task regressors (nuisance-only model)
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
@@ -586,6 +586,11 @@ class FeedbackEstimator:
 
         # Validate and store task regressors
         if task_regressors is not None:
+            # Check if it's a TaskDesign object (has compute_regressors method)
+            if hasattr(task_regressors, 'compute_regressors'):
+                # It's a TaskDesign - compute regressors from it
+                task_regressors = task_regressors.compute_regressors(n_volumes, tr)
+
             task_regressors = np.asarray(task_regressors, dtype=np.float64)
             if task_regressors.ndim == 1:
                 # Single task regressor provided as 1D array

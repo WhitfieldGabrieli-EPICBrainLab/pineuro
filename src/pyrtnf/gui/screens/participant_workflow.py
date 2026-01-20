@@ -19,6 +19,7 @@ to be resumed after interruption.
 """
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
 from enum import Enum
@@ -33,7 +34,11 @@ from ..components.fd_plot import FDPlot
 from ..components.task_mirror import TaskMirror
 from ..components.csv_poller import FeedbackMonitor
 from ..components.qc_viewer import QCReportManager
+from ..components.collection_progress import CollectionProgressPanel
+from ..components.run_selection_dialog import RunSelectionDialog, RunInfo
+from ..components.mask_selection_dialog import MaskSelectionDialog, MaskReviewInfo
 from pyrtnf.feedback import get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
+from pyrtnf.utils import get_dicom_files
 
 logger = logging.getLogger(__name__)
 
@@ -115,57 +120,233 @@ class ParticipantWorkflowScreen:
         self._is_running: bool = False  # Track if a pipeline step is running
         self._current_step_id: Optional[str] = None  # Track current running step
 
+        # File logging for export functionality
+        self._log_file_handler: Optional[logging.FileHandler] = None
+        self._log_file_path: Optional[Path] = None
+        self._setup_file_logging()
+
         # QC report manager for detecting and opening reports
         self.qc_manager = QCReportManager(
             base_dir=participant_base_dir,
             participant_id=participant_id,
         )
 
-        # QC approval state (two gates)
+        # Mask approval state (single gate after mask extraction)
         self._initial_qc_approved = self._check_qc_approval("initial")
-        self._realtime_qc_approved = self._check_qc_approval("realtime")
+
+        # Selected rest runs for preprocessing (None = use all available)
+        self._selected_rest_runs: Optional[List[int]] = None
 
     def _check_qc_approval(self, approval_type: str) -> bool:
-        """Check if QC has been approved for a checkpoint.
+        """Check if masks have been approved.
 
         Args:
-            approval_type: "initial" (after coregistration) or "realtime" (after coregistration_realtime)
+            approval_type: Currently only "initial" is used (after mask extraction)
 
         Returns:
             True if the approval marker file exists
         """
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
-        if approval_type == "initial":
-            marker_path = base_dir / "mask_extraction" / ".qc_approved_initial"
-        else:  # realtime
-            marker_path = base_dir / "feedback" / ".qc_approved_realtime"
+        marker_path = base_dir / "mask_extraction" / ".masks_approved"
         return marker_path.exists()
 
     def _set_qc_approved(self, approval_type: str, approved: bool):
-        """Set QC approval state for a checkpoint.
+        """Set mask approval state.
 
         Args:
-            approval_type: "initial" or "realtime"
+            approval_type: Currently only "initial" is used
             approved: True to approve, False to revoke
         """
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
-        if approval_type == "initial":
-            marker_path = base_dir / "mask_extraction" / ".qc_approved_initial"
-        else:  # realtime
-            marker_path = base_dir / "feedback" / ".qc_approved_realtime"
+        marker_path = base_dir / "mask_extraction" / ".masks_approved"
 
         if approved:
             marker_path.parent.mkdir(parents=True, exist_ok=True)
             marker_path.touch()
-            logger.info(f"QC approval marker created: {marker_path}")
+            logger.info(f"Mask approval marker created: {marker_path}")
         elif marker_path.exists():
             marker_path.unlink()
-            logger.info(f"QC approval marker removed: {marker_path}")
+            logger.info(f"Mask approval marker removed: {marker_path}")
 
-        if approval_type == "initial":
-            self._initial_qc_approved = approved
-        else:
-            self._realtime_qc_approved = approved
+        self._initial_qc_approved = approved
+
+    def _has_custom_mask_selections(self) -> bool:
+        """Check if user has customized mask selections.
+
+        Returns:
+            True if any mask was manually modified from the auto-selected ICA component
+        """
+        from pyrtnf.mask_extraction import load_mask_selections
+
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        masks_dir = base_dir / "mask_extraction" / "03_masks"
+
+        selections = load_mask_selections(masks_dir)
+        if not selections:
+            return False
+
+        return any(
+            sel.selection_reason in ("manual", "yeo_fallback")
+            for sel in selections.values()
+        )
+
+    def _show_mask_review_dialog(self):
+        """Show the mask review/selection dialog."""
+        from glob import glob
+        import pandas as pd
+        from pyrtnf.mask_extraction import load_mask_selections, get_alternative_components
+        from pyrtnf import qc
+
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        mask_extraction_dir = base_dir / "mask_extraction"
+        masks_dir = mask_extraction_dir / "03_masks"
+        ica_dir = mask_extraction_dir / "01_ica"
+        qc_dir = base_dir / "qc"
+
+        # Get network names from config
+        config = self.study_config.session_config
+        network_names = config["mask"]["yeo_targets"]
+        n_yeo = config["mask"]["n_yeo"]
+        threshold = config["mask"].get("threshold", 2000)
+
+        # Load correlation matrix
+        corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
+        if not corr_file.exists():
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Correlation matrix not found. Run mask extraction first."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        corr_df = pd.read_csv(corr_file)
+
+        # Load existing selections
+        selections = load_mask_selections(masks_dir)
+
+        # Find required files
+        components_files = sorted(glob(str(ica_dir / "*_components.nii.gz")))
+        if not components_files:
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("ICA components not found. Run mask extraction first."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+        components_file = Path(components_files[0])
+
+        yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
+        if not yeo2sub_files:
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Yeo atlas in subject space not found."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+        yeo_subject_space = Path(yeo2sub_files[0])
+
+        # Generate overlays only for RECOMMENDED (best) components initially
+        # Alternative overlays will be generated on-demand when user rejects a mask
+        n_components = config["mask"].get("n_components", 20)
+        self._add_log("[INFO] Generating overlays for recommended ICA components...")
+        self.page.update()
+
+        alternative_overlays = qc.generate_alternative_overlays(
+            mask_extraction_dir=mask_extraction_dir,
+            participant_id=self.participant_id,
+            network_names=network_names,
+            n_alternatives=1,  # Only generate overlay for top component per network
+            output_dir=qc_dir,
+            n_yeo=n_yeo,
+        )
+
+        # Yeo overlays will be generated on-demand when user rejects a mask
+        yeo_overlays = {}
+
+        # Build MaskReviewInfo for each network
+        masks_info = []
+        overlays_dir = qc_dir / "overlays" / "subject"
+
+        for network in network_names:
+            # Get current selection or defaults
+            if network in selections:
+                sel = selections[network]
+                current_component = sel.component_index if sel.component_index is not None else 0
+                current_correlation = sel.correlation
+            else:
+                current_component = int(corr_df[network].idxmax())
+                current_correlation = float(corr_df[network].iloc[current_component])
+
+            # Get all ICA components as alternatives (sorted by correlation)
+            n_components = config["mask"].get("n_components", 20)
+            alternatives = get_alternative_components(corr_df, network, top_n=n_components)
+
+            # Find overlay paths
+            overlay_path = overlays_dir / f"{self.participant_id}_{network}_overlay.png"
+            if not overlay_path.exists():
+                overlay_path = None
+
+            info = MaskReviewInfo(
+                network_name=network,
+                current_component=current_component,
+                current_correlation=current_correlation,
+                alternative_components=alternatives,
+                overlay_path=overlay_path,
+                alternative_overlay_paths=alternative_overlays.get(network, {}),
+                yeo_overlay_path=yeo_overlays.get(network),
+            )
+            masks_info.append(info)
+
+        def on_complete(new_selections):
+            # Set mask approval when user completes review
+            self._set_qc_approved("initial", True)
+            self._add_log("[SUCCESS] Masks reviewed and approved")
+            self._refresh_step_list()
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Masks approved! You can now run coregistration."),
+                bgcolor=ft.Colors.GREEN,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+
+        # Find preprocessing outputs for script generation
+        preprocessing_dir = base_dir / "preprocessing"
+        input_file = preprocessing_dir / f"{self.participant_id}_task-rest_preproc.nii.gz"
+        brain_mask_file = preprocessing_dir / f"{self.participant_id}_task-rest_preproc_mask.nii.gz"
+        ref_file = preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
+
+        # Get ICA parameters from config
+        n_components = config["mask"].get("n_components", 20)
+        smooth_fwhm = config["mask"].get("smooth_fwhm")
+        highpass = config["mask"].get("highpass")
+        lowpass = config["mask"].get("lowpass")
+
+        dialog = MaskSelectionDialog(
+            page=self.page,
+            masks_info=masks_info,
+            participant_id=self.participant_id,
+            masks_dir=masks_dir,
+            components_file=components_file,
+            yeo_subject_space=yeo_subject_space,
+            n_yeo=n_yeo,
+            threshold=threshold,
+            on_complete=on_complete,
+            on_log=self._add_log,
+            # Script generation context
+            mask_extraction_dir=mask_extraction_dir,
+            input_file=input_file if input_file.exists() else None,
+            brain_mask_file=brain_mask_file if brain_mask_file.exists() else None,
+            ref_file=ref_file if ref_file.exists() else None,
+            yeo_targets=network_names,
+            n_components=n_components,
+            smooth_fwhm=smooth_fwhm,
+            highpass=highpass,
+            lowpass=lowpass,
+        )
+        dialog.show()
 
     def _check_collection_status(self, collection_dir: Path, expected_volumes: int) -> StepStatus:
         """Check status of a DICOM collection step.
@@ -187,6 +368,94 @@ class ParticipantWorkflowScreen:
             return StepStatus.INTERRUPTED
         else:
             return StepStatus.PENDING
+
+    def _get_rest_run_info(self) -> List[RunInfo]:
+        """Get information about available resting-state runs.
+
+        Returns:
+            List of RunInfo objects for all configured localizer runs
+        """
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+
+        runs = []
+
+        # Get expected volumes (use new localizer_n_volumes, fall back to legacy)
+        expected_vols = config["scan"].get("localizer_n_volumes")
+        if expected_vols is None:
+            rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
+            expected_vols = (
+                rest_n_volumes[0]
+                if isinstance(rest_n_volumes, list)
+                else rest_n_volumes
+            )
+
+        # Build run info for each configured localizer run
+        for run_num in range(1, n_localizer_runs + 1):
+            run_dir = base_dir / "collection" / f"task-rest_run-{run_num:02d}"
+            actual_vols = len(get_dicom_files(run_dir)) if run_dir.exists() else 0
+
+            runs.append(
+                RunInfo(
+                    run_id=run_num,
+                    run_name=f"Localizer Run {run_num}",
+                    directory=run_dir,
+                    expected_volumes=expected_vols,
+                    actual_volumes=actual_vols,
+                    is_complete=actual_vols >= expected_vols,
+                    selected=actual_vols > 0,  # Pre-select if has data
+                )
+            )
+
+        return runs
+
+    def _needs_run_selection(self) -> bool:
+        """Check if run selection dialog should be shown for preprocessing.
+
+        Returns True if:
+        - Not all configured runs have data
+        - Any run is incomplete
+        """
+        runs = self._get_rest_run_info()
+        runs_with_data = [r for r in runs if r.actual_volumes > 0]
+
+        # No data at all - don't show dialog
+        if not runs_with_data:
+            return False
+
+        # All configured runs complete - no need for selection
+        if len(runs_with_data) == len(runs) and all(r.is_complete for r in runs_with_data):
+            return False
+
+        # Show selection if:
+        # - Not all runs have data
+        # - Any run is incomplete
+        return True
+
+    def _show_run_selection_dialog(self, on_selected):
+        """Show the run selection dialog.
+
+        Args:
+            on_selected: Callback with list of selected run IDs
+        """
+        runs = self._get_rest_run_info()
+
+        def on_confirm(selected_run_ids: List[int]):
+            self._selected_rest_runs = selected_run_ids
+            on_selected(selected_run_ids)
+
+        def on_cancel():
+            # Return to preview panel
+            self._on_preview_cancel()
+
+        dialog = RunSelectionDialog(
+            page=self.page,
+            runs=runs,
+            on_confirm=on_confirm,
+            on_cancel=on_cancel,
+        )
+        dialog.show()
 
     def _check_feedback_step_status(self, log_path: Path, expected_volumes: int) -> StepStatus:
         """Check status of a feedback/transfer run based on feedbacklog.
@@ -284,46 +553,59 @@ class ParticipantWorkflowScreen:
         base_dir = Path(config["paths"]["base_dir"])
         participant_id = self.participant_id
 
-        # Initialize all as pending
-        steps = [
-            "2vol_initial",
-            "rest_run_1",
-            "rest_run_2",
+        # Get dynamic configuration values
+        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        twovol_initial_enabled = config["scan"].get("twovol_initial_enabled", True)
+        twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
+
+        # Build dynamic steps list
+        steps = []
+        if twovol_initial_enabled:
+            steps.append("2vol_initial")
+        # Add rest runs dynamically
+        for i in range(1, n_localizer_runs + 1):
+            steps.append(f"rest_run_{i}")
+        steps.extend([
             "preprocessing",
             "mask_extraction",
-            "coregistration",
-            "2vol_realtime",
-            "coregistration_realtime",
+        ])
+        # Add coregistration only if initial 2vol is enabled
+        if twovol_initial_enabled:
+            steps.append("coregistration")
+        if twovol_realtime_enabled:
+            steps.extend(["2vol_realtime", "coregistration_realtime"])
+        steps.extend([
             "transfer_1",
             "feedback_1",
             "feedback_2",
             "transfer_2",
-        ]
+        ])
 
         for step in steps:
             self.step_statuses[step] = StepStatus.PENDING
 
-        # Check 2vol initial collection
-        twovol_initial_dir = base_dir / "collection" / "task-2vol_run-01"
-        status = self._check_collection_status(twovol_initial_dir, config["scan"]["twovol_n_volumes"])
-        self.step_statuses["2vol_initial"] = status
-        if status != StepStatus.PENDING:
-            logger.info(f"Detected {status.value}: 2vol_initial")
+        # Check 2vol initial collection (only if enabled)
+        if twovol_initial_enabled:
+            twovol_initial_dir = base_dir / "collection" / "task-2vol_run-01"
+            n_vols = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+            status = self._check_collection_status(twovol_initial_dir, n_vols)
+            self.step_statuses["2vol_initial"] = status
+            if status != StepStatus.PENDING:
+                logger.info(f"Detected {status.value}: 2vol_initial")
 
-        # Check rest run collections
-        rest_run_1_dir = base_dir / "collection" / "task-rest_run-01"
-        expected_vols = config["scan"]["rest_n_volumes"][0] if isinstance(config["scan"]["rest_n_volumes"], list) else config["scan"]["rest_n_volumes"]
-        status = self._check_collection_status(rest_run_1_dir, expected_vols)
-        self.step_statuses["rest_run_1"] = status
-        if status != StepStatus.PENDING:
-            logger.info(f"Detected {status.value}: rest_run_1")
+        # Check localizer run collections dynamically
+        expected_vols = config["scan"].get("localizer_n_volumes")
+        if expected_vols is None:
+            rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
+            expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
-        rest_run_2_dir = base_dir / "collection" / "task-rest_run-02"
-        expected_vols = config["scan"]["rest_n_volumes"][1] if isinstance(config["scan"]["rest_n_volumes"], list) and len(config["scan"]["rest_n_volumes"]) > 1 else config["scan"]["rest_n_volumes"]
-        status = self._check_collection_status(rest_run_2_dir, expected_vols)
-        self.step_statuses["rest_run_2"] = status
-        if status != StepStatus.PENDING:
-            logger.info(f"Detected {status.value}: rest_run_2")
+        for run_num in range(1, n_localizer_runs + 1):
+            step_id = f"rest_run_{run_num}"
+            run_dir = base_dir / "collection" / f"task-rest_run-{run_num:02d}"
+            status = self._check_collection_status(run_dir, expected_vols)
+            self.step_statuses[step_id] = status
+            if status != StepStatus.PENDING:
+                logger.info(f"Detected {status.value}: {step_id}")
 
         # Check preprocessing outputs
         preprocessing_dir = base_dir / "preprocessing"
@@ -352,18 +634,22 @@ class ParticipantWorkflowScreen:
             self.step_statuses["coregistration"] = StepStatus.COMPLETE
             logger.info("Detected complete: coregistration")
 
-        # Check 2vol realtime collection
-        twovol_realtime_dir = base_dir / "collection" / "task-2vol_run-02"
-        status = self._check_collection_status(twovol_realtime_dir, config["scan"]["twovol_n_volumes"])
-        self.step_statuses["2vol_realtime"] = status
-        if status != StepStatus.PENDING:
-            logger.info(f"Detected {status.value}: 2vol_realtime")
+        # Check 2vol realtime collection (only if enabled)
+        if twovol_realtime_enabled:
+            twovol_realtime_dir = base_dir / "collection" / "task-2vol_run-02"
+            n_vols = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+            status = self._check_collection_status(twovol_realtime_dir, n_vols)
+            self.step_statuses["2vol_realtime"] = status
+            if status != StepStatus.PENDING:
+                logger.info(f"Detected {status.value}: 2vol_realtime")
 
-        # Check coregistration_realtime (2vol run-02) outputs - realtime is in feedback/01_2vol
-        realtime_twovol_masks_dir = feedback_dir / "01_2vol" / "masks"
-        if realtime_twovol_masks_dir.exists() and len(list(realtime_twovol_masks_dir.glob("*_to_task-2vol_run-02_*.nii.gz"))) > 0:
-            self.step_statuses["coregistration_realtime"] = StepStatus.COMPLETE
-            logger.info("Detected complete: coregistration_realtime")
+            # Check coregistration_realtime (2vol run-02) outputs - realtime is in feedback/01_2vol
+            realtime_twovol_masks_dir = feedback_dir / "01_2vol" / "masks"
+            if realtime_twovol_masks_dir.exists() and len(list(realtime_twovol_masks_dir.glob("*_to_task-2vol_run-02_*.nii.gz"))) > 0:
+                self.step_statuses["coregistration_realtime"] = StepStatus.COMPLETE
+                logger.info("Detected complete: coregistration_realtime")
+        # Note: When 2vol realtime is disabled, those steps are not in the steps list,
+        # so we don't need to mark them as complete
 
         # Check feedback runs (transfer and feedback) using slot-based naming
         feedback_output_dir = feedback_dir / "02_feedback_output"
@@ -389,10 +675,28 @@ class ParticipantWorkflowScreen:
         Returns:
             Session name ("localizer", "mask_extraction", "feedback") or None if all complete
         """
+        next_step = self._get_next_step()
+        if next_step is None:
+            return None
+
+        step_id, _ = next_step
+        return self._get_session_for_step(step_id)
+
+    def _get_session_for_step(self, step_id: str) -> str:
+        """Get the session name for a given step ID.
+
+        Args:
+            step_id: Step identifier
+
+        Returns:
+            Session name ("localizer", "mask_extraction", "feedback")
+        """
+        # Handle dynamic rest_run_* steps
+        if step_id.startswith("rest_run_"):
+            return "localizer"
+
         step_to_session = {
             "2vol_initial": "localizer",
-            "rest_run_1": "localizer",
-            "rest_run_2": "localizer",
             "preprocessing": "mask_extraction",
             "mask_extraction": "mask_extraction",
             "coregistration": "mask_extraction",
@@ -404,12 +708,7 @@ class ParticipantWorkflowScreen:
             "transfer_2": "feedback",
         }
 
-        next_step = self._get_next_step()
-        if next_step is None:
-            return None
-
-        step_id, _ = next_step
-        return step_to_session.get(step_id)
+        return step_to_session.get(step_id, "feedback")
 
     def _get_status_icon(self, status: StepStatus) -> ft.Icon:
         """Get icon for a step status.
@@ -460,15 +759,12 @@ class ParticipantWorkflowScreen:
         """
         status = self.step_statuses.get(step_id, StepStatus.PENDING)
 
-        # Gate 1: Initial QC approval required for feedback session start
-        gate1_steps = ["2vol_realtime", "coregistration_realtime"]
-        requires_initial_approval = step_id in gate1_steps and not self._initial_qc_approved
-
-        # Gate 2: Realtime QC approval required for feedback/transfer runs
-        gate2_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
-        requires_realtime_approval = step_id in gate2_steps and not self._realtime_qc_approved
-
-        requires_approval = requires_initial_approval or requires_realtime_approval
+        # Gate: Mask approval required for coregistration and all subsequent steps
+        gated_steps = [
+            "coregistration", "2vol_realtime", "coregistration_realtime",
+            "transfer_1", "feedback_1", "feedback_2", "transfer_2"
+        ]
+        requires_approval = step_id in gated_steps and not self._initial_qc_approved
 
         button = ft.ElevatedButton(
             label,
@@ -500,33 +796,40 @@ class ParticipantWorkflowScreen:
         Returns:
             ExpansionPanel control
         """
+        config = self.study_config.session_config
+        controls = []
+
+        # Add Initial 2vol section only if enabled
+        if config["scan"].get("twovol_initial_enabled", True):
+            controls.extend([
+                ft.Text("Initial 2vol", size=14, weight=ft.FontWeight.W_500),
+                self._create_step_button(
+                    "2vol_initial",
+                    "Collect",
+                    lambda e: self._on_step_clicked("2vol_initial"),
+                ),
+                ft.Divider(),
+            ])
+
+        # Add localizer/rest runs dynamically based on localizer_n_runs
+        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        controls.append(ft.Text("Resting State", size=14, weight=ft.FontWeight.W_500))
+
+        for run_num in range(1, n_localizer_runs + 1):
+            step_id = f"rest_run_{run_num}"
+            controls.append(
+                self._create_step_button(
+                    step_id,
+                    f"Collect Run {run_num}",
+                    lambda e, sid=step_id: self._on_step_clicked(sid),
+                )
+            )
+
         return ft.ExpansionPanel(
             header=ft.ListTile(
                 title=ft.Text("Localizer Session", weight=ft.FontWeight.BOLD),
             ),
-            content=ft.Column(
-                [
-                    ft.Text("Initial 2vol", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        "2vol_initial",
-                        "Collect",
-                        lambda e: self._on_step_clicked("2vol_initial"),
-                    ),
-                    ft.Divider(),
-                    ft.Text("Resting State", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        "rest_run_1",
-                        "Collect Run 1",
-                        lambda e: self._on_step_clicked("rest_run_1"),
-                    ),
-                    self._create_step_button(
-                        "rest_run_2",
-                        "Collect Run 2",
-                        lambda e: self._on_step_clicked("rest_run_2"),
-                    ),
-                ],
-                spacing=10,
-            ),
+            content=ft.Column(controls, spacing=10),
             expanded=self._get_session_for_next_step() == "localizer",
         )
 
@@ -551,28 +854,26 @@ class ParticipantWorkflowScreen:
                 "Extract Masks",
                 lambda e: self._on_step_clicked("mask_extraction"),
             ),
-            ft.Divider(),
-            ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
-            self._create_step_button(
-                "coregistration",
-                "Coregister to 2vol",
-                lambda e: self._on_step_clicked("coregistration"),
-            ),
         ]
 
-        # Add QC review/approval after coregistration if complete
-        if self.step_statuses.get("coregistration") == StepStatus.COMPLETE:
+        # Add mask review/approval gate after mask extraction completes
+        if self.step_statuses.get("mask_extraction") == StepStatus.COMPLETE:
             if self._initial_qc_approved:
-                # Approved - show "View QC" button with checkmark
+                # Approved - show "Review Masks" button with checkmark
+                masks_customized = self._has_custom_mask_selections()
+                status_text = "Customized" if masks_customized else "Default ICA"
+                status_color = ft.Colors.BLUE if masks_customized else ft.Colors.GREY_600
+
                 controls.append(
                     ft.Container(
                         content=ft.Row(
                             [
                                 ft.TextButton(
-                                    "View QC",
-                                    icon=ft.Icons.ASSESSMENT,
-                                    on_click=lambda e: self._show_qc_approval_dialog("initial"),
+                                    "Review Masks",
+                                    icon=ft.Icons.TUNE,
+                                    on_click=lambda e: self._show_mask_review_dialog(),
                                 ),
+                                ft.Text(f"({status_text})", size=12, color=status_color),
                                 ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
                             ],
                             spacing=5,
@@ -588,9 +889,35 @@ class ParticipantWorkflowScreen:
                             "Review & Approve Masks",
                             icon=ft.Icons.APPROVAL,
                             bgcolor=ft.Colors.ORANGE,
-                            on_click=lambda e: self._show_qc_approval_dialog("initial"),
+                            on_click=lambda e: self._show_mask_review_dialog(),
                         ),
                         padding=ft.padding.only(left=10, top=5),
+                    )
+                )
+
+        # Add coregistration section only if initial 2vol is enabled
+        config = self.study_config.session_config
+        if config["scan"].get("twovol_initial_enabled", True):
+            controls.extend([
+                ft.Divider(),
+                ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+                self._create_step_button(
+                    "coregistration",
+                    "Coregister to 2vol",
+                    lambda e: self._on_step_clicked("coregistration"),
+                ),
+            ])
+
+            # Add optional QC view after coregistration if complete (non-essential)
+            if self.step_statuses.get("coregistration") == StepStatus.COMPLETE:
+                controls.append(
+                    ft.Container(
+                        content=ft.TextButton(
+                            "View Coregistration QC",
+                            icon=ft.Icons.ASSESSMENT,
+                            on_click=lambda e: self._show_coregistration_qc("initial"),
+                        ),
+                        padding=ft.padding.only(left=10),
                     )
                 )
 
@@ -611,54 +938,39 @@ class ParticipantWorkflowScreen:
         Returns:
             ExpansionPanel control
         """
-        # Build controls list
-        controls = [
-            ft.Text("Real-time 2vol", size=14, weight=ft.FontWeight.W_500),
-            self._create_step_button(
-                "2vol_realtime",
-                "Collect",
-                lambda e: self._on_step_clicked("2vol_realtime"),
-            ),
-            ft.Divider(),
-            ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
-            self._create_step_button(
-                "coregistration_realtime",
-                "Coregister",
-                lambda e: self._on_step_clicked("coregistration_realtime"),
-            ),
-        ]
+        config = self.study_config.session_config
 
-        # Add QC review/approval after coregistration_realtime if complete
-        if self.step_statuses.get("coregistration_realtime") == StepStatus.COMPLETE:
-            if self._realtime_qc_approved:
-                # Approved - show "View QC" button with checkmark
+        # Build controls list
+        controls = []
+
+        # Add Real-time 2vol section only if enabled
+        if config["scan"].get("twovol_realtime_enabled", True):
+            controls.extend([
+                ft.Text("Real-time 2vol", size=14, weight=ft.FontWeight.W_500),
+                self._create_step_button(
+                    "2vol_realtime",
+                    "Collect",
+                    lambda e: self._on_step_clicked("2vol_realtime"),
+                ),
+                ft.Divider(),
+                ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+                self._create_step_button(
+                    "coregistration_realtime",
+                    "Coregister",
+                    lambda e: self._on_step_clicked("coregistration_realtime"),
+                ),
+            ])
+
+            # Add optional QC view after coregistration_realtime if complete (non-essential)
+            if self.step_statuses.get("coregistration_realtime") == StepStatus.COMPLETE:
                 controls.append(
                     ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.TextButton(
-                                    "View QC",
-                                    icon=ft.Icons.ASSESSMENT,
-                                    on_click=lambda e: self._show_qc_approval_dialog("realtime"),
-                                ),
-                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
-                            ],
-                            spacing=5,
+                        content=ft.TextButton(
+                            "View Coregistration QC",
+                            icon=ft.Icons.ASSESSMENT,
+                            on_click=lambda e: self._show_coregistration_qc("realtime"),
                         ),
                         padding=ft.padding.only(left=10),
-                    )
-                )
-            else:
-                # Not approved - show prominent approval button
-                controls.append(
-                    ft.Container(
-                        content=ft.FilledButton(
-                            "Review & Approve Masks",
-                            icon=ft.Icons.APPROVAL,
-                            bgcolor=ft.Colors.ORANGE,
-                            on_click=lambda e: self._show_qc_approval_dialog("realtime"),
-                        ),
-                        padding=ft.padding.only(left=10, top=5),
                     )
                 )
 
@@ -698,6 +1010,334 @@ class ParticipantWorkflowScreen:
             ),
             expanded=self._get_session_for_next_step() == "feedback",
         )
+
+    def _get_dir_size(self, path: Path) -> int:
+        """Get total size of directory in bytes.
+
+        Args:
+            path: Directory path to measure
+
+        Returns:
+            Total size in bytes, or 0 if directory doesn't exist
+        """
+        if not path.exists():
+            return 0
+        total = 0
+        try:
+            for entry in path.rglob("*"):
+                if entry.is_file():
+                    total += entry.stat().st_size
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Error calculating size for {path}: {e}")
+        return total
+
+    def _format_size(self, size_bytes: int) -> str:
+        """Format byte size to human-readable string.
+
+        Args:
+            size_bytes: Size in bytes
+
+        Returns:
+            Formatted string (e.g., "2.5 GB", "500 MB")
+        """
+        if size_bytes >= 1024 ** 3:
+            return f"{size_bytes / (1024 ** 3):.1f} GB"
+        elif size_bytes >= 1024 ** 2:
+            return f"{size_bytes / (1024 ** 2):.1f} MB"
+        elif size_bytes >= 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        else:
+            return f"{size_bytes} B"
+
+    def _check_cleanup_available(self) -> dict:
+        """Check what can be cleaned up.
+
+        Returns:
+            dict with keys:
+            - collection_exists: bool
+            - collection_size: int (bytes)
+            - collection_subdirs: list of subdir names
+            - total_size: int (bytes)
+        """
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
+
+        result = {
+            "collection_exists": False,
+            "collection_size": 0,
+            "collection_subdirs": [],
+            "total_size": 0,
+        }
+
+        if collection_dir.exists():
+            subdirs = [d.name for d in collection_dir.iterdir() if d.is_dir()]
+            if subdirs:
+                result["collection_exists"] = True
+                result["collection_subdirs"] = sorted(subdirs)
+                result["collection_size"] = self._get_dir_size(collection_dir)
+
+        result["total_size"] = result["collection_size"]
+        return result
+
+    def _build_utilities_section(self) -> ft.ExpansionPanel:
+        """Build the session utilities section with cleanup step.
+
+        Returns:
+            ExpansionPanel control
+        """
+        cleanup_info = self._check_cleanup_available()
+
+        if cleanup_info["total_size"] > 0:
+            status_text = f"Available ({self._format_size(cleanup_info['total_size'])})"
+            status_color = ft.Colors.ORANGE
+            icon = ft.Icons.DELETE_SWEEP
+        else:
+            status_text = "Nothing to clean"
+            status_color = ft.Colors.GREY
+            icon = ft.Icons.CHECK_CIRCLE
+
+        cleanup_button = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(icon, color=status_color, size=20),
+                    ft.TextButton(
+                        "Cleanup Session",
+                        on_click=lambda e: self._on_cleanup_clicked(),
+                        disabled=self._is_running,
+                    ),
+                    ft.Text(status_text, size=12, color=status_color),
+                ],
+                spacing=5,
+            ),
+            padding=ft.padding.only(left=10),
+        )
+
+        return ft.ExpansionPanel(
+            header=ft.ListTile(
+                title=ft.Text("Session Utilities", weight=ft.FontWeight.BOLD),
+            ),
+            content=ft.Column(
+                [cleanup_button],
+                spacing=10,
+            ),
+            expanded=False,
+        )
+
+    def _on_cleanup_clicked(self):
+        """Handle click on cleanup step - show preview panel."""
+        self._show_cleanup_preview_panel()
+
+    def _show_cleanup_preview_panel(self):
+        """Show the cleanup preview in the right panel."""
+        cleanup_info = self._check_cleanup_available()
+
+        if cleanup_info["total_size"] == 0:
+            # Nothing to clean
+            content = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Icon(ft.Icons.CHECK_CIRCLE, size=64, color=ft.Colors.GREEN),
+                        ft.Text("Nothing to Clean", size=20, weight=ft.FontWeight.BOLD),
+                        ft.Text(
+                            "No temporary files found. The collection directory is empty or doesn't exist.",
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=20,
+                ),
+                alignment=ft.alignment.center,
+                expand=True,
+            )
+        else:
+            # Build list of directories to delete
+            dir_items = []
+            if cleanup_info["collection_exists"]:
+                dir_items.append(
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Icon(ft.Icons.FOLDER, color=ft.Colors.AMBER),
+                                        ft.Text("collection/", weight=ft.FontWeight.BOLD),
+                                        ft.Text(
+                                            f"({self._format_size(cleanup_info['collection_size'])})",
+                                            color=ft.Colors.GREY_600,
+                                        ),
+                                    ],
+                                    spacing=10,
+                                ),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
+                                            for subdir in cleanup_info["collection_subdirs"][:6]
+                                        ] + (
+                                            [ft.Text(f"  ... and {len(cleanup_info['collection_subdirs']) - 6} more", size=12, color=ft.Colors.GREY_500)]
+                                            if len(cleanup_info["collection_subdirs"]) > 6 else []
+                                        ),
+                                        spacing=2,
+                                    ),
+                                    padding=ft.padding.only(left=30),
+                                ),
+                            ],
+                            spacing=5,
+                        ),
+                        padding=10,
+                        bgcolor=ft.Colors.GREY_100,
+                        border_radius=5,
+                    )
+                )
+
+            content = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text("Session Cleanup", size=20, weight=ft.FontWeight.BOLD),
+                        ft.Divider(),
+                        ft.Text("The following directories will be permanently deleted:"),
+                        ft.Container(height=10),
+                        *dir_items,
+                        ft.Container(height=10),
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    ft.Text("Total:", weight=ft.FontWeight.BOLD),
+                                    ft.Text(self._format_size(cleanup_info["total_size"])),
+                                ],
+                                spacing=10,
+                            ),
+                            padding=10,
+                            bgcolor=ft.Colors.BLUE_50,
+                            border_radius=5,
+                        ),
+                        ft.Container(height=20),
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    ft.Icon(ft.Icons.WARNING, color=ft.Colors.ORANGE),
+                                    ft.Text(
+                                        "Warning: This action cannot be undone.",
+                                        color=ft.Colors.ORANGE_900,
+                                        weight=ft.FontWeight.W_500,
+                                    ),
+                                ],
+                                spacing=10,
+                            ),
+                            padding=10,
+                            bgcolor=ft.Colors.ORANGE_50,
+                            border_radius=5,
+                        ),
+                        ft.Container(height=20),
+                        ft.Row(
+                            [
+                                ft.OutlinedButton(
+                                    "Cancel",
+                                    on_click=lambda e: self._show_default_preview(),
+                                ),
+                                ft.FilledButton(
+                                    "Run Cleanup",
+                                    icon=ft.Icons.DELETE_SWEEP,
+                                    bgcolor=ft.Colors.RED,
+                                    on_click=lambda e: self._show_cleanup_confirmation(),
+                                    disabled=self._is_running,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.END,
+                            spacing=10,
+                        ),
+                    ],
+                    spacing=5,
+                ),
+                padding=20,
+            )
+
+        if self.right_panel_container:
+            self.right_panel_container.content = content
+            self.right_panel_container.update()
+
+    def _show_default_preview(self):
+        """Show the default preview panel."""
+        if self.right_panel_container:
+            self.right_panel_container.content = self._build_preview_panel()
+            self.right_panel_container.update()
+
+    def _show_cleanup_confirmation(self):
+        """Show confirmation dialog before cleanup."""
+        cleanup_info = self._check_cleanup_available()
+
+        def on_confirm(e):
+            dialog.open = False
+            self.page.update()
+            self._run_cleanup()
+
+        def on_cancel(e):
+            dialog.open = False
+            self.page.update()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Confirm Cleanup"),
+            content=ft.Text(
+                f"Are you sure you want to delete {self._format_size(cleanup_info['total_size'])} "
+                f"of temporary files?\n\nThis action cannot be undone."
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=on_cancel),
+                ft.FilledButton(
+                    "Delete",
+                    bgcolor=ft.Colors.RED,
+                    on_click=on_confirm,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
+    def _run_cleanup(self):
+        """Execute cleanup - delete collection directory."""
+        import shutil
+
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
+
+        self._add_log("[INFO] Starting cleanup...")
+
+        try:
+            if collection_dir.exists():
+                shutil.rmtree(collection_dir)
+                self._add_log(f"[SUCCESS] Deleted: {collection_dir}")
+                logger.info(f"Cleanup: deleted {collection_dir}")
+
+            self._add_log("[SUCCESS] Cleanup complete")
+
+            # Show success snackbar
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Cleanup complete. Temporary files have been deleted."),
+                bgcolor=ft.Colors.GREEN,
+                open=True,
+            )
+            self.page.update()
+
+            # Refresh the UI - step list first (to update utilities section status)
+            self._refresh_step_list()
+            # Show default preview panel (cleanup complete state)
+            self._show_default_preview()
+
+        except Exception as e:
+            self._add_log(f"[ERROR] Cleanup failed: {e}")
+            logger.error(f"Cleanup failed: {e}")
+
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text(f"Cleanup failed: {e}"),
+                bgcolor=ft.Colors.RED,
+                open=True,
+            )
+            self.page.update()
 
     def _show_qc_approval_dialog(self, approval_type: str):
         """Show mandatory QC approval dialog after coregistration.
@@ -751,6 +1391,34 @@ class ParticipantWorkflowScreen:
             require_approval=True,
             on_approve=on_approve,
             on_reject=on_reject,
+        )
+        viewer.show()
+
+    def _show_coregistration_qc(self, qc_type: str):
+        """Show coregistration QC viewer (non-essential, view-only).
+
+        Args:
+            qc_type: "initial" (after coregistration) or "realtime" (after coregistration_realtime)
+        """
+        from ..components.qc_plot_viewer import QCPlotViewer
+
+        logger.info(f"Opening coregistration QC viewer: {qc_type}")
+
+        # Get 2vol overlay plots
+        plots = self.qc_manager.get_2vol_qc_plots()
+        html_path = self.qc_manager.get_mask_extraction_qc()
+
+        if qc_type == "initial":
+            title = "Initial 2vol Coregistration QC"
+        else:
+            title = "Real-time 2vol Coregistration QC"
+
+        viewer = QCPlotViewer(
+            page=self.page,
+            title=title,
+            plots=plots,
+            html_report_path=html_path,
+            require_approval=False,  # View-only, no approval needed
         )
         viewer.show()
 
@@ -811,12 +1479,10 @@ class ParticipantWorkflowScreen:
                     ft.Row(
                         [
                             ft.Text("Log Console", weight=ft.FontWeight.BOLD),
-                            ft.Row(
-                                [
-                                    ft.TextButton("Clear", icon=ft.icons.Icons.CLEAR),
-                                    ft.TextButton("Export", icon=ft.icons.Icons.SAVE),
-                                ],
-                                spacing=5,
+                            ft.TextButton(
+                                "Clear",
+                                icon=ft.icons.Icons.CLEAR,
+                                on_click=self._clear_log,
                             ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -1053,40 +1719,16 @@ class ParticipantWorkflowScreen:
         # Map step IDs to their information
         step_info_map = {
             "2vol_initial": {
-                "label": "Collect Initial 2vol",
-                "description": "Collect 2 volumes for initial positioning verification before resting-state acquisition.",
+                "label": "Collect Initial 2vol" + ("" if config["scan"].get("twovol_initial_enabled", True) else " (Disabled)"),
+                "description": "Collect 2 volumes for initial positioning verification before localizer acquisition." if config["scan"].get("twovol_initial_enabled", True) else "Initial 2vol collection is disabled in study configuration.",
                 "parameters": {
                     "Task": "2vol (run-01)",
-                    "Volumes": config["scan"]["twovol_n_volumes"],
+                    "Volumes": config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2)),
                     "Source": config["scan"]["twovol_initial_dicoms"],
                     "Output": base_dir / "collection" / "task-2vol_run-01",
-                    "Simulator Speed": f"{config['scan']['collection_speed']}x",
-                },
+                    "Enabled": "Yes" if config["scan"].get("twovol_initial_enabled", True) else "No",
+                } if config["scan"].get("twovol_initial_enabled", True) else {"Status": "Disabled"},
                 "output_path": base_dir / "collection" / "task-2vol_run-01",
-            },
-            "rest_run_1": {
-                "label": "Collect Rest Run 1",
-                "description": "Collect resting-state fMRI data (run 1) for network mask extraction.",
-                "parameters": {
-                    "Task": "rest (run-01)",
-                    "Volumes": config["scan"]["rest_n_volumes"][0] if isinstance(config["scan"]["rest_n_volumes"], list) else config["scan"]["rest_n_volumes"],
-                    "Source": config["scan"]["rest_source_dicoms"][0] if isinstance(config["scan"]["rest_source_dicoms"], list) else config["scan"]["rest_source_dicoms"],
-                    "Output": base_dir / "collection" / "task-rest_run-01",
-                    "Simulator Speed": f"{config['scan']['collection_speed']}x",
-                },
-                "output_path": base_dir / "collection" / "task-rest_run-01",
-            },
-            "rest_run_2": {
-                "label": "Collect Rest Run 2",
-                "description": "Collect resting-state fMRI data (run 2) for network mask extraction.",
-                "parameters": {
-                    "Task": "rest (run-02)",
-                    "Volumes": config["scan"]["rest_n_volumes"][1] if isinstance(config["scan"]["rest_n_volumes"], list) and len(config["scan"]["rest_n_volumes"]) > 1 else config["scan"]["rest_n_volumes"],
-                    "Source": config["scan"]["rest_source_dicoms"][1] if isinstance(config["scan"]["rest_source_dicoms"], list) and len(config["scan"]["rest_source_dicoms"]) > 1 else config["scan"]["rest_source_dicoms"],
-                    "Output": base_dir / "collection" / "task-rest_run-02",
-                    "Simulator Speed": f"{config['scan']['collection_speed']}x",
-                },
-                "output_path": base_dir / "collection" / "task-rest_run-02",
             },
             "preprocessing": {
                 "label": "Run Preprocessing",
@@ -1122,15 +1764,15 @@ class ParticipantWorkflowScreen:
                 "output_pattern": "*_to_task-2vol_run-01_*.nii.gz",
             },
             "2vol_realtime": {
-                "label": "Collect Real-time 2vol",
-                "description": "Collect 2 volumes immediately before feedback session for real-time registration verification.",
+                "label": "Collect Real-time 2vol" + ("" if config["scan"].get("twovol_realtime_enabled", True) else " (Disabled)"),
+                "description": "Collect 2 volumes immediately before feedback session for real-time registration verification." if config["scan"].get("twovol_realtime_enabled", True) else "Real-time 2vol collection is disabled. Feedback will use masks from subject boldref space.",
                 "parameters": {
                     "Task": "2vol (run-02)",
-                    "Volumes": config["scan"]["twovol_n_volumes"],
+                    "Volumes": config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2)),
                     "Source": config["scan"]["twovol_realtime_dicoms"],
                     "Output": base_dir / "collection" / "task-2vol_run-02",
-                    "Simulator Speed": f"{config['scan']['collection_speed']}x",
-                },
+                    "Enabled": "Yes" if config["scan"].get("twovol_realtime_enabled", True) else "No",
+                } if config["scan"].get("twovol_realtime_enabled", True) else {"Status": "Disabled - using boldref masks"},
                 "output_path": base_dir / "collection" / "task-2vol_run-02",
             },
             "coregistration_realtime": {
@@ -1153,6 +1795,7 @@ class ParticipantWorkflowScreen:
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF",
                     "Output": base_dir / "feedback" / "02_feedback_output",
+                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
                 "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-transfer_run-01_feedbacklog.tsv",
             },
@@ -1166,6 +1809,7 @@ class ParticipantWorkflowScreen:
                     "Feedback": "ON",
                     "Networks": ", ".join(config['mask']['mask_names']),
                     "Output": base_dir / "feedback" / "02_feedback_output",
+                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
                 "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-feedback_run-01_feedbacklog.tsv",
             },
@@ -1179,6 +1823,7 @@ class ParticipantWorkflowScreen:
                     "Feedback": "ON",
                     "Networks": ", ".join(config['mask']['mask_names']),
                     "Output": base_dir / "feedback" / "02_feedback_output",
+                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
                 "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-feedback_run-02_feedbacklog.tsv",
             },
@@ -1191,17 +1836,39 @@ class ParticipantWorkflowScreen:
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF",
                     "Output": base_dir / "feedback" / "02_feedback_output",
+                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
                 "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-transfer_run-02_feedbacklog.tsv",
             },
         }
 
-        info = step_info_map.get(step_id, {
-            "label": step_id,
-            "description": "Unknown step",
-            "parameters": {},
-            "output_path": None,
-        })
+        # Handle dynamic rest_run_* steps
+        if step_id.startswith("rest_run_"):
+            run_num = int(step_id.split("_")[-1])
+            run_idx = run_num - 1  # 0-indexed for accessing lists
+
+            localizer_dicoms = config["scan"].get("localizer_source_dicoms") or config["scan"].get("rest_source_dicoms", [])
+            source_dicom = localizer_dicoms[run_idx] if run_idx < len(localizer_dicoms) else ""
+
+            info = {
+                "label": f"Collect Localizer Run {run_num}",
+                "description": f"Collect localizer fMRI data (run {run_num}) for network mask extraction.",
+                "parameters": {
+                    "Task": f"{config['scan'].get('localizer_task_type', 'rest')} (run-{run_num:02d})",
+                    "Volumes": config["scan"].get("localizer_n_volumes") or 200,
+                    "Source": source_dicom,
+                    "Output": base_dir / "collection" / f"task-rest_run-{run_num:02d}",
+                    "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 10.0))}x",
+                },
+                "output_path": base_dir / "collection" / f"task-rest_run-{run_num:02d}",
+            }
+        else:
+            info = step_info_map.get(step_id, {
+                "label": step_id,
+                "description": "Unknown step",
+                "parameters": {},
+                "output_path": None,
+            })
 
         # For feedback/transfer steps, show slot-based run info with acq entity
         feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
@@ -1260,6 +1927,30 @@ class ParticipantWorkflowScreen:
         Args:
             step_id: Step identifier to execute
         """
+        # For preprocessing, check if run selection is needed
+        if step_id == "preprocessing" and self._needs_run_selection():
+            # Show run selection dialog first
+            def on_runs_selected(selected_runs: List[int]):
+                self._add_log(f"Selected runs for preprocessing: {selected_runs}")
+                self._start_step(step_id)
+
+            self._show_run_selection_dialog(on_runs_selected)
+            return
+
+        # Clear any previous selection for non-preprocessing steps
+        if step_id != "preprocessing":
+            self._selected_rest_runs = None
+
+        self._start_step(step_id)
+
+    def _start_step(self, step_id: str):
+        """Actually start executing a pipeline step.
+
+        This is called after any pre-step dialogs (like run selection) are completed.
+
+        Args:
+            step_id: Step identifier to execute
+        """
         logger.info(f"Starting step: {step_id}")
 
         # Set running state and lock UI
@@ -1278,7 +1969,14 @@ class ParticipantWorkflowScreen:
                 on_progress=self._on_pipeline_progress,
                 on_complete=self._on_pipeline_complete,
                 on_error=self._on_pipeline_error,
+                on_collection_progress=self._on_collection_progress,
             )
+
+        # Pass selected runs to runner for preprocessing step
+        if step_id == "preprocessing":
+            self.pipeline_runner.set_selected_rest_runs(self._selected_rest_runs)
+        else:
+            self.pipeline_runner.set_selected_rest_runs(None)
 
         # Show monitoring panel (creates task_mirror for feedback steps)
         self._show_monitoring_panel(step_id)
@@ -1454,6 +2152,38 @@ class ParticipantWorkflowScreen:
 
         logger.info(message)
 
+    def _setup_file_logging(self):
+        """Set up file-based logging to capture full debug output for export."""
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        logs_dir = base_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create log file with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._log_file_path = logs_dir / f"session_{timestamp}.log"
+
+        # Create file handler for the root logger to capture all pyrtnf logs
+        self._log_file_handler = logging.FileHandler(self._log_file_path)
+        self._log_file_handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        self._log_file_handler.setFormatter(formatter)
+
+        # Add handler to pyrtnf root logger to capture all module logs
+        pyrtnf_logger = logging.getLogger("pyrtnf")
+        pyrtnf_logger.addHandler(self._log_file_handler)
+
+        logger.info(f"Session log file: {self._log_file_path}")
+
+    def _clear_log(self, e=None):
+        """Clear the log console display."""
+        self.log_messages.clear()
+        if self.log_listview is not None:
+            self.log_listview.controls.clear()
+            self.log_listview.update()
+        logger.debug("Log console cleared by user")
+
     def _show_monitoring_panel(self, step_id: str):
         """Show monitoring panel for a running step.
 
@@ -1592,45 +2322,90 @@ class ParticipantWorkflowScreen:
             self._start_feedback_monitoring(step_id)
 
         else:
-            # Simple monitoring panel for non-feedback steps
-            monitoring_panel = ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text(
-                            f"Running: {self._get_step_label(step_id)}",
-                            size=18,
-                            weight=ft.FontWeight.BOLD,
-                        ),
-                        ft.Divider(),
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.ProgressRing(),
-                                    ft.Text("Processing...", size=14),
-                                ],
-                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                spacing=10,
-                            ),
-                            alignment=ft.Alignment(0, 0),  # Center alignment
-                            expand=True,
-                        ),
-                        ft.Row(
-                            [
-                                ft.FilledButton(
-                                    "Stop",
-                                    icon=ft.icons.Icons.STOP,
-                                    on_click=lambda e: self._on_stop_clicked(),
-                                    bgcolor=ft.Colors.RED,
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.END,
-                        ),
-                    ],
-                    spacing=10,
-                ),
-                padding=20,
-                expand=True,
+            # Check if this is a collection step (including dynamic rest_run_* steps)
+            is_collection_step = (
+                step_id in ["2vol_initial", "2vol_realtime"] or
+                step_id.startswith("rest_run_")
             )
+
+            if is_collection_step:
+                # Collection progress panel with DICOM preview
+                n_volumes = self._get_collection_n_volumes(step_id)
+                tr = config["scan"].get("tr")
+
+                self.collection_progress = CollectionProgressPanel(
+                    n_volumes=n_volumes,
+                    tr=tr,
+                )
+
+                monitoring_panel = ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                self._get_step_label(step_id),
+                                size=18,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            ft.Divider(),
+                            self.collection_progress.build(),
+                            ft.Row(
+                                [
+                                    ft.FilledButton(
+                                        "Stop",
+                                        icon=ft.Icons.STOP,
+                                        on_click=lambda e: self._on_stop_clicked(),
+                                        bgcolor=ft.Colors.RED,
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.END,
+                            ),
+                        ],
+                        spacing=10,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=20,
+                    expand=True,
+                )
+            else:
+                # Simple monitoring panel for other non-feedback steps (preprocessing, etc.)
+                monitoring_panel = ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                f"Running: {self._get_step_label(step_id)}",
+                                size=18,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            ft.Divider(),
+                            ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.ProgressRing(),
+                                        ft.Text("Processing...", size=14),
+                                    ],
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=10,
+                                ),
+                                alignment=ft.Alignment(0, 0),  # Center alignment
+                                expand=True,
+                            ),
+                            ft.Row(
+                                [
+                                    ft.FilledButton(
+                                        "Stop",
+                                        icon=ft.Icons.STOP,
+                                        on_click=lambda e: self._on_stop_clicked(),
+                                        bgcolor=ft.Colors.RED,
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.END,
+                            ),
+                        ],
+                        spacing=10,
+                    ),
+                    padding=20,
+                    expand=True,
+                )
 
         # Replace right panel content
         if self.right_panel_container is not None:
@@ -1646,10 +2421,13 @@ class ParticipantWorkflowScreen:
         Returns:
             Human-readable label
         """
+        # Handle dynamic rest_run_* steps
+        if step_id.startswith("rest_run_"):
+            run_num = step_id.split("_")[-1]
+            return f"Collect Rest Run {run_num}"
+
         labels = {
             "2vol_initial": "Collect Initial 2vol",
-            "rest_run_1": "Collect Rest Run 1",
-            "rest_run_2": "Collect Rest Run 2",
             "preprocessing": "Run Preprocessing",
             "mask_extraction": "Extract Masks",
             "coregistration": "Coregister to 2vol",
@@ -1661,6 +2439,65 @@ class ParticipantWorkflowScreen:
             "transfer_2": "Transfer Run 2",
         }
         return labels.get(step_id, step_id)
+
+    def _get_collection_n_volumes(self, step_id: str) -> int:
+        """Get expected number of volumes for a collection step.
+
+        Args:
+            step_id: Step identifier
+
+        Returns:
+            Expected number of volumes
+        """
+        config = self.study_config.session_config
+
+        if step_id == "2vol_initial":
+            return config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+
+        elif step_id == "2vol_realtime":
+            return config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+
+        elif step_id.startswith("rest_run_"):
+            # Use new localizer_n_volumes, fall back to legacy
+            n_volumes = config["scan"].get("localizer_n_volumes")
+            if n_volumes is not None:
+                return n_volumes
+            # Legacy: try to get from rest_n_volumes list
+            run_num = int(step_id.split("_")[-1])
+            run_idx = run_num - 1
+            rest_volumes = config["scan"].get("rest_n_volumes", [200])
+            if isinstance(rest_volumes, list) and run_idx < len(rest_volumes):
+                return rest_volumes[run_idx]
+            return rest_volumes[0] if isinstance(rest_volumes, list) else rest_volumes
+
+        return 0
+
+    def _on_collection_progress(
+        self,
+        volumes_collected: int,
+        n_volumes: int,
+        elapsed_time: float,
+        dicom_path: Path,
+    ):
+        """Handle collection progress updates from pipeline runner.
+
+        Args:
+            volumes_collected: Number of volumes collected so far
+            n_volumes: Total expected volumes
+            elapsed_time: Time elapsed since start (seconds)
+            dicom_path: Path to the latest collected DICOM file
+        """
+        # This callback runs in the background thread
+        # Schedule UI update on the main thread
+        async def update_ui():
+            if hasattr(self, 'collection_progress') and self.collection_progress is not None:
+                self.collection_progress.update(volumes_collected, elapsed_time, dicom_path)
+                self.page.update()
+
+        try:
+            self.page.run_task(update_ui)
+        except Exception as e:
+            logger.error(f"Failed to schedule collection progress update: {e}")
 
     def _start_feedback_monitoring(self, step_id: str):
         """Start monitoring feedback log file for real-time updates.
@@ -1701,7 +2538,7 @@ class ParticipantWorkflowScreen:
 
     def _stop_feedback_monitoring(self):
         """Stop the feedback log monitor."""
-        if self.feedback_monitor:
+        if hasattr(self, 'feedback_monitor') and self.feedback_monitor:
             self.feedback_monitor.stop()
             self.feedback_monitor = None
 
@@ -1892,21 +2729,46 @@ class ParticipantWorkflowScreen:
         Returns:
             Tuple of (step_id, step_label) or None if all complete
         """
-        # Define workflow order
-        workflow = [
-            ("2vol_initial", "Collect Initial 2vol"),
-            ("rest_run_1", "Collect Rest Run 1"),
-            ("rest_run_2", "Collect Rest Run 2"),
+        # Build dynamic workflow order based on configuration
+        config = self.study_config.session_config
+        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        twovol_initial_enabled = config["scan"].get("twovol_initial_enabled", True)
+        twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
+
+        workflow = []
+
+        # Add Initial 2vol if enabled
+        if twovol_initial_enabled:
+            workflow.append(("2vol_initial", "Collect Initial 2vol"))
+
+        # Add localizer runs dynamically
+        for run_num in range(1, n_localizer_runs + 1):
+            workflow.append((f"rest_run_{run_num}", f"Collect Rest Run {run_num}"))
+
+        # Add mask extraction steps
+        workflow.extend([
             ("preprocessing", "Run Preprocessing"),
             ("mask_extraction", "Extract Masks"),
-            ("coregistration", "Coregister to 2vol"),
-            ("2vol_realtime", "Collect Real-time 2vol"),
-            ("coregistration_realtime", "Coregister to Real-time 2vol"),
+        ])
+
+        # Add coregistration only if initial 2vol is enabled
+        if twovol_initial_enabled:
+            workflow.append(("coregistration", "Coregister to 2vol"))
+
+        # Add realtime 2vol if enabled
+        if twovol_realtime_enabled:
+            workflow.extend([
+                ("2vol_realtime", "Collect Real-time 2vol"),
+                ("coregistration_realtime", "Coregister to Real-time 2vol"),
+            ])
+
+        # Add feedback runs
+        workflow.extend([
             ("transfer_1", "Transfer Run 1"),
             ("feedback_1", "Feedback Run 1"),
             ("feedback_2", "Feedback Run 2"),
             ("transfer_2", "Transfer Run 2"),
-        ]
+        ])
 
         # Debug: log current statuses
         logger.info("Current step statuses:")
@@ -2013,6 +2875,7 @@ class ParticipantWorkflowScreen:
             self._build_localizer_session_section(),
             self._build_mask_extraction_section(),
             self._build_feedback_section(),
+            self._build_utilities_section(),
         ]
 
         # Force updates in the correct order
@@ -2108,6 +2971,7 @@ class ParticipantWorkflowScreen:
                 self._build_localizer_session_section(),
                 self._build_mask_extraction_section(),
                 self._build_feedback_section(),
+                self._build_utilities_section(),
             ],
         )
 

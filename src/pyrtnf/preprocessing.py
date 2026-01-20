@@ -42,7 +42,7 @@ Jenkinson, M., Beckmann, C. F., Behrens, T. E., Woolrich, M. W., & Smith, S. M. 
 """
 
 # Standard library imports
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Callable
 from pathlib import Path
 import heapq
 import shutil
@@ -605,6 +605,8 @@ def collect_dicoms(
     simulator_source_dir: Optional[Union[str, Path]] = None,
     simulator_speed: float = 1.0,
     poll_interval: float = 0.5,
+    progress_callback: Optional[Callable[[int, int, float, Path], None]] = None,
+    stop_event: Optional[threading.Event] = None,
 ) -> Path:
     """
     Watch for incoming DICOMs during scanner acquisition and collect them.
@@ -637,6 +639,12 @@ def collect_dicoms(
         Only used if simulator_source_dir is provided.
     poll_interval : float, default=0.5
         How often to check for new files when queue is empty (seconds).
+    progress_callback : callable, optional
+        Function called after each volume with signature:
+        callback(volumes_collected, n_volumes, elapsed_time, dicom_path).
+        Use this to update progress displays during collection.
+    stop_event : threading.Event, optional
+        Event to signal early termination. If set, collection stops gracefully.
 
     Returns
     -------
@@ -766,7 +774,7 @@ def collect_dicoms(
         )
 
         def run_simulator():
-            for _ in simulator.copy_volumes_iter():
+            for _ in simulator.copy_volumes_iter(stop_event=stop_event):
                 pass
 
         simulator_thread = threading.Thread(target=run_simulator, daemon=True)
@@ -780,6 +788,11 @@ def collect_dicoms(
 
     try:
         while collected_count < n_volumes:
+            # Check for stop signal
+            if stop_event is not None and stop_event.is_set():
+                logger.info(f"Collection stopped by user after {collected_count}/{n_volumes} volumes")
+                break
+
             # Check timeout
             elapsed = time.time() - start_time
             if elapsed > timeout:
@@ -799,6 +812,14 @@ def collect_dicoms(
                 shutil.copy2(file_path, dest_path)
                 collected_count += 1
 
+                # Call progress callback
+                if progress_callback is not None:
+                    elapsed = time.time() - start_time
+                    try:
+                        progress_callback(collected_count, n_volumes, elapsed, dest_path)
+                    except Exception as e:
+                        logger.warning(f"Progress callback error: {e}")
+
                 if collected_count % 10 == 0 or collected_count == n_volumes:
                     logger.info(f"Collected {collected_count}/{n_volumes} volumes")
             else:
@@ -810,10 +831,14 @@ def collect_dicoms(
         observer.stop()
         observer.join()
 
-        # Wait for simulator to finish copying all volumes (no early termination)
+        # Wait for simulator to finish (skip if stopped early to avoid blocking)
         if simulator_thread is not None:
-            simulator_thread.join()  # No timeout - wait for completion
-            logger.debug("Simulator thread completed")
+            if stop_event is not None and stop_event.is_set():
+                # Don't wait for simulator when stopped - it's a daemon thread
+                logger.debug("Skipping simulator join (stopped by user)")
+            else:
+                simulator_thread.join()  # Wait for completion
+                logger.debug("Simulator thread completed")
 
         # Clean up watch directory (remove incoming DICOMs)
         if clear_watch_dir and watch_dir.exists():

@@ -27,6 +27,7 @@ class PipelineRunner:
         on_progress: Optional[Callable[[str], None]] = None,
         on_complete: Optional[Callable[[bool, Optional[str]], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
+        on_collection_progress: Optional[Callable[[int, int, float, Path], None]] = None,
     ):
         """Initialize pipeline runner.
 
@@ -36,17 +37,29 @@ class PipelineRunner:
             on_progress: Callback for progress updates (message)
             on_complete: Callback when step completes (success, result_message)
             on_error: Callback when step fails (exception)
+            on_collection_progress: Callback for DICOM collection progress
+                (volumes_collected, n_volumes, elapsed_time, dicom_path)
         """
         self.config = config
         self.participant_id = participant_id
         self.on_progress = on_progress
         self.on_complete = on_complete
         self.on_error = on_error
+        self.on_collection_progress = on_collection_progress
 
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._current_coordinator = None  # Track coordinator for feedback tasks
         self._task_mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._selected_rest_runs: Optional[list] = None  # Selected runs for preprocessing
+
+    def set_selected_rest_runs(self, runs: Optional[list]) -> None:
+        """Set which rest runs to use for preprocessing.
+
+        Args:
+            runs: List of run IDs (1 and/or 2), or None to use all available
+        """
+        self._selected_rest_runs = runs
 
     def set_task_mirror_callback(
         self, callback: Optional[Callable[[Dict[str, Any]], None]]
@@ -69,11 +82,13 @@ class PipelineRunner:
         Args:
             step_id: Step identifier to execute
         """
+        # Check if a step is already running
         if self._thread is not None and self._thread.is_alive():
             logger.warning(f"Step already running: {self._thread.name}")
             return
 
         self._stop_event.clear()
+
         self._thread = threading.Thread(
             target=self._run_step_impl,
             args=(step_id,),
@@ -92,10 +107,11 @@ class PipelineRunner:
             If True and a feedback task is running, show post-run questions
             to the participant before stopping. Default is False.
         """
-        if self._thread is not None and self._thread.is_alive():
-            logger.info(f"Signaling pipeline step to stop (show_questions={show_questions})")
-            self._stop_event.set()
+        logger.info(f"Signaling pipeline step to stop (show_questions={show_questions})")
+        self._stop_event.set()
 
+        # Stop thread-based steps
+        if self._thread is not None and self._thread.is_alive():
             # If a feedback task is running, stop the coordinator
             if self._current_coordinator is not None:
                 logger.info("Stopping feedback coordinator")
@@ -113,10 +129,10 @@ class PipelineRunner:
             # Execute the appropriate step
             if step_id == "2vol_initial":
                 self._run_2vol_initial()
-            elif step_id == "rest_run_1":
-                self._run_rest_run_1()
-            elif step_id == "rest_run_2":
-                self._run_rest_run_2()
+            elif step_id.startswith("rest_run_"):
+                # Handle dynamic rest run steps (rest_run_1, rest_run_2, etc.)
+                run_num = int(step_id.split("_")[-1])
+                self._run_rest_run(run_num)
             elif step_id == "preprocessing":
                 self._run_preprocessing()
             elif step_id == "mask_extraction":
@@ -158,100 +174,113 @@ class PipelineRunner:
 
     def _run_2vol_initial(self) -> None:
         """Collect initial 2vol for positioning verification."""
+        config = self.config
+
+        # Check if 2vol initial is enabled
+        if not config["scan"].get("twovol_initial_enabled", True):
+            self._emit_progress("2vol initial collection is disabled, skipping...")
+            return
+
         self._emit_progress("Collecting initial 2vol DICOMs...")
 
-        config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         output_dir = base_dir / "collection" / "task-2vol_run-01"
 
-        # Create temporary watch directory
-        watch_dir = base_dir / "tmp" / "incoming_2vol_initial"
-        watch_dir.mkdir(parents=True, exist_ok=True)
+        # Get number of volumes (use new field, fall back to legacy)
+        n_volumes = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
 
-        collect_dicoms(
-            watch_dir=watch_dir,
-            output_dir=output_dir,
-            n_volumes=config["scan"]["twovol_n_volumes"],
-            simulator_source_dir=config["scan"]["twovol_initial_dicoms"],
-            simulator_speed=config["scan"]["collection_speed"],
-            clear_watch_dir=True,
-            clear_output_dir=False,  # Don't clear if re-running
-        )
+        # Determine simulator vs real-time mode
+        simulator_enabled = config["scan"].get("simulator_enabled", True)
 
-        self._emit_progress(f"Collected {config['scan']['twovol_n_volumes']} volumes to {output_dir}")
-
-    def _run_rest_run_1(self) -> None:
-        """Collect resting-state run 1."""
-        self._emit_progress("Collecting rest run 1 DICOMs...")
-
-        config = self.config
-        base_dir = Path(config["paths"]["base_dir"])
-        output_dir = base_dir / "collection" / "task-rest_run-01"
-
-        # Get expected volumes
-        rest_volumes = config["scan"]["rest_n_volumes"]
-        if isinstance(rest_volumes, list):
-            n_volumes = rest_volumes[0]
+        if simulator_enabled:
+            # Simulator mode: create temp watch dir and use source DICOMs
+            watch_dir = base_dir / "tmp" / "incoming_2vol_initial"
+            watch_dir.mkdir(parents=True, exist_ok=True)
+            simulator_source_dir = config["scan"]["twovol_initial_dicoms"]
+            simulator_speed = config["scan"].get("collection_speed", 10.0)
         else:
-            n_volumes = rest_volumes
-
-        # Get source directory
-        rest_sources = config["scan"]["rest_source_dicoms"]
-        if isinstance(rest_sources, list):
-            source_dir = rest_sources[0]
-        else:
-            source_dir = rest_sources
-
-        # Create temporary watch directory
-        watch_dir = base_dir / "tmp" / "incoming_rest_run1"
-        watch_dir.mkdir(parents=True, exist_ok=True)
+            # Real-time mode: watch scanner DICOM directory
+            watch_dir = Path(config["scan"]["scanner_dicom_dir"])
+            simulator_source_dir = None
+            simulator_speed = 1.0
 
         collect_dicoms(
             watch_dir=watch_dir,
             output_dir=output_dir,
             n_volumes=n_volumes,
-            simulator_source_dir=source_dir,
-            simulator_speed=config["scan"]["collection_speed"],
-            clear_watch_dir=True,
-            clear_output_dir=False,
+            simulator_source_dir=simulator_source_dir,
+            simulator_speed=simulator_speed,
+            clear_watch_dir=simulator_enabled,  # Only clear in simulator mode
+            clear_output_dir=False,  # Don't clear if re-running
+            progress_callback=self.on_collection_progress,
+            stop_event=self._stop_event,
         )
 
         self._emit_progress(f"Collected {n_volumes} volumes to {output_dir}")
 
-    def _run_rest_run_2(self) -> None:
-        """Collect resting-state run 2."""
-        self._emit_progress("Collecting rest run 2 DICOMs...")
+    def _run_rest_run(self, run_num: int) -> None:
+        """Collect resting-state run.
+
+        Args:
+            run_num: Run number (1-based)
+        """
+        self._emit_progress(f"Collecting rest run {run_num} DICOMs...")
 
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
-        output_dir = base_dir / "collection" / "task-rest_run-02"
+        output_dir = base_dir / "collection" / f"task-rest_run-{run_num:02d}"
 
-        # Get expected volumes
-        rest_volumes = config["scan"]["rest_n_volumes"]
-        if isinstance(rest_volumes, list) and len(rest_volumes) > 1:
-            n_volumes = rest_volumes[1]
+        # Get expected volumes (use new localizer fields, fall back to legacy)
+        n_volumes = config["scan"].get("localizer_n_volumes")
+        if n_volumes is None:
+            rest_volumes = config["scan"].get("rest_n_volumes", [200])
+            if isinstance(rest_volumes, list):
+                if len(rest_volumes) >= run_num:
+                    n_volumes = rest_volumes[run_num - 1]
+                else:
+                    n_volumes = rest_volumes[0] if rest_volumes else 200
+            else:
+                n_volumes = rest_volumes
+
+        # Determine simulator vs real-time mode
+        simulator_enabled = config["scan"].get("simulator_enabled", True)
+
+        if simulator_enabled:
+            # Simulator mode: get source directory and create temp watch dir
+            localizer_sources = config["scan"].get("localizer_source_dicoms")
+            if localizer_sources is None:
+                localizer_sources = config["scan"].get("rest_source_dicoms", [])
+
+            # Get source for this run (0-indexed)
+            if isinstance(localizer_sources, list):
+                if len(localizer_sources) >= run_num:
+                    source_dir = localizer_sources[run_num - 1]
+                elif len(localizer_sources) > 0:
+                    source_dir = localizer_sources[0]
+                else:
+                    source_dir = None
+            else:
+                source_dir = localizer_sources
+
+            watch_dir = base_dir / "tmp" / f"incoming_rest_run{run_num}"
+            watch_dir.mkdir(parents=True, exist_ok=True)
+            simulator_speed = config["scan"].get("collection_speed", 10.0)
         else:
-            n_volumes = rest_volumes if not isinstance(rest_volumes, list) else rest_volumes[0]
-
-        # Get source directory
-        rest_sources = config["scan"]["rest_source_dicoms"]
-        if isinstance(rest_sources, list) and len(rest_sources) > 1:
-            source_dir = rest_sources[1]
-        else:
-            source_dir = rest_sources if not isinstance(rest_sources, list) else rest_sources[0]
-
-        # Create temporary watch directory
-        watch_dir = base_dir / "tmp" / "incoming_rest_run2"
-        watch_dir.mkdir(parents=True, exist_ok=True)
+            # Real-time mode: watch scanner DICOM directory
+            source_dir = None
+            watch_dir = Path(config["scan"]["scanner_dicom_dir"])
+            simulator_speed = 1.0
 
         collect_dicoms(
             watch_dir=watch_dir,
             output_dir=output_dir,
             n_volumes=n_volumes,
             simulator_source_dir=source_dir,
-            simulator_speed=config["scan"]["collection_speed"],
-            clear_watch_dir=True,
+            simulator_speed=simulator_speed,
+            clear_watch_dir=simulator_enabled,  # Only clear in simulator mode
             clear_output_dir=False,
+            progress_callback=self.on_collection_progress,
+            stop_event=self._stop_event,
         )
 
         self._emit_progress(f"Collected {n_volumes} volumes to {output_dir}")
@@ -266,10 +295,25 @@ class PipelineRunner:
         rest_run_1_dir = base_dir / "collection" / "task-rest_run-01"
         rest_run_2_dir = base_dir / "collection" / "task-rest_run-02"
 
-        # Combine run directories
-        input_dicoms = [rest_run_1_dir]
-        if rest_run_2_dir.exists():
-            input_dicoms.append(rest_run_2_dir)
+        # Use selected runs if specified, otherwise use all available
+        input_dicoms = []
+        if self._selected_rest_runs is not None:
+            # Use explicitly selected runs
+            if 1 in self._selected_rest_runs and rest_run_1_dir.exists():
+                input_dicoms.append(rest_run_1_dir)
+            if 2 in self._selected_rest_runs and rest_run_2_dir.exists():
+                input_dicoms.append(rest_run_2_dir)
+
+            self._emit_progress(f"Using selected runs: {self._selected_rest_runs}")
+        else:
+            # Default behavior: use all available runs
+            if rest_run_1_dir.exists():
+                input_dicoms.append(rest_run_1_dir)
+            if rest_run_2_dir.exists():
+                input_dicoms.append(rest_run_2_dir)
+
+        if not input_dicoms:
+            raise ValueError("No resting-state run directories found for preprocessing")
 
         # Set up progress callback for preprocessing to show in GUI log console
         def progress_callback(step: str, detail: str = ""):
@@ -336,6 +380,18 @@ class PipelineRunner:
         Args:
             run_id: Run number (1 for initial, 2 for realtime)
         """
+        config = self.config
+
+        # Check if 2vol is enabled for this run
+        if run_id == 1:
+            if not config["scan"].get("twovol_initial_enabled", True):
+                self._emit_progress("2vol initial coregistration is disabled, skipping...")
+                return
+        else:
+            if not config["scan"].get("twovol_realtime_enabled", True):
+                self._emit_progress("2vol realtime coregistration is disabled, skipping...")
+                return
+
         run_str = f"run-{run_id:02d}"
         self._emit_progress(f"Coregistering network masks to 2vol {run_str}...")
 
@@ -396,6 +452,7 @@ class PipelineRunner:
                 mask_extraction_dir=mask_extraction_dir,
                 network_coreg_files=coreg_masks,
                 run_str=str(run_id).zfill(2),
+                n_yeo=config["mask"]["n_yeo"],
                 overwrite=True,
                 twovol_subdir=twovol_subdir,
             )
@@ -406,27 +463,49 @@ class PipelineRunner:
 
     def _run_2vol_realtime(self) -> None:
         """Collect real-time 2vol before feedback session."""
+        config = self.config
+
+        # Check if 2vol realtime is enabled
+        if not config["scan"].get("twovol_realtime_enabled", True):
+            self._emit_progress("2vol realtime collection is disabled, skipping...")
+            return
+
         self._emit_progress("Collecting real-time 2vol DICOMs...")
 
-        config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         output_dir = base_dir / "collection" / "task-2vol_run-02"
 
-        # Create temporary watch directory
-        watch_dir = base_dir / "tmp" / "incoming_2vol_realtime"
-        watch_dir.mkdir(parents=True, exist_ok=True)
+        # Get number of volumes (use new field, fall back to legacy)
+        n_volumes = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+
+        # Determine simulator vs real-time mode
+        simulator_enabled = config["scan"].get("simulator_enabled", True)
+
+        if simulator_enabled:
+            # Simulator mode: create temp watch dir and use source DICOMs
+            watch_dir = base_dir / "tmp" / "incoming_2vol_realtime"
+            watch_dir.mkdir(parents=True, exist_ok=True)
+            simulator_source_dir = config["scan"]["twovol_realtime_dicoms"]
+            simulator_speed = config["scan"].get("collection_speed", 10.0)
+        else:
+            # Real-time mode: watch scanner DICOM directory
+            watch_dir = Path(config["scan"]["scanner_dicom_dir"])
+            simulator_source_dir = None
+            simulator_speed = 1.0
 
         collect_dicoms(
             watch_dir=watch_dir,
             output_dir=output_dir,
-            n_volumes=config["scan"]["twovol_n_volumes"],
-            simulator_source_dir=config["scan"]["twovol_realtime_dicoms"],
-            simulator_speed=config["scan"]["collection_speed"],
-            clear_watch_dir=True,
+            n_volumes=n_volumes,
+            simulator_source_dir=simulator_source_dir,
+            simulator_speed=simulator_speed,
+            clear_watch_dir=simulator_enabled,  # Only clear in simulator mode
             clear_output_dir=False,
+            progress_callback=self.on_collection_progress,
+            stop_event=self._stop_event,
         )
 
-        self._emit_progress(f"Collected {config['scan']['twovol_n_volumes']} volumes to {output_dir}")
+        self._emit_progress(f"Collected {n_volumes} volumes to {output_dir}")
 
     def _run_feedback_task(self, step_id: str) -> None:
         """Run a feedback or transfer task.
@@ -448,6 +527,7 @@ class PipelineRunner:
         # Get output directory for slot-based run info
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
+        mask_extraction_dir = base_dir / "mask_extraction"
         feedback_dir = base_dir / "feedback"
         output_dir = feedback_dir / "02_feedback_output"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -464,19 +544,33 @@ class PipelineRunner:
 
         self._emit_progress(f"Starting {task_type} run-{task_run_number:02d} acq-{task_acq:02d}...")
 
-        # Get coregistered mask files (use thresholded masks from realtime 2vol run-02)
+        # Get mask files - use 2vol-coregistered masks if realtime 2vol is enabled,
+        # otherwise use boldref space masks from mask extraction
         # IMPORTANT: Match files to mask_names order, not alphabetically sorted
-        twovol_masks_dir = feedback_dir / "01_2vol" / "masks"
         mask_names = config["mask"]["mask_names"]
+        twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
+
+        if twovol_realtime_enabled:
+            # Use 2vol-coregistered masks
+            masks_dir = feedback_dir / "01_2vol" / "masks"
+            pattern_template = "*_{mask_name}_thr_to_task-2vol_run-02_*.nii.gz"
+            mask_space = "2vol run-02"
+        else:
+            # Use boldref space masks from mask extraction
+            masks_dir = mask_extraction_dir / "03_masks"
+            pattern_template = "*_{mask_name}_thr.nii.gz"
+            mask_space = "subject boldref"
+
+        self._emit_progress(f"Using masks from {mask_space} space")
 
         # Find mask files matching each mask name in order
         mask_files = []
         for mask_name in mask_names:
-            pattern = f"*_{mask_name}_thr_to_task-2vol_run-02_*.nii.gz"
-            matches = list(twovol_masks_dir.glob(pattern))
+            pattern = pattern_template.format(mask_name=mask_name)
+            matches = list(masks_dir.glob(pattern))
             if not matches:
                 raise ValueError(
-                    f"Could not find mask file for '{mask_name}' in {twovol_masks_dir}. "
+                    f"Could not find mask file for '{mask_name}' in {masks_dir}. "
                     f"Expected pattern: {pattern}"
                 )
             if len(matches) > 1:
@@ -491,19 +585,31 @@ class PipelineRunner:
                 f"Mask names: {mask_names}"
             )
 
-        # Create temporary watch directory
-        watch_dir = base_dir / "tmp" / f"incoming_{task_type}_acq-{task_acq:02d}_run-{task_run_number:02d}"
-        watch_dir.mkdir(parents=True, exist_ok=True)
-
         # Collection directory for this run
         collection_dir = base_dir / "collection"
+
+        # Determine simulator vs real-time mode
+        simulator_enabled = config["scan"].get("simulator_enabled", True)
+
+        if simulator_enabled:
+            # Simulator mode: create temp watch dir and use source DICOMs
+            watch_dir = base_dir / "tmp" / f"incoming_{task_type}_acq-{task_acq:02d}_run-{task_run_number:02d}"
+            watch_dir.mkdir(parents=True, exist_ok=True)
+            simulator_source_dir = config["scan"]["feedback_dicoms"]
+            simulator_speed = config["scan"].get("feedback_simulator_speed", config["scan"].get("collection_speed", 10.0))
+        else:
+            # Real-time mode: watch scanner DICOM directory
+            watch_dir = Path(config["scan"]["scanner_dicom_dir"])
+            simulator_source_dir = None
+            simulator_speed = 1.0
 
         self._emit_progress(f"Preparing {task_type} run (feedback={'ON' if feedback_mode else 'OFF'})...")
 
         # Compute task regressor (HRF-convolved boxcar for ball task)
         n_baseline = config["feedback"]["n_baseline"]
         n_volumes = config["feedback"]["n_volumes"]
-        tr = config["scan"]["tr"]
+        # Use new feedback_tr field, fall back to legacy tr
+        tr = config["scan"].get("feedback_tr") or config["scan"].get("tr", 1.2)
         task_regressor = compute_boxcar_task_regressor(n_baseline, n_volumes, tr)
 
         # Run feedback session (this will handle DICOM collection + processing)
@@ -522,8 +628,8 @@ class PipelineRunner:
                 task_regressors=task_regressor,  # Pass the computed task regressor
                 mask_names=mask_names,
                 use_efficiency_weights=config["feedback"].get("use_efficiency_weights", True),
-                simulator_source_dir=config["scan"]["feedback_dicoms"],
-                simulator_speed=config["scan"].get("simulator_speed", 1.0),
+                simulator_source_dir=simulator_source_dir,
+                simulator_speed=simulator_speed,
                 step_id=step_id,  # Use slot-based naming with acq entity
                 qc_enabled=True,
             )

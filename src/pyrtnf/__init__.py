@@ -90,6 +90,10 @@ from .utils import (
     compute_hrf,
     compute_boxcar_task_regressor,
 )
+from .script_generator import (
+    generate_mask_extraction_script,
+    save_script,
+)
 from . import config
 
 __all__ = [
@@ -137,6 +141,9 @@ __all__ = [
     # Utilities
     'outputs_exist',
     'ProgressEmitter',
+    # Script generation
+    'generate_mask_extraction_script',
+    'save_script',
     # Configuration
     'config',
 ]

@@ -361,7 +361,17 @@ class BallTask(BaseTask):
             # Linux (including WSL2): Need Xlib workaround for Flet/XWayland
             import pyglet
             screens = pyglet.canvas.Display().get_screens()
-            target = screens[target_screen] if len(screens) > target_screen else screens[0]
+            n_screens = len(screens)
+
+            # Validate target screen exists
+            if target_screen >= n_screens:
+                logger.warning(
+                    f"Requested screen {target_screen} not available "
+                    f"(only {n_screens} screen(s) detected). Using screen 0."
+                )
+                target_screen = 0
+
+            target = screens[target_screen]
 
             self.win = visual.Window(
                 fullscr=False,
@@ -373,7 +383,10 @@ class BallTask(BaseTask):
                 allowGUI=False,
                 waitBlanking=False,
             )
-            self._move_window_to_secondary(target_screen)
+
+            # Only attempt to move window if using secondary screen
+            if target_screen > 0:
+                self._move_window_to_secondary(target_screen)
 
         # Use default frame duration for display loop timing (prevents CPU spinning)
         # Movement is time-based (dt) so actual frame rate doesn't affect physics
@@ -1320,3 +1333,7 @@ BALL_TASK_METADATA = TaskMetadata(
 
 # Auto-register on import
 register_task(BALL_TASK_METADATA)
+
+# Register with factory for create_task() support
+from .factory import register_task_class
+register_task_class("ball", BallTask)

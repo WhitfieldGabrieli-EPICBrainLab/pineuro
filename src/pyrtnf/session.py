@@ -120,53 +120,106 @@ class ScanConfig:
 
     Parameters
     ----------
-    tr : float
-        Repetition time in seconds
-    n_volumes : int
+    localizer_tr : float
+        Repetition time in seconds for localizer runs
+    localizer_n_volumes : int
+        Number of volumes per localizer run
+    localizer_n_runs : int
+        Number of localizer runs
+    localizer_task_type : str
+        Task type for localizer: "rest" or a registered task identifier
+    feedback_tr : float
+        Repetition time in seconds for feedback runs
+    feedback_n_volumes : int
         Number of volumes per feedback run
-    n_baseline : int
-        Number of baseline volumes before task
-    rest_source_dicoms : list[Path]
-        Source DICOM folders for resting-state runs (for simulator)
-    rest_n_volumes : list[int]
-        Number of volumes per resting-state run
-    rest_max_runs : int
-        Maximum number of resting-state runs
+    localizer_source_dicoms : list[Path]
+        Source DICOM folders for localizer runs (for simulator)
+    twovol_initial_enabled : bool
+        Whether to collect initial 2vol reference (before localizer)
+    twovol_initial_n_volumes : int
+        Number of volumes for initial 2vol acquisition
+    twovol_realtime_enabled : bool
+        Whether to collect realtime 2vol reference (before feedback)
+    twovol_realtime_n_volumes : int
+        Number of volumes for realtime 2vol acquisition
     twovol_dicoms : Path, optional
         Default 2vol DICOM source
     twovol_initial_dicoms : Path, optional
         2vol DICOM source for initial (pre-scan) acquisition
     twovol_realtime_dicoms : Path, optional
         2vol DICOM source for real-time (day-of) acquisition
-    twovol_n_volumes : int
-        Number of volumes in 2vol acquisition
-    twovol_max_runs : int
-        Maximum number of 2vol acquisitions
     feedback_dicoms : Path, optional
         Source DICOM folder for feedback runs (for simulator)
     collection_speed : float
-        Speed multiplier for DICOM collection simulation
-    simulator_speed : float
+        Speed multiplier for DICOM collection simulation (localizer/setup runs)
+    feedback_simulator_speed : float
         Speed multiplier for feedback DICOM simulation
     """
-    tr: float = 1.2
-    n_volumes: int = 150
-    n_baseline: int = 25
-    rest_source_dicoms: list[Path] = field(default_factory=list)
-    rest_n_volumes: list[int] = field(default_factory=lambda: [200, 200])
-    rest_max_runs: int = 2
+    # Localizer parameters
+    localizer_tr: float = 1.2
+    localizer_n_volumes: int = 200
+    localizer_n_runs: int = 2
+    localizer_task_type: str = "rest"
+
+    # Feedback parameters
+    feedback_tr: float = 1.2
+    feedback_n_volumes: int = 150
+
+    # 2vol parameters (independently optional)
+    twovol_initial_enabled: bool = True
+    twovol_initial_n_volumes: int = 2
+    twovol_realtime_enabled: bool = True
+    twovol_realtime_n_volumes: int = 2
+
+    # DICOM sources (for simulator)
+    localizer_source_dicoms: list[Path] = field(default_factory=list)
     twovol_dicoms: Optional[Path] = None
     twovol_initial_dicoms: Optional[Path] = None
     twovol_realtime_dicoms: Optional[Path] = None
-    twovol_n_volumes: int = 2
-    twovol_max_runs: int = 2
     feedback_dicoms: Optional[Path] = None
     collection_speed: float = 10.0
-    simulator_speed: float = 1.0
+    feedback_simulator_speed: float = 10.0
+
+    # Legacy aliases
+    @property
+    def twovol_n_volumes(self) -> int:
+        """Alias for twovol_initial_n_volumes (backward compatibility)."""
+        return self.twovol_initial_n_volumes
+
+    @property
+    def twovol_max_runs(self) -> int:
+        """Legacy alias - returns 2 if both 2vol enabled, 1 if only one, 0 if none."""
+        return int(self.twovol_initial_enabled) + int(self.twovol_realtime_enabled)
+
+    # Legacy aliases (for backward compatibility)
+    @property
+    def tr(self) -> float:
+        """Alias for feedback_tr (backward compatibility)."""
+        return self.feedback_tr
+
+    @property
+    def n_volumes(self) -> int:
+        """Alias for feedback_n_volumes (backward compatibility)."""
+        return self.feedback_n_volumes
+
+    @property
+    def rest_source_dicoms(self) -> list[Path]:
+        """Alias for localizer_source_dicoms (backward compatibility)."""
+        return self.localizer_source_dicoms
+
+    @property
+    def rest_n_volumes(self) -> list[int]:
+        """Alias returning localizer volumes as list (backward compatibility)."""
+        return [self.localizer_n_volumes] * self.localizer_n_runs
+
+    @property
+    def rest_max_runs(self) -> int:
+        """Alias for localizer_n_runs (backward compatibility)."""
+        return self.localizer_n_runs
 
     def __post_init__(self):
         """Convert all DICOM source paths to Path objects."""
-        self.rest_source_dicoms = [Path(p) for p in self.rest_source_dicoms]
+        self.localizer_source_dicoms = [Path(p) for p in self.localizer_source_dicoms]
         if self.twovol_dicoms is not None:
             self.twovol_dicoms = Path(self.twovol_dicoms)
         if self.twovol_initial_dicoms is not None:
@@ -859,7 +912,7 @@ def run_single_task(
     if use_simulator:
         simulator_kwargs = {
             "simulator_source_dir": config.scan.feedback_dicoms,
-            "simulator_speed": config.scan.simulator_speed,
+            "simulator_speed": config.scan.feedback_simulator_speed,
             "simulator_clear_target": True,
             "simulator_cleanup": False,
         }
@@ -1006,6 +1059,7 @@ def coregister_before_first_transfer(
             mask_extraction_dir=config.paths.mask_extraction_dir,
             network_coreg_files=coreg_mask_files,
             run_str=run_str,
+            n_yeo=config.mask.n_yeo,
             overwrite=True,
             twovol_subdir="04_2vol",  # Match the output_subdir used in coregister_2vol
         )

@@ -48,8 +48,10 @@ References
 """
 
 # Standard library imports
+import json
 import re
-from typing import Union, Any, List, Optional, Sequence
+from dataclasses import dataclass, asdict
+from typing import Union, Any, Dict, List, Optional, Sequence, Tuple
 from pathlib import Path
 
 # Third-party imports
@@ -73,6 +75,307 @@ from pyrtnf.utils import (
 # Configure module-level logger
 import logging
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MaskSelection:
+    """Tracks the selection state for a single network mask.
+
+    Attributes
+    ----------
+    network_name : str
+        Name of the network (e.g., "DefaultA", "ContA")
+    source_type : str
+        Either "ica" for ICA-derived mask or "yeo_atlas" for atlas fallback
+    component_index : int or None
+        ICA component index if source_type == "ica", None for atlas masks
+    correlation : float
+        Spatial correlation with Yeo atlas (0.0 for atlas masks)
+    selection_reason : str
+        How this selection was made: "auto", "manual", or "yeo_fallback"
+    """
+    network_name: str
+    source_type: str  # "ica" or "yeo_atlas"
+    component_index: Optional[int]
+    correlation: float
+    selection_reason: str  # "auto", "manual", "yeo_fallback"
+
+
+def save_mask_selections(
+    masks_dir: Union[str, Path],
+    selections: Dict[str, MaskSelection]
+) -> Path:
+    """Save mask selections to JSON file.
+
+    Parameters
+    ----------
+    masks_dir : str or Path
+        Directory containing the masks (typically 03_masks/)
+    selections : dict
+        Dictionary mapping network names to MaskSelection objects
+
+    Returns
+    -------
+    Path
+        Path to the saved JSON file
+    """
+    masks_dir = Path(masks_dir)
+    output_file = masks_dir / "mask_selections.json"
+
+    # Convert dataclasses to dicts for JSON serialization
+    data = {name: asdict(sel) for name, sel in selections.items()}
+
+    with open(output_file, 'w') as f:
+        json.dump(data, f, indent=2)
+
+    logger.info(f"Saved mask selections to {output_file}")
+    return output_file
+
+
+def load_mask_selections(masks_dir: Union[str, Path]) -> Dict[str, MaskSelection]:
+    """Load mask selections from JSON file.
+
+    Parameters
+    ----------
+    masks_dir : str or Path
+        Directory containing the masks (typically 03_masks/)
+
+    Returns
+    -------
+    dict
+        Dictionary mapping network names to MaskSelection objects.
+        Returns empty dict if file doesn't exist.
+    """
+    masks_dir = Path(masks_dir)
+    selections_file = masks_dir / "mask_selections.json"
+
+    if not selections_file.exists():
+        return {}
+
+    with open(selections_file, 'r') as f:
+        data = json.load(f)
+
+    return {
+        name: MaskSelection(**sel_data)
+        for name, sel_data in data.items()
+    }
+
+
+def get_alternative_components(
+    correlation_df: pd.DataFrame,
+    network_name: str,
+    top_n: int = 5
+) -> List[Tuple[int, float]]:
+    """Get the top N ICA components for a network, ranked by correlation.
+
+    Parameters
+    ----------
+    correlation_df : pd.DataFrame
+        Spatial correlation matrix (components × networks)
+    network_name : str
+        Name of the target network
+    top_n : int
+        Number of top components to return
+
+    Returns
+    -------
+    list of (int, float)
+        List of (component_index, correlation) tuples, sorted by correlation descending
+    """
+    if network_name not in correlation_df.columns:
+        raise ValueError(f"Network '{network_name}' not found in correlation matrix")
+
+    correlations = correlation_df[network_name]
+    # Get indices sorted by correlation (descending)
+    # Use numpy argsort to avoid pandas FutureWarning with float-dtype index slicing
+    corr_values = correlations.values
+    sorted_indices = np.argsort(corr_values)[::-1][:top_n]
+
+    return [(int(idx), float(corr_values[idx])) for idx in sorted_indices]
+
+
+def extract_yeo_mask_for_network(
+    yeo_subject_space: Union[str, Path],
+    network_name: str,
+    output_file: Union[str, Path],
+    n_yeo: int = 17,
+    threshold: int = 2000,
+    overwrite: bool = False
+) -> Path:
+    """Extract and threshold a mask directly from Yeo atlas in subject space.
+
+    This is the fallback option when ICA-derived masks are rejected. The Yeo
+    atlas (already registered to subject space) is used to create a binary
+    mask for the specified network.
+
+    Parameters
+    ----------
+    yeo_subject_space : str or Path
+        Path to Yeo atlas in subject space (e.g., 02_mnireg/Yeo_to_{ref}.nii.gz)
+    network_name : str
+        Name of the target network (e.g., "DefaultA")
+    output_file : str or Path
+        Path to save the thresholded mask
+    n_yeo : int
+        Yeo parcellation (7 or 17 networks)
+    threshold : int
+        Number of voxels to keep in the thresholded mask
+    overwrite : bool
+        If True, overwrite existing output
+
+    Returns
+    -------
+    Path
+        Path to the saved mask file
+    """
+    yeo_subject_space = Path(yeo_subject_space)
+    output_file = Path(output_file)
+
+    if output_file.exists() and not overwrite:
+        logger.info(f"Output exists and overwrite=False, skipping: {output_file}")
+        return output_file
+
+    if not yeo_subject_space.exists():
+        raise FileNotFoundError(f"Yeo atlas not found: {yeo_subject_space}")
+
+    # Get network label index from name
+    labels = get_yeo_labels(n_networks=n_yeo)
+    if network_name not in labels:
+        raise ValueError(f"Network '{network_name}' not in Yeo-{n_yeo} labels: {labels}")
+
+    network_index = labels.index(network_name) + 1  # Yeo uses 1-based indexing
+
+    # Load atlas and extract network region
+    atlas_img = load(yeo_subject_space)
+    atlas_data = atlas_img.get_fdata()
+
+    # Create binary mask for this network
+    network_mask = (atlas_data == network_index).astype(float)
+    n_voxels = int(network_mask.sum())
+
+    if n_voxels == 0:
+        raise ValueError(f"No voxels found for network '{network_name}' (index {network_index})")
+
+    logger.info(f"Yeo atlas '{network_name}': {n_voxels} voxels")
+
+    # For Yeo atlas masks, keep all voxels - don't threshold/subsample
+    # The atlas already defines anatomically meaningful network boundaries
+    # Random subsampling would destroy spatial coherence
+    binary_mask = network_mask.astype("uint8")
+
+    # Save
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    save(Nifti1Image(binary_mask, atlas_img.affine, atlas_img.header), output_file)
+    logger.info(f"Saved Yeo atlas mask ({int(binary_mask.sum())} voxels) to {output_file}")
+
+    return output_file
+
+
+def regenerate_mask_from_selection(
+    participant_id: str,
+    masks_dir: Union[str, Path],
+    selection: MaskSelection,
+    components_file: Union[str, Path],
+    yeo_subject_space: Union[str, Path],
+    n_yeo: int = 17,
+    threshold: int = 2000,
+) -> Path:
+    """Regenerate a single network mask based on user's selection.
+
+    This function is called after the user modifies mask selections in the
+    mask review dialog. It regenerates the mask file based on the user's
+    choice (different ICA component or Yeo atlas fallback).
+
+    Parameters
+    ----------
+    participant_id : str
+        Participant ID
+    masks_dir : str or Path
+        Directory containing masks (typically 03_masks/)
+    selection : MaskSelection
+        The user's selection for this network
+    components_file : str or Path
+        Path to ICA components file (4D NIfTI)
+    yeo_subject_space : str or Path
+        Path to Yeo atlas in subject space
+    n_yeo : int
+        Yeo parcellation (7 or 17 networks)
+    threshold : int
+        Number of voxels to keep in the thresholded mask
+
+    Returns
+    -------
+    Path
+        Path to the regenerated thresholded mask file
+    """
+    masks_dir = Path(masks_dir)
+    network_name = selection.network_name
+
+    # Output files
+    network_file = masks_dir / f"{participant_id}_{network_name}.nii.gz"
+    thr_file = masks_dir / f"{participant_id}_{network_name}_thr.nii.gz"
+
+    if selection.source_type == "yeo_atlas":
+        # Use Yeo atlas fallback
+        logger.info(f"Regenerating {network_name} from Yeo atlas (fallback)")
+        extract_yeo_mask_for_network(
+            yeo_subject_space=yeo_subject_space,
+            network_name=network_name,
+            output_file=thr_file,
+            n_yeo=n_yeo,
+            threshold=threshold,
+            overwrite=True
+        )
+        # Also save an unthresholded version (full atlas region)
+        labels = get_yeo_labels(n_networks=n_yeo)
+        network_index = labels.index(network_name) + 1
+        atlas_img = load(yeo_subject_space)
+        atlas_data = atlas_img.get_fdata()
+        network_mask = (atlas_data == network_index).astype(float)
+        save(Nifti1Image(network_mask, atlas_img.affine, atlas_img.header), network_file)
+
+    elif selection.source_type == "ica":
+        # Use specified ICA component
+        component_idx = selection.component_index
+        if component_idx is None:
+            raise ValueError(f"ICA selection for {network_name} missing component_index")
+
+        logger.info(f"Regenerating {network_name} from ICA component {component_idx}")
+
+        # Load ICA components
+        components_file = Path(components_file)
+        if not components_file.exists():
+            raise FileNotFoundError(f"Components file not found: {components_file}")
+
+        components_img = load(components_file)
+        components_data = components_img.get_fdata()
+
+        if component_idx >= components_data.shape[3]:
+            raise ValueError(
+                f"Component index {component_idx} out of range "
+                f"(max: {components_data.shape[3] - 1})"
+            )
+
+        # Extract component and save unthresholded
+        ic_data = components_data[..., component_idx]
+        ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)
+        save(ic_img, network_file)
+
+        # Threshold and save
+        flat = ic_data.ravel()
+        mask = np.zeros(flat.shape, dtype=bool)
+        mask[np.argpartition(flat, -threshold)[-threshold:]] = True
+        mask = mask.reshape(ic_data.shape)
+        thresholded = ((ic_data * mask) > 0).astype("uint8")
+        save(Nifti1Image(thresholded, components_img.affine, components_img.header), thr_file)
+
+        logger.info(f"Saved regenerated mask ({int(thresholded.sum())} voxels) to {thr_file}")
+
+    else:
+        raise ValueError(f"Unknown source_type: {selection.source_type}")
+
+    return thr_file
+
 
 def run_ica(
         input_file: Union[str, Path],
@@ -515,6 +818,20 @@ def mask_extraction_rest(
     sc_df = spatial_correlation(input_file=components_file, mask_file=mask_file, parcellation_file=yeo2sub, labels=labels, output_file=sc_file, overwrite=overwrite)
     chosen_components = {target: int(sc_df[target].idxmax()) for target in yeo_targets}
 
+    # Save initial mask selections (auto-selected based on correlation)
+    initial_selections: Dict[str, MaskSelection] = {}
+    for target in yeo_targets:
+        component_idx = chosen_components[target]
+        correlation = float(sc_df[target].iloc[component_idx])
+        initial_selections[target] = MaskSelection(
+            network_name=target,
+            source_type="ica",
+            component_index=component_idx,
+            correlation=correlation,
+            selection_reason="auto"
+        )
+    save_mask_selections(masks_dir, initial_selections)
+
     # Step 3b: Select ICA component with highest correlation for each target network
     # For each target network (e.g., DMN), find the ICA component that best matches it
     emit_progress("Step 3/3", "Selecting best ICA components for each network...")
@@ -566,6 +883,7 @@ def mask_extraction_rest(
             participant_id=participant_id,
             network_names=network_names,
             output_dir=qc_output_dir,
+            n_yeo=n_yeo,
             overwrite=overwrite,
             open_browser=False
         )
@@ -732,6 +1050,7 @@ def generate_2vol_qc_overlays(
         mask_extraction_dir: Path,
         network_coreg_files: Sequence[Path],
         run_str: str,
+        n_yeo: int = 17,
         overwrite: bool = False,
         twovol_subdir: str = "01_2vol",
 ) -> None:
@@ -752,6 +1071,8 @@ def generate_2vol_qc_overlays(
         List of coregistered network mask files
     run_str : str
         Run number string (e.g., "01" or "02")
+    n_yeo : int, default=17
+        Yeo parcellation (7 or 17 networks)
     overwrite : bool, default=False
         If True, overwrite existing files
     twovol_subdir : str, default="01_2vol"
@@ -833,6 +1154,7 @@ def generate_2vol_qc_overlays(
         participant_id=participant_id,
         network_names=network_names,
         output_dir=qc_dir,
+        n_yeo=n_yeo,
         overwrite=True,  # Force regeneration to include new 2vol overlays
         open_browser=False
     )
