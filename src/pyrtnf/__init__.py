@@ -68,6 +68,7 @@ from .session import (
     FeedbackConfig,
     TaskConfig,
     VisitConfig,
+    ShamConfig,
     # Orchestration functions
     setup_session,
     run_single_task,
@@ -81,6 +82,14 @@ from .session import (
     is_single_visit_data,
     migrate_to_multi_visit,
     setup_visit_with_reused_masks,
+)
+from .sham import (
+    ShamActivationProvider,
+    ReplayActivationProvider,
+    load_randomization,
+    get_condition_for_participant,
+    resolve_sham_masks,
+    find_feedbacklog_for_replay,
 )
 from .utils import (
     # Timing functions
@@ -133,6 +142,14 @@ __all__ = [
     'FeedbackConfig',
     'TaskConfig',
     'VisitConfig',
+    'ShamConfig',
+    # Sham functionality
+    'ShamActivationProvider',
+    'ReplayActivationProvider',
+    'load_randomization',
+    'get_condition_for_participant',
+    'resolve_sham_masks',
+    'find_feedbacklog_for_replay',
     # Orchestration functions
     'setup_session',
     'run_single_task',

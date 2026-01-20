@@ -26,6 +26,7 @@ Configuration Dataclasses:
 - FeedbackConfig: Feedback session parameters
 - TaskConfig: BallTask parameters
 - VisitConfig: Visit-level configuration for multi-visit studies
+- ShamConfig: Sham/control condition configuration
 - SessionConfig: Top-level config combining all above
 
 Orchestration Functions:
@@ -127,6 +128,64 @@ class VisitConfig:
         if self.mask_source == "reuse":
             # Disable localizer when reusing masks
             self.localizer_enabled = False
+
+
+@dataclass
+class ShamConfig:
+    """Configuration for sham/control neurofeedback conditions.
+
+    Supports two delivery methods for sham feedback:
+    1. 'alternative_masks': Use different network masks (e.g., motor instead of DMN)
+    2. 'replay': Replay activation values from another participant's feedbacklog.tsv
+
+    Critical blinding requirements:
+    - All masks (target + alternative) are extracted for ALL participants
+    - Real activations are always computed (even for sham participants)
+    - Both real and delivered activations are logged in feedbacklog.tsv
+    - Task and GUI display show delivered values only (maintains blinding)
+
+    Parameters
+    ----------
+    enabled : bool
+        Whether sham functionality is enabled for this study.
+    delivery_method : str
+        How sham feedback is delivered:
+        - 'alternative_masks': Use different network masks
+        - 'replay': Replay activation values from another participant's feedbacklog
+    alternative_mask_targets : list[str]
+        For 'alternative_masks' method: network names to use for sham participants
+        (e.g., ["SomMotA", "SomMotB"] instead of ["DefaultA", "ContA"])
+    randomization_file : Path, optional
+        Path to TSV file containing subject -> condition assignments.
+        Columns: subject_id, condition, matched_participant, matched_visit, notes
+    replay_source_dir : Path, optional
+        For 'replay' method: base directory containing source participant data.
+        Feedbacklogs are expected at: {replay_source_dir}/{matched_participant}/feedback/
+    """
+    enabled: bool = False
+    delivery_method: str = "alternative_masks"  # "alternative_masks" or "replay"
+    alternative_mask_targets: list[str] = field(
+        default_factory=lambda: ["SomMotA", "SomMotB"]
+    )
+    randomization_file: Optional[Path] = None
+    replay_source_dir: Optional[Path] = None
+
+    def __post_init__(self):
+        """Validate configuration and convert paths."""
+        if self.enabled:
+            if self.delivery_method not in ("alternative_masks", "replay"):
+                raise ValueError(
+                    f"delivery_method must be 'alternative_masks' or 'replay', "
+                    f"got '{self.delivery_method}'"
+                )
+            if self.delivery_method == "replay" and self.replay_source_dir is None:
+                raise ValueError(
+                    "replay_source_dir is required when delivery_method='replay'"
+                )
+        if self.randomization_file is not None:
+            self.randomization_file = Path(self.randomization_file)
+        if self.replay_source_dir is not None:
+            self.replay_source_dir = Path(self.replay_source_dir)
 
 
 @dataclass
@@ -404,6 +463,12 @@ class TaskConfig:
         Fraction to adjust scale_factor by (0.25 = 25%)
     max_feedback_runs : int
         Total number of feedback runs in session
+    top_network : str, optional
+        Network for upward ball movement (ball moves up when this network is more active).
+        If None, defaults to mask_names[0].
+    bottom_network : str, optional
+        Network for downward ball movement (ball moves down when this network is more active).
+        If None, defaults to mask_names[1].
     """
     initial_scale_factor: float = 10.0
     fullscreen: bool = True
@@ -415,6 +480,8 @@ class TaskConfig:
     max_hits_threshold: int = 5
     scale_adjust_factor: float = 0.25
     max_feedback_runs: int = 2
+    top_network: Optional[str] = None
+    bottom_network: Optional[str] = None
 
 
 def _path_to_str(obj):
@@ -447,6 +514,9 @@ class SessionConfig:
     visit : VisitConfig, optional
         Visit-specific configuration for multi-visit studies.
         If None, uses single-visit mode (backward compatible).
+    sham : ShamConfig, optional
+        Sham/control condition configuration.
+        If None or sham.enabled=False, all participants receive real feedback.
 
     Examples
     --------
@@ -474,6 +544,7 @@ class SessionConfig:
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     task: TaskConfig = field(default_factory=TaskConfig)
     visit: Optional[VisitConfig] = None
+    sham: Optional[ShamConfig] = None
 
     @classmethod
     def from_yaml(cls, path: Path) -> "SessionConfig":
@@ -515,7 +586,10 @@ class SessionConfig:
         visit_data = data.get('visit', None)
         visit = VisitConfig(**visit_data) if visit_data else None
 
-        return cls(paths=paths, scan=scan, mask=mask, feedback=feedback, task=task, visit=visit)
+        sham_data = data.get('sham', None)
+        sham = ShamConfig(**sham_data) if sham_data else None
+
+        return cls(paths=paths, scan=scan, mask=mask, feedback=feedback, task=task, visit=visit, sham=sham)
 
     def to_yaml(self, path: Path) -> None:
         """Save configuration to YAML file."""
@@ -545,6 +619,8 @@ class SessionConfig:
         }
         if self.visit is not None:
             result['visit'] = asdict(self.visit)
+        if self.sham is not None:
+            result['sham'] = _path_to_str(asdict(self.sham))
         return result
 
     def validate(self) -> list[str]:
@@ -1365,10 +1441,17 @@ def run_single_task(
     )
     is_first_of_type = (completed_of_type == 0)
 
+    # Determine mask names for ball task (top/bottom network assignment)
+    # Use explicit assignment if configured, otherwise fall back to mask_names order
+    ball_mask_names = [
+        config.task.top_network or config.mask.mask_names[0],
+        config.task.bottom_network or config.mask.mask_names[1],
+    ]
+
     # Create task with session state
     task = BallTask(
         coordinator,
-        mask_names=["ContA", "DefaultA"],  # ContA at top, DefaultA at bottom
+        mask_names=ball_mask_names,
         scale_factor=session_state.scale_factor,
         trigger_keys=config.task.trigger_keys,
         left_button=config.task.left_button,

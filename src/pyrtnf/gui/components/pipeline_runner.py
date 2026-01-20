@@ -547,7 +547,19 @@ class PipelineRunner:
         # Get mask files - use 2vol-coregistered masks if realtime 2vol is enabled,
         # otherwise use boldref space masks from mask extraction
         # IMPORTANT: Match files to mask_names order, not alphabetically sorted
-        mask_names = config["mask"]["mask_names"]
+        #
+        # For ball task, respect top_network/bottom_network assignment if specified
+        task_config = config.get("task", {})
+        ball_config = task_config.get("ball", {})
+        top_network = ball_config.get("top_network")
+        bottom_network = ball_config.get("bottom_network")
+
+        if top_network and bottom_network:
+            # Use explicit ball task network assignment
+            mask_names = [top_network, bottom_network]
+        else:
+            # Fall back to config mask_names
+            mask_names = config["mask"]["mask_names"]
         twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
 
         if twovol_realtime_enabled:

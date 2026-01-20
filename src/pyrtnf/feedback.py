@@ -48,10 +48,13 @@ from pathlib import Path
 import shutil
 import threading
 import time
-from typing import Callable, Optional, Sequence, TextIO
+from typing import Callable, Optional, Sequence, TextIO, TYPE_CHECKING
 from collections import OrderedDict
 import heapq
 import re
+
+if TYPE_CHECKING:
+    from .sham import ShamActivationProvider
 
 # Third-party imports
 import nibabel as nib
@@ -568,6 +571,7 @@ class FeedbackEstimator:
         task_regressors: Optional[NDArray[np.float64]] = None,
         mask_names: Optional[list[str]] = None,
         use_efficiency_weights: bool = False,
+        sham_provider: Optional["ShamActivationProvider"] = None,
     ) -> None:
         if len(mask_paths) == 0:
             raise ValueError("At least one mask path required")
@@ -643,12 +647,19 @@ class FeedbackEstimator:
         # Timeseries storage
         self.timeseries: dict[str, list[float]] = {name: [] for name in mask_names}
 
+        # Sham support: when sham_provider is set, we return sham activations
+        # but still compute and store real activations for logging
+        self._sham_provider = sham_provider
+        self._last_real_activations: dict[str, float] = {}
+
+        sham_status = "SHAM MODE" if sham_provider is not None else "disabled"
         logger.info(
             f"FeedbackEstimator initialized with {len(mask_paths)} masks, "
             f"{self._n_voxels} total voxels, "
             f"n_baseline={n_baseline}, n_volumes={n_volumes}, tr={tr:.3f}s, "
             f"task_regressors={self._n_task_regressors}, "
-            f"efficiency_weights={'enabled' if use_efficiency_weights else 'disabled'}"
+            f"efficiency_weights={'enabled' if use_efficiency_weights else 'disabled'}, "
+            f"sham={sham_status}"
         )
 
     def _load_single_mask(
@@ -1001,8 +1012,10 @@ class FeedbackEstimator:
         # Handle case where GLM can't compute activation yet (not enough observations)
         if result is None:
             activations = {name: 0.0 for name in self.mask_names}
+            self._last_real_activations = activations.copy()
             for name in self.mask_names:
                 self.timeseries[name].append(0.0)
+            # If sham mode, still return zeros (consistent behavior)
             return activations
 
         # Compute efficiency weights when baseline completes
@@ -1015,7 +1028,7 @@ class FeedbackEstimator:
                 self._compute_weights()
 
         # ===== 4. Compute weighted activations per mask =====
-        activations: dict[str, float] = {}
+        real_activations: dict[str, float] = {}
         for name, idx in self._mask_voxel_idx.items():
             mask_values = result[idx]
 
@@ -1026,10 +1039,26 @@ class FeedbackEstimator:
                 # Use simple mean
                 weighted_mean = float(np.mean(mask_values))
 
-            activations[name] = weighted_mean
+            real_activations[name] = weighted_mean
             self.timeseries[name].append(weighted_mean)
 
-        return activations
+        # Store real activations for logging (used by coordinator)
+        self._last_real_activations = real_activations.copy()
+
+        # ===== 5. Handle sham mode =====
+        if self._sham_provider is not None:
+            # Get sham activations to deliver to task
+            elapsed_time = self.n_volumes * self._tr
+            sham_activations = self._sham_provider.get_activation(
+                self.n_volumes, elapsed_time
+            )
+            logger.debug(
+                f"Volume {self.n_volumes}: SHAM delivering {sham_activations}, "
+                f"real was {real_activations}"
+            )
+            return sham_activations
+
+        return real_activations
 
 
 class _DicomEventHandler(FileSystemEventHandler):
@@ -1507,6 +1536,8 @@ class NeurofeedbackCoordinator:
         simulator=None,  # DicomSimulator instance for simulation mode
         qc_enabled: bool = True,  # Generate QC report after session completes
         acq: str = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
+        sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
+        condition: str = "real",  # Participant condition: "real" or "sham"
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -1546,7 +1577,12 @@ class NeurofeedbackCoordinator:
             mask_names = [p.stem for p in mask_paths_resolved]
         self.mask_names = mask_names
 
-        # Initialize FeedbackEstimator
+        # Sham mode configuration
+        self._sham_provider = sham_provider
+        self._condition = condition
+        self._is_sham_mode = sham_provider is not None
+
+        # Initialize FeedbackEstimator (pass sham provider for activation delivery)
         self._estimator = FeedbackEstimator(
             mask_paths=list(mask_paths_resolved),
             n_baseline=n_baseline,
@@ -1555,6 +1591,7 @@ class NeurofeedbackCoordinator:
             task_regressors=task_regressors,
             mask_names=mask_names,
             use_efficiency_weights=use_efficiency_weights,
+            sham_provider=sham_provider,
         )
 
         # Processing state
@@ -1611,10 +1648,29 @@ class NeurofeedbackCoordinator:
         )
 
     def _init_csv(self) -> None:
-        """Initialize CSV log file and design matrix file with headers."""
+        """Initialize CSV log file and design matrix file with headers.
+
+        When sham mode is enabled, the header includes separate columns for
+        delivered and real activations: {mask}_delivered, {mask}_real.
+        This allows post-hoc analysis of what participants received vs actual brain activity.
+        """
         self._csv_file = open(self._csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file, delimiter='\t')
-        header = ["volume", "time", "is_baseline", "is_outlier", "fd"] + self.mask_names
+
+        # Build header based on sham mode
+        # When sham is enabled, we log both delivered and real activations
+        # When not in sham mode, we only log delivered (which equals real)
+        header = ["volume", "time", "is_baseline", "is_outlier", "fd", "condition"]
+
+        if self._is_sham_mode:
+            # Add delivered columns (what task saw) and real columns (actual brain)
+            header.extend([f"{name}_delivered" for name in self.mask_names])
+            header.extend([f"{name}_real" for name in self.mask_names])
+        else:
+            # Non-sham mode: just use mask names (delivered = real)
+            header.extend([f"{name}_delivered" for name in self.mask_names])
+            header.extend([f"{name}_real" for name in self.mask_names])
+
         self._csv_writer.writerow(header)
         self._csv_file.flush()
         # Initialize incremental design matrix file
@@ -2025,8 +2081,27 @@ class NeurofeedbackCoordinator:
         # Get FD from estimator (computed during process_volume)
         fd = self._estimator._latest_fd
 
-        row = [self.n_processed, f"{elapsed_time:.2f}", is_baseline, is_outlier, f"{fd:.4f}"]
+        # Get real activations from estimator (always computed, even in sham mode)
+        real_activations = self._estimator._last_real_activations
+
+        # Build CSV row with both delivered and real activations
+        # delivered = what task saw (sham values in sham mode, real values in real mode)
+        # real = actual brain activations (always computed)
+        row = [
+            self.n_processed,
+            f"{elapsed_time:.2f}",
+            is_baseline,
+            is_outlier,
+            f"{fd:.4f}",
+            self._condition,  # Log condition (real/sham) for each volume
+        ]
+
+        # Add delivered activations (what task saw)
         row.extend([f"{activations[name]:.4f}" for name in self.mask_names])
+
+        # Add real activations (actual brain activity)
+        row.extend([f"{real_activations.get(name, 0.0):.4f}" for name in self.mask_names])
+
         if self._csv_writer is not None:
             self._csv_writer.writerow(row)
         if self._csv_file is not None:
@@ -2034,6 +2109,7 @@ class NeurofeedbackCoordinator:
 
         # Log concise timing: proc = dcm2niix+GLM for this volume; drift = (elapsed - expected)
         status = "BASELINE" if is_baseline else "ACTIVE"
+        sham_indicator = " [SHAM]" if self._is_sham_mode else ""
         activation_str = "  ".join(
             f"{name}={activations[name]:+.3f}" for name in self.mask_names
         )
@@ -2045,7 +2121,7 @@ class NeurofeedbackCoordinator:
 
         logger.info(
             f"[{elapsed_time:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
-            f"({status}): {activation_str} "
+            f"({status}{sham_indicator}): {activation_str} "
             f"[proc:{total_duration:.0f}ms drift:{drift_str}ms{outlier_indicator}]{queue_warning}"
         )
 
@@ -2369,6 +2445,8 @@ def run_feedback_session(
     error_callback: Optional[Callable[[Exception], None]] = None,
     qc_enabled: bool = True,
     step_id: Optional[str] = None,
+    sham_provider: Optional["ShamActivationProvider"] = None,
+    condition: str = "real",
 ) -> dict:
     """Run a complete feedback session with optional DICOM simulation.
 
@@ -2443,6 +2521,15 @@ def run_feedback_session(
         transfer_2/feedback_2 -> run-02) and an acquisition letter (a, b, c...)
         is appended for each attempt at the same slot. When step_id is provided,
         the `run` parameter is ignored and determined from the step_id mapping.
+    sham_provider : ShamActivationProvider, optional
+        Sham activation source for control conditions. When provided, the estimator
+        returns sham activations (from provider) to the task while still computing
+        real activations for logging. Both delivered and real values are logged
+        to feedbacklog.tsv for post-hoc analysis. Default is None (real feedback).
+    condition : str, optional
+        Participant condition label to log in feedbacklog.tsv. Should be 'real'
+        or 'sham'. This is logged for each volume but doesn't affect processing -
+        the sham_provider determines what activations are delivered. Default is 'real'.
 
     Returns
     -------
@@ -2619,7 +2706,11 @@ def run_feedback_session(
         )
         logger.info(f"Simulator configured (speed={simulator_speed}x)")
 
-    # Initialize coordinator with simulator
+    # Log sham mode if active
+    if sham_provider is not None:
+        logger.info(f"SHAM MODE ACTIVE: condition='{condition}'")
+
+    # Initialize coordinator with simulator and sham configuration
     coordinator = NeurofeedbackCoordinator(
         watch_dir=incoming_dir,
         output_dir=output_dir,
@@ -2639,6 +2730,8 @@ def run_feedback_session(
         simulator=simulator,
         qc_enabled=qc_enabled,
         acq=acq,
+        sham_provider=sham_provider,
+        condition=condition,
     )
 
     # Set cleanup flags for simulation mode
