@@ -111,7 +111,7 @@ class StudyEditorScreen:
                 "feedback_dicoms": "",
                 "simulator_enabled": True,
                 "collection_speed": 10.0,  # Speed for localizer/collection
-                "feedback_simulator_speed": 10.0,  # Speed for feedback runs
+                "feedback_simulator_speed": 1.0,  # Speed for feedback runs
                 "scanner_dicom_dir": "/BOLD_DICOM",
             },
             "mask": {
