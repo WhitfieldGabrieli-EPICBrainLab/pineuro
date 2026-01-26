@@ -1,6 +1,6 @@
 """Pipeline execution runner for background thread execution.
 
-This module provides thread-safe execution of pyrtnf pipeline steps,
+This module provides thread-safe execution of pineuro pipeline steps,
 allowing the GUI to remain responsive during long-running operations.
 """
 
@@ -9,10 +9,16 @@ import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
-from pyrtnf.preprocessing import collect_dicoms, preprocessing
-from pyrtnf.mask_extraction import mask_extraction_rest, coregister_2vol, generate_2vol_qc_overlays
-from pyrtnf.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
-from pyrtnf.tasks.ball import compute_boxcar_task_regressor
+from pineuro.preprocessing import collect_dicoms, preprocessing
+from pineuro.mask_extraction import mask_extraction_rest, coregister_2vol, generate_2vol_qc_overlays
+from pineuro.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
+from pineuro.tasks.ball import compute_boxcar_task_regressor
+from pineuro.sham import (
+    load_randomization,
+    get_condition_for_participant,
+    find_feedbacklog_for_replay,
+    ReplayActivationProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -346,10 +352,20 @@ class PipelineRunner:
 
         # Mask extraction parameters
         n_yeo = config["mask"]["n_yeo"]
-        yeo_targets = config["mask"]["yeo_targets"]
+        yeo_targets = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
         smooth_fwhm = config["mask"]["smooth_fwhm"]
         highpass = config["mask"]["highpass"]
         lowpass = config["mask"].get("lowpass")
+
+        # If sham is enabled with alternative masks, include those networks too
+        sham_config = config.get("sham", {})
+        if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
+            alternative_targets = sham_config.get("alternative_mask_targets", [])
+            # Add any alternative targets not already in yeo_targets
+            for target in alternative_targets:
+                if target and target not in yeo_targets:
+                    yeo_targets.append(target)
+                    self._emit_progress(f"Including sham alternative network: {target}")
 
         # Set up progress callback for mask extraction to show in GUI log console
         def progress_callback(step: str, detail: str = ""):
@@ -392,18 +408,50 @@ class PipelineRunner:
                 self._emit_progress("2vol realtime coregistration is disabled, skipping...")
                 return
 
-        run_str = f"run-{run_id:02d}"
-        self._emit_progress(f"Coregistering network masks to 2vol {run_str}...")
-
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         preprocessing_dir = base_dir / "preprocessing"
         mask_extraction_dir = base_dir / "mask_extraction"
         feedback_dir = base_dir / "feedback"
 
-        # Input files
-        ref_file = preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
-        masks_dir = mask_extraction_dir / "03_masks"
+        # Check for mask reuse mode
+        visit_config = config.get("visit", {})
+        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        mask_source_visit = visit_config.get("mask_source_visit")
+
+        # Determine actual 2vol run number
+        # In mask reuse mode, realtime (run_id=2 from caller) uses 2vol run-01 (since no initial 2vol)
+        # In standard mode, run_id directly maps to 2vol run number
+        if is_mask_reuse and run_id == 2:
+            actual_2vol_run = 1
+        else:
+            actual_2vol_run = run_id
+
+        run_str = f"run-{actual_2vol_run:02d}"
+        self._emit_progress(f"Coregistering network masks to 2vol {run_str}...")
+
+        # For QC overlay generation, we need the mask_extraction_dir where ICA outputs are
+        source_mask_extraction_dir = None
+
+        if is_mask_reuse and mask_source_visit:
+            # Mask reuse mode: get masks and ref_file from source visit
+            # The source visit is at: study_base_dir / participant_id / source_visit_id
+            # Current base_dir is: study_base_dir / participant_id / current_visit_id
+            # So we go up one level and into the source visit
+            study_base_dir = base_dir.parent.parent  # Go up from participant/visit to study
+            source_visit_dir = study_base_dir / self.participant_id / mask_source_visit
+            source_preprocessing_dir = source_visit_dir / "preprocessing"
+            source_mask_extraction_dir = source_visit_dir / "mask_extraction"
+
+            ref_file = source_preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
+            masks_dir = source_mask_extraction_dir / "03_masks"
+
+            self._emit_progress(f"Using masks from source visit: {mask_source_visit}")
+        else:
+            # Standard mode: get masks and ref_file from current visit
+            ref_file = preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
+            masks_dir = mask_extraction_dir / "03_masks"
+
         twovol_dicom = base_dir / "collection" / f"task-2vol_{run_str}"
 
         # Get network mask files (thresholded only)
@@ -425,7 +473,7 @@ class PipelineRunner:
             input_dicom=twovol_dicom,
             network_files=[str(f) for f in network_files],
             ref_file=str(ref_file),
-            run_id=run_id,
+            run_id=actual_2vol_run,
             overwrite=True,
             output_subdir=output_subdir,
         )
@@ -445,13 +493,17 @@ class PipelineRunner:
                 session_dir = feedback_dir
                 twovol_subdir = "01_2vol"
 
+            # For QC overlays, use the mask_extraction_dir where ICA outputs are located
+            # In mask reuse mode, this is the source visit's mask_extraction_dir
+            qc_mask_extraction_dir = source_mask_extraction_dir if source_mask_extraction_dir else mask_extraction_dir
+
             generate_2vol_qc_overlays(
                 participant_id=self.participant_id,
                 session_dir=session_dir,
                 ref_file=ref_file,
-                mask_extraction_dir=mask_extraction_dir,
+                mask_extraction_dir=qc_mask_extraction_dir,
                 network_coreg_files=coreg_masks,
-                run_str=str(run_id).zfill(2),
+                run_str=str(actual_2vol_run).zfill(2),
                 n_yeo=config["mask"]["n_yeo"],
                 overwrite=True,
                 twovol_subdir=twovol_subdir,
@@ -473,7 +525,13 @@ class PipelineRunner:
         self._emit_progress("Collecting real-time 2vol DICOMs...")
 
         base_dir = Path(config["paths"]["base_dir"])
-        output_dir = base_dir / "collection" / "task-2vol_run-02"
+
+        # In mask reuse mode, realtime 2vol is run-01 (no initial 2vol)
+        # In standard mode, realtime 2vol is run-02 (after initial 2vol)
+        visit_config = config.get("visit", {})
+        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        run_id = 1 if is_mask_reuse else 2
+        output_dir = base_dir / "collection" / f"task-2vol_run-{run_id:02d}"
 
         # Get number of volumes (use new field, fall back to legacy)
         n_volumes = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
@@ -546,7 +604,6 @@ class PipelineRunner:
 
         # Get mask files - use 2vol-coregistered masks if realtime 2vol is enabled,
         # otherwise use boldref space masks from mask extraction
-        # IMPORTANT: Match files to mask_names order, not alphabetically sorted
         #
         # For ball task, respect top_network/bottom_network assignment if specified
         task_config = config.get("task", {})
@@ -555,18 +612,26 @@ class PipelineRunner:
         bottom_network = ball_config.get("bottom_network")
 
         if top_network and bottom_network:
-            # Use explicit ball task network assignment
-            mask_names = [top_network, bottom_network]
+            # Use explicit ball task network assignment for real condition
+            real_mask_names = [top_network, bottom_network]
         else:
             # Fall back to config mask_names
-            mask_names = config["mask"]["mask_names"]
+            real_mask_names = config["mask"]["mask_names"]
+
         twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
+
+        # Determine 2vol run number for mask file pattern
+        # In mask reuse mode, 2vol is run-01 (no initial 2vol)
+        # In standard mode, 2vol is run-02 (after initial 2vol)
+        visit_config = config.get("visit", {})
+        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        realtime_2vol_run = 1 if is_mask_reuse else 2
 
         if twovol_realtime_enabled:
             # Use 2vol-coregistered masks
             masks_dir = feedback_dir / "01_2vol" / "masks"
-            pattern_template = "*_{mask_name}_thr_to_task-2vol_run-02_*.nii.gz"
-            mask_space = "2vol run-02"
+            pattern_template = f"*_{{mask_name}}_thr_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz"
+            mask_space = f"2vol run-{realtime_2vol_run:02d}"
         else:
             # Use boldref space masks from mask extraction
             masks_dir = mask_extraction_dir / "03_masks"
@@ -575,9 +640,8 @@ class PipelineRunner:
 
         self._emit_progress(f"Using masks from {mask_space} space")
 
-        # Find mask files matching each mask name in order
-        mask_files = []
-        for mask_name in mask_names:
+        # Helper function to find mask file for a given name
+        def find_mask_file(mask_name: str) -> Path:
             pattern = pattern_template.format(mask_name=mask_name)
             matches = list(masks_dir.glob(pattern))
             if not matches:
@@ -587,15 +651,10 @@ class PipelineRunner:
                 )
             if len(matches) > 1:
                 logger.warning(f"Multiple mask files found for '{mask_name}', using first: {matches[0]}")
-            mask_files.append(matches[0])
+            return matches[0]
 
-        # Verify mask count matches
-        if len(mask_files) != len(mask_names):
-            raise ValueError(
-                f"Found {len(mask_files)} mask files but config specifies {len(mask_names)} mask names. "
-                f"Mask files: {[f.name for f in mask_files]}, "
-                f"Mask names: {mask_names}"
-            )
+        # Find mask files for the real masks
+        real_mask_files = [find_mask_file(name) for name in real_mask_names]
 
         # Collection directory for this run
         collection_dir = base_dir / "collection"
@@ -624,10 +683,112 @@ class PipelineRunner:
         tr = config["scan"].get("feedback_tr") or config["scan"].get("tr", 1.2)
         task_regressor = compute_boxcar_task_regressor(n_baseline, n_volumes, tr)
 
+        # Determine sham condition and build complete mask list
+        # New approach: compute ALL masks (real + sham alternatives), let BallTask decide
+        # which two masks control the ball based on condition
+        condition = "real"
+        sham_mask_names = []
+        sham_mask_files = []
+        sham_provider = None  # ReplayActivationProvider for replay mode
+        sham_config = config.get("sham", {})
+
+        if sham_config.get("enabled", False):
+            randomization_file = sham_config.get("randomization_file")
+            if randomization_file:
+                randomization_path = Path(randomization_file)
+                if randomization_path.exists():
+                    try:
+                        randomization = load_randomization(randomization_path)
+                        condition_info = get_condition_for_participant(
+                            randomization, self.participant_id
+                        )
+                        condition = condition_info["condition"]
+                        self._emit_progress(f"Participant condition: {condition}")
+
+                        delivery_method = sham_config.get("delivery_method", "alternative_masks")
+
+                        if delivery_method == "alternative_masks":
+                            # Always load sham alternative masks if configured (for logging)
+                            alternative_targets = sham_config.get("alternative_mask_targets", [])
+                            for alt_name in alternative_targets:
+                                # Only add if not already in real_mask_names
+                                if alt_name not in real_mask_names:
+                                    try:
+                                        sham_mask_files.append(find_mask_file(alt_name))
+                                        sham_mask_names.append(alt_name)
+                                    except ValueError as e:
+                                        logger.warning(f"Sham mask not found: {e}")
+
+                        elif delivery_method == "replay" and condition == "sham":
+                            # Replay mode: find feedbacklog from matched participant
+                            matched_participant = condition_info.get("matched_participant")
+                            matched_visit = condition_info.get("matched_visit")
+
+                            if not matched_participant:
+                                raise ValueError(
+                                    f"Sham participant {self.participant_id} has replay mode "
+                                    f"but no matched_participant in randomization file"
+                                )
+
+                            self._emit_progress(
+                                f"Replay mode: looking up feedbacklog from {matched_participant}"
+                                + (f" visit {matched_visit}" if matched_visit else "")
+                            )
+
+                            try:
+                                # base_dir is participant-specific (e.g., /data/sub-02)
+                                # For replay, we need the study base dir (e.g., /data)
+                                # to find other participants' feedbacklogs
+                                study_base_dir = base_dir.parent
+                                feedbacklog_path = find_feedbacklog_for_replay(
+                                    source_dir=study_base_dir,
+                                    matched_participant=matched_participant,
+                                    matched_visit=matched_visit,
+                                    task=task_type,
+                                    run=task_run_number,
+                                )
+                                self._emit_progress(f"Found feedbacklog: {feedbacklog_path.name}")
+
+                                # Create replay provider with the real mask names
+                                sham_provider = ReplayActivationProvider(
+                                    feedbacklog_path=feedbacklog_path,
+                                    mask_names=real_mask_names,
+                                )
+                                self._emit_progress(
+                                    f"Replay provider initialized with {sham_provider._n_source_volumes} volumes"
+                                )
+                            except FileNotFoundError as e:
+                                logger.error(f"Could not find feedbacklog for replay: {e}")
+                                self._emit_progress(f"ERROR: {e}")
+                                raise
+
+                    except Exception as e:
+                        logger.error(f"Error loading randomization: {e}")
+                        self._emit_progress(f"Warning: Could not load randomization file: {e}")
+                        raise
+                else:
+                    logger.warning(f"Randomization file not found: {randomization_path}")
+
+        # Combine all masks: real masks + any additional sham masks
+        all_mask_files = real_mask_files + sham_mask_files
+        all_mask_names = real_mask_names + sham_mask_names
+        self._emit_progress(f"Computing activations for masks: {all_mask_names}")
+
+        # Determine which masks control the ball based on condition
+        # For real: use real_mask_names (e.g., ContA, DefaultA)
+        # For sham: substitute first real mask with first sham mask (e.g., SomMotA replaces ContA)
+        if condition == "sham" and sham_mask_names:
+            # Sham: use sham mask for top (first), keep real mask for bottom (second)
+            ball_mask_names = [sham_mask_names[0], real_mask_names[1]]
+            self._emit_progress(f"Sham: ball controlled by {ball_mask_names} (instead of {real_mask_names})")
+        else:
+            ball_mask_names = real_mask_names
+
         # Run feedback session (this will handle DICOM collection + processing)
+        # Pass ALL masks so all activations are computed and logged
         try:
             session_info = run_feedback_session(
-                mask_paths=[str(f) for f in mask_files],
+                mask_paths=[str(f) for f in all_mask_files],
                 subject=self.participant_id,
                 task=task_type,
                 run=task_run_number,
@@ -638,12 +799,14 @@ class PipelineRunner:
                 n_volumes=n_volumes,
                 tr=tr,
                 task_regressors=task_regressor,  # Pass the computed task regressor
-                mask_names=mask_names,
+                mask_names=all_mask_names,  # All masks for logging
                 use_efficiency_weights=config["feedback"].get("use_efficiency_weights", True),
                 simulator_source_dir=simulator_source_dir,
                 simulator_speed=simulator_speed,
                 step_id=step_id,  # Use slot-based naming with acq entity
                 qc_enabled=True,
+                condition=condition,  # Log the actual condition
+                sham_provider=sham_provider,  # Replay provider for sham participants
             )
 
             # Wait for the coordinator thread to complete
@@ -657,15 +820,17 @@ class PipelineRunner:
             self._emit_progress(f"Launching PsychoPy task...")
 
             # Import task class
-            from pyrtnf.tasks import BallTask
+            from pineuro.tasks import BallTask
 
             # Get task configuration
             task_config = config.get("task", {})
 
             # Create and run task
+            # BallTask uses ball_mask_names to determine which 2 masks control movement
+            # For sham, this substitutes the sham mask for ball control
             task = BallTask(
                 coordinator=coordinator,
-                mask_names=mask_names,
+                mask_names=ball_mask_names,  # Which 2 masks control the ball
                 scale_factor=task_config.get("initial_scale_factor", 10.0),
                 fullscreen=task_config.get("fullscreen", True),
                 trigger_keys=task_config.get("trigger_keys", ["t", "+", "5", "equal"]),
@@ -707,8 +872,8 @@ class PipelineRunner:
             # Extract results from coordinator and task
             volumes_processed = coordinator.n_processed
             hits = {
-                mask_names[0]: task.hit_counters[0],
-                mask_names[1]: task.hit_counters[1],
+                ball_mask_names[0]: task.hit_counters[0],
+                ball_mask_names[1]: task.hit_counters[1],
             }
 
             self._emit_progress(

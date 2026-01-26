@@ -12,7 +12,7 @@ from typing import Callable, Optional
 
 import flet as ft
 
-from pyrtnf.session import detect_existing_visits, next_visit_id, VisitConfig
+from pineuro.session import detect_existing_visits, next_visit_id, VisitConfig
 
 logger = logging.getLogger(__name__)
 

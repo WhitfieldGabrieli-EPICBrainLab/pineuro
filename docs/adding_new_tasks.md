@@ -1,8 +1,8 @@
-# Adding New Tasks to pyrtnf GUI
+# Adding New Tasks to pineuro GUI
 
 ## Overview
 
-pyrtnf supports pluggable task types through a registry system. To add a new task, you only need to:
+pineuro supports pluggable task types through a registry system. To add a new task, you only need to:
 1. Define task metadata with parameters
 2. Register the task in the task registry
 3. Implement the PsychoPy task class (optional if using existing task code)
@@ -14,7 +14,7 @@ The GUI will automatically discover and display your task's parameters without a
 Here's how to add a simple "Rest" task with minimal parameters:
 
 ```python
-# Create src/pyrtnf/tasks/rest.py
+# Create src/pineuro/tasks/rest.py
 
 from .base import BaseTask
 from .task_registry import TaskMetadata, TaskParameter, register_task
@@ -66,7 +66,7 @@ REST_TASK_METADATA = TaskMetadata(
 register_task(REST_TASK_METADATA)
 ```
 
-Then add to `src/pyrtnf/tasks/__init__.py`:
+Then add to `src/pineuro/tasks/__init__.py`:
 ```python
 from .rest import RestTask  # Registers "rest" task
 ```
@@ -77,7 +77,7 @@ That's it! The GUI will now show "Resting State" in the task type dropdown with 
 
 ### 1. Create Your Task File
 
-Create a new file `src/pyrtnf/tasks/nback.py`:
+Create a new file `src/pineuro/tasks/nback.py`:
 
 ```python
 from typing import Dict, Any
@@ -165,7 +165,7 @@ register_task(NBACK_TASK_METADATA)
 
 ### 2. Register in `__init__.py`
 
-Add your task to `src/pyrtnf/tasks/__init__.py`:
+Add your task to `src/pineuro/tasks/__init__.py`:
 
 ```python
 # Import tasks to trigger auto-registration
@@ -256,7 +256,7 @@ task:
 
 1. **Test in GUI:**
    ```bash
-   python -m pyrtnf.gui.app
+   python -m pineuro.gui.app
    ```
    - Create or edit a study
    - Go to "Task Parameters" tab
@@ -271,13 +271,13 @@ task:
 
 3. **Test configuration:**
    - Save a study with your task configured
-   - Check `~/.pyrtnf/studies/yourstudy.yaml`
+   - Check `~/.pineuro/studies/yourstudy.yaml`
    - Verify task config is correctly formatted
 
 ## Complete Example: Stroop Task
 
 ```python
-# Create src/pyrtnf/tasks/stroop.py
+# Create src/pineuro/tasks/stroop.py
 
 from typing import Dict, Any
 from .base import BaseTask
@@ -366,7 +366,7 @@ STROOP_TASK_METADATA = TaskMetadata(
 register_task(STROOP_TASK_METADATA)
 ```
 
-Then add to `src/pyrtnf/tasks/__init__.py`:
+Then add to `src/pineuro/tasks/__init__.py`:
 ```python
 from .stroop import StroopTask  # Registers "stroop" task
 ```
@@ -410,7 +410,7 @@ Now your Stroop task is available in the GUI with all parameters configurable!
 **Parameters don't save correctly:**
 - Check parameter keys match between metadata and implementation
 - Verify type conversions in task code (e.g., `int(config["n"])`)
-- Inspect YAML file at `~/.pyrtnf/studies/yourstudy.yaml`
+- Inspect YAML file at `~/.pineuro/studies/yourstudy.yaml`
 
 **Validation errors:**
 - Check min/max values are reasonable
@@ -441,6 +441,6 @@ Then in the GUI, merge these defaults when loading the study.
 
 ## Questions?
 
-- Check existing tasks in `src/pyrtnf/tasks/task_registry.py` for examples
+- Check existing tasks in `src/pineuro/tasks/task_registry.py` for examples
 - See `TaskMetadata` and `TaskParameter` docstrings for API details
 - Test with the ball task configuration to understand expected behavior

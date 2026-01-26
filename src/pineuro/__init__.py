@@ -1,4 +1,4 @@
-"""pyrtnf - Python Real-Time fMRI Neurofeedback
+"""pineuro - Python Real-Time fMRI Neurofeedback
 
 A complete pipeline for real-time fMRI neurofeedback research, from DICOM acquisition
 through preprocessing, network mask extraction, and moment-to-moment BOLD activation estimation.
@@ -28,7 +28,7 @@ SessionState : Persistent state across runs
 
 Examples
 --------
->>> from pyrtnf import preprocessing, mask_extraction_rest, run_feedback_session
+>>> from pineuro import preprocessing, mask_extraction_rest, run_feedback_session
 >>>
 >>> # Step 1: Preprocess resting-state data
 >>> preproc_file, mask_file, ref_file = preprocessing(

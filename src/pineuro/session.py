@@ -158,9 +158,8 @@ class ShamConfig:
     randomization_file : Path, optional
         Path to TSV file containing subject -> condition assignments.
         Columns: subject_id, condition, matched_participant, matched_visit, notes
-    replay_source_dir : Path, optional
-        For 'replay' method: base directory containing source participant data.
-        Feedbacklogs are expected at: {replay_source_dir}/{matched_participant}/feedback/
+        For 'replay' method: matched_participant specifies which participant's
+        feedbacklog to replay from (looked up in the study's base_dir).
     """
     enabled: bool = False
     delivery_method: str = "alternative_masks"  # "alternative_masks" or "replay"
@@ -168,7 +167,6 @@ class ShamConfig:
         default_factory=lambda: ["SomMotA", "SomMotB"]
     )
     randomization_file: Optional[Path] = None
-    replay_source_dir: Optional[Path] = None
 
     def __post_init__(self):
         """Validate configuration and convert paths."""
@@ -178,14 +176,13 @@ class ShamConfig:
                     f"delivery_method must be 'alternative_masks' or 'replay', "
                     f"got '{self.delivery_method}'"
                 )
-            if self.delivery_method == "replay" and self.replay_source_dir is None:
+            if self.delivery_method == "replay" and self.randomization_file is None:
                 raise ValueError(
-                    "replay_source_dir is required when delivery_method='replay'"
+                    "randomization_file is required when delivery_method='replay' "
+                    "(must contain matched_participant column)"
                 )
         if self.randomization_file is not None:
             self.randomization_file = Path(self.randomization_file)
-        if self.replay_source_dir is not None:
-            self.replay_source_dir = Path(self.replay_source_dir)
 
 
 @dataclass
@@ -824,7 +821,7 @@ def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict]:
                 "visit_id": entry.name,
                 "has_masks": (entry / "mask_extraction" / "03_masks").exists(),
                 "has_feedback": (entry / "feedback" / "session_state.json").exists(),
-                "masks_approved": (entry / "mask_extraction" / "03_masks" / ".masks_approved").exists(),
+                "masks_approved": (entry / "mask_extraction" / ".masks_approved").exists(),
             }
             visits.append(visit_info)
 
@@ -834,7 +831,7 @@ def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict]:
             "visit_id": None,  # Single-visit mode
             "has_masks": (participant_dir / "mask_extraction" / "03_masks").exists(),
             "has_feedback": (participant_dir / "feedback" / "session_state.json").exists(),
-            "masks_approved": (participant_dir / "mask_extraction" / "03_masks" / ".masks_approved").exists(),
+            "masks_approved": (participant_dir / "mask_extraction" / ".masks_approved").exists(),
         })
 
     return visits

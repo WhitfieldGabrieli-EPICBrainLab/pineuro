@@ -1,6 +1,6 @@
 # PsychoPy Task Integration
 
-This module provides tools for creating PsychoPy tasks that receive real-time fMRI activation feedback from the pyrtnf processing pipeline.
+This module provides tools for creating PsychoPy tasks that receive real-time fMRI activation feedback from the pineuro processing pipeline.
 
 ## Overview
 
@@ -13,7 +13,7 @@ The task framework handles:
 ## Quick Start
 
 ```python
-from pyrtnf import run_feedback_session, BallTask
+from pineuro import run_feedback_session, BallTask
 # Start feedback in background thread
 session_info = run_feedback_session(
     mask_paths=['/path/to/cen_mask.nii.gz', '/path/to/dmn_mask.nii.gz'],
@@ -47,7 +47,7 @@ finally:
 Subclass `BaseTask` and implement three methods:
 
 ```python
-from pyrtnf.tasks import BaseTask
+from pineuro.tasks import BaseTask
 from psychopy import visual
 
 class MyTask(BaseTask):
@@ -122,7 +122,7 @@ Example implementation with:
 Exponential moving average for reducing noise:
 
 ```python
-from pyrtnf.tasks import ActivationSmoother
+from pineuro.tasks import ActivationSmoother
 
 smoother = ActivationSmoother(alpha=0.3)  # 0=max smoothing, 1=no smoothing
 smoothed = smoother.update(new_activation)
@@ -133,7 +133,7 @@ smoothed = smoother.update(new_activation)
 Percentile-based normalization to [0, 1]:
 
 ```python
-from pyrtnf.tasks import ActivationNormalizer
+from pineuro.tasks import ActivationNormalizer
 
 normalizer = ActivationNormalizer(window_size=50, lower_percentile=10, upper_percentile=90)
 normalized = normalizer.update(raw_activation)  # Returns value in [0, 1]
@@ -153,7 +153,7 @@ See [examples/run_feedback_with_task.py](../../../examples/run_feedback_with_tas
 
 ## Requirements
 
-- pyrtnf (this package)
+- pineuro (this package)
 - psychopy
 - numpy
 - See `docs/references.md` for underlying method references.

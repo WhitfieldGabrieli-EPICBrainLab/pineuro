@@ -2,7 +2,7 @@
 PsychoPy task integration for real-time neurofeedback.
 
 This module provides base classes and utilities for creating PsychoPy tasks
-that receive real-time fMRI activation feedback from the pyrtnf processing pipeline.
+that receive real-time fMRI activation feedback from the pineuro processing pipeline.
 
 Key Classes
 -----------

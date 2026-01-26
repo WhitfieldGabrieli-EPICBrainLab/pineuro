@@ -1,6 +1,6 @@
 """Task registration system for pluggable neurofeedback tasks.
 
-This module provides the infrastructure for adding new task types to pyrtnf
+This module provides the infrastructure for adding new task types to pineuro
 without modifying the GUI code. Tasks register themselves by defining metadata
 that describes their configurable parameters.
 

@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
-from pyrtnf.mask_extraction import MaskSelection
+from pineuro.mask_extraction import MaskSelection
 
 
 def generate_mask_extraction_script(
@@ -98,15 +98,15 @@ import shutil
 import sys
 from pathlib import Path
 
-from pyrtnf import mask_extraction_rest
-from pyrtnf.mask_extraction import (
+from pineuro import mask_extraction_rest
+from pineuro.mask_extraction import (
     MaskSelection,
     save_mask_selections,
     regenerate_mask_from_selection,
     load_mask_selections,
 )
-from pyrtnf import qc
-from pyrtnf.qc import generate_alternative_overlays, generate_yeo_network_overlay
+from pineuro import qc
+from pineuro.qc import generate_alternative_overlays, generate_yeo_network_overlay
 
 
 def clean_stale_outputs(root_dir: Path):

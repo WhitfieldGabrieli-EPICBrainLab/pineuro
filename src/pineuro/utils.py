@@ -1,5 +1,5 @@
 """
-Utilities and command execution framework for pyrtnf.
+Utilities and command execution framework for pineuro.
 
 Summary
 -------
@@ -58,6 +58,7 @@ from nibabel.loadsave import save
 from nibabel.nifti1 import Nifti1Image
 from templateflow import api as tflow
 import pydicom
+from scipy.ndimage import binary_erosion, generate_binary_structure
 
 # Local imports
 
@@ -177,7 +178,7 @@ def check_platform_requirements() -> list[str]:
     """Check platform requirements and return list of warnings/errors.
 
     This function checks for required external tools (FSL, dcm2niix) and
-    platform-specific limitations that may affect pyrtnf functionality.
+    platform-specific limitations that may affect pineuro functionality.
 
     Returns
     -------
@@ -186,7 +187,7 @@ def check_platform_requirements() -> list[str]:
 
     Examples
     --------
-    >>> from pyrtnf.utils import check_platform_requirements
+    >>> from pineuro.utils import check_platform_requirements
     >>> warnings = check_platform_requirements()
     >>> for warning in warnings:
     ...     print(f"Warning: {warning}")
@@ -222,7 +223,7 @@ def check_platform_requirements() -> list[str]:
     if platform == 'wsl':
         warnings.append(
             "Running under WSL2: Multi-monitor PsychoPy display may not work correctly. "
-            "Single-monitor mode is recommended (pyrtnf.config.PSYCHOPY_SCREEN = 0)."
+            "Single-monitor mode is recommended (pineuro.config.PSYCHOPY_SCREEN = 0)."
         )
 
     if platform == 'linux' and config.is_wayland():
@@ -263,7 +264,7 @@ def outputs_exist(
 
     Examples
     --------
-    >>> from pyrtnf.utils import outputs_exist
+    >>> from pineuro.utils import outputs_exist
     >>> if outputs_exist(output_path, overwrite=False):
     ...     logger.info("Skipping - output exists")
     ...     return output_path
@@ -294,7 +295,7 @@ class ProgressEmitter:
 
     Examples
     --------
-    >>> from pyrtnf.utils import ProgressEmitter
+    >>> from pineuro.utils import ProgressEmitter
     >>> emitter = ProgressEmitter(progress_callback, logger)
     >>> emitter.emit("Step 1", "Processing files...")
     >>> emitter.emit("Step 2")  # detail is optional
@@ -355,7 +356,7 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
 
     Examples
     --------
-    >>> from pyrtnf.utils import compute_hrf
+    >>> from pineuro.utils import compute_hrf
     >>> hrf = compute_hrf(tr=1.2)
     >>> print(hrf.shape)  # (27,) for 32s duration at TR=1.2
     """
@@ -416,7 +417,7 @@ def compute_boxcar_task_regressor(
 
     Examples
     --------
-    >>> from pyrtnf.utils import compute_boxcar_task_regressor
+    >>> from pineuro.utils import compute_boxcar_task_regressor
     >>> regressor = compute_boxcar_task_regressor(n_baseline=25, n_volumes=150, tr=1.2)
     >>> print(regressor.shape)  # (150,)
     """
@@ -1298,3 +1299,54 @@ def apply_mask(
     out_img = Nifti1Image(masked, img.affine, img.header)
     save(out_img, output_path)
     logger.info(f"Output: {output_path}")
+
+
+def erode_mask(
+    input_file: Union[str, Path],
+    output_file: Union[str, Path],
+    overwrite: bool = False
+) -> Path:
+    """Apply binary erosion (2 voxels) to a mask.
+
+    Uses 6-connected structuring element (face neighbors only) for conservative
+    erosion. Removes two voxel layers from the mask boundary.
+
+    Parameters
+    ----------
+    input_file : str or Path
+        Path to input binary mask NIfTI
+    output_file : str or Path
+        Path to save eroded mask
+    overwrite : bool, default=False
+        If True, overwrite existing output
+
+    Returns
+    -------
+    Path
+        Path to eroded mask file
+    """
+    output_path = Path(output_file)
+
+    if not overwrite and output_path.exists():
+        logger.info(f"Output exists and overwrite=False. Skipping erosion: {output_path}")
+        return output_path
+
+    logger.info(f"Eroding mask by 2 voxels: {input_file}")
+
+    # Load mask
+    img = nib.load(str(input_file))
+    data = img.get_fdata() > 0  # Ensure binary
+
+    # 6-connected structuring element (face neighbors only)
+    structure = generate_binary_structure(3, 1)
+
+    # Apply erosion
+    eroded = binary_erosion(data, structure=structure, iterations=2)
+
+    # Save
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    eroded_img = Nifti1Image(eroded.astype("uint8"), img.affine, img.header)
+    save(eroded_img, output_path)
+
+    logger.info(f"Eroded mask: {int(data.sum())} -> {int(eroded.sum())} voxels")
+    return output_path

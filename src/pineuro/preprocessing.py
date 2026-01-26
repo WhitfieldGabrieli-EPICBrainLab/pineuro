@@ -61,9 +61,10 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, DirCreatedEvent
 
 # Local imports
-from pyrtnf.utils import (
+from pineuro.utils import (
     run_command, dicom_to_nifti, compute_xfm, apply_xfm, compute_mean, apply_mask,
-    DICOM_EXTENSIONS, is_valid_dicom, get_tr_from_dicom, Timer, parallel_run_command
+    DICOM_EXTENSIONS, is_valid_dicom, get_tr_from_dicom, Timer, parallel_run_command,
+    erode_mask
 )
 
 # Configure module-level logger
@@ -536,11 +537,10 @@ def preprocessing(
         emit_progress("Step 4/4", f"Concatenating {len(concat_files)} runs...")
         concat(input_files=concat_files, output_file=coreg_file, overwrite=overwrite)
 
-    # Copy brain mask to final output location
-    emit_progress("Step 4/4", "Applying brain mask to outputs...")
+    # Erode brain mask (2 voxels) and save to final output location
+    emit_progress("Step 4/4", "Eroding and saving brain mask...")
     mask_file = root_dir / Path(f"{participant_id}_task-{task}_preproc_mask.nii.gz")
-    if not mask_file.exists() or overwrite:
-        shutil.copy(mean_mask, mask_file)
+    erode_mask(mean_mask, mask_file, overwrite=overwrite)
 
     # Apply mask to preprocessed timeseries (final masked 4D output)
     preproc_file = root_dir / Path(f"{participant_id}_task-{task}_preproc.nii.gz")

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pyrtnf is a Python library for real-time fMRI neurofeedback research. It provides a pipeline from DICOM acquisition through preprocessing and network mask extraction, implementing a real-time approach for moment-to-moment BOLD activation estimation.
+pineuro is a Python library for real-time fMRI neurofeedback research. It provides a pipeline from DICOM acquisition through preprocessing and network mask extraction, implementing a real-time approach for moment-to-moment BOLD activation estimation.
 
 ## Dependencies
 
@@ -23,7 +23,7 @@ pip install -e .
 python tests/test.py
 
 # Run DICOM simulator for offline testing
-python -m pyrtnf.simulator --source /path/to/dicoms --target /path/to/incoming --tr 1.5 --speed 2.0
+python -m pineuro.simulator --source /path/to/dicoms --target /path/to/incoming --tr 1.5 --speed 2.0
 ```
 
 ## Architecture
@@ -138,7 +138,7 @@ Feedback:
 
 ### Collecting Resting-State DICOMs (Real-Time Mode)
 ```python
-from pyrtnf import collect_dicoms, preprocessing
+from pineuro import collect_dicoms, preprocessing
 
 # Step 1: Collect resting-state DICOMs from scanner
 # (Similar to MURFI's resting_state step)
@@ -160,7 +160,7 @@ preproc_file, mask_file, ref_file = preprocessing(
 
 ### Collecting DICOMs (Simulation Mode for Testing)
 ```python
-from pyrtnf import collect_dicoms
+from pineuro import collect_dicoms
 
 # Offline testing with simulated scanner acquisition
 dicom_folder = collect_dicoms(
@@ -174,7 +174,7 @@ dicom_folder = collect_dicoms(
 
 ### Running a Feedback Session (Simulation Mode)
 ```python
-from pyrtnf import run_feedback_session
+from pineuro import run_feedback_session
 
 # Offline testing with simulated DICOM acquisition
 results = run_feedback_session(
@@ -193,7 +193,7 @@ results = run_feedback_session(
 
 ### Running a Feedback Session (Real-Time Mode)
 ```python
-from pyrtnf import run_feedback_session
+from pineuro import run_feedback_session
 
 # Real-time processing with scanner acquisition
 results = run_feedback_session(
@@ -214,7 +214,7 @@ QC reports can be generated automatically during pipeline execution or manually 
 
 **Automatic QC during pipeline execution**:
 ```python
-from pyrtnf import preprocessing, mask_extraction_rest, run_feedback_session
+from pineuro import preprocessing, mask_extraction_rest, run_feedback_session
 
 # Preprocessing with QC (enabled by default)
 preproc_file, mask_file, ref_file = preprocessing(
@@ -255,7 +255,7 @@ results = run_feedback_session(
 
 **Manual QC report generation**:
 ```python
-from pyrtnf import qc
+from pineuro import qc
 from pathlib import Path
 
 # Generate preprocessing QC report

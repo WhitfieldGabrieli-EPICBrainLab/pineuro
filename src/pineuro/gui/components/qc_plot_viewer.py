@@ -68,6 +68,7 @@ class QCPlotViewer:
             self.page.update()
             return
 
+
         # Use different styling for approval mode
         if self.require_approval:
             title_icon = ft.Icon(ft.Icons.APPROVAL, color=ft.Colors.ORANGE)
@@ -198,18 +199,24 @@ class QCPlotViewer:
 
     def _on_close(self, e):
         """Handle Close button click."""
-        self.page.pop_dialog()
+        if self._dialog:
+            self._dialog.open = False
+            self.page.update()
 
     def _on_approve_clicked(self, e):
         """Handle Approve button click."""
         logger.info("QC approved by user")
-        self.page.pop_dialog()
+        if self._dialog:
+            self._dialog.open = False
+            self.page.update()
         if self.on_approve:
             self.on_approve()
 
     def _on_reject_clicked(self, e):
         """Handle Reject button click."""
         logger.info("QC rejected by user")
-        self.page.pop_dialog()
+        if self._dialog:
+            self._dialog.open = False
+            self.page.update()
         if self.on_reject:
             self.on_reject()

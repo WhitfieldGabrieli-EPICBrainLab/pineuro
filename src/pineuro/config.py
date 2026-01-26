@@ -1,8 +1,8 @@
-"""Global configuration settings for pyrtnf.
+"""Global configuration settings for pineuro.
 
 This module provides centralized configuration for display settings,
 platform detection, and cross-platform defaults. Settings can be modified
-before importing other pyrtnf modules to customize behavior.
+before importing other pineuro modules to customize behavior.
 
 Display Settings
 ----------------
@@ -19,13 +19,13 @@ get_platform() : Get normalized platform name
 
 Examples
 --------
->>> import pyrtnf.config as config
+>>> import pineuro.config as config
 >>> # Configure before importing other modules
 >>> config.PSYCHOPY_SCREEN = 0  # Use primary monitor for tasks
 >>> config.QC_BROWSER_SCREEN = 0  # Use primary monitor for QC
 >>>
->>> # Now import and use pyrtnf
->>> from pyrtnf import run_feedback_session
+>>> # Now import and use pineuro
+>>> from pineuro import run_feedback_session
 """
 
 import os

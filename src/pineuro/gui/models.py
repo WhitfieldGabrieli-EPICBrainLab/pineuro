@@ -55,7 +55,7 @@ class StudyConfig:
 
     Attributes:
         metadata: Study metadata (name, description, timestamps)
-        session_config: The actual pipeline configuration (from pyrtnf.session)
+        session_config: The actual pipeline configuration (from pineuro.session)
         file_path: Path to the YAML file (None if not yet saved)
     """
     metadata: StudyMetadata

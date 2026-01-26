@@ -1,6 +1,6 @@
 """Study Editor screen for creating and editing study configurations.
 
-This module provides a tabbed interface for configuring all aspects of a pyrtnf study:
+This module provides a tabbed interface for configuring all aspects of a pineuro study:
 - Metadata and scanner parameters
 - Network selection and preprocessing
 - Task-specific parameters (Ball task, future tasks)
@@ -15,7 +15,7 @@ from typing import Optional, Dict
 
 import flet as ft
 
-from pyrtnf.tasks import get_task_metadata, list_available_tasks, TaskParameter
+from pineuro.tasks import get_task_metadata, list_available_tasks, TaskParameter
 from ..config_manager import ConfigManager
 from ..models import StudyConfig, StudyMetadata
 from ..utils import (
@@ -87,7 +87,7 @@ class StudyEditorScreen:
         session_config = {
             "paths": {
                 "participant_id": "",
-                "base_dir": "/data/pyrtnf",
+                "base_dir": "/data/pineuro",
                 "example_participant_id": "sub-001",
             },
             "scan": {
@@ -164,9 +164,8 @@ class StudyEditorScreen:
             "sham": {
                 "enabled": False,
                 "delivery_method": "alternative_masks",
-                "alternative_mask_targets": ["SomMotA", "SomMotB"],
+                "alternative_mask_targets": ["SomMotA", "DefaultA"],
                 "randomization_file": "",
-                "replay_source_dir": "",
             }
         }
 
@@ -308,9 +307,25 @@ class StudyEditorScreen:
             ]),
             value=str(config["mask"]["n_yeo"]),
         )
+        self.n_yeo_radio.on_change = self._on_n_yeo_changed
 
-        # Yeo network checkboxes
-        self.yeo_checkboxes = self._create_yeo_checkboxes(config["mask"]["n_yeo"], config["mask"]["yeo_targets"])
+        # Network selection dropdowns (replacing checkboxes)
+        # Get current targets from config
+        yeo_targets = config["mask"].get("yeo_targets", ["DefaultA", "ContA"])
+        first_network = yeo_targets[0] if len(yeo_targets) > 0 else None
+        second_network = yeo_targets[1] if len(yeo_targets) > 1 else None
+
+        self.first_network_dropdown = ft.Dropdown(
+            label="First Network (top of ball task)",
+            options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
+            value=first_network,
+        )
+
+        self.second_network_dropdown = ft.Dropdown(
+            label="Second Network (bottom of ball task)",
+            options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
+            value=second_network,
+        )
 
         self.smooth_fwhm_field = ft.TextField(
             label="Spatial smoothing (mm FWHM)",
@@ -411,20 +426,29 @@ class StudyEditorScreen:
             on_change=self._on_sham_enabled_changed,
         )
 
-        self.sham_delivery_method_dropdown = ft.Dropdown(
-            label="Delivery Method",
-            options=[
-                ft.dropdown.Option(key="alternative_masks", text="Alternative Masks"),
-                ft.dropdown.Option(key="replay", text="Replay Previous Participant"),
-            ],
+        self.sham_delivery_method_radio = ft.RadioGroup(
+            content=ft.Column([
+                ft.Radio(value="alternative_masks", label="Alternative Masks"),
+                ft.Radio(value="replay", label="Replay Previous Participant"),
+            ]),
             value=sham_config.get("delivery_method", "alternative_masks"),
         )
-        self.sham_delivery_method_dropdown.on_change = self._on_sham_method_changed
+        self.sham_delivery_method_radio.on_change = self._on_sham_method_changed
 
-        self.sham_alternative_targets_field = ft.TextField(
-            label="Alternative Network Targets",
-            value=", ".join(sham_config.get("alternative_mask_targets", ["SomMotA", "SomMotB"])),
-            hint_text="Comma-separated network names (e.g., SomMotA, SomMotB)",
+        # Sham alternative network dropdowns (replacing text field)
+        sham_targets = sham_config.get("alternative_mask_targets", ["SomMotA", "DefaultA"])
+        sham_first = sham_targets[0] if len(sham_targets) > 0 else None
+        sham_second = sham_targets[1] if len(sham_targets) > 1 else None
+
+        self.sham_first_network_dropdown = ft.Dropdown(
+            label="First Sham Network",
+            options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
+            value=sham_first,
+        )
+        self.sham_second_network_dropdown = ft.Dropdown(
+            label="Second Sham Network",
+            options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
+            value=sham_second,
         )
 
         self.sham_randomization_file_field = ft.TextField(
@@ -433,52 +457,40 @@ class StudyEditorScreen:
             hint_text="TSV file with subject_id, condition, matched_participant columns",
         )
 
-        self.sham_replay_source_dir_field = ft.TextField(
-            label="Replay Source Directory",
-            value=sham_config.get("replay_source_dir", ""),
-            hint_text="Base directory containing source participant data",
-        )
 
-        # --- Ball task network assignment dropdowns ---
-        # These are populated dynamically from selected yeo_targets
-        ball_config = config["task"].get("ball", {})
-        self.ball_top_network_dropdown = ft.Dropdown(
-            label="Top Network (upward movement)",
-            options=[],  # Populated by _update_ball_network_dropdowns
-            value=ball_config.get("top_network"),
-            hint_text="Network that controls upward ball movement",
-        )
-        self.ball_bottom_network_dropdown = ft.Dropdown(
-            label="Bottom Network (downward movement)",
-            options=[],  # Populated by _update_ball_network_dropdowns
-            value=ball_config.get("bottom_network"),
-            hint_text="Network that controls downward ball movement",
-        )
-
-    def _create_yeo_checkboxes(self, n_yeo: int, selected_targets: list) -> ft.Column:
-        """Create Yeo network checkboxes based on atlas size.
+    def _get_yeo_network_options(self, n_yeo: int) -> list:
+        """Get Yeo network options for dropdowns based on atlas size.
 
         Args:
             n_yeo: 7 or 17
-            selected_targets: Currently selected network names
 
         Returns:
-            Column of checkboxes
+            List of dropdown options
         """
         from ..utils import YEO_7_LABELS, YEO_17_LABELS
 
         labels = YEO_7_LABELS if n_yeo == 7 else YEO_17_LABELS
+        return [ft.dropdown.Option(key=label, text=label) for label in labels]
 
-        checkboxes = []
-        for label in labels:
-            checkbox = ft.Checkbox(
-                label=label,
-                value=label in selected_targets,
-                on_change=self._on_yeo_checkbox_changed,
-            )
-            checkboxes.append(checkbox)
+    def _on_n_yeo_changed(self, e):
+        """Handle Yeo atlas size change - update all network dropdowns."""
+        n_yeo = int(self.n_yeo_radio.value)
+        new_options = self._get_yeo_network_options(n_yeo)
 
-        return ft.Column(checkboxes, scroll=ft.ScrollMode.AUTO, height=300)
+        # Update all network dropdowns with new options
+        for dropdown in [
+            self.first_network_dropdown,
+            self.second_network_dropdown,
+            self.sham_first_network_dropdown,
+            self.sham_second_network_dropdown,
+        ]:
+            # Clear value if it's not in the new options
+            old_value = dropdown.value
+            dropdown.options = new_options
+            valid_keys = [opt.key for opt in new_options]
+            if old_value not in valid_keys:
+                dropdown.value = None
+            dropdown.update()
 
     def _validate_field(self, field_name: str, field: ft.TextField, validator):
         """Validate a form field and update UI.
@@ -529,57 +541,28 @@ class StudyEditorScreen:
 
     def _on_sham_enabled_changed(self, e):
         """Handle sham enabled checkbox change."""
+        self._update_sham_visibility()
+
+    def _on_sham_method_changed(self, e):
+        """Handle sham delivery method change."""
+        self._update_sham_visibility()
+
+    def _update_sham_visibility(self):
+        """Update visibility of sham sections based on enabled state and delivery method."""
         is_enabled = self.sham_enabled_checkbox.value
+        method = self.sham_delivery_method_radio.value
 
         # Update visibility of sham configuration fields
         if hasattr(self, 'sham_config_container'):
             self.sham_config_container.visible = is_enabled
-
-        self.page.update()
-
-    def _on_sham_method_changed(self, e):
-        """Handle sham delivery method change."""
-        method = self.sham_delivery_method_dropdown.value
-
-        # Update visibility based on delivery method
         if hasattr(self, 'sham_alternative_section'):
-            self.sham_alternative_section.visible = (method == "alternative_masks")
+            self.sham_alternative_section.visible = is_enabled and (method == "alternative_masks")
         if hasattr(self, 'sham_replay_section'):
-            self.sham_replay_section.visible = (method == "replay")
+            self.sham_replay_section.visible = is_enabled and (method == "replay")
+        if hasattr(self, 'sham_randomization_section'):
+            self.sham_randomization_section.visible = is_enabled
 
         self.page.update()
-
-    def _update_ball_network_dropdowns(self):
-        """Update ball network dropdowns based on selected Yeo targets."""
-        # Get selected networks from checkboxes
-        selected = [cb.label for cb in self.yeo_checkboxes.controls if cb.value]
-        options = [ft.dropdown.Option(key=n, text=n) for n in selected]
-
-        # Update dropdown options
-        self.ball_top_network_dropdown.options = options
-        self.ball_bottom_network_dropdown.options = options
-
-        # Auto-select first two if current values not in selected
-        if len(selected) >= 2:
-            if self.ball_top_network_dropdown.value not in selected:
-                self.ball_top_network_dropdown.value = selected[0]
-            if self.ball_bottom_network_dropdown.value not in selected:
-                self.ball_bottom_network_dropdown.value = selected[1]
-        elif len(selected) == 1:
-            if self.ball_top_network_dropdown.value not in selected:
-                self.ball_top_network_dropdown.value = selected[0]
-            self.ball_bottom_network_dropdown.value = None
-        else:
-            self.ball_top_network_dropdown.value = None
-            self.ball_bottom_network_dropdown.value = None
-
-        # Update UI
-        self.ball_top_network_dropdown.update()
-        self.ball_bottom_network_dropdown.update()
-
-    def _on_yeo_checkbox_changed(self, e):
-        """Handle Yeo network checkbox change."""
-        self._update_ball_network_dropdowns()
 
     def _create_localizer_task_parameter_fields(self):
         """Create form fields for localizer task type's parameters (when not rest)."""
@@ -666,10 +649,16 @@ class StudyEditorScreen:
         # Recreate task parameter fields for new task type
         self._create_task_parameter_fields()
 
-        # Update ball network section visibility
-        if hasattr(self, 'ball_network_section'):
-            self.ball_network_section.visible = (task_type == "ball")
-            self.ball_network_section.update()
+        is_ball_task = (task_type == "ball")
+
+        # Update ball-task-specific section visibility
+        if hasattr(self, 'session_structure_section'):
+            self.session_structure_section.visible = is_ball_task
+            self.session_structure_section.update()
+
+        if hasattr(self, 'task_specific_section'):
+            self.task_specific_section.visible = is_ball_task
+            self.task_specific_section.update()
 
         # Rebuild the task tab dynamically
         # Find the TabsWidget and update its content
@@ -803,6 +792,81 @@ class StudyEditorScreen:
             on_click=pick_directory,
         )
 
+    def _create_file_browse_button(self, field: ft.TextField, filetypes: list = None) -> ft.IconButton:
+        """Create a browse button for file selection.
+
+        Args:
+            field: TextField to update with selected file
+            filetypes: List of (description, pattern) tuples for file filter
+                       e.g., [("TSV files", "*.tsv"), ("All files", "*.*")]
+
+        Returns:
+            IconButton that opens file picker
+        """
+        def pick_file(e):
+            """Handle file picker click event."""
+            logger.info(f"File picker clicked for field: {field.label}")
+
+            # Use tkinter file dialog as a workaround for Flet FilePicker issues on Linux
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+            except ImportError:
+                logger.error("tkinter is not available")
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"),
+                    open=True,
+                )
+                self.page.update()
+                return
+
+            try:
+                # Create a temporary tkinter root window
+                root = tk.Tk()
+                root.withdraw()  # Hide the main window
+                root.attributes('-topmost', True)  # Bring to front
+
+                # Set up file types filter
+                ftypes = filetypes if filetypes else [("All files", "*.*")]
+
+                # Get initial directory from current value
+                import os
+                initialdir = None
+                if field.value:
+                    dirname = os.path.dirname(field.value)
+                    if dirname and os.path.isdir(dirname):
+                        initialdir = dirname
+
+                # Open file picker
+                path = filedialog.askopenfilename(
+                    title=f"Select {field.label}",
+                    initialdir=initialdir,
+                    filetypes=ftypes
+                )
+
+                # Clean up
+                root.destroy()
+
+                logger.info(f"Selected file: {path}")
+                if path:
+                    field.value = path
+                    field.update()
+
+            except Exception as ex:
+                logger.error(f"Error opening file picker: {ex}")
+                # Show error to user
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text(f"Error opening file browser: {ex}"),
+                    open=True,
+                )
+                self.page.update()
+
+        return ft.IconButton(
+            icon=ft.icons.Icons.FILE_OPEN,
+            tooltip="Browse for file",
+            on_click=pick_file,
+        )
+
     def build(self) -> ft.Control:
         """Build the study editor UI.
 
@@ -842,9 +906,6 @@ class StudyEditorScreen:
             content=tabs_content,
             length=4,  # Number of tabs
         )
-
-        # Initialize ball network dropdowns with selected Yeo targets
-        self._update_ball_network_dropdowns()
 
         # Create action buttons
         action_buttons = ft.Row(
@@ -1049,7 +1110,18 @@ class StudyEditorScreen:
         return controls
 
     def _build_feedback_tab(self) -> ft.Container:
-        """Build the feedback parameters tab with integrated networks and sham."""
+        """Build the feedback parameters tab with integrated networks and sham.
+
+        Order follows workflow sequence:
+        1. Scanner Parameters
+        2. 2vol Realtime Reference
+        3. Feedback Task selection
+        4. Session Structure (ball task specific)
+        5. Preprocessing
+        6. Network Configuration (with dropdowns for first/second network)
+        7. Sham/Control Conditions
+        8. Task Parameters (ball task specific)
+        """
         # Scanner parameters for feedback
         scanner_section = [
             ft.Text("Scanner Parameters", size=16, weight=ft.FontWeight.BOLD),
@@ -1084,8 +1156,46 @@ class StudyEditorScreen:
             ft.Divider(),
         ]
 
-        # Networks section (only visible when localizer is rest)
+        # Feedback task selection - right after 2vol section
+        task_selection = [
+            ft.Text("Feedback Task", size=16, weight=ft.FontWeight.BOLD),
+            self.task_type_dropdown,
+            ft.Divider(),
+        ]
+
+        # Ball task specific sections (only visible when task_type is ball)
+        is_ball_task = self.task_type_dropdown.value == "ball"
+
+        # Session structure - ball task specific
+        self.session_structure_section = ft.Container(
+            content=ft.Column([
+                ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
+                self.max_feedback_runs_field,
+                self.n_baseline_field,
+                ft.Text(
+                    "Note: Transfer runs are optional (configure in task-specific parameters below)",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+                ft.Divider(),
+            ]),
+            visible=is_ball_task,
+        )
+
+        # Preprocessing section (only visible when localizer is rest)
         is_rest_localizer = self.localizer_task_type_dropdown.value == "rest"
+        self.preprocessing_section = ft.Container(
+            content=ft.Column([
+                ft.Text("Preprocessing", size=16, weight=ft.FontWeight.BOLD),
+                self.smooth_fwhm_field,
+                self.highpass_field,
+                ft.Divider(),
+            ]),
+            visible=is_rest_localizer,
+        )
+
+        # Network Configuration section (only visible when localizer is rest)
         self.networks_section = ft.Container(
             content=ft.Column([
                 ft.Text("Network Configuration", size=16, weight=ft.FontWeight.BOLD),
@@ -1099,69 +1209,35 @@ class StudyEditorScreen:
                 ft.Text("Yeo Atlas", size=14, weight=ft.FontWeight.BOLD),
                 self.n_yeo_radio,
                 ft.Divider(),
-                ft.Text("Target Networks (select 2+)", size=14, weight=ft.FontWeight.BOLD),
-                self.yeo_checkboxes,
-                ft.Divider(),
-                ft.Text("Preprocessing", size=14, weight=ft.FontWeight.BOLD),
-                self.smooth_fwhm_field,
-                self.highpass_field,
+                ft.Text("Target Networks (select 2)", size=14, weight=ft.FontWeight.BOLD),
+                ft.Row([
+                    self.first_network_dropdown,
+                    self.second_network_dropdown,
+                ]),
                 ft.Divider(),
             ]),
             visible=is_rest_localizer,
         )
 
-        # Task configuration
-        task_section = [
-            ft.Text("Feedback Task", size=16, weight=ft.FontWeight.BOLD),
-            self.task_type_dropdown,
-            ft.Divider(),
-            ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
-            self.max_feedback_runs_field,
-            self.n_baseline_field,
-            ft.Text(
-                "Note: Transfer runs are optional (configure in task-specific parameters below)",
-                size=12,
-                color=ft.Colors.GREY_600,
-                italic=True,
-            ),
-            ft.Divider(),
-        ]
-
-        # Ball task network assignment section (only visible when task_type is ball)
-        is_ball_task = self.task_type_dropdown.value == "ball"
-        self.ball_network_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Network Assignment", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "Specify which network controls each ball direction. "
-                    "Top network: activation moves ball UP toward top circle. "
-                    "Bottom network: activation moves ball DOWN toward bottom circle.",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                ),
-                ft.Row([
-                    self.ball_top_network_dropdown,
-                    self.ball_bottom_network_dropdown,
-                ]),
-                ft.Divider(),
-            ]),
-            visible=is_ball_task,
-        )
-
-        # Task-specific parameters
-        task_specific_section = self._build_task_specific_params()
-
         # Sham section (integrated from sham tab)
         sham_section = self._build_sham_section()
+
+        # Task-specific parameters (wrapped in container for visibility control)
+        task_specific_controls = self._build_task_specific_params()
+        self.task_specific_section = ft.Container(
+            content=ft.Column(task_specific_controls),
+            visible=is_ball_task,
+        )
 
         return ft.Container(
             content=ft.Column(
                 scanner_section + twovol_section +
+                task_selection +
+                [self.session_structure_section] +
+                [self.preprocessing_section] +
                 [self.networks_section] +
-                task_section +
-                [self.ball_network_section] +
-                task_specific_section +
-                [sham_section],
+                [sham_section] +
+                [self.task_specific_section],
                 scroll=ft.ScrollMode.AUTO,
             ),
             padding=20,
@@ -1170,39 +1246,45 @@ class StudyEditorScreen:
     def _build_sham_section(self) -> ft.Container:
         """Build the sham/control condition section for feedback tab."""
         is_enabled = self.sham_enabled_checkbox.value
-        method = self.sham_delivery_method_dropdown.value
+        method = self.sham_delivery_method_radio.value
 
-        # Alternative masks section
-        self.sham_alternative_section = ft.Column(
-            [
+        # Alternative masks section (using dropdowns)
+        self.sham_alternative_section = ft.Container(
+            content=ft.Column([
                 ft.Text("Alternative Networks", size=14, weight=ft.FontWeight.BOLD),
-                self.sham_alternative_targets_field,
+                ft.Row([
+                    self.sham_first_network_dropdown,
+                    self.sham_second_network_dropdown,
+                ]),
                 ft.Text(
                     "Networks to use for sham participants (e.g., motor networks instead of DMN)",
                     size=11,
                     color=ft.Colors.GREY_600,
                     italic=True,
                 ),
-            ],
-            visible=(method == "alternative_masks"),
+            ]),
+            visible=is_enabled and (method == "alternative_masks"),
         )
 
-        # Replay section
-        self.sham_replay_section = ft.Column(
-            [
+        # Replay info section (replay uses base_dir + randomization file)
+        self.sham_replay_section = ft.Container(
+            content=ft.Column([
                 ft.Text("Replay Configuration", size=14, weight=ft.FontWeight.BOLD),
-                ft.Row([
-                    self.sham_replay_source_dir_field,
-                    self._create_browse_button(self.sham_replay_source_dir_field),
-                ]),
                 ft.Text(
-                    "Directory containing feedbacklog.tsv files from previous participants to replay",
+                    "Replay mode uses the matched_participant column from the randomization file "
+                    "to find feedbacklog.tsv files in the study's base data directory.",
+                    size=12,
+                    color=ft.Colors.GREY_700,
+                ),
+                ft.Text(
+                    "Ensure the matched participant's feedback session has completed before "
+                    "running the sham participant.",
                     size=11,
                     color=ft.Colors.GREY_600,
                     italic=True,
                 ),
-            ],
-            visible=(method == "replay"),
+            ]),
+            visible=is_enabled and (method == "replay"),
         )
 
         # Configuration container (visible when sham enabled)
@@ -1210,15 +1292,23 @@ class StudyEditorScreen:
             [
                 ft.Divider(),
                 ft.Text("Delivery Method", size=14, weight=ft.FontWeight.BOLD),
-                self.sham_delivery_method_dropdown,
+                self.sham_delivery_method_radio,
                 ft.Divider(),
-                self.sham_alternative_section,
-                self.sham_replay_section,
+            ],
+            visible=is_enabled,
+        )
+
+        # Randomization section (visible when sham enabled)
+        self.sham_randomization_section = ft.Column(
+            [
                 ft.Divider(),
                 ft.Text("Randomization", size=14, weight=ft.FontWeight.BOLD),
                 ft.Row([
                     self.sham_randomization_file_field,
-                    self._create_browse_button(self.sham_randomization_file_field),
+                    self._create_file_browse_button(
+                        self.sham_randomization_file_field,
+                        filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")]
+                    ),
                 ]),
                 ft.Text(
                     "TSV file with columns: subject_id, condition (real/sham), "
@@ -1242,6 +1332,9 @@ class StudyEditorScreen:
                 ),
                 self.sham_enabled_checkbox,
                 self.sham_config_container,
+                self.sham_alternative_section,
+                self.sham_replay_section,
+                self.sham_randomization_section,
             ]),
         )
 
@@ -1637,11 +1730,12 @@ class StudyEditorScreen:
             logger.error(f"Invalid network parameter: {e}")
             raise ValidationError(f"Invalid network parameter: {e}")
 
-        # Update selected networks
-        selected_networks = [
-            checkbox.label for checkbox in self.yeo_checkboxes.controls
-            if checkbox.value
-        ]
+        # Update selected networks from dropdowns
+        selected_networks = []
+        if self.first_network_dropdown.value:
+            selected_networks.append(self.first_network_dropdown.value)
+        if self.second_network_dropdown.value:
+            selected_networks.append(self.second_network_dropdown.value)
         config["mask"]["yeo_targets"] = selected_networks
         config["mask"]["mask_names"] = selected_networks
 
@@ -1690,10 +1784,10 @@ class StudyEditorScreen:
             # Validate task config
             metadata.validate_config(config["task"][task_type])
 
-            # Save ball task network assignment
+            # Save ball task network assignment (first network = top, second = bottom)
             if task_type == "ball":
-                config["task"]["ball"]["top_network"] = self.ball_top_network_dropdown.value
-                config["task"]["ball"]["bottom_network"] = self.ball_bottom_network_dropdown.value
+                config["task"]["ball"]["top_network"] = self.first_network_dropdown.value
+                config["task"]["ball"]["bottom_network"] = self.second_network_dropdown.value
 
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid task parameter: {e}")
@@ -1753,9 +1847,14 @@ class StudyEditorScreen:
         if "sham" not in config:
             config["sham"] = {}
         config["sham"]["enabled"] = self.sham_enabled_checkbox.value
-        config["sham"]["delivery_method"] = self.sham_delivery_method_dropdown.value
-        config["sham"]["alternative_mask_targets"] = [
-            s.strip() for s in self.sham_alternative_targets_field.value.split(",") if s.strip()
-        ]
+        config["sham"]["delivery_method"] = self.sham_delivery_method_radio.value
+        # Save sham alternative networks from dropdowns
+        sham_targets = []
+        if self.sham_first_network_dropdown.value:
+            sham_targets.append(self.sham_first_network_dropdown.value)
+        if self.sham_second_network_dropdown.value:
+            sham_targets.append(self.sham_second_network_dropdown.value)
+        config["sham"]["alternative_mask_targets"] = sham_targets
         config["sham"]["randomization_file"] = self.sham_randomization_file_field.value.strip()
-        config["sham"]["replay_source_dir"] = self.sham_replay_source_dir_field.value.strip()
+        # Remove legacy replay_source_dir if present (now uses base_dir automatically)
+        config["sham"].pop("replay_source_dir", None)

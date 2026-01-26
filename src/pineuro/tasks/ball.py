@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 
 # Import from utils for backward compatibility (these were originally defined here)
-from pyrtnf.utils import compute_hrf, compute_boxcar_task_regressor
+from pineuro.utils import compute_hrf, compute_boxcar_task_regressor
 
 # Re-export for backward compatibility with existing imports from this module
 __all__ = ['BallTask', 'compute_hrf', 'compute_boxcar_task_regressor']
@@ -129,6 +129,9 @@ class BallTask(BaseTask):
         Whether this is the first run of this type (transfer or feedback).
         Controls instruction text: first runs show detailed explanations,
         later runs show brief reminders.
+    circle_shrink_factor : float, default=0.9
+        Multiplier applied to circle radius after each hit (0.9 = 10% shrink per hit,
+        1.0 = no shrink). Lower values increase difficulty faster.
 
     Attributes
     ----------
@@ -147,7 +150,7 @@ class BallTask(BaseTask):
 
     Examples
     --------
-    >>> from pyrtnf import run_feedback_session, BallTask
+    >>> from pineuro import run_feedback_session, BallTask
     >>> session_info = run_feedback_session(..., run_in_background=True)
     >>> task = BallTask(session_info['coordinator'], mask_names=['CEN', 'DMN'])
     >>> task.run()
@@ -174,6 +177,7 @@ class BallTask(BaseTask):
         min_hits_threshold: int = 3,
         max_hits_threshold: int = 5,
         scale_adjust_factor: float = 0.25,
+        circle_shrink_factor: float = 0.9,
     ):
         self.coordinator = coordinator
         self._session_state = session_state
@@ -183,6 +187,7 @@ class BallTask(BaseTask):
         self._min_hits_threshold = min_hits_threshold
         self._max_hits_threshold = max_hits_threshold
         self._scale_adjust_factor = scale_adjust_factor
+        self.circle_shrink_factor = circle_shrink_factor
 
         if len(coordinator.mask_names) < 2:
             raise ValueError(
@@ -319,7 +324,7 @@ class BallTask(BaseTask):
     def setup(self):
         """Initialize PsychoPy window and ball task stimuli."""
         from psychopy import visual
-        from pyrtnf import config
+        from pineuro import config
 
         # Get target screen from config
         target_screen = config.PSYCHOPY_SCREEN
@@ -877,9 +882,9 @@ class BallTask(BaseTask):
                 # Reset frame time to prevent large dt jump after hit processing
                 self._last_frame_time = core.getTime()
 
-                # Shrink circle to increase difficulty (10% reduction per hit, min 0.03)
+                # Shrink circle to increase difficulty (configurable reduction per hit, min 0.03)
                 # Makes it progressively harder to hit the same target repeatedly
-                self.circle_radii[i] = max(self.circle_radii[i] * 0.9, 0.03)
+                self.circle_radii[i] = max(self.circle_radii[i] * self.circle_shrink_factor, 0.03)
                 self.circles[i].radius = self.circle_radii[i]
 
                 return True
@@ -1257,6 +1262,15 @@ BALL_TASK_METADATA = TaskMetadata(
             hint="Include transfer runs (1 before feedback, 1 after)",
         ),
         TaskParameter(
+            key="circle_shrink_factor",
+            label="Circle Shrink Factor",
+            type="float",
+            default=0.9,
+            min_value=0.5,
+            max_value=1.0,
+            hint="Circle size multiplier after hit (0.9 = 10% shrink, 1.0 = no shrink)",
+        ),
+        TaskParameter(
             key="initial_scale_factor",
             label="Initial Scale Factor",
             type="float",
@@ -1264,6 +1278,15 @@ BALL_TASK_METADATA = TaskMetadata(
             min_value=1.0,
             max_value=50.0,
             hint="Starting difficulty (larger = easier)",
+        ),
+        TaskParameter(
+            key="scale_adjust_factor",
+            label="Scale Adjustment Factor",
+            type="float",
+            default=0.25,
+            min_value=0.01,
+            max_value=1.0,
+            hint="How much to adjust scale between runs (0.25 = 25% change)",
         ),
         TaskParameter(
             key="min_hits_threshold",
@@ -1302,14 +1325,14 @@ BALL_TASK_METADATA = TaskMetadata(
             label="Left Control Button",
             type="str",
             default="1",
-            hint="Key for moving ball left",
+            hint="Key for moving slider left",
         ),
         TaskParameter(
             key="right_button",
             label="Right Control Button",
             type="str",
             default="2",
-            hint="Key for moving ball right",
+            hint="Key for moving slider right",
         ),
         TaskParameter(
             key="enter_button",
@@ -1317,15 +1340,6 @@ BALL_TASK_METADATA = TaskMetadata(
             type="str",
             default="0",
             hint="Key for confirming selections",
-        ),
-        TaskParameter(
-            key="scale_adjust_factor",
-            label="Scale Adjustment Factor",
-            type="float",
-            default=0.25,
-            min_value=0.01,
-            max_value=1.0,
-            hint="How much to adjust scale (0.25 = 25% change)",
         ),
     ],
     cross_parameter_validator=_validate_ball_hits,

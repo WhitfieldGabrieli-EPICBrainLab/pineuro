@@ -3,27 +3,29 @@
    build-backend = "setuptools.build_meta"
 
    [project]
-   name = "pyrtnf"
+   name = "pi-neuro"
    version = "0.1.0"
-   description = "Python Real-Time fMRI Neurofeedback"
+   description = "Python for Individualized Neurofeedback"
    authors = [{name = "Marlee M Vandewouw", email = "marlee.vandewouw@outlook.com"}]
    dependencies = [
-      "numpy",
+      "antspyx",
+      "flet>=0.23.0",
+      "flet-charts>=0.1.0",
+      "matplotlib",
       "nibabel",
       "nilearn",
-      "scipy",
+      "numpy",
       "pandas",
-      "matplotlib",
-      "pydicom",
-      "templateflow",
       "psychopy",
-      "watchdog",
+      "pydicom",
       "pyyaml",
+      "scipy",
+      "templateflow",
+      "watchdog",
    ]
 
    [project.optional-dependencies]
    dev = []
-   gui = ["flet>=0.23.0"]
 
    [project.scripts]
-   pyrtnf-gui = "pyrtnf.gui.app:main"
+   pineuro-gui = "pineuro.gui.app:main"

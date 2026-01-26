@@ -14,7 +14,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import flet as ft
 
-from pyrtnf.mask_extraction import (
+from pineuro.mask_extraction import (
     MaskSelection,
     get_alternative_components,
     load_mask_selections,
@@ -349,7 +349,7 @@ class MaskSelectionDialog:
         This is called when the user rejects a mask and enters stage 2,
         avoiding upfront generation of all overlays.
         """
-        from pyrtnf import qc
+        from pineuro import qc
 
         info = self.masks_info[network_name]
         qc_dir = self.mask_extraction_dir / "qc"
@@ -781,7 +781,7 @@ class MaskSelectionDialog:
 
     def _on_generate_script_clicked(self, e):
         """Handle Generate Script button."""
-        from pyrtnf.script_generator import generate_mask_extraction_script, save_script
+        from pineuro.script_generator import generate_mask_extraction_script, save_script
 
         # Check if we have enough context for script generation
         if not self.input_file or not self.brain_mask_file or not self.ref_file:

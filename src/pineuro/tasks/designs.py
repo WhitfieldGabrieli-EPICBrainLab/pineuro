@@ -12,7 +12,7 @@ NuisanceOnlyDesign : No task regressors (resting state)
 
 Examples
 --------
->>> from pyrtnf.tasks.designs import BlockDesign
+>>> from pineuro.tasks.designs import BlockDesign
 >>> design = BlockDesign(n_baseline=25)
 >>> regressors = design.compute_regressors(n_volumes=150, tr=1.2)
 >>> print(regressors.shape)  # (150, 1)
@@ -117,7 +117,7 @@ class BlockDesign(TaskDesign):
         NDArray, shape (n_volumes, 1)
             Single-column task regressor matrix
         """
-        from pyrtnf.utils import compute_boxcar_task_regressor
+        from pineuro.utils import compute_boxcar_task_regressor
 
         regressor = compute_boxcar_task_regressor(self.n_baseline, n_volumes, tr)
         return regressor.reshape(-1, 1)
@@ -228,7 +228,7 @@ class EventRelatedDesign(TaskDesign):
         NDArray, shape (n_volumes, n_conditions)
             Regressor matrix with one column per condition
         """
-        from pyrtnf.utils import compute_hrf
+        from pineuro.utils import compute_hrf
 
         n_conditions = len(self._condition_names)
         if n_conditions == 0:

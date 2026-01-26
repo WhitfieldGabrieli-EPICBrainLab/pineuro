@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: pi-neuro
+Version: 0.1.0
+Summary: Python for Individualized Neurofeedback
+Author-email: Marlee M Vandewouw <marlee.vandewouw@outlook.com>
+License-File: LICENSE
+Requires-Dist: antspyx
+Requires-Dist: flet>=0.23.0
+Requires-Dist: flet-charts>=0.1.0
+Requires-Dist: matplotlib
+Requires-Dist: nibabel
+Requires-Dist: nilearn
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: psychopy
+Requires-Dist: pydicom
+Requires-Dist: pyyaml
+Requires-Dist: scipy
+Requires-Dist: templateflow
+Requires-Dist: watchdog
+Provides-Extra: dev
+Dynamic: license-file

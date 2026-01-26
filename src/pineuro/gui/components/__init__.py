@@ -1,4 +1,4 @@
-"""Reusable GUI components for the pyrtnf application.
+"""Reusable GUI components for the pineuro application.
 
 This package contains reusable components and utilities for the GUI:
 - PipelineRunner: Background thread execution of pipeline steps

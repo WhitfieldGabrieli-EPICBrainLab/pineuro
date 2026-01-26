@@ -1,0 +1,16 @@
+antspyx
+flet>=0.23.0
+flet-charts>=0.1.0
+matplotlib
+nibabel
+nilearn
+numpy
+pandas
+psychopy
+pydicom
+pyyaml
+scipy
+templateflow
+watchdog
+
+[dev]

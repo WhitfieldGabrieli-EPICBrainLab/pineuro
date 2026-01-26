@@ -231,15 +231,16 @@ class FeedbackMonitor:
         self._volumes_processed = volume
 
         # Extract mask activations
-        # Try both direct mask name and mask_ prefixed versions
+        # New format: columns are just mask names (e.g., ContA, DefaultA, SomMotA)
+        # Old format: columns had _delivered suffix (e.g., ContA_delivered)
         mask_activations = {}
         for mask_name in self.mask_names:
-            # First try direct column name (e.g., "DefaultA")
+            # Try new format first (just mask name)
             if mask_name in data:
                 mask_activations[mask_name] = data[mask_name]
-            # Fall back to prefixed version (e.g., "mask_DefaultA")
-            elif f"mask_{mask_name}" in data:
-                mask_activations[mask_name] = data[f"mask_{mask_name}"]
+            # Fall back to old format (_delivered suffix)
+            elif f"{mask_name}_delivered" in data:
+                mask_activations[mask_name] = data[f"{mask_name}_delivered"]
 
         # Extract motion parameters
         motion_params = {}

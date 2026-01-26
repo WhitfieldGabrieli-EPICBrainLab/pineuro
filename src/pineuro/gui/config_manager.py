@@ -7,7 +7,7 @@ This module manages the lifecycle of study configurations:
 - Deleting studies
 - Listing available studies sorted by modification date
 
-All study configurations are stored in ~/.pyrtnf/studies/ by default.
+All study configurations are stored in ~/.pineuro/studies/ by default.
 Each study is a YAML file containing metadata (_metadata section) and
 session configuration (SessionConfig compatible dictionary).
 
@@ -18,7 +18,7 @@ Example YAML structure:
         created: "2026-01-16T10:00:00"
         modified: "2026-01-16T14:30:00"
     paths:
-        base_dir: "/data/pyrtnf"
+        base_dir: "/data/pineuro"
         ...
     scan:
         tr: 1.2
@@ -43,7 +43,7 @@ class ConfigManager:
         """Initialize the config manager.
 
         Args:
-            studies_dir: Directory for study configs (default: ~/.pyrtnf/studies/)
+            studies_dir: Directory for study configs (default: ~/.pineuro/studies/)
         """
         self.studies_dir = studies_dir or STUDIES_DIR
         self._ensure_studies_dir()

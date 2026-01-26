@@ -429,10 +429,10 @@ def find_feedbacklog_for_replay(
     # Try broader search if specific patterns fail
     all_logs = list(base_path.glob("*feedbacklog.tsv"))
     if all_logs:
-        # Filter by run number
-        run_logs = [p for p in all_logs if run_str in p.name]
-        if run_logs:
-            feedbacklog = sorted(run_logs)[-1]
+        # Filter by task AND run number
+        task_run_logs = [p for p in all_logs if f"task-{task}" in p.name and run_str in p.name]
+        if task_run_logs:
+            feedbacklog = sorted(task_run_logs)[-1]
             logger.info(f"Found feedbacklog for replay (broad search): {feedbacklog}")
             return feedbacklog
 

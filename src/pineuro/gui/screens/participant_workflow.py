@@ -1,6 +1,6 @@
 """Participant Workflow screen for executing pipeline steps.
 
-This module provides the main dashboard for executing pyrtnf pipeline steps for a
+This module provides the main dashboard for executing pineuro pipeline steps for a
 single participant:
 - Step-by-step workflow with status tracking
 - Parameter preview before execution
@@ -37,8 +37,8 @@ from ..components.qc_viewer import QCReportManager
 from ..components.collection_progress import CollectionProgressPanel
 from ..components.run_selection_dialog import RunSelectionDialog, RunInfo
 from ..components.mask_selection_dialog import MaskSelectionDialog, MaskReviewInfo
-from pyrtnf.feedback import get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
-from pyrtnf.utils import get_dicom_files
+from pineuro.feedback import get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
+from pineuro.utils import get_dicom_files
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +84,19 @@ class ParticipantWorkflowScreen:
         self.on_back_callback = on_back
 
         # Create participant-specific base directory
-        # Modify study config to include participant ID (and visit ID) in base_dir path
-        self.study_config = study_config
-        base_dir = Path(study_config.session_config["paths"]["base_dir"])
+        # Make a deep copy of study config to avoid mutating the original
+        import copy
+        self.study_config = copy.deepcopy(study_config)
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+
+        # The base_dir might already contain participant/visit paths from a previous session
+        # (if the study_config object was reused). We need to get the study-level base_dir.
+        # Look for participant ID in the path and strip it and everything after.
+        base_dir_str = str(base_dir)
+        if f"/{participant_id}" in base_dir_str:
+            # Strip participant and everything after it
+            base_dir = Path(base_dir_str.split(f"/{participant_id}")[0])
+            logger.debug(f"Stripped participant path, using base_dir: {base_dir}")
 
         if visit_id:
             # Multi-visit mode: base_dir/participant_id/visit_id/
@@ -98,9 +108,15 @@ class ParticipantWorkflowScreen:
         # Update the session config with participant-specific base directory
         self.study_config.session_config["paths"]["base_dir"] = str(participant_base_dir)
 
-        # Store visit config info in session config if provided
+        # Create the participant directory if it doesn't exist
+        participant_base_dir.mkdir(parents=True, exist_ok=True)
+
+        # Visit config file path for persistence
+        visit_config_file = participant_base_dir / "visit_config.json"
+
+        # Store visit config info in session config if provided (new visit)
         if visit_config:
-            self.study_config.session_config["visit"] = {
+            visit_config_dict = {
                 "visit_id": visit_config.visit_id,
                 "visit_number": visit_config.visit_number,
                 "mask_source": visit_config.mask_source,
@@ -108,11 +124,31 @@ class ParticipantWorkflowScreen:
                 "localizer_enabled": visit_config.localizer_enabled,
                 "notes": visit_config.notes,
             }
+            self.study_config.session_config["visit"] = visit_config_dict
 
-        # Create the participant directory if it doesn't exist
-        participant_base_dir.mkdir(parents=True, exist_ok=True)
+            # Persist visit config to file
+            import json
+            with open(visit_config_file, "w") as f:
+                json.dump(visit_config_dict, f, indent=2)
+            logger.info(f"Saved visit config to {visit_config_file}: mask_source={visit_config.mask_source}")
+
+        elif visit_config_file.exists():
+            # Load existing visit config from file (continuing existing visit)
+            import json
+            with open(visit_config_file, "r") as f:
+                visit_config_dict = json.load(f)
+            self.study_config.session_config["visit"] = visit_config_dict
+            logger.info(f"Loaded visit config from {visit_config_file}: mask_source={visit_config_dict.get('mask_source')}")
+        else:
+            logger.info(f"No visit config found (visit_config={visit_config}, file_exists={visit_config_file.exists()})")
+
+        # DEBUG: Log what we have in session config
+        logger.info(f"DEBUG: session_config['visit'] = {self.study_config.session_config.get('visit', 'NOT SET')}")
         visit_str = f" ({visit_id})" if visit_id else ""
         logger.info(f"Participant data directory{visit_str}: {participant_base_dir}")
+
+        # Mask approval state (must be initialized before _detect_completed_steps)
+        self._initial_qc_approved = self._check_qc_approval("initial")
 
         # Initialize step statuses
         self.step_statuses: Dict[str, StepStatus] = {}
@@ -146,6 +182,11 @@ class ParticipantWorkflowScreen:
 
         # File logging for export functionality
         self._log_file_handler: Optional[logging.FileHandler] = None
+
+        # Cache mask reuse mode flag for easy access
+        visit_config = self.study_config.session_config.get("visit", {})
+        self._is_mask_reuse_mode = visit_config.get("mask_source") == "reuse"
+        self._mask_source_visit = visit_config.get("mask_source_visit")
         self._log_file_path: Optional[Path] = None
         self._setup_file_logging()
 
@@ -154,9 +195,6 @@ class ParticipantWorkflowScreen:
             base_dir=participant_base_dir,
             participant_id=participant_id,
         )
-
-        # Mask approval state (single gate after mask extraction)
-        self._initial_qc_approved = self._check_qc_approval("initial")
 
         # Selected rest runs for preprocessing (None = use all available)
         self._selected_rest_runs: Optional[List[int]] = None
@@ -194,13 +232,16 @@ class ParticipantWorkflowScreen:
 
         self._initial_qc_approved = approved
 
+        # Update mask_approval step status
+        self.step_statuses["mask_approval"] = StepStatus.COMPLETE if approved else StepStatus.PENDING
+
     def _has_custom_mask_selections(self) -> bool:
         """Check if user has customized mask selections.
 
         Returns:
             True if any mask was manually modified from the auto-selected ICA component
         """
-        from pyrtnf.mask_extraction import load_mask_selections
+        from pineuro.mask_extraction import load_mask_selections
 
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
         masks_dir = base_dir / "mask_extraction" / "03_masks"
@@ -218,8 +259,8 @@ class ParticipantWorkflowScreen:
         """Show the mask review/selection dialog."""
         from glob import glob
         import pandas as pd
-        from pyrtnf.mask_extraction import load_mask_selections, get_alternative_components
-        from pyrtnf import qc
+        from pineuro.mask_extraction import load_mask_selections, get_alternative_components
+        from pineuro import qc
 
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
         mask_extraction_dir = base_dir / "mask_extraction"
@@ -227,11 +268,19 @@ class ParticipantWorkflowScreen:
         ica_dir = mask_extraction_dir / "01_ica"
         qc_dir = base_dir / "qc"
 
-        # Get network names from config
+        # Get network names from config (include sham alternatives if enabled)
         config = self.study_config.session_config
-        network_names = config["mask"]["yeo_targets"]
+        network_names = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
         n_yeo = config["mask"]["n_yeo"]
         threshold = config["mask"].get("threshold", 2000)
+
+        # Include sham alternative networks if sham is enabled with alternative masks
+        sham_config = config.get("sham", {})
+        if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
+            alternative_targets = sham_config.get("alternative_mask_targets", [])
+            for target in alternative_targets:
+                if target and target not in network_names:
+                    network_names.append(target)
 
         # Load correlation matrix
         corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
@@ -329,6 +378,7 @@ class ParticipantWorkflowScreen:
             self._set_qc_approved("initial", True)
             self._add_log("[SUCCESS] Masks reviewed and approved")
             self._refresh_step_list()
+            self._update_run_next_button()
             self.page.snack_bar = ft.SnackBar(
                 ft.Text("Masks approved! You can now run coregistration."),
                 bgcolor=ft.Colors.GREEN,
@@ -585,6 +635,7 @@ class ParticipantWorkflowScreen:
         # Check if this is a mask-reuse visit
         visit_config = config.get("visit", {})
         is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        logger.info(f"DEBUG _detect_completed_steps: visit_config={visit_config}, is_mask_reuse={is_mask_reuse}")
 
         # Build dynamic steps list
         steps = []
@@ -626,68 +677,84 @@ class ParticipantWorkflowScreen:
         for step in steps:
             self.step_statuses[step] = StepStatus.PENDING
 
-        # Check 2vol initial collection (only if enabled)
-        if twovol_initial_enabled:
-            twovol_initial_dir = base_dir / "collection" / "task-2vol_run-01"
-            n_vols = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
-            status = self._check_collection_status(twovol_initial_dir, n_vols)
-            self.step_statuses["2vol_initial"] = status
-            if status != StepStatus.PENDING:
-                logger.info(f"Detected {status.value}: 2vol_initial")
+        # Only check localizer/preprocessing/mask extraction steps if NOT in mask reuse mode
+        if not is_mask_reuse:
+            # Check 2vol initial collection (only if enabled)
+            if twovol_initial_enabled:
+                twovol_initial_dir = base_dir / "collection" / "task-2vol_run-01"
+                n_vols = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+                status = self._check_collection_status(twovol_initial_dir, n_vols)
+                self.step_statuses["2vol_initial"] = status
+                if status != StepStatus.PENDING:
+                    logger.info(f"Detected {status.value}: 2vol_initial")
 
-        # Check localizer run collections dynamically
-        expected_vols = config["scan"].get("localizer_n_volumes")
-        if expected_vols is None:
-            rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
-            expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
+            # Check localizer run collections dynamically
+            expected_vols = config["scan"].get("localizer_n_volumes")
+            if expected_vols is None:
+                rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
+                expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
-        for run_num in range(1, n_localizer_runs + 1):
-            step_id = f"rest_run_{run_num}"
-            run_dir = base_dir / "collection" / f"task-rest_run-{run_num:02d}"
-            status = self._check_collection_status(run_dir, expected_vols)
-            self.step_statuses[step_id] = status
-            if status != StepStatus.PENDING:
-                logger.info(f"Detected {status.value}: {step_id}")
+            for run_num in range(1, n_localizer_runs + 1):
+                step_id = f"rest_run_{run_num}"
+                run_dir = base_dir / "collection" / f"task-rest_run-{run_num:02d}"
+                status = self._check_collection_status(run_dir, expected_vols)
+                self.step_statuses[step_id] = status
+                if status != StepStatus.PENDING:
+                    logger.info(f"Detected {status.value}: {step_id}")
 
-        # Check preprocessing outputs
-        preprocessing_dir = base_dir / "preprocessing"
-        preproc_file = preprocessing_dir / f"{participant_id}_task-rest_preproc.nii.gz"
-        mask_file = preprocessing_dir / f"{participant_id}_task-rest_preproc_mask.nii.gz"
-        ref_file = preprocessing_dir / f"{participant_id}_task-rest_boldref.nii.gz"
+            # Check preprocessing outputs
+            preprocessing_dir = base_dir / "preprocessing"
+            preproc_file = preprocessing_dir / f"{participant_id}_task-rest_preproc.nii.gz"
+            mask_file = preprocessing_dir / f"{participant_id}_task-rest_preproc_mask.nii.gz"
+            ref_file = preprocessing_dir / f"{participant_id}_task-rest_boldref.nii.gz"
 
-        if preproc_file.exists() and mask_file.exists() and ref_file.exists():
-            self.step_statuses["preprocessing"] = StepStatus.COMPLETE
-            logger.info("Detected complete: preprocessing")
+            if preproc_file.exists() and mask_file.exists() and ref_file.exists():
+                self.step_statuses["preprocessing"] = StepStatus.COMPLETE
+                logger.info("Detected complete: preprocessing")
 
-        # Check mask extraction outputs
-        mask_extraction_dir = base_dir / "mask_extraction"
-        masks_dir = mask_extraction_dir / "03_masks"
+            # Check mask extraction outputs
+            mask_extraction_dir = base_dir / "mask_extraction"
+            masks_dir = mask_extraction_dir / "03_masks"
 
-        # Check for any network mask files
-        if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
-            self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
-            logger.info("Detected complete: mask_extraction")
+            # Check for any network mask files
+            if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
+                self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
+                logger.info("Detected complete: mask_extraction")
 
-        # Check coregistration (2vol) outputs - initial (run-01) is in mask_extraction/04_2vol
+            # Check mask approval status (based on approval marker file)
+            if self._initial_qc_approved:
+                self.step_statuses["mask_approval"] = StepStatus.COMPLETE
+                logger.info("Detected complete: mask_approval")
+            else:
+                self.step_statuses["mask_approval"] = StepStatus.PENDING
+
+            # Check coregistration (2vol) outputs - initial (run-01) is in mask_extraction/04_2vol
+            initial_twovol_masks_dir = mask_extraction_dir / "04_2vol" / "masks"
+
+            if initial_twovol_masks_dir.exists() and len(list(initial_twovol_masks_dir.glob("*_to_task-2vol_run-01_*.nii.gz"))) > 0:
+                self.step_statuses["coregistration"] = StepStatus.COMPLETE
+                logger.info("Detected complete: coregistration")
+
+        # Define directories needed for remaining checks
         feedback_dir = base_dir / "feedback"
-        initial_twovol_masks_dir = mask_extraction_dir / "04_2vol" / "masks"
-
-        if initial_twovol_masks_dir.exists() and len(list(initial_twovol_masks_dir.glob("*_to_task-2vol_run-01_*.nii.gz"))) > 0:
-            self.step_statuses["coregistration"] = StepStatus.COMPLETE
-            logger.info("Detected complete: coregistration")
+        if is_mask_reuse:
+            mask_extraction_dir = base_dir / "mask_extraction"  # Still needed for path references
 
         # Check 2vol realtime collection (only if enabled)
         if twovol_realtime_enabled:
-            twovol_realtime_dir = base_dir / "collection" / "task-2vol_run-02"
+            # In mask reuse mode, 2vol is run-01 (no initial 2vol)
+            # In standard mode, 2vol is run-02 (after initial 2vol)
+            realtime_2vol_run = 1 if is_mask_reuse else 2
+            twovol_realtime_dir = base_dir / "collection" / f"task-2vol_run-{realtime_2vol_run:02d}"
             n_vols = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
             status = self._check_collection_status(twovol_realtime_dir, n_vols)
             self.step_statuses["2vol_realtime"] = status
             if status != StepStatus.PENDING:
                 logger.info(f"Detected {status.value}: 2vol_realtime")
 
-            # Check coregistration_realtime (2vol run-02) outputs - realtime is in feedback/01_2vol
+            # Check coregistration_realtime outputs - realtime is in feedback/01_2vol
             realtime_twovol_masks_dir = feedback_dir / "01_2vol" / "masks"
-            if realtime_twovol_masks_dir.exists() and len(list(realtime_twovol_masks_dir.glob("*_to_task-2vol_run-02_*.nii.gz"))) > 0:
+            if realtime_twovol_masks_dir.exists() and len(list(realtime_twovol_masks_dir.glob(f"*_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz"))) > 0:
                 self.step_statuses["coregistration_realtime"] = StepStatus.COMPLETE
                 logger.info("Detected complete: coregistration_realtime")
         # Note: When 2vol realtime is disabled, those steps are not in the steps list,
@@ -741,6 +808,7 @@ class ParticipantWorkflowScreen:
             "2vol_initial": "localizer",
             "preprocessing": "mask_extraction",
             "mask_extraction": "mask_extraction",
+            "mask_approval": "mask_extraction",
             "coregistration": "mask_extraction",
             "2vol_realtime": "feedback",
             "coregistration_realtime": "feedback",
@@ -801,21 +869,35 @@ class ParticipantWorkflowScreen:
         """
         status = self.step_statuses.get(step_id, StepStatus.PENDING)
 
-        # Gate: Mask approval required for coregistration and all subsequent steps
-        gated_steps = [
-            "coregistration", "2vol_realtime", "coregistration_realtime",
-            "transfer_1", "feedback_1", "feedback_2", "transfer_2"
-        ]
-        requires_approval = step_id in gated_steps and not self._initial_qc_approved
+        # In mask reuse mode, preprocessing and mask approval are inherited from source visit
+        # so these gates should not apply
+        if self._is_mask_reuse_mode:
+            requires_preprocessing = False
+            requires_approval = False
+        else:
+            # Gate 1: Preprocessing must be complete before mask extraction and subsequent steps
+            preprocessing_complete = self.step_statuses.get("preprocessing") == StepStatus.COMPLETE
+            steps_requiring_preprocessing = [
+                "mask_extraction", "coregistration", "2vol_realtime", "coregistration_realtime",
+                "transfer_1", "feedback_1", "feedback_2", "transfer_2"
+            ]
+            requires_preprocessing = step_id in steps_requiring_preprocessing and not preprocessing_complete
+
+            # Gate 2: Mask approval required for coregistration and all subsequent steps
+            gated_steps = [
+                "coregistration", "2vol_realtime", "coregistration_realtime",
+                "transfer_1", "feedback_1", "feedback_2", "transfer_2"
+            ]
+            requires_approval = step_id in gated_steps and not self._initial_qc_approved
 
         button = ft.ElevatedButton(
             label,
             on_click=on_click,
-            disabled=self._is_running or status == StepStatus.RUNNING or requires_approval,
+            disabled=self._is_running or status == StepStatus.RUNNING or requires_preprocessing or requires_approval,
         )
 
-        # Show lock icon if blocked by QC approval, otherwise show status icon
-        if requires_approval:
+        # Show lock icon if blocked, otherwise show status icon
+        if requires_preprocessing or requires_approval:
             icon = ft.Icon(ft.Icons.LOCK, color=ft.Colors.ORANGE_500, size=20)
         else:
             icon = self._get_status_icon(status)
@@ -1399,7 +1481,10 @@ class ParticipantWorkflowScreen:
             title = "Initial 2vol QC - Review Required"
             success_msg = "Initial coregistration approved! You can now collect real-time 2vol."
         else:
-            plots = self.qc_manager.get_2vol_qc_plots()
+            # In mask reuse mode, realtime 2vol is run-01 (no initial 2vol collection)
+            # In standard mode, realtime 2vol is run-02
+            run_id = 1 if self._is_mask_reuse_mode else 2
+            plots = self.qc_manager.get_2vol_qc_plots(run_id=run_id)
             title = "Real-time 2vol QC - Review Required"
             success_msg = "Real-time coregistration approved! You can now run feedback."
 
@@ -1446,14 +1531,18 @@ class ParticipantWorkflowScreen:
 
         logger.info(f"Opening coregistration QC viewer: {qc_type}")
 
-        # Get 2vol overlay plots
-        plots = self.qc_manager.get_2vol_qc_plots()
-        html_path = self.qc_manager.get_mask_extraction_qc()
-
+        # Get 2vol overlay plots - use run_id=1 for initial, run_id=2 for realtime
+        # In mask reuse mode, realtime 2vol is run-01 (no initial 2vol collection)
         if qc_type == "initial":
+            run_id = 1
             title = "Initial 2vol Coregistration QC"
         else:
+            # In mask reuse mode, realtime 2vol is run-01
+            run_id = 1 if self._is_mask_reuse_mode else 2
             title = "Real-time 2vol Coregistration QC"
+
+        plots = self.qc_manager.get_2vol_qc_plots(run_id=run_id)
+        html_path = self.qc_manager.get_mask_extraction_qc()
 
         viewer = QCPlotViewer(
             page=self.page,
@@ -1612,7 +1701,7 @@ class ParticipantWorkflowScreen:
                             disabled=self._is_running,  # Disable when running
                         ),
                         ft.Text(
-                            f"pyrtnf: {self.study_config.metadata.name}",
+                            f"pineuro: {self.study_config.metadata.name}",
                             size=20,
                             weight=ft.FontWeight.BOLD,
                         ),
@@ -1746,6 +1835,133 @@ class ParticipantWorkflowScreen:
             expand=True,
         )
 
+    def _get_all_network_targets(self, config: dict) -> list:
+        """Get combined list of network targets including sham alternatives.
+
+        Args:
+            config: Session configuration
+
+        Returns:
+            List of all network names to extract
+        """
+        network_names = list(config["mask"]["yeo_targets"])
+
+        # Include sham alternative networks if sham is enabled with alternative masks
+        sham_config = config.get("sham", {})
+        if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
+            alternative_targets = sham_config.get("alternative_mask_targets", [])
+            for target in alternative_targets:
+                if target and target not in network_names:
+                    network_names.append(target)
+
+        return network_names
+
+    def _get_mask_extraction_step_info(self, config: dict, base_dir: Path) -> dict:
+        """Get step info for mask extraction, including sham networks if enabled.
+
+        Args:
+            config: Session configuration
+            base_dir: Base directory path
+
+        Returns:
+            Dictionary with step information
+        """
+        all_networks = self._get_all_network_targets(config)
+
+        return {
+            "label": "Extract Network Masks",
+            "description": f"ICA-based extraction of {len(all_networks)} network masks using {config['mask']['n_yeo']}-network Yeo atlas.",
+            "parameters": {
+                "Networks": ", ".join(all_networks),
+                "Yeo Atlas": f"{config['mask']['n_yeo']} networks",
+                "Smoothing": f"{config['mask']['smooth_fwhm']} mm FWHM",
+                "Highpass": f"{config['mask']['highpass']} Hz",
+                "Output": base_dir / "mask_extraction",
+            },
+            "output_path": base_dir / "mask_extraction" / "03_masks",
+        }
+
+    def _get_coregistration_realtime_step_info(self, config: dict, base_dir: Path) -> dict:
+        """Get step info for realtime coregistration, handling mask reuse mode.
+
+        Args:
+            config: Session configuration
+            base_dir: Base directory path
+
+        Returns:
+            Dictionary with step information
+        """
+        # Check for mask reuse mode
+        visit_config = config.get("visit", {})
+        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        mask_source_visit = visit_config.get("mask_source_visit")
+
+        # In mask reuse mode, 2vol is run-01 (no initial 2vol)
+        run_num = 1 if is_mask_reuse else 2
+
+        if is_mask_reuse and mask_source_visit:
+            # Mask reuse mode: masks come from source visit
+            study_base_dir = base_dir.parent.parent  # Go up from participant/visit to study
+            source_visit_dir = study_base_dir / self.participant_id / mask_source_visit
+            input_masks_path = source_visit_dir / "mask_extraction" / "03_masks"
+            description = f"Register network masks from {mask_source_visit} to real-time 2vol space for feedback runs."
+        else:
+            # Standard mode: masks come from current visit
+            input_masks_path = base_dir / "mask_extraction" / "03_masks"
+            description = "Register network masks to real-time 2vol space for feedback runs."
+
+        return {
+            "label": "Coregister to Real-time 2vol",
+            "description": description,
+            "parameters": {
+                "Input Masks": input_masks_path,
+                "Target": f"2vol run-{run_num:02d}",
+                "Output": base_dir / "feedback" / "01_2vol" / "masks",
+            },
+            "output_path": base_dir / "feedback" / "01_2vol" / "masks",
+            "output_pattern": f"*_to_task-2vol_run-{run_num:02d}_*.nii.gz",
+        }
+
+    def _get_2vol_realtime_step_info(self, config: dict, base_dir: Path) -> dict:
+        """Get step info for realtime 2vol collection, handling mask reuse mode.
+
+        Args:
+            config: Session configuration
+            base_dir: Base directory path
+
+        Returns:
+            Dictionary with step information
+        """
+        twovol_enabled = config["scan"].get("twovol_realtime_enabled", True)
+
+        # Check for mask reuse mode
+        visit_config = config.get("visit", {})
+        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+
+        # In mask reuse mode, 2vol is run-01 (no initial 2vol)
+        run_num = 1 if is_mask_reuse else 2
+
+        if not twovol_enabled:
+            return {
+                "label": "Collect Real-time 2vol (Disabled)",
+                "description": "Real-time 2vol collection is disabled. Feedback will use masks from subject boldref space.",
+                "parameters": {"Status": "Disabled - using boldref masks"},
+                "output_path": base_dir / "collection" / f"task-2vol_run-{run_num:02d}",
+            }
+
+        return {
+            "label": "Collect Real-time 2vol",
+            "description": "Collect 2 volumes immediately before feedback session for real-time registration verification.",
+            "parameters": {
+                "Task": f"2vol (run-{run_num:02d})",
+                "Volumes": config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2)),
+                "Source": config["scan"]["twovol_realtime_dicoms"],
+                "Output": base_dir / "collection" / f"task-2vol_run-{run_num:02d}",
+                "Enabled": "Yes",
+            },
+            "output_path": base_dir / "collection" / f"task-2vol_run-{run_num:02d}",
+        }
+
     def _get_step_info(self, step_id: str, config: dict, base_dir: Path, participant_id: str) -> dict:
         """Get information about a pipeline step for preview.
 
@@ -1782,18 +1998,7 @@ class ParticipantWorkflowScreen:
                 },
                 "output_path": base_dir / "preprocessing" / f"{participant_id}_task-rest_preproc.nii.gz",
             },
-            "mask_extraction": {
-                "label": "Extract Network Masks",
-                "description": f"ICA-based extraction of {len(config['mask']['yeo_targets'])} network masks using {config['mask']['n_yeo']}-network Yeo atlas.",
-                "parameters": {
-                    "Networks": ", ".join(config['mask']['yeo_targets']),
-                    "Yeo Atlas": f"{config['mask']['n_yeo']} networks",
-                    "Smoothing": f"{config['mask']['smooth_fwhm']} mm FWHM",
-                    "Highpass": f"{config['mask']['highpass']} Hz",
-                    "Output": base_dir / "mask_extraction",
-                },
-                "output_path": base_dir / "mask_extraction" / "03_masks",
-            },
+            "mask_extraction": self._get_mask_extraction_step_info(config, base_dir),
             "coregistration": {
                 "label": "Coregister to 2vol",
                 "description": "Register network masks from rest space to 2vol feedback space.",
@@ -1805,29 +2010,8 @@ class ParticipantWorkflowScreen:
                 "output_path": base_dir / "mask_extraction" / "04_2vol" / "masks",
                 "output_pattern": "*_to_task-2vol_run-01_*.nii.gz",
             },
-            "2vol_realtime": {
-                "label": "Collect Real-time 2vol" + ("" if config["scan"].get("twovol_realtime_enabled", True) else " (Disabled)"),
-                "description": "Collect 2 volumes immediately before feedback session for real-time registration verification." if config["scan"].get("twovol_realtime_enabled", True) else "Real-time 2vol collection is disabled. Feedback will use masks from subject boldref space.",
-                "parameters": {
-                    "Task": "2vol (run-02)",
-                    "Volumes": config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2)),
-                    "Source": config["scan"]["twovol_realtime_dicoms"],
-                    "Output": base_dir / "collection" / "task-2vol_run-02",
-                    "Enabled": "Yes" if config["scan"].get("twovol_realtime_enabled", True) else "No",
-                } if config["scan"].get("twovol_realtime_enabled", True) else {"Status": "Disabled - using boldref masks"},
-                "output_path": base_dir / "collection" / "task-2vol_run-02",
-            },
-            "coregistration_realtime": {
-                "label": "Coregister to Real-time 2vol",
-                "description": "Register network masks to real-time 2vol space for feedback runs.",
-                "parameters": {
-                    "Input Masks": base_dir / "mask_extraction" / "03_masks",
-                    "Target": "2vol run-02",
-                    "Output": base_dir / "feedback" / "01_2vol" / "masks",
-                },
-                "output_path": base_dir / "feedback" / "01_2vol" / "masks",
-                "output_pattern": "*_to_task-2vol_run-02_*.nii.gz",
-            },
+            "2vol_realtime": self._get_2vol_realtime_step_info(config, base_dir),
+            "coregistration_realtime": self._get_coregistration_realtime_step_info(config, base_dir),
             "transfer_1": {
                 "label": "Transfer Run 1",
                 "description": "Practice run without neurofeedback to establish baseline performance.",
@@ -2204,7 +2388,7 @@ class ParticipantWorkflowScreen:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file_path = logs_dir / f"session_{timestamp}.log"
 
-        # Create file handler for the root logger to capture all pyrtnf logs
+        # Create file handler for the root logger to capture all pineuro logs
         self._log_file_handler = logging.FileHandler(self._log_file_path)
         self._log_file_handler.setLevel(logging.DEBUG)
         formatter = logging.Formatter(
@@ -2212,9 +2396,9 @@ class ParticipantWorkflowScreen:
         )
         self._log_file_handler.setFormatter(formatter)
 
-        # Add handler to pyrtnf root logger to capture all module logs
-        pyrtnf_logger = logging.getLogger("pyrtnf")
-        pyrtnf_logger.addHandler(self._log_file_handler)
+        # Add handler to pineuro root logger to capture all module logs
+        pineuro_logger = logging.getLogger("pineuro")
+        pineuro_logger.addHandler(self._log_file_handler)
 
         logger.info(f"Session log file: {self._log_file_path}")
 
@@ -2241,7 +2425,15 @@ class ParticipantWorkflowScreen:
 
         if is_feedback_step:
             # Create activation plot for feedback/transfer runs
-            mask_names = config["mask"]["mask_names"]
+            # Include all masks: real + sham alternatives (if enabled)
+            mask_names = list(config["mask"]["mask_names"])  # Copy to avoid modifying config
+            sham_config = config.get("sham", {})
+            if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
+                alternative_targets = sham_config.get("alternative_mask_targets", [])
+                for alt_name in alternative_targets:
+                    if alt_name and alt_name not in mask_names:
+                        mask_names.append(alt_name)
+
             n_volumes = config["feedback"]["n_volumes"]
 
             self.activation_plot = ActivationPlot(
@@ -2549,7 +2741,16 @@ class ParticipantWorkflowScreen:
         """
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
-        mask_names = config["mask"]["mask_names"]
+
+        # Include all masks: real + sham alternatives (if enabled)
+        mask_names = list(config["mask"]["mask_names"])  # Copy to avoid modifying config
+        sham_config = config.get("sham", {})
+        if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
+            alternative_targets = sham_config.get("alternative_mask_targets", [])
+            for alt_name in alternative_targets:
+                if alt_name and alt_name not in mask_names:
+                    mask_names.append(alt_name)
+
         n_volumes = config["feedback"]["n_volumes"]
 
         # Determine task type and get slot-based run info
@@ -2779,23 +2980,26 @@ class ParticipantWorkflowScreen:
 
         workflow = []
 
-        # Add Initial 2vol if enabled
-        if twovol_initial_enabled:
-            workflow.append(("2vol_initial", "Collect Initial 2vol"))
+        # In mask reuse mode, skip localizer and mask extraction steps
+        if not self._is_mask_reuse_mode:
+            # Add Initial 2vol if enabled
+            if twovol_initial_enabled:
+                workflow.append(("2vol_initial", "Collect Initial 2vol"))
 
-        # Add localizer runs dynamically
-        for run_num in range(1, n_localizer_runs + 1):
-            workflow.append((f"rest_run_{run_num}", f"Collect Rest Run {run_num}"))
+            # Add localizer runs dynamically
+            for run_num in range(1, n_localizer_runs + 1):
+                workflow.append((f"rest_run_{run_num}", f"Collect Rest Run {run_num}"))
 
-        # Add mask extraction steps
-        workflow.extend([
-            ("preprocessing", "Run Preprocessing"),
-            ("mask_extraction", "Extract Masks"),
-        ])
+            # Add mask extraction steps
+            workflow.extend([
+                ("preprocessing", "Run Preprocessing"),
+                ("mask_extraction", "Extract Masks"),
+                ("mask_approval", "Review & Approve Masks"),
+            ])
 
-        # Add coregistration only if initial 2vol is enabled
-        if twovol_initial_enabled:
-            workflow.append(("coregistration", "Coregister to 2vol"))
+            # Add coregistration only if initial 2vol is enabled
+            if twovol_initial_enabled:
+                workflow.append(("coregistration", "Coregister to 2vol"))
 
         # Add realtime 2vol if enabled
         if twovol_realtime_enabled:
@@ -2848,6 +3052,11 @@ class ParticipantWorkflowScreen:
 
         step_id, step_label = next_step
         logger.info(f"Run Next clicked: {step_id} ({step_label})")
+
+        # Handle mask_approval step specially - open the review dialog
+        if step_id == "mask_approval":
+            self._show_mask_review_dialog()
+            return
 
         # Trigger the step (same as clicking step button)
         self._on_step_clicked(step_id)
@@ -2913,12 +3122,14 @@ class ParticipantWorkflowScreen:
 
         # Rebuild the expansion panel list with updated statuses
         logger.info("Rebuilding step panel controls...")
-        self.step_panel_list.controls = [
-            self._build_localizer_session_section(),
-            self._build_mask_extraction_section(),
-            self._build_feedback_section(),
-            self._build_utilities_section(),
-        ]
+        panels = []
+        # Only show localizer and mask extraction sections if NOT in mask reuse mode
+        if not self._is_mask_reuse_mode:
+            panels.append(self._build_localizer_session_section())
+            panels.append(self._build_mask_extraction_section())
+        panels.append(self._build_feedback_section())
+        panels.append(self._build_utilities_section())
+        self.step_panel_list.controls = panels
 
         # Force updates in the correct order
         try:
@@ -2984,7 +3195,7 @@ class ParticipantWorkflowScreen:
                                 disabled=self._is_running,  # Disable when running
                             ),
                             ft.Text(
-                                f"pyrtnf: {self.study_config.metadata.name}",
+                                f"pineuro: {self.study_config.metadata.name}",
                                 size=20,
                                 weight=ft.FontWeight.BOLD,
                             ),
@@ -3006,15 +3217,18 @@ class ParticipantWorkflowScreen:
 
         # Left panel: Step dashboard
         # Store reference for dynamic updates
+        # Only show localizer and mask extraction sections if NOT in mask reuse mode
+        panels = []
+        if not self._is_mask_reuse_mode:
+            panels.append(self._build_localizer_session_section())
+            panels.append(self._build_mask_extraction_section())
+        panels.append(self._build_feedback_section())
+        panels.append(self._build_utilities_section())
+
         self.step_panel_list = ft.ExpansionPanelList(
             expand_icon_color=ft.Colors.BLUE_500,
             elevation=2,
-            controls=[
-                self._build_localizer_session_section(),
-                self._build_mask_extraction_section(),
-                self._build_feedback_section(),
-                self._build_utilities_section(),
-            ],
+            controls=panels,
         )
 
         left_panel = ft.Container(

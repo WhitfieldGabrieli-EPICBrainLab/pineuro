@@ -1,7 +1,7 @@
 """QC report viewer component for displaying HTML reports.
 
 This module provides functionality to view QC HTML reports generated
-by pyrtnf's QC module. Since Flet doesn't have native HTML embedding,
+by pineuro's QC module. Since Flet doesn't have native HTML embedding,
 reports are opened in an external browser.
 """
 
@@ -37,9 +37,9 @@ def open_qc_report(report_path: Path, screen: Optional[int] = None) -> bool:
         # Try to use xdg-open on Linux for better screen control
         system = platform.system()
         if system == "Linux" and screen is not None:
-            # Use screen-aware browser opening (from pyrtnf.qc)
+            # Use screen-aware browser opening (from pineuro.qc)
             try:
-                from pyrtnf.qc import _open_html_in_browser
+                from pineuro.qc import _open_html_in_browser
                 _open_html_in_browser(abs_path)
                 return True
             except ImportError:
@@ -383,14 +383,17 @@ class QCReportManager:
             List of (label, path) tuples for 2vol overlay images
         """
         plots = []
+        run_pattern = f"run-{run_id:02d}"
+
+        # QC overlays are in participant-level qc/ directory
         qc_dir = self.base_dir / "qc"
 
         if not qc_dir.exists():
+            logger.debug(f"QC directory not found: {qc_dir}")
             return plots
 
         # 2vol overlays only - filter by run number
         twovol_dir = qc_dir / "overlays" / "2vol"
-        run_pattern = f"run-{run_id:02d}"
         if twovol_dir.exists():
             for overlay in sorted(twovol_dir.glob("*_overlay.png")):
                 # Only include overlays for the specified run
@@ -402,6 +405,9 @@ class QCReportManager:
                 if "_thr_to_task-2vol" in network:
                     network = network.split("_thr_to_task-2vol")[0]
                 plots.append((f"{network} Mask (2vol Space)", overlay))
+
+        if not plots:
+            logger.debug(f"No 2vol overlay plots found in {twovol_dir} for {run_pattern}")
 
         return plots
 

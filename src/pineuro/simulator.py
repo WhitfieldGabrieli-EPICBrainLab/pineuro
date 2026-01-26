@@ -30,7 +30,7 @@ durations, making this suitable for end-to-end dry runs without a scanner.
 Further reading: see docs/references.md.
 
 Command-line usage:
-    python -m pyrtnf.simulator --source /path/to/dicoms --target /path/to/incoming --tr 1.5 --speed 1.0
+    python -m pineuro.simulator --source /path/to/dicoms --target /path/to/incoming --tr 1.5 --speed 1.0
 
 References
 ----------

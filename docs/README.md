@@ -1,11 +1,11 @@
 # Documentation
 
-This directory contains supplementary documentation for the pyrtnf library.
+This directory contains supplementary documentation for the pineuro library.
 
 ## Files
 
 ### [references.md](references.md)
-Academic references and citations for the methods and algorithms used in pyrtnf:
+Academic references and citations for the methods and algorithms used in pineuro:
 
 - **Gentleman's Algorithm** - Incremental GLM updates for real-time feedback
 - **Hinds et al. (2011)** - Moment-to-moment BOLD activation computation
@@ -18,15 +18,15 @@ Academic references and citations for the methods and algorithms used in pyrtnf:
 ### Main Documentation
 - [../README.md](../README.md) - Project overview, installation, and quick start
 - [../CLAUDE.md](../CLAUDE.md) - Comprehensive architecture guide and development patterns
-- [../src/pyrtnf/tasks/README.md](../src/pyrtnf/tasks/README.md) - Task framework integration guide
+- [../src/pineuro/tasks/README.md](../src/pineuro/tasks/README.md) - Task framework integration guide
 
 ### Module Documentation
 All Python modules include detailed docstrings following NumPy style:
 
 ```python
-import pyrtnf
-help(pyrtnf.preprocessing)  # View preprocessing documentation
-help(pyrtnf.run_feedback_session)  # View function documentation
+import pineuro
+help(pineuro.preprocessing)  # View preprocessing documentation
+help(pineuro.run_feedback_session)  # View function documentation
 ```
 
 ### Example Usage

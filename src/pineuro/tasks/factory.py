@@ -6,7 +6,7 @@ and instantiate the appropriate task class.
 
 Examples
 --------
->>> from pyrtnf.tasks.factory import create_task
+>>> from pineuro.tasks.factory import create_task
 >>> task = create_task(
 ...     task_id='ball',
 ...     coordinator=coordinator,

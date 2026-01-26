@@ -1,6 +1,6 @@
 # References
 
-Core methods and external tools used throughout pyrtnf.
+Core methods and external tools used throughout pineuro.
 
 ## Real-time GLM and Feedback
 - Gentleman, W.M. (1974). Algorithm AS 75: Basic procedures for large, sparse or weighted linear least problems. *Applied Statistics*, 23(3), 448-454.

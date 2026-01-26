@@ -66,8 +66,8 @@ from nibabel.spatialimages import SpatialImage
 from scipy.stats import pearsonr
 
 # Local imports
-from pyrtnf import qc
-from pyrtnf.utils import (
+from pineuro import qc
+from pineuro.utils import (
     compute_mean, compute_xfm, compute_xfm_to_mni, apply_xfm,
     get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni, Timer
 )

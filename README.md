@@ -1,8 +1,8 @@
-# pyrtnf
+# pineuro
 
 **Python Real-Time fMRI Neurofeedback**
 
-A Python library for real-time fMRI neurofeedback research. pyrtnf provides a complete pipeline from DICOM acquisition through preprocessing, network mask extraction, and moment-to-moment BOLD activation estimation.
+A Python library for real-time fMRI neurofeedback research. pineuro provides a complete pipeline from DICOM acquisition through preprocessing, network mask extraction, and moment-to-moment BOLD activation estimation.
 
 ## Features
 
@@ -17,7 +17,7 @@ A Python library for real-time fMRI neurofeedback research. pyrtnf provides a co
 
 ### Prerequisites
 
-pyrtnf requires the following external tools:
+pineuro requires the following external tools:
 
 - **FSL** (FMRIB Software Library) - For preprocessing operations
   - Install from: https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation
@@ -29,12 +29,12 @@ pyrtnf requires the following external tools:
 - **dcm2niix** - For DICOM to NIfTI conversion
   - Install from: https://github.com/rordenlab/dcm2niix
 
-### Install pyrtnf
+### Install pineuro
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/pyrtnf.git
-cd pyrtnf
+git clone https://github.com/yourusername/pineuro.git
+cd pineuro
 
 # Install in development mode
 pip install -e .
@@ -45,7 +45,7 @@ pip install -e .
 ### 1. Collect and Preprocess Resting-State Data
 
 ```python
-from pyrtnf import collect_dicoms, preprocessing
+from pineuro import collect_dicoms, preprocessing
 
 # Collect DICOMs from scanner (or use simulation mode for testing)
 dicom_folder = collect_dicoms(
@@ -67,7 +67,7 @@ preproc_file, mask_file, ref_file = preprocessing(
 ### 2. Extract Network Masks
 
 ```python
-from pyrtnf import mask_extraction_rest
+from pineuro import mask_extraction_rest
 
 # Extract network masks using ICA and Yeo atlas
 mask_extraction_rest(
@@ -82,7 +82,7 @@ mask_extraction_rest(
 ### 3. Run a Neurofeedback Session
 
 ```python
-from pyrtnf import run_feedback_session
+from pineuro import run_feedback_session
 
 # Run real-time feedback with scanner acquisition
 results = run_feedback_session(
@@ -104,7 +104,7 @@ print(results['timing'])
 ### 4. Offline Testing with Simulation Mode
 
 ```python
-from pyrtnf import run_feedback_session
+from pineuro import run_feedback_session
 
 # Test feedback pipeline offline using DICOM replay
 results = run_feedback_session(
@@ -125,7 +125,7 @@ results = run_feedback_session(
 
 ### Processing Pipeline
 
-pyrtnf implements a sequential pipeline with numbered output directories for easy tracing:
+pineuro implements a sequential pipeline with numbered output directories for easy tracing:
 
 1. **DICOM Collection** - Watch for and collect incoming DICOMs from scanner
    - Real-time mode: monitors scanner export directory
@@ -191,7 +191,7 @@ preprocessing(participant_id='sub-01', task='rest', root_dir='/data',
 All external commands go through `run_command()` for consistent validation, logging, and error handling:
 
 ```python
-from pyrtnf.utils import run_command
+from pineuro.utils import run_command
 
 run_command(
     cmd_name='mcflirt',
@@ -221,12 +221,12 @@ collect_dicoms(
 
 ## Creating Custom Tasks
 
-See [src/pyrtnf/tasks/README.md](src/pyrtnf/tasks/README.md) for detailed instructions on creating custom neurofeedback tasks.
+See [src/pineuro/tasks/README.md](src/pineuro/tasks/README.md) for detailed instructions on creating custom neurofeedback tasks.
 
 Quick example:
 
 ```python
-from pyrtnf.tasks import BaseTask
+from pineuro.tasks import BaseTask
 from psychopy import visual
 
 class MyTask(BaseTask):
@@ -251,7 +251,7 @@ class MyTask(BaseTask):
 python tests/test.py
 
 # Run DICOM simulator manually for testing other components
-python -m pyrtnf.simulator \
+python -m pineuro.simulator \
     --source /path/to/source_dicoms \
     --target /tmp/incoming \
     --tr 1.5 \
@@ -261,16 +261,16 @@ python -m pyrtnf.simulator \
 ## Documentation
 
 - **[CLAUDE.md](CLAUDE.md)** - Comprehensive architecture guide and development patterns
-- **[tasks/README.md](src/pyrtnf/tasks/README.md)** - Task framework integration guide
+- **[tasks/README.md](src/pineuro/tasks/README.md)** - Task framework integration guide
 - **[docs/references.md](docs/references.md)** - Academic references and citations
 
 ## Citation
 
-If you use pyrtnf in your research, please cite:
+If you use pineuro in your research, please cite:
 
 ```
-Vandewouw, M. M. (2026). pyrtnf: Python Real-Time fMRI Neurofeedback.
-https://github.com/yourusername/pyrtnf
+Vandewouw, M. M. (2026). pineuro: Python Real-Time fMRI Neurofeedback.
+https://github.com/yourusername/pineuro
 ```
 
 Key references:

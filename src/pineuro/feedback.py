@@ -1052,10 +1052,6 @@ class FeedbackEstimator:
             sham_activations = self._sham_provider.get_activation(
                 self.n_volumes, elapsed_time
             )
-            logger.debug(
-                f"Volume {self.n_volumes}: SHAM delivering {sham_activations}, "
-                f"real was {real_activations}"
-            )
             return sham_activations
 
         return real_activations
@@ -1259,7 +1255,7 @@ def _generate_partial_qc(
         Path to generated QC report, or None if generation failed
     """
     try:
-        from pyrtnf import qc
+        from pineuro import qc
 
         qc_output_dir = output_dir / "qc"
         qc_output_dir.mkdir(parents=True, exist_ok=True)
@@ -1650,25 +1646,22 @@ class NeurofeedbackCoordinator:
     def _init_csv(self) -> None:
         """Initialize CSV log file and design matrix file with headers.
 
-        When sham mode is enabled, the header includes separate columns for
-        delivered and real activations: {mask}_delivered, {mask}_real.
-        This allows post-hoc analysis of what participants received vs actual brain activity.
+        Simplified format: one column per mask with just the mask name.
+        All masks are computed and logged regardless of condition.
+        The 'condition' column indicates real vs sham for analysis.
+
+        In sham mode, additional {mask}_real columns are added to log
+        the actual computed activations alongside the delivered (sham) values.
         """
         self._csv_file = open(self._csv_path, "w", newline="")
         self._csv_writer = csv.writer(self._csv_file, delimiter='\t')
 
-        # Build header based on sham mode
-        # When sham is enabled, we log both delivered and real activations
-        # When not in sham mode, we only log delivered (which equals real)
+        # Simple header: one column per mask (no _delivered/_real suffix)
         header = ["volume", "time", "is_baseline", "is_outlier", "fd", "condition"]
+        header.extend(self.mask_names)
 
+        # In sham mode, add {mask}_real columns for the actual computed activations
         if self._is_sham_mode:
-            # Add delivered columns (what task saw) and real columns (actual brain)
-            header.extend([f"{name}_delivered" for name in self.mask_names])
-            header.extend([f"{name}_real" for name in self.mask_names])
-        else:
-            # Non-sham mode: just use mask names (delivered = real)
-            header.extend([f"{name}_delivered" for name in self.mask_names])
             header.extend([f"{name}_real" for name in self.mask_names])
 
         self._csv_writer.writerow(header)
@@ -2081,12 +2074,8 @@ class NeurofeedbackCoordinator:
         # Get FD from estimator (computed during process_volume)
         fd = self._estimator._latest_fd
 
-        # Get real activations from estimator (always computed, even in sham mode)
-        real_activations = self._estimator._last_real_activations
-
-        # Build CSV row with both delivered and real activations
-        # delivered = what task saw (sham values in sham mode, real values in real mode)
-        # real = actual brain activations (always computed)
+        # Build CSV row: one column per mask (simplified format)
+        # All masks are computed and logged regardless of condition
         row = [
             self.n_processed,
             f"{elapsed_time:.2f}",
@@ -2096,11 +2085,13 @@ class NeurofeedbackCoordinator:
             self._condition,  # Log condition (real/sham) for each volume
         ]
 
-        # Add delivered activations (what task saw)
-        row.extend([f"{activations[name]:.4f}" for name in self.mask_names])
+        # Add activation for each mask (these are delivered values - sham or real)
+        row.extend([f"{activations.get(name, 0.0):.4f}" for name in self.mask_names])
 
-        # Add real activations (actual brain activity)
-        row.extend([f"{real_activations.get(name, 0.0):.4f}" for name in self.mask_names])
+        # In sham mode, also log the real computed activations
+        if self._is_sham_mode:
+            real_activations = self._estimator._last_real_activations
+            row.extend([f"{real_activations.get(name, 0.0):.4f}" for name in self.mask_names])
 
         if self._csv_writer is not None:
             self._csv_writer.writerow(row)
@@ -2109,7 +2100,6 @@ class NeurofeedbackCoordinator:
 
         # Log concise timing: proc = dcm2niix+GLM for this volume; drift = (elapsed - expected)
         status = "BASELINE" if is_baseline else "ACTIVE"
-        sham_indicator = " [SHAM]" if self._is_sham_mode else ""
         activation_str = "  ".join(
             f"{name}={activations[name]:+.3f}" for name in self.mask_names
         )
@@ -2121,7 +2111,7 @@ class NeurofeedbackCoordinator:
 
         logger.info(
             f"[{elapsed_time:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
-            f"({status}{sham_indicator}): {activation_str} "
+            f"({status}): {activation_str} "
             f"[proc:{total_duration:.0f}ms drift:{drift_str}ms{outlier_indicator}]{queue_warning}"
         )
 

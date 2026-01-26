@@ -50,7 +50,7 @@ class PyrtnfApp:
 
     def _setup_page(self):
         """Configure the Flet page properties."""
-        self.page.title = "pyrtnf - Real-time fMRI Neurofeedback"
+        self.page.title = "pineuro - Real-time fMRI Neurofeedback"
         self.page.window.width = 1400
         self.page.window.height = 900
         self.page.window.maximizable = True
@@ -58,7 +58,7 @@ class PyrtnfApp:
         self.page.padding = 0
         self.page.theme_mode = ft.ThemeMode.LIGHT
 
-        logger.info("pyrtnf GUI initialized")
+        logger.info("pineuro GUI initialized")
 
     def show_study_manager(self):
         """Show the study manager screen."""
@@ -77,7 +77,7 @@ class PyrtnfApp:
                             content=ft.Row(
                                 [
                                     ft.Text(
-                                        "pyrtnf Study Manager",
+                                        "pineuro Study Manager",
                                         size=24,
                                         weight=ft.FontWeight.BOLD,
                                     ),
