@@ -10,6 +10,7 @@ psychopy
 pydicom
 pyyaml
 scipy
+screeninfo>=0.8
 templateflow
 watchdog
 

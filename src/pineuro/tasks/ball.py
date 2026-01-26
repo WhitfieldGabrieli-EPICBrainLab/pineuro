@@ -178,6 +178,7 @@ class BallTask(BaseTask):
         max_hits_threshold: int = 5,
         scale_adjust_factor: float = 0.25,
         circle_shrink_factor: float = 0.9,
+        presenter_monitor: str = "right",
     ):
         self.coordinator = coordinator
         self._session_state = session_state
@@ -215,6 +216,7 @@ class BallTask(BaseTask):
         self.enter_button = enter_button
 
         self.fullscreen = fullscreen
+        self.presenter_monitor = presenter_monitor
 
         self.feedback_mode = feedback_mode
 
@@ -222,7 +224,7 @@ class BallTask(BaseTask):
         self.hit_counters = [0, 0]
         self.circle_positions = [1.0 / 3, -1.0 / 3]
         self.circle_radii = [0.15, 0.15]
-        self.circle_colors = ['yellow', 'lightblue']
+        self.circle_colors = ['yellow', '#1E90FF']
         
         if session_state is not None:
             self.scale_factor = session_state.scale_factor
@@ -289,45 +291,42 @@ class BallTask(BaseTask):
             # Keep current_volume in sync even if the main loop exits right after the last callback
             self.current_volume = volume
 
-    def _move_window_to_secondary(self, target_screen: int):
-        """Move PsychoPy window to a specific monitor using Xlib.
+    def _move_window_xlib(self, target_x: int):
+        """Move PsychoPy window to a specific x position using Xlib.
 
-        This is a workaround for Flet/XWayland ignoring PsychoPy's screen parameter.
-        Works on Linux/X11 systems including WSL2 with XWayland.
+        This is a workaround for WSL2/Wayland ignoring window position requests.
+        Uses the actual window ID from PsychoPy's window handle.
 
         Parameters
         ----------
-        target_screen : int
-            Screen index to move window to (0 = primary, 1 = secondary)
+        target_x : int
+            X coordinate to move window to (e.g., 1920 for right monitor)
         """
         try:
-            # Get target screen position
-            screens = self.win.winHandle.display.get_screens()
-            if target_screen >= len(screens):
-                logger.warning(f"Screen {target_screen} not found, using screen 0")
-                target_screen = 0
-            target = screens[target_screen]
-
-            # Move window using Xlib
             from Xlib import display as xlib_display
+
+            # Get the X11 window ID from PsychoPy's pyglet window
+            window_id = self.win.winHandle._window
+
             d = xlib_display.Display()
-            x_win = d.create_resource_object('window', self.win.winHandle._window)
-            x_win.configure(x=target.x, y=target.y)
+            xlib_win = d.create_resource_object('window', window_id)
+            xlib_win.configure(x=target_x, y=0)
             d.sync()
             d.close()
-            logger.debug(f"Moved window to screen {target_screen} at ({target.x}, {target.y})")
+
+            logger.info(f"Moved window (id={window_id}) to x={target_x} using Xlib")
+
         except ImportError:
-            logger.info("Xlib not available - window positioning disabled")
+            logger.warning("Xlib not available - window positioning disabled")
         except Exception as e:
-            logger.warning(f"Could not move window to screen {target_screen}: {e}")
+            logger.warning(f"Could not move window: {e}")
 
     def setup(self):
         """Initialize PsychoPy window and ball task stimuli."""
         from psychopy import visual
         from pineuro import config
+        from pineuro.display import get_monitor_by_position
 
-        # Get target screen from config
-        target_screen = config.PSYCHOPY_SCREEN
         platform = config.get_platform()
 
         # Initialize PsychoPy log file
@@ -350,6 +349,15 @@ class BallTask(BaseTask):
         # Create minimal monitor to avoid "Monitor specification not found" warning
         mon = monitors.Monitor('neurofeedback')
 
+        # Get target screen using display module
+        target_monitor = get_monitor_by_position(self.presenter_monitor)
+        if target_monitor:
+            target_screen = target_monitor.index
+            logger.info(f"Task window targeting {self.presenter_monitor} monitor: {target_monitor.name} (screen={target_screen})")
+        else:
+            target_screen = 0
+            logger.warning("No monitors detected, using screen 0")
+
         # Platform-specific window creation
         if platform == 'darwin':
             # macOS: screen parameter works directly
@@ -363,41 +371,43 @@ class BallTask(BaseTask):
                 waitBlanking=False,
             )
         else:
-            # Linux (including WSL2): Need Xlib workaround for Flet/XWayland
-            import pyglet
-            screens = pyglet.canvas.Display().get_screens()
-            n_screens = len(screens)
+            # Linux (including WSL2): Wayland/XWayland ignores screen parameter.
+            # Workaround: Create window at target size, then move it using Xlib.
+            # See: docs/wsl2_monitor_configuration.md
+            if target_monitor:
+                win_width = target_monitor.width
+                win_height = target_monitor.height
+                target_x = target_monitor.x
+            else:
+                win_width, win_height = 1920, 1080
+                target_x = 0
 
-            # Validate target screen exists
-            if target_screen >= n_screens:
-                logger.warning(
-                    f"Requested screen {target_screen} not available "
-                    f"(only {n_screens} screen(s) detected). Using screen 0."
-                )
-                target_screen = 0
-
-            target = screens[target_screen]
-
+            logger.info(f"Creating {win_width}x{win_height} window, will move to x={target_x}")
             self.win = visual.Window(
                 fullscr=False,
-                size=(target.width, target.height),
+                size=(win_width, win_height),
+                pos=(0, 0),
                 monitor=mon,
-                screen=target_screen,
+                screen=0,
                 units='height',
                 color='black',
                 allowGUI=False,
                 waitBlanking=False,
             )
+            self.win.flip()
 
-            # Only attempt to move window if using secondary screen
-            if target_screen > 0:
-                self._move_window_to_secondary(target_screen)
+            # Move window to target monitor using Xlib
+            if target_x > 0:
+                import time
+                time.sleep(0.2)  # Give window time to appear
+                self._move_window_xlib(target_x)
 
         # Use default frame duration for display loop timing (prevents CPU spinning)
         # Movement is time-based (dt) so actual frame rate doesn't affect physics
         self.frame_duration = 1.0 / 60.0  # ~60 Hz target for smooth display
 
         # Create target circles
+        # Use thicker line width for visibility on full-screen display
         self.circles = []
         for i in range(2):
             circle = visual.Circle(
@@ -406,7 +416,7 @@ class BallTask(BaseTask):
                 radius=self.circle_radii[i],
                 fillColor=None,
                 lineColor=self.circle_colors[i],
-                lineWidth=3,
+                lineWidth=8,
             )
             self.circles.append(circle)
 
@@ -502,10 +512,12 @@ class BallTask(BaseTask):
 
         In simulation mode, this automatically proceeds after a brief delay.
         In real-time mode, this waits for the user to press a trigger key.
+        Use the Stop button in GUI to exit.
         """
         from ..feedback import logger
 
         self.waiting_text.draw()
+        self._capture_and_emit_screenshot(force=True)
         self.win.flip()
 
         # Check if we're in simulation mode (coordinator has a simulator)
@@ -518,28 +530,34 @@ class BallTask(BaseTask):
             logger.info(f"Waiting for trigger (keys: {self.trigger_keys})...")
             continueRoutine = True
             while continueRoutine:
-                keys = event.getKeys(keyList=self.trigger_keys + ['escape'])
-                if 'escape' in keys:
-                    raise KeyboardInterrupt("User cancelled during trigger wait")
+                # Check for stop signal from GUI
+                if self.coordinator.was_stopped():
+                    logger.info("Stop signal received during trigger wait")
+                    raise KeyboardInterrupt("Stopped by user")
+
+                keys = event.getKeys(keyList=self.trigger_keys)
                 if any(k in keys for k in self.trigger_keys):
                     logger.info(f"▶ Trigger received: starting task")
                     self.coordinator.send_trigger()
                     continueRoutine = False
+
+                # Small sleep to avoid busy-waiting
+                core.wait(0.01)
 
         # Brief pause before starting task
         core.wait(0.1)
 
     def show_instructions(self):
         """Display instruction slides before task begins.
-        
+
         Instructions vary based on feedback_mode and is_first_of_type:
         - First transfer run: explains task with no movement
         - Later transfer runs: brief reminder about no movement
         - First feedback run: explains ball movement mechanism
         - Later feedback runs: brief reminder
-        
+
         Each slide is advanced by pressing spacebar (or configured advance key).
-        Escape key can exit during instructions.
+        Use the Stop button in GUI to exit.
         """
         # Determine which instruction slides to show
         if not self.feedback_mode:
@@ -552,27 +570,37 @@ class BallTask(BaseTask):
                 slides = [INSTRUCTIONS_FIRST_FEEDBACK, INSTRUCTIONS_READY]
             else:
                 slides = [INSTRUCTIONS_LATER_FEEDBACK, INSTRUCTIONS_READY]
-        
+
         # Display each instruction slide
         for slide_text in slides:
+            # Check for stop signal from GUI
+            if self.coordinator.was_stopped():
+                logger.info("Stop signal received during instructions")
+                raise KeyboardInterrupt("Stopped by user")
+
             self.instruction_text.setText(slide_text)
             self.instruction_text.draw()
+            self._capture_and_emit_screenshot(force=True)
             self.win.flip()
-            
-            # Wait for key press to advance
+
+            # Wait for key press to advance (check for stop signal periodically)
             continueRoutine = True
             while continueRoutine:
-                keys = event.getKeys(keyList=self.instruction_advance_keys + ['escape'])
-                
-                if 'escape' in keys:
-                    raise KeyboardInterrupt("User cancelled during instructions")
-                
+                # Check for stop signal from GUI
+                if self.coordinator.was_stopped():
+                    logger.info("Stop signal received during instructions")
+                    raise KeyboardInterrupt("Stopped by user")
+
+                keys = event.getKeys(keyList=self.instruction_advance_keys)
                 if any(k in keys for k in self.instruction_advance_keys):
                     continueRoutine = False
-            
+
+                # Small sleep to avoid busy-waiting
+                core.wait(0.01)
+
             # Brief pause between slides
             core.wait(0.1)
-        
+
         logger.info("Instructions complete")
 
     def _run_slider(
@@ -619,21 +647,24 @@ class BallTask(BaseTask):
         # Draw initial state
         slider.draw()
         self.question_text.draw()
+        self._capture_and_emit_screenshot(force=True)
         self.win.flip()
-        
+
         # Track timing
         response_clock = core.Clock()
         
         # Wait for response
         continueRoutine = True
         while continueRoutine:
+            # Check for stop signal from GUI
+            if self.coordinator.was_stopped():
+                logger.info("Stop signal received during slider question")
+                raise KeyboardInterrupt("Stopped by user")
+
             keys = event.getKeys(keyList=[
-                self.left_button, self.right_button, self.enter_button, 'escape'
+                self.left_button, self.right_button, self.enter_button
             ])
-            
-            if 'escape' in keys:
-                raise KeyboardInterrupt("User cancelled during slider question")
-            
+
             if len(keys):
                 if self.left_button in keys:
                     slider.markerPos = max(1, slider.markerPos - 1)
@@ -642,12 +673,16 @@ class BallTask(BaseTask):
                 elif self.enter_button in keys:
                     slider.rating = slider.markerPos
                     continueRoutine = False
-                
+
                 # Redraw
                 slider.draw()
                 self.question_text.draw()
+                self._capture_and_emit_screenshot(force=True)
                 self.win.flip()
-        
+
+            # Small sleep to avoid busy-waiting
+            core.wait(0.01)
+
         # Get response time
         rt = response_clock.getTime()
         rating = int(slider.rating)
@@ -676,19 +711,26 @@ class BallTask(BaseTask):
         """
         # Show instruction screen
         self.slider_instruction_text.draw()
+        self._capture_and_emit_screenshot(force=True)
         self.win.flip()
-        
+
         # Wait for any button press to continue
         event.clearEvents('keyboard')
         continueRoutine = True
         while continueRoutine:
+            # Check for stop signal from GUI
+            if self.coordinator.was_stopped():
+                logger.info("Stop signal received during slider instructions")
+                raise KeyboardInterrupt("Stopped by user")
+
             keys = event.getKeys(keyList=[
-                self.left_button, self.right_button, self.enter_button, 'escape'
+                self.left_button, self.right_button, self.enter_button
             ])
-            if 'escape' in keys:
-                raise KeyboardInterrupt("User cancelled during slider instructions")
             if len(keys):
                 continueRoutine = False
+
+            # Small sleep to avoid busy-waiting
+            core.wait(0.01)
         
         # Core questions (always asked)
         self._run_slider(
@@ -980,11 +1022,11 @@ class BallTask(BaseTask):
 
             self.ball.draw()
 
+        # Capture screenshot (back buffer) before flip for GUI mirror
+        self._capture_and_emit_screenshot()
+
         # Flip window
         self.win.flip()
-
-        # Emit visual state to GUI mirror if callback is set
-        self._emit_mirror_state()
 
         # Increment frame counter
         self._frame_counter += 1

@@ -307,32 +307,49 @@ def resolve_sham_masks(
     mask_extraction_dir: Path,
     participant_id: str,
     twovol_subdir: str = "04_2vol",
+    sham_mask_mode: str = "two_networks",
+    hemisphere_network: Optional[str] = None,
+    target_hemisphere: str = "right",
 ) -> list[Path]:
     """Get alternative mask paths for sham condition.
 
-    Returns mask file paths for the alternative_mask_targets networks,
+    Returns mask file paths for the alternative networks/hemispheres,
     which will be used instead of the real target networks for sham participants.
+
+    Supports two modes:
+    1. 'two_networks': Returns masks for two distinct Yeo networks (legacy)
+    2. 'hemisphere_split': Returns left/right hemisphere masks from a single network
 
     Parameters
     ----------
     alternative_mask_targets : list[str]
-        Network names to use for sham (e.g., ["SomMotA", "SomMotB"])
+        For 'two_networks' mode: network names to use for sham (e.g., ["SomMotA", "SomMotB"])
+        Ignored for 'hemisphere_split' mode.
     mask_extraction_dir : Path
         Directory containing mask extraction outputs
     participant_id : str
         Participant identifier
     twovol_subdir : str
         Subdirectory containing 2vol-coregistered masks (default: "04_2vol")
+    sham_mask_mode : str
+        Mode for mask selection: "two_networks" or "hemisphere_split"
+    hemisphere_network : str, optional
+        For 'hemisphere_split' mode: the network that was split (e.g., "SomMotA")
+    target_hemisphere : str
+        For 'hemisphere_split' mode: which hemisphere is target ("right" or "left")
 
     Returns
     -------
     list[Path]
-        Paths to alternative mask files (in same order as alternative_mask_targets)
+        Paths to alternative mask files. For hemisphere_split, returns
+        [target_hemi_mask, non_target_hemi_mask].
 
     Raises
     ------
     FileNotFoundError
         If any alternative mask file is not found
+    ValueError
+        If hemisphere_split mode is used without hemisphere_network
     """
     mask_extraction_dir = Path(mask_extraction_dir)
     masks_dir = mask_extraction_dir / twovol_subdir / "masks"
@@ -341,8 +358,29 @@ def resolve_sham_masks(
         # Try looking in 03_masks directly (for non-2vol-registered masks)
         masks_dir = mask_extraction_dir / "03_masks"
 
+    # Build target list based on mode
+    if sham_mask_mode == "hemisphere_split":
+        if hemisphere_network is None:
+            raise ValueError(
+                "hemisphere_network is required for hemisphere_split mode"
+            )
+        # Determine non-target hemisphere
+        non_target_hemisphere = "left" if target_hemisphere == "right" else "right"
+        # Build targets: [target_hemi, non_target_hemi]
+        targets = [
+            f"{hemisphere_network}_{target_hemisphere}",
+            f"{hemisphere_network}_{non_target_hemisphere}",
+        ]
+        logger.info(
+            f"Hemisphere split mode: {hemisphere_network} -> "
+            f"target={target_hemisphere}, non-target={non_target_hemisphere}"
+        )
+    else:
+        # two_networks mode (legacy)
+        targets = alternative_mask_targets
+
     mask_files = []
-    for target in alternative_mask_targets:
+    for target in targets:
         # Look for thresholded mask file with various naming patterns
         patterns = [
             f"{participant_id}_{target}_thr_to_*.nii.gz",  # 2vol coregistered

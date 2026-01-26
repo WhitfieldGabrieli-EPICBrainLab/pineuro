@@ -276,11 +276,23 @@ class ParticipantWorkflowScreen:
 
         # Include sham alternative networks if sham is enabled with alternative masks
         sham_config = config.get("sham", {})
+        sham_hemisphere_network = None
+        sham_target_hemisphere = "right"  # Default
         if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-            alternative_targets = sham_config.get("alternative_mask_targets", [])
-            for target in alternative_targets:
-                if target and target not in network_names:
-                    network_names.append(target)
+            sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
+            if sham_mask_mode == "hemisphere_split":
+                # Hemisphere split mode - record the network for overlay generation
+                sham_hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                sham_target_hemisphere = sham_config.get("target_hemisphere", "right")
+                # Make sure the network is in the list for ICA selection
+                if sham_hemisphere_network and sham_hemisphere_network not in network_names:
+                    network_names.append(sham_hemisphere_network)
+            else:
+                # Two networks mode (legacy)
+                alternative_targets = sham_config.get("alternative_mask_targets", [])
+                for target in alternative_targets:
+                    if target and target not in network_names:
+                        network_names.append(target)
 
         # Load correlation matrix
         corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
@@ -338,6 +350,19 @@ class ParticipantWorkflowScreen:
 
         # Yeo overlays will be generated on-demand when user rejects a mask
         yeo_overlays = {}
+
+        # Generate hemisphere overlays for sham verification (if hemisphere_split mode)
+        hemisphere_overlays = {}
+        if sham_hemisphere_network:
+            self._add_log(f"[INFO] Generating hemisphere overlays for {sham_hemisphere_network}...")
+            self.page.update()
+            hemisphere_overlays = qc.generate_hemisphere_overlays(
+                mask_extraction_dir=mask_extraction_dir,
+                participant_id=self.participant_id,
+                hemisphere_network=sham_hemisphere_network,
+                output_dir=qc_dir,
+                n_yeo=n_yeo,
+            )
 
         # Build MaskReviewInfo for each network
         masks_info = []
@@ -419,6 +444,10 @@ class ParticipantWorkflowScreen:
             smooth_fwhm=smooth_fwhm,
             highpass=highpass,
             lowpass=lowpass,
+            # Hemisphere split overlay info (for sham verification)
+            hemisphere_network=sham_hemisphere_network,
+            hemisphere_overlays=hemisphere_overlays,
+            target_hemisphere=sham_target_hemisphere,
         )
         dialog.show()
 
@@ -1849,10 +1878,18 @@ class ParticipantWorkflowScreen:
         # Include sham alternative networks if sham is enabled with alternative masks
         sham_config = config.get("sham", {})
         if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-            alternative_targets = sham_config.get("alternative_mask_targets", [])
-            for target in alternative_targets:
-                if target and target not in network_names:
-                    network_names.append(target)
+            sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
+            if sham_mask_mode == "hemisphere_split":
+                # Hemisphere split mode - add the network that will be split
+                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                if hemisphere_network and hemisphere_network not in network_names:
+                    network_names.append(hemisphere_network)
+            else:
+                # Two networks mode (legacy)
+                alternative_targets = sham_config.get("alternative_mask_targets", [])
+                for target in alternative_targets:
+                    if target and target not in network_names:
+                        network_names.append(target)
 
         return network_names
 
@@ -2429,17 +2466,29 @@ class ParticipantWorkflowScreen:
             mask_names = list(config["mask"]["mask_names"])  # Copy to avoid modifying config
             sham_config = config.get("sham", {})
             if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-                alternative_targets = sham_config.get("alternative_mask_targets", [])
-                for alt_name in alternative_targets:
-                    if alt_name and alt_name not in mask_names:
-                        mask_names.append(alt_name)
+                sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
+                if sham_mask_mode == "hemisphere_split":
+                    # Hemisphere split mode - add left/right mask names
+                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                    target_hemi = sham_config.get("target_hemisphere", "right")
+                    non_target_hemi = "left" if target_hemi == "right" else "right"
+                    for hemi in [target_hemi, non_target_hemi]:
+                        hemi_name = f"{hemisphere_network}_{hemi}"
+                        if hemi_name not in mask_names:
+                            mask_names.append(hemi_name)
+                else:
+                    # Two networks mode (legacy)
+                    alternative_targets = sham_config.get("alternative_mask_targets", [])
+                    for alt_name in alternative_targets:
+                        if alt_name and alt_name not in mask_names:
+                            mask_names.append(alt_name)
 
             n_volumes = config["feedback"]["n_volumes"]
 
             self.activation_plot = ActivationPlot(
                 mask_names=mask_names,
                 n_volumes=n_volumes,
-                height=180,
+                height=160,
                 y_min=-2.0,
                 y_max=2.0,
             )
@@ -2451,7 +2500,7 @@ class ParticipantWorkflowScreen:
             )
 
             # Create task mirror for visual feedback display
-            self.task_mirror = TaskMirror(width=180, height=250)
+            self.task_mirror = TaskMirror(width=480, height=270)
 
             # Create progress and status UI elements
             self._progress_bar = ft.ProgressBar(value=0, width=400)
@@ -2497,7 +2546,7 @@ class ParticipantWorkflowScreen:
                                         spacing=5,
                                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                     ),
-                                    width=200,
+                                    width=500,
                                 ),
                             ],
                             spacing=20,
@@ -2746,10 +2795,22 @@ class ParticipantWorkflowScreen:
         mask_names = list(config["mask"]["mask_names"])  # Copy to avoid modifying config
         sham_config = config.get("sham", {})
         if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-            alternative_targets = sham_config.get("alternative_mask_targets", [])
-            for alt_name in alternative_targets:
-                if alt_name and alt_name not in mask_names:
-                    mask_names.append(alt_name)
+            sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
+            if sham_mask_mode == "hemisphere_split":
+                # Hemisphere split mode - add left/right mask names
+                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                target_hemi = sham_config.get("target_hemisphere", "right")
+                non_target_hemi = "left" if target_hemi == "right" else "right"
+                for hemi in [target_hemi, non_target_hemi]:
+                    hemi_name = f"{hemisphere_network}_{hemi}"
+                    if hemi_name not in mask_names:
+                        mask_names.append(hemi_name)
+            else:
+                # Two networks mode (legacy)
+                alternative_targets = sham_config.get("alternative_mask_targets", [])
+                for alt_name in alternative_targets:
+                    if alt_name and alt_name not in mask_names:
+                        mask_names.append(alt_name)
 
         n_volumes = config["feedback"]["n_volumes"]
 

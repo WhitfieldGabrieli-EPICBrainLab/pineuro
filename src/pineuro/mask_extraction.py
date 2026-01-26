@@ -60,6 +60,7 @@ import pandas as pd
 from nilearn.decomposition import CanICA
 from nilearn import datasets
 from nilearn.image import get_data, resample_to_img
+import nibabel as nib
 from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
 from nibabel.spatialimages import SpatialImage
@@ -269,6 +270,118 @@ def extract_yeo_mask_for_network(
     logger.info(f"Saved Yeo atlas mask ({int(binary_mask.sum())} voxels) to {output_file}")
 
     return output_file
+
+
+def split_mask_by_hemisphere(
+    input_mask: Union[str, Path],
+    output_left: Union[str, Path],
+    output_right: Union[str, Path],
+    threshold: int = 2000,
+    overwrite: bool = False
+) -> Tuple[Path, Path]:
+    """Split a network mask into left and right hemisphere masks with thresholding.
+
+    Takes an unthresholded ICA component mask, splits it by hemisphere using
+    world coordinates, then thresholds each hemisphere separately to retain
+    the top N voxels. This ensures each hemisphere has the full threshold
+    count (e.g., 2000 voxels each).
+
+    Uses MNI/RAS convention: x < 0 = left hemisphere, x > 0 = right hemisphere.
+    Voxels at exactly x=0 (midline) are excluded from both hemispheres.
+
+    Parameters
+    ----------
+    input_mask : str or Path
+        Path to input unthresholded network mask (ICA component, not _thr file)
+    output_left : str or Path
+        Path to save left hemisphere thresholded mask
+    output_right : str or Path
+        Path to save right hemisphere thresholded mask
+    threshold : int
+        Number of voxels to keep in each hemisphere (default: 2000)
+    overwrite : bool
+        If True, overwrite existing outputs
+
+    Returns
+    -------
+    tuple[Path, Path]
+        (left_mask_path, right_mask_path)
+
+    Raises
+    ------
+    FileNotFoundError
+        If input_mask does not exist
+    """
+    input_mask = Path(input_mask)
+    output_left = Path(output_left)
+    output_right = Path(output_right)
+
+    if not input_mask.exists():
+        raise FileNotFoundError(f"Input mask not found: {input_mask}")
+
+    if output_left.exists() and output_right.exists() and not overwrite:
+        logger.info(f"Hemisphere masks exist and overwrite=False, skipping")
+        return output_left, output_right
+
+    # Load unthresholded mask (ICA component with continuous values)
+    mask_img = load(input_mask)
+    mask_data = mask_img.get_fdata()
+    affine = mask_img.affine
+
+    # Create hemisphere masks based on world coordinates
+    # Get all voxel indices
+    all_indices = np.indices(mask_data.shape).reshape(3, -1).T  # (N, 3)
+    world_coords = nib.affines.apply_affine(affine, all_indices)
+    x_coords = world_coords[:, 0].reshape(mask_data.shape)
+
+    # Create left/right hemisphere masks (boolean)
+    left_hemi_mask = x_coords < 0
+    right_hemi_mask = x_coords > 0
+
+    # Apply hemisphere masks to get component values in each hemisphere
+    left_values = mask_data.copy()
+    left_values[~left_hemi_mask] = 0
+
+    right_values = mask_data.copy()
+    right_values[~right_hemi_mask] = 0
+
+    # Threshold each hemisphere separately
+    def threshold_hemisphere(data: np.ndarray, n_voxels: int) -> np.ndarray:
+        """Keep top N voxels by absolute value."""
+        flat = data.ravel()
+        abs_flat = np.abs(flat)
+        if n_voxels >= np.count_nonzero(abs_flat):
+            # Keep all nonzero voxels if fewer than threshold
+            return (abs_flat > 0).astype("uint8").reshape(data.shape)
+        # Find threshold value for top N
+        threshold_indices = np.argpartition(abs_flat, -n_voxels)[-n_voxels:]
+        result = np.zeros(flat.shape, dtype="uint8")
+        result[threshold_indices] = 1
+        # Only keep where original was nonzero (positive values after thresholding)
+        result = result & (flat > 0)
+        return result.reshape(data.shape)
+
+    left_thresholded = threshold_hemisphere(left_values, threshold)
+    right_thresholded = threshold_hemisphere(right_values, threshold)
+
+    n_left = int(left_thresholded.sum())
+    n_right = int(right_thresholded.sum())
+
+    logger.info(
+        f"Split and thresholded {input_mask.name}: "
+        f"{n_left} left voxels, {n_right} right voxels (threshold={threshold})"
+    )
+
+    # Save
+    output_left.parent.mkdir(parents=True, exist_ok=True)
+    output_right.parent.mkdir(parents=True, exist_ok=True)
+    save(Nifti1Image(left_thresholded, affine, mask_img.header), output_left)
+    save(Nifti1Image(right_thresholded, affine, mask_img.header), output_right)
+
+    logger.info(f"Saved left hemisphere mask to {output_left}")
+    logger.info(f"Saved right hemisphere mask to {output_right}")
+
+    return output_left, output_right
 
 
 def regenerate_mask_from_selection(
@@ -647,7 +760,8 @@ def mask_extraction_rest(
         overwrite: bool = False,
         qc_enabled: bool = True,
         qc_dir: Optional[Union[str, Path]] = None,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        sham_hemisphere_network: Optional[str] = None
 ) -> List[Path]:
     """
     Run the mask extraction pipeline for resting-state fMRI data.
@@ -697,6 +811,10 @@ def mask_extraction_rest(
     progress_callback : callable, optional
         Callback function for progress updates. Called with (step, detail) arguments.
         Used by GUI to display real-time progress in log console.
+    sham_hemisphere_network : str, optional
+        If provided, generates hemisphere-split masks for this network (e.g., "SomMotA").
+        Creates {participant}_{network}_left_thr.nii.gz and {participant}_{network}_right_thr.nii.gz
+        files for use in hemisphere-split sham feedback.
 
     Returns
     -------
@@ -870,6 +988,46 @@ def mask_extraction_rest(
         network_thr_files.append(thr_file)
 
     emit_progress("Step 3/3", f"Complete ({len(network_thr_files)} masks extracted)")
+
+    # Step 3d: Generate hemisphere-split masks for sham (if configured)
+    # Each hemisphere gets its own threshold count (e.g., 2000 voxels each)
+    if sham_hemisphere_network:
+        emit_progress("Generating hemisphere-split masks", f"Network: {sham_hemisphere_network}")
+
+        # Check if this network was already extracted (unthresholded)
+        network_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}.nii.gz"
+
+        if not network_file.exists():
+            # Network not in yeo_targets, need to extract it first
+            # Check if it's a valid Yeo network
+            if sham_hemisphere_network not in labels:
+                logger.warning(
+                    f"Sham hemisphere network '{sham_hemisphere_network}' not in "
+                    f"Yeo {n_yeo} labels. Skipping hemisphere split."
+                )
+            else:
+                # Extract this network for sham (unthresholded)
+                emit_progress("Extracting sham network", sham_hemisphere_network)
+                ic_ind = int(sc_df[sham_hemisphere_network].idxmax())
+                if not network_file.exists() or overwrite:
+                    ic_data = components_data[..., ic_ind]
+                    ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)
+                    save(ic_img, network_file)
+
+        # Now split into hemispheres (using unthresholded mask, thresholding each hemisphere)
+        if network_file.exists():
+            left_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_left_thr.nii.gz"
+            right_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_right_thr.nii.gz"
+            split_mask_by_hemisphere(
+                network_file, left_file, right_file,
+                threshold=threshold, overwrite=overwrite
+            )
+            emit_progress(
+                "Hemisphere split",
+                f"Created {left_file.name} and {right_file.name} ({threshold} voxels each)"
+            )
+        else:
+            logger.warning(f"Could not find or create mask for {sham_hemisphere_network}")
 
     # Generate QC report
     if qc_enabled:

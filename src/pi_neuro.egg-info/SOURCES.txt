@@ -9,6 +9,7 @@ src/pi_neuro.egg-info/requires.txt
 src/pi_neuro.egg-info/top_level.txt
 src/pineuro/__init__.py
 src/pineuro/config.py
+src/pineuro/display.py
 src/pineuro/feedback.py
 src/pineuro/mask_extraction.py
 src/pineuro/preprocessing.py
@@ -46,5 +47,3 @@ src/pineuro/tasks/factory.py
 src/pineuro/tasks/session.py
 src/pineuro/tasks/task_registry.py
 src/pineuro/tasks/utils.py
-tests/test.py
-tests/test_display_config.py

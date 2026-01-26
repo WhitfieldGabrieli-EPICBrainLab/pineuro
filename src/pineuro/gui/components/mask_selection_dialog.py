@@ -5,9 +5,7 @@ Provides a two-stage dialog flow:
 2. Select alternative (different ICA component or Yeo atlas fallback) for rejected masks
 """
 
-import base64
 import logging
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -82,6 +80,10 @@ class MaskSelectionDialog:
         smooth_fwhm: Optional[float] = None,
         highpass: Optional[float] = None,
         lowpass: Optional[float] = None,
+        # Hemisphere split (sham verification)
+        hemisphere_network: Optional[str] = None,
+        hemisphere_overlays: Optional[Dict[str, Path]] = None,
+        target_hemisphere: str = "right",
     ):
         """Initialize the mask selection dialog.
 
@@ -106,6 +108,9 @@ class MaskSelectionDialog:
             smooth_fwhm: Gaussian smoothing FWHM in mm (for script generation)
             highpass: High-pass filter frequency in Hz (for script generation)
             lowpass: Low-pass filter frequency in Hz (for script generation)
+            hemisphere_network: Network name that was split into hemispheres (for sham)
+            hemisphere_overlays: Dict mapping 'left'/'right' to overlay paths
+            target_hemisphere: Which hemisphere is the target ('right' or 'left')
         """
         self.page = page
         self.masks_info = {m.network_name: m for m in masks_info}
@@ -130,11 +135,15 @@ class MaskSelectionDialog:
         self.highpass = highpass
         self.lowpass = lowpass
 
+        # Hemisphere split info (for sham verification)
+        self.hemisphere_network = hemisphere_network
+        self.hemisphere_overlays = hemisphere_overlays or {}
+        self.target_hemisphere = target_hemisphere
+
         self._dialog: Optional[ft.AlertDialog] = None
         self._stage = 1  # 1 = Accept/Reject, 2 = Select Alternative
         self._current_reject_network: Optional[str] = None
         self._selections: Dict[str, MaskSelection] = {}
-        self._force_reload_images = False  # When True, use base64 to bypass Flet's image cache
 
         # Load existing selections
         existing = load_mask_selections(masks_dir)
@@ -152,30 +161,13 @@ class MaskSelectionDialog:
                 )
 
     def _create_image(self, path: Path, height: int = 150, width: Optional[int] = None) -> ft.Image:
-        """Create an Image widget, using base64 if cache bypass is needed.
-
-        When _force_reload_images is True, reads the file and uses src_base64
-        to bypass Flet's image caching. Otherwise uses normal src path.
-        """
-        if self._force_reload_images and path.exists():
-            # Read file and encode as base64 to bypass cache
-            with open(path, "rb") as f:
-                img_bytes = f.read()
-            img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-            return ft.Image(
-                src_base64=img_b64,
-                fit="contain",
-                height=height,
-                width=width,
-            )
-        else:
-            # Normal path-based loading
-            return ft.Image(
-                src=str(path),
-                fit="contain",
-                height=height,
-                width=width,
-            )
+        """Create an Image widget from a local file path."""
+        return ft.Image(
+            src=str(path),
+            fit="contain",
+            height=height,
+            width=width,
+        )
 
     def show(self):
         """Display the dialog."""
@@ -307,6 +299,30 @@ class MaskSelectionDialog:
             )
             mask_cards.append(card)
 
+        # Add hemisphere-split masks as info-only cards (for sham verification)
+        if self.hemisphere_network and self.hemisphere_overlays:
+            hemisphere_cards = self._build_hemisphere_info_cards()
+            if hemisphere_cards:
+                mask_cards.append(ft.Divider(height=2, color=ft.Colors.BLUE_200))
+                mask_cards.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.BLUE, size=16),
+                                ft.Text(
+                                    "Sham Hemisphere Masks (verification only)",
+                                    size=12,
+                                    color=ft.Colors.BLUE_700,
+                                    weight=ft.FontWeight.W_500,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        padding=ft.padding.only(left=5, bottom=5),
+                    )
+                )
+                mask_cards.extend(hemisphere_cards)
+
         return ft.Container(
             content=ft.Column(
                 mask_cards,
@@ -314,9 +330,82 @@ class MaskSelectionDialog:
                 scroll=ft.ScrollMode.AUTO,
             ),
             width=500,
-            height=450,
+            height=500,  # Increased to accommodate hemisphere cards
             padding=10,
         )
+
+    def _build_hemisphere_info_cards(self) -> List[ft.Control]:
+        """Build info-only cards for hemisphere-split masks (sham verification).
+
+        These cards show the left and right hemisphere masks for visual verification
+        but do not have accept/reject buttons since they are derived from the
+        parent network mask.
+        """
+        cards = []
+
+        for hemisphere in ["left", "right"]:
+            overlay_path = self.hemisphere_overlays.get(hemisphere)
+            if not overlay_path:
+                continue
+
+            # Build overlay image
+            overlay_content: ft.Control
+            if overlay_path and overlay_path.exists():
+                overlay_content = self._create_image(overlay_path, height=120)
+            else:
+                overlay_content = ft.Container(
+                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
+                    height=120,
+                    alignment=ft.Alignment(0, 0),
+                    bgcolor=ft.Colors.GREY_200,
+                )
+
+            # Determine which is target vs non-target based on config
+            if hemisphere == self.target_hemisphere:
+                role_label = "TARGET"
+                role_color = ft.Colors.GREEN
+            else:
+                role_label = "NON-TARGET"
+                role_color = ft.Colors.ORANGE
+
+            card = ft.Container(
+                content=ft.Column(
+                    [
+                        # Header row
+                        ft.Row(
+                            [
+                                ft.Text(
+                                    f"{self.hemisphere_network} {hemisphere.upper()}",
+                                    size=14,
+                                    weight=ft.FontWeight.W_500,
+                                ),
+                                ft.Container(expand=True),
+                                ft.Container(
+                                    content=ft.Text(role_label, size=11, color=ft.Colors.WHITE),
+                                    bgcolor=role_color,
+                                    padding=ft.padding.symmetric(horizontal=8, vertical=2),
+                                    border_radius=10,
+                                ),
+                            ],
+                        ),
+                        # Overlay image
+                        ft.Container(
+                            content=overlay_content,
+                            border=ft.border.all(1, ft.Colors.GREY_300),
+                            border_radius=5,
+                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                        ),
+                    ],
+                    spacing=8,
+                ),
+                padding=12,
+                bgcolor=ft.Colors.BLUE_50,
+                border_radius=6,
+                border=ft.border.all(1, ft.Colors.BLUE_200),
+            )
+            cards.append(card)
+
+        return cards
 
     def _build_stage1_actions(self) -> List[ft.Control]:
         """Build action buttons for Stage 1."""
@@ -444,12 +533,12 @@ class MaskSelectionDialog:
 
         alternative_items = []
 
-        # Add ICA alternatives
-        for idx, (comp_idx, corr) in enumerate(alternatives):
-            # Skip the current component
-            if comp_idx == info.current_component:
-                continue
+        # Get the currently selected component to mark it
+        current_selection = self._selections.get(network_name)
+        currently_selected_idx = current_selection.component_index if current_selection else None
 
+        # Add ICA alternatives (show all, including currently selected)
+        for idx, (comp_idx, corr) in enumerate(alternatives):
             # Build overlay if available - use larger images for better visibility
             overlay: ft.Control
             if comp_idx in info.alternative_overlay_paths:
@@ -667,12 +756,119 @@ class MaskSelectionDialog:
         # Mark as accepted with new selection
         self.masks_info[network_name].accepted = True
 
-        # Return to Stage 1
-        self._on_back_clicked(None)
+        # If this is the hemisphere network, regenerate hemisphere masks immediately
+        # so the user can verify them before final approval
+        if self.hemisphere_network and network_name == self.hemisphere_network:
+            # First close the current Stage 2 dialog
+            if self._dialog:
+                self._dialog.open = False
+                self.page.update()
+
+            # Now regenerate the masks
+            self._regenerate_hemisphere_masks_preview()
+
+            # Set state for Stage 1
+            self._stage = 1
+            self._current_reject_network = None
+
+            # Show Stage 1 with updated overlays
+            self._show_stage1()
+        else:
+            # Regular path - just go back
+            self._on_back_clicked(None)
+
+    def _regenerate_hemisphere_masks_preview(self):
+        """Regenerate hemisphere masks for preview when hemisphere network selection changes.
+
+        This is called immediately after the user selects a different ICA component
+        for the hemisphere network, allowing them to verify the hemisphere split
+        before final approval.
+        """
+        from pineuro.mask_extraction import split_mask_by_hemisphere
+        from pineuro import qc
+        from nibabel.loadsave import load, save
+        from nibabel.nifti1 import Nifti1Image
+
+        selection = self._selections.get(self.hemisphere_network)
+        if not selection:
+            return
+
+        if self.on_log:
+            self.on_log(f"[INFO] Regenerating hemisphere masks for preview...")
+
+        try:
+            # First, regenerate the unthresholded mask from the selected component
+            network_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}.nii.gz"
+
+            if selection.source_type == "ica" and selection.component_index is not None:
+                # Extract the selected ICA component
+                components_img = load(self.components_file)
+                components_data = components_img.get_fdata()
+                ic_data = components_data[..., selection.component_index]
+                ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)
+                save(ic_img, network_file)
+
+            elif selection.source_type == "yeo_atlas":
+                # Use Yeo atlas - extract the network region
+                from pineuro.utils import get_yeo_labels
+                labels = get_yeo_labels(n_networks=self.n_yeo)
+                network_index = labels.index(self.hemisphere_network) + 1
+                atlas_img = load(self.yeo_subject_space)
+                atlas_data = atlas_img.get_fdata()
+                network_mask = (atlas_data == network_index).astype(float)
+                save(Nifti1Image(network_mask, atlas_img.affine, atlas_img.header), network_file)
+
+            # Now split into hemispheres
+            left_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_left_thr.nii.gz"
+            right_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_right_thr.nii.gz"
+
+            split_mask_by_hemisphere(
+                network_file, left_file, right_file,
+                threshold=self.threshold, overwrite=True
+            )
+
+            # Regenerate hemisphere overlays
+            qc_dir = self.mask_extraction_dir.parent / "qc"
+            new_overlays = qc.generate_hemisphere_overlays(
+                mask_extraction_dir=self.mask_extraction_dir,
+                participant_id=self.participant_id,
+                hemisphere_network=self.hemisphere_network,
+                output_dir=qc_dir,
+                n_yeo=self.n_yeo,
+                overwrite=True,
+            )
+
+            # Copy overlays to component-specific paths to avoid Flet image caching
+            # (Flet caches images by path, so we need unique paths for each component)
+            import shutil
+            comp_suffix = f"_IC{selection.component_index}" if selection.component_index is not None else "_yeo"
+            updated_overlays = {}
+            for hemi, src_path in new_overlays.items():
+                if src_path and src_path.exists():
+                    # Create unique filename with component index
+                    new_name = src_path.stem + comp_suffix + src_path.suffix
+                    dest_path = src_path.parent / new_name
+                    shutil.copy2(src_path, dest_path)
+                    updated_overlays[hemi] = dest_path
+                else:
+                    updated_overlays[hemi] = src_path
+
+            # Update stored overlays with the unique paths
+            self.hemisphere_overlays.update(updated_overlays)
+
+            if self.on_log:
+                self.on_log(f"[SUCCESS] Hemisphere masks regenerated for preview")
+
+        except Exception as ex:
+            logger.error(f"Failed to regenerate hemisphere masks for preview: {ex}")
+            if self.on_log:
+                self.on_log(f"[WARNING] Failed to regenerate hemisphere masks: {ex}")
 
     def _on_cancel_clicked(self, e):
         """Handle Cancel button."""
-        self._close_dialog()
+        if self._dialog:
+            self._dialog.open = False
+            self.page.update()
         if self.on_cancel:
             self.on_cancel()
 
@@ -735,9 +931,6 @@ class MaskSelectionDialog:
                 if corr_df is not None and name in corr_df.columns:
                     alternatives = get_alternative_components(corr_df, name, top_n=self.n_components)
                     info.alternative_components = alternatives
-
-            # Force image reload using base64 to bypass Flet's cache
-            self._force_reload_images = True
 
             # Log the reload
             if self.on_log:
@@ -894,6 +1087,48 @@ class MaskSelectionDialog:
                 self.page.snack_bar.open = True
                 self.page.update()
                 return
+
+        # Regenerate hemisphere-split masks if hemisphere_network was modified
+        if self.hemisphere_network and self.hemisphere_network in modified_networks:
+            logger.info(f"Regenerating hemisphere-split masks for {self.hemisphere_network}")
+            try:
+                from pineuro.mask_extraction import split_mask_by_hemisphere
+                from pineuro import qc
+
+                # The unthresholded mask should have been regenerated above
+                network_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}.nii.gz"
+                left_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_left_thr.nii.gz"
+                right_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_right_thr.nii.gz"
+
+                if network_file.exists():
+                    split_mask_by_hemisphere(
+                        network_file, left_file, right_file,
+                        threshold=self.threshold, overwrite=True
+                    )
+                    logger.info(f"Regenerated hemisphere masks: {left_file.name}, {right_file.name}")
+
+                    # Regenerate hemisphere overlays
+                    if self.on_log:
+                        self.on_log(f"[INFO] Regenerating hemisphere overlays for {self.hemisphere_network}...")
+
+                    qc_dir = self.mask_extraction_dir.parent / "qc"
+                    new_overlays = qc.generate_hemisphere_overlays(
+                        mask_extraction_dir=self.mask_extraction_dir,
+                        participant_id=self.participant_id,
+                        hemisphere_network=self.hemisphere_network,
+                        output_dir=qc_dir,
+                        n_yeo=self.n_yeo,
+                        overwrite=True,
+                    )
+                    # Update stored overlays for display
+                    self.hemisphere_overlays.update(new_overlays)
+                else:
+                    logger.warning(f"Cannot regenerate hemisphere masks: {network_file} not found")
+
+            except Exception as ex:
+                logger.error(f"Failed to regenerate hemisphere masks: {ex}")
+                if self.on_log:
+                    self.on_log(f"[WARNING] Failed to regenerate hemisphere masks: {ex}")
 
         # Save selections
         save_mask_selections(self.masks_dir, self._selections)

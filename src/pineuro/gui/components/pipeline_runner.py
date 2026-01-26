@@ -359,13 +359,23 @@ class PipelineRunner:
 
         # If sham is enabled with alternative masks, include those networks too
         sham_config = config.get("sham", {})
+        sham_hemisphere_network = None
         if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-            alternative_targets = sham_config.get("alternative_mask_targets", [])
-            # Add any alternative targets not already in yeo_targets
-            for target in alternative_targets:
-                if target and target not in yeo_targets:
-                    yeo_targets.append(target)
-                    self._emit_progress(f"Including sham alternative network: {target}")
+            mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+            if mask_mode == "hemisphere_split":
+                # For hemisphere split, we need to include the network to split
+                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                if hemisphere_network and hemisphere_network not in yeo_targets:
+                    yeo_targets.append(hemisphere_network)
+                    self._emit_progress(f"Including sham hemisphere network: {hemisphere_network}")
+                sham_hemisphere_network = hemisphere_network
+            else:
+                # For two_networks mode, include both alternative targets
+                alternative_targets = sham_config.get("alternative_mask_targets", [])
+                for target in alternative_targets:
+                    if target and target not in yeo_targets:
+                        yeo_targets.append(target)
+                        self._emit_progress(f"Including sham alternative network: {target}")
 
         # Set up progress callback for mask extraction to show in GUI log console
         def progress_callback(step: str, detail: str = ""):
@@ -388,6 +398,7 @@ class PipelineRunner:
             overwrite=True,
             qc_enabled=True,
             progress_callback=progress_callback,
+            sham_hemisphere_network=sham_hemisphere_network,
         )
 
     def _run_coregistration(self, run_id: int = 1) -> None:
@@ -618,6 +629,10 @@ class PipelineRunner:
             # Fall back to config mask_names
             real_mask_names = config["mask"]["mask_names"]
 
+        # Log the ball task network assignment for debugging
+        self._emit_progress(f"Ball task networks: {real_mask_names[0]} (top/yellow) vs {real_mask_names[1]} (bottom/blue)")
+        logger.info(f"Ball mask assignment: top={real_mask_names[0]}, bottom={real_mask_names[1]}")
+
         twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
 
         # Determine 2vol run number for mask file pattern
@@ -708,16 +723,33 @@ class PipelineRunner:
                         delivery_method = sham_config.get("delivery_method", "alternative_masks")
 
                         if delivery_method == "alternative_masks":
-                            # Always load sham alternative masks if configured (for logging)
-                            alternative_targets = sham_config.get("alternative_mask_targets", [])
-                            for alt_name in alternative_targets:
-                                # Only add if not already in real_mask_names
-                                if alt_name not in real_mask_names:
-                                    try:
-                                        sham_mask_files.append(find_mask_file(alt_name))
-                                        sham_mask_names.append(alt_name)
-                                    except ValueError as e:
-                                        logger.warning(f"Sham mask not found: {e}")
+                            mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+                            if mask_mode == "hemisphere_split":
+                                # Hemisphere split: use left/right halves of a single network
+                                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                                target_hemisphere = sham_config.get("target_hemisphere", "right")
+                                non_target_hemisphere = "left" if target_hemisphere == "right" else "right"
+
+                                # Target hemisphere is sham target, non-target is sham non-target
+                                for hemi in [target_hemisphere, non_target_hemisphere]:
+                                    alt_name = f"{hemisphere_network}_{hemi}"
+                                    if alt_name not in real_mask_names:
+                                        try:
+                                            sham_mask_files.append(find_mask_file(alt_name))
+                                            sham_mask_names.append(alt_name)
+                                        except ValueError as e:
+                                            logger.warning(f"Sham hemisphere mask not found: {e}")
+                            else:
+                                # Two networks mode: use two distinct networks
+                                alternative_targets = sham_config.get("alternative_mask_targets", [])
+                                for alt_name in alternative_targets:
+                                    # Only add if not already in real_mask_names
+                                    if alt_name not in real_mask_names:
+                                        try:
+                                            sham_mask_files.append(find_mask_file(alt_name))
+                                            sham_mask_names.append(alt_name)
+                                        except ValueError as e:
+                                            logger.warning(f"Sham mask not found: {e}")
 
                         elif delivery_method == "replay" and condition == "sham":
                             # Replay mode: find feedbacklog from matched participant
@@ -828,6 +860,10 @@ class PipelineRunner:
             # Create and run task
             # BallTask uses ball_mask_names to determine which 2 masks control movement
             # For sham, this substitutes the sham mask for ball control
+            # Get display configuration
+            display_config = config.get("display", {})
+            presenter_monitor = display_config.get("presenter_monitor", "right")
+
             task = BallTask(
                 coordinator=coordinator,
                 mask_names=ball_mask_names,  # Which 2 masks control the ball
@@ -841,6 +877,7 @@ class PipelineRunner:
                 max_hits_threshold=task_config.get("max_hits_threshold", 5),
                 scale_adjust_factor=task_config.get("scale_adjust_factor", 0.25),
                 feedback_mode=feedback_mode,
+                presenter_monitor=presenter_monitor,
             )
 
             # Register callback so coordinator updates task with new activations

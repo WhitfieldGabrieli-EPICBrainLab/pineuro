@@ -138,6 +138,10 @@ class ShamConfig:
     1. 'alternative_masks': Use different network masks (e.g., motor instead of DMN)
     2. 'replay': Replay activation values from another participant's feedbacklog.tsv
 
+    For 'alternative_masks', two modes are available:
+    1. 'hemisphere_split': Split a single network into left/right hemispheres (default)
+    2. 'two_networks': Use two distinct Yeo networks (legacy behavior)
+
     Critical blinding requirements:
     - All masks (target + alternative) are extracted for ALL participants
     - Real activations are always computed (even for sham participants)
@@ -152,8 +156,18 @@ class ShamConfig:
         How sham feedback is delivered:
         - 'alternative_masks': Use different network masks
         - 'replay': Replay activation values from another participant's feedbacklog
+    sham_mask_mode : str
+        For 'alternative_masks' method, how masks are selected:
+        - 'hemisphere_split': Split a single network into left/right hemispheres
+        - 'two_networks': Use two distinct Yeo networks
+    hemisphere_network : str
+        For 'hemisphere_split' mode: the network to split (e.g., "SomMotA").
+        Can be any network from the current Yeo parcellation (7 or 17).
+    target_hemisphere : str
+        For 'hemisphere_split' mode: which hemisphere is the target ("right" or "left").
+        The other hemisphere becomes the non-target/sham mask.
     alternative_mask_targets : list[str]
-        For 'alternative_masks' method: network names to use for sham participants
+        For 'two_networks' mode: network names to use for sham participants
         (e.g., ["SomMotA", "SomMotB"] instead of ["DefaultA", "ContA"])
     randomization_file : Path, optional
         Path to TSV file containing subject -> condition assignments.
@@ -163,6 +177,9 @@ class ShamConfig:
     """
     enabled: bool = False
     delivery_method: str = "alternative_masks"  # "alternative_masks" or "replay"
+    sham_mask_mode: str = "hemisphere_split"  # "hemisphere_split" or "two_networks"
+    hemisphere_network: str = "SomMotA"  # Network to split for hemisphere_split mode
+    target_hemisphere: str = "right"  # "right" or "left"
     alternative_mask_targets: list[str] = field(
         default_factory=lambda: ["SomMotA", "SomMotB"]
     )
@@ -181,6 +198,18 @@ class ShamConfig:
                     "randomization_file is required when delivery_method='replay' "
                     "(must contain matched_participant column)"
                 )
+            if self.delivery_method == "alternative_masks":
+                if self.sham_mask_mode not in ("hemisphere_split", "two_networks"):
+                    raise ValueError(
+                        f"sham_mask_mode must be 'hemisphere_split' or 'two_networks', "
+                        f"got '{self.sham_mask_mode}'"
+                    )
+                if self.sham_mask_mode == "hemisphere_split":
+                    if self.target_hemisphere not in ("right", "left"):
+                        raise ValueError(
+                            f"target_hemisphere must be 'right' or 'left', "
+                            f"got '{self.target_hemisphere}'"
+                        )
         if self.randomization_file is not None:
             self.randomization_file = Path(self.randomization_file)
 

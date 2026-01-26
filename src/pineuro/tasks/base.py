@@ -103,6 +103,8 @@ class BaseTask(ABC):
 
         # Mirror callback for GUI visualization
         self._mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._mirror_frame_counter = 0
+        self._mirror_frame_skip = 4  # Only capture every Nth frame to reduce overhead
 
     def set_mirror_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Set callback for GUI mirroring.
@@ -147,6 +149,51 @@ class BaseTask(ABC):
                 self._mirror_callback(self.get_mirror_state())
             except Exception as e:
                 logger.debug(f"Mirror callback failed: {e}")
+
+    def _capture_and_emit_screenshot(self, force: bool = False) -> None:
+        """Capture current PsychoPy frame and emit to mirror callback.
+
+        This provides a true mirror of exactly what participants see on the
+        PsychoPy window. Works for any task without task-specific code.
+
+        IMPORTANT: Call this BEFORE win.flip(), not after. This captures the
+        back buffer (what has been drawn but not yet displayed), which works
+        reliably across all platforms including WSL2/XWayland.
+
+        To reduce flickering from capture overhead, this method only captures
+        every Nth frame (controlled by _mirror_frame_skip) unless force=True.
+
+        Parameters
+        ----------
+        force : bool
+            If True, capture immediately regardless of frame counter.
+            Use for important screens like instructions that need immediate update.
+        """
+        if self._mirror_callback is None:
+            return
+        if not hasattr(self, 'win'):
+            return
+
+        try:
+            import io
+            import base64
+
+            # Capture back buffer (drawn content before flip)
+            # This works reliably on WSL2/XWayland where front buffer capture fails
+            frame = self.win.getMovieFrame(buffer='back')
+
+            # Resize to mirror dimensions (16:9 aspect ratio)
+            frame_resized = frame.resize((480, 270))
+
+            # Convert to JPEG for faster encoding (less overhead than PNG)
+            buffer = io.BytesIO()
+            frame_resized.save(buffer, format='JPEG', quality=85)
+            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+            # Emit to callback
+            self._mirror_callback({'type': 'screenshot', 'image': f'data:image/jpeg;base64,{img_base64}'})
+        except Exception as e:
+            logger.debug(f"Screenshot capture failed: {e}")
 
     def _update_data(
         self,

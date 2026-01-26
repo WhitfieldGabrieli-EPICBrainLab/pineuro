@@ -1773,6 +1773,126 @@ def generate_yeo_network_overlay(
             temp_mask.unlink()
 
 
+def generate_hemisphere_overlays(
+        mask_extraction_dir: Path,
+        participant_id: str,
+        hemisphere_network: str,
+        output_dir: Path | None = None,
+        n_yeo: int = 17,
+        overwrite: bool = False
+) -> Dict[str, Path]:
+    """
+    Generate overlay images for hemisphere-split masks (for sham verification).
+
+    Creates overlay images for left and right hemisphere masks from a split network,
+    enabling visual verification in the mask selection dialog.
+
+    Parameters
+    ----------
+    mask_extraction_dir : Path
+        Root mask extraction directory (contains 01_ica/, 02_mnireg/, 03_masks/)
+    participant_id : str
+        Participant identifier
+    hemisphere_network : str
+        Name of the network that was split (e.g., 'SomMotA')
+    output_dir : Path, optional
+        QC output directory. Defaults to mask_extraction_dir.parent / 'qc'
+    n_yeo : int, default=17
+        Yeo parcellation (7 or 17 networks)
+    overwrite : bool, default=False
+        Regenerate overlays even if they exist
+
+    Returns
+    -------
+    dict
+        Dictionary mapping hemisphere ('left', 'right') to overlay path.
+        Example: {'left': Path('...left_overlay.png'), 'right': Path('...right_overlay.png')}
+    """
+    import logging
+    from glob import glob
+
+    from pineuro.utils import get_yeo_labels
+
+    logger = logging.getLogger(__name__)
+
+    mask_extraction_dir = Path(mask_extraction_dir)
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    overlays_dir = output_dir / "overlays" / "hemisphere_split"
+    overlays_dir.mkdir(parents=True, exist_ok=True)
+
+    masks_dir = mask_extraction_dir / "03_masks"
+
+    # Find required files
+    left_mask = masks_dir / f"{participant_id}_{hemisphere_network}_left_thr.nii.gz"
+    right_mask = masks_dir / f"{participant_id}_{hemisphere_network}_right_thr.nii.gz"
+
+    if not left_mask.exists() or not right_mask.exists():
+        logger.warning(
+            f"Hemisphere-split masks not found for {hemisphere_network}. "
+            f"Expected: {left_mask.name}, {right_mask.name}"
+        )
+        return {}
+
+    # Find BOLD reference
+    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+    if preprocessing_dir.exists():
+        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+    else:
+        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+
+    if not ref_files:
+        logger.warning("No BOLD reference found for hemisphere overlays")
+        return {}
+    ref_file = Path(ref_files[0])
+
+    # Find Yeo atlas in subject space for slice selection
+    yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
+    yeo2sub = Path(yeo2sub_files[0]) if yeo2sub_files else None
+
+    labels = get_yeo_labels(n_yeo)
+
+    result: Dict[str, Path] = {}
+
+    for hemisphere, mask_path in [("left", left_mask), ("right", right_mask)]:
+        overlay_png = overlays_dir / f"{participant_id}_{hemisphere_network}_{hemisphere}_overlay.png"
+
+        if not overwrite and overlay_png.exists():
+            result[hemisphere] = overlay_png
+            continue
+
+        logger.info(f"Generating {hemisphere_network} {hemisphere} hemisphere overlay")
+
+        # Get voxel count for title
+        mask_img = load(mask_path)
+        mask_data = mask_img.get_fdata()
+        n_voxels = int((mask_data > 0).sum())
+
+        try:
+            # Select slices based on the mask itself
+            atlas_slices = select_slices_from_atlas(
+                atlas_path=yeo2sub if yeo2sub else ref_file,
+                labels=labels,
+                target_label=hemisphere_network,
+                top_n_per_plane=1,
+                mask_path=mask_path
+            )
+
+            # Generate overlay
+            plot_mask_overlay_tripanel(
+                mask_path=mask_path,
+                ref_path=ref_file,
+                out_path=overlay_png,
+                slices=atlas_slices,
+                title=f"{hemisphere_network} {hemisphere.upper()} ({n_voxels} voxels)"
+            )
+
+            result[hemisphere] = overlay_png
+        except Exception as ex:
+            logger.warning(f"Failed to generate {hemisphere} hemisphere overlay: {ex}")
+
+    return result
+
+
 # ============================================================================
 # SECTION 4: Feedback QC
 # ============================================================================
@@ -1933,6 +2053,9 @@ def plot_design_matrix(
     """
     # Load design matrix
     df = pd.read_csv(design_path, sep='\t')
+
+    # Ensure all columns are numeric (handles edge cases where pandas infers object dtype)
+    df = df.apply(pd.to_numeric, errors='coerce')
 
     # Remove volume_idx if present
     if 'volume_idx' in df.columns:

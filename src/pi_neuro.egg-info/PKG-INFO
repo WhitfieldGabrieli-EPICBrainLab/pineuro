@@ -16,6 +16,7 @@ Requires-Dist: psychopy
 Requires-Dist: pydicom
 Requires-Dist: pyyaml
 Requires-Dist: scipy
+Requires-Dist: screeninfo>=0.8
 Requires-Dist: templateflow
 Requires-Dist: watchdog
 Provides-Extra: dev

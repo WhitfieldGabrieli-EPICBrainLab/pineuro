@@ -116,11 +116,11 @@ class StudyEditorScreen:
             },
             "mask": {
                 "n_yeo": 17,
-                "yeo_targets": ["DefaultA", "ContA"],
+                "yeo_targets": ["ContA", "DefaultA"],
                 "smooth_fwhm": 5.0,
                 "highpass": 0.01,
                 "lowpass": None,
-                "mask_names": ["DefaultA", "ContA"],
+                "mask_names": ["ContA", "DefaultA"],
             },
             "feedback": {
                 "n_baseline": 25,
@@ -164,9 +164,16 @@ class StudyEditorScreen:
             "sham": {
                 "enabled": False,
                 "delivery_method": "alternative_masks",
+                "sham_mask_mode": "hemisphere_split",
+                "hemisphere_network": "SomMotA",
+                "target_hemisphere": "right",
                 "alternative_mask_targets": ["SomMotA", "DefaultA"],
                 "randomization_file": "",
-            }
+            },
+            "display": {
+                "control_monitor": "left",    # Where GUI opens (left/right)
+                "presenter_monitor": "right",  # Where PsychoPy tasks open (left/right)
+            },
         }
 
         return StudyConfig(metadata=metadata, session_config=session_config)
@@ -435,7 +442,31 @@ class StudyEditorScreen:
         )
         self.sham_delivery_method_radio.on_change = self._on_sham_method_changed
 
-        # Sham alternative network dropdowns (replacing text field)
+        # Sham mask mode radio (hemisphere_split vs two_networks)
+        self.sham_mask_mode_radio = ft.RadioGroup(
+            content=ft.Column([
+                ft.Radio(value="hemisphere_split", label="Hemisphere Split (single network)"),
+                ft.Radio(value="two_networks", label="Two Distinct Networks"),
+            ]),
+            value=sham_config.get("sham_mask_mode", "hemisphere_split"),
+        )
+        self.sham_mask_mode_radio.on_change = self._on_sham_mask_mode_changed
+
+        # Hemisphere split controls
+        self.sham_hemisphere_network_dropdown = ft.Dropdown(
+            label="Network to Split",
+            options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
+            value=sham_config.get("hemisphere_network", "SomMotA"),
+        )
+        self.sham_target_hemisphere_radio = ft.RadioGroup(
+            content=ft.Row([
+                ft.Radio(value="right", label="Right (target)"),
+                ft.Radio(value="left", label="Left (target)"),
+            ]),
+            value=sham_config.get("target_hemisphere", "right"),
+        )
+
+        # Sham alternative network dropdowns (for two_networks mode)
         sham_targets = sham_config.get("alternative_mask_targets", ["SomMotA", "DefaultA"])
         sham_first = sham_targets[0] if len(sham_targets) > 0 else None
         sham_second = sham_targets[1] if len(sham_targets) > 1 else None
@@ -457,6 +488,75 @@ class StudyEditorScreen:
             hint_text="TSV file with subject_id, condition, matched_participant columns",
         )
 
+        # --- Display settings ---
+        display_config = config.get("display", {})
+        self.control_monitor_dropdown = ft.Dropdown(
+            label="Control Monitor (GUI)",
+            options=[
+                ft.dropdown.Option(key="left", text="Left"),
+                ft.dropdown.Option(key="right", text="Right"),
+            ],
+            value=display_config.get("control_monitor", "left"),
+        )
+        self.presenter_monitor_dropdown = ft.Dropdown(
+            label="Presenter Monitor (Task)",
+            options=[
+                ft.dropdown.Option(key="left", text="Left"),
+                ft.dropdown.Option(key="right", text="Right"),
+            ],
+            value=display_config.get("presenter_monitor", "right"),
+        )
+
+
+    def _build_monitor_preview(self) -> ft.Container:
+        """Build a preview showing detected monitors."""
+        try:
+            from pineuro.display import get_monitors
+            monitors = get_monitors()
+
+            if not monitors:
+                return ft.Container(
+                    content=ft.Text(
+                        "No monitors detected",
+                        size=12,
+                        color=ft.Colors.ORANGE_700,
+                    ),
+                    padding=10,
+                )
+
+            # Build monitor info text
+            monitor_texts = []
+            for m in monitors:
+                position = "Left" if m.index == 0 else "Right"
+                monitor_texts.append(
+                    ft.Text(
+                        f"{position}: {m.name} ({m.width}x{m.height})",
+                        size=12,
+                        color=ft.Colors.GREY_700,
+                    )
+                )
+
+            return ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text("Detected monitors:", size=12, weight=ft.FontWeight.BOLD),
+                    ] + monitor_texts,
+                    spacing=2,
+                ),
+                bgcolor=ft.Colors.GREY_100,
+                padding=10,
+                border_radius=5,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to detect monitors: {e}")
+            return ft.Container(
+                content=ft.Text(
+                    f"Monitor detection unavailable: {e}",
+                    size=12,
+                    color=ft.Colors.ORANGE_700,
+                ),
+                padding=10,
+            )
 
     def _get_yeo_network_options(self, n_yeo: int) -> list:
         """Get Yeo network options for dropdowns based on atlas size.
@@ -483,6 +583,7 @@ class StudyEditorScreen:
             self.second_network_dropdown,
             self.sham_first_network_dropdown,
             self.sham_second_network_dropdown,
+            self.sham_hemisphere_network_dropdown,
         ]:
             # Clear value if it's not in the new options
             old_value = dropdown.value
@@ -547,16 +648,29 @@ class StudyEditorScreen:
         """Handle sham delivery method change."""
         self._update_sham_visibility()
 
+    def _on_sham_mask_mode_changed(self, e):
+        """Handle sham mask mode change (hemisphere_split vs two_networks)."""
+        self._update_sham_visibility()
+
     def _update_sham_visibility(self):
         """Update visibility of sham sections based on enabled state and delivery method."""
         is_enabled = self.sham_enabled_checkbox.value
         method = self.sham_delivery_method_radio.value
+        mask_mode = self.sham_mask_mode_radio.value
 
         # Update visibility of sham configuration fields
         if hasattr(self, 'sham_config_container'):
             self.sham_config_container.visible = is_enabled
         if hasattr(self, 'sham_alternative_section'):
             self.sham_alternative_section.visible = is_enabled and (method == "alternative_masks")
+        if hasattr(self, 'sham_hemisphere_split_section'):
+            self.sham_hemisphere_split_section.visible = (
+                is_enabled and method == "alternative_masks" and mask_mode == "hemisphere_split"
+            )
+        if hasattr(self, 'sham_two_networks_section'):
+            self.sham_two_networks_section.visible = (
+                is_enabled and method == "alternative_masks" and mask_mode == "two_networks"
+            )
         if hasattr(self, 'sham_replay_section'):
             self.sham_replay_section.visible = is_enabled and (method == "replay")
         if hasattr(self, 'sham_randomization_section'):
@@ -1008,6 +1122,19 @@ class StudyEditorScreen:
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
+                    ft.Divider(),
+                    ft.Text("Display Settings", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Row([
+                        self.control_monitor_dropdown,
+                        self.presenter_monitor_dropdown,
+                    ]),
+                    self._build_monitor_preview(),
+                    ft.Text(
+                        "Configure which monitor shows the control GUI vs the participant task display.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
                 ],
                 scroll=ft.ScrollMode.AUTO,
             ),
@@ -1247,21 +1374,51 @@ class StudyEditorScreen:
         """Build the sham/control condition section for feedback tab."""
         is_enabled = self.sham_enabled_checkbox.value
         method = self.sham_delivery_method_radio.value
+        mask_mode = self.sham_mask_mode_radio.value
 
-        # Alternative masks section (using dropdowns)
-        self.sham_alternative_section = ft.Container(
+        # Hemisphere split section (single network split into left/right)
+        self.sham_hemisphere_split_section = ft.Container(
             content=ft.Column([
-                ft.Text("Alternative Networks", size=14, weight=ft.FontWeight.BOLD),
+                ft.Text("Hemisphere Split", size=13, weight=ft.FontWeight.BOLD),
+                self.sham_hemisphere_network_dropdown,
+                ft.Text("Target Hemisphere:", size=12),
+                self.sham_target_hemisphere_radio,
+                ft.Text(
+                    "Split the selected network into left and right hemispheres. "
+                    "One hemisphere is target, the other is non-target.",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+            ]),
+            visible=is_enabled and method == "alternative_masks" and mask_mode == "hemisphere_split",
+        )
+
+        # Two networks section (legacy: use two distinct networks)
+        self.sham_two_networks_section = ft.Container(
+            content=ft.Column([
+                ft.Text("Alternative Networks", size=13, weight=ft.FontWeight.BOLD),
                 ft.Row([
                     self.sham_first_network_dropdown,
                     self.sham_second_network_dropdown,
                 ]),
                 ft.Text(
-                    "Networks to use for sham participants (e.g., motor networks instead of DMN)",
+                    "Use two distinct networks for sham (e.g., motor networks instead of DMN)",
                     size=11,
                     color=ft.Colors.GREY_600,
                     italic=True,
                 ),
+            ]),
+            visible=is_enabled and method == "alternative_masks" and mask_mode == "two_networks",
+        )
+
+        # Alternative masks section (contains mask mode radio and subsections)
+        self.sham_alternative_section = ft.Container(
+            content=ft.Column([
+                ft.Text("Alternative Mask Mode", size=14, weight=ft.FontWeight.BOLD),
+                self.sham_mask_mode_radio,
+                self.sham_hemisphere_split_section,
+                self.sham_two_networks_section,
             ]),
             visible=is_enabled and (method == "alternative_masks"),
         )
@@ -1784,14 +1941,16 @@ class StudyEditorScreen:
             # Validate task config
             metadata.validate_config(config["task"][task_type])
 
-            # Save ball task network assignment (first network = top, second = bottom)
-            if task_type == "ball":
-                config["task"]["ball"]["top_network"] = self.first_network_dropdown.value
-                config["task"]["ball"]["bottom_network"] = self.second_network_dropdown.value
-
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid task parameter: {e}")
             raise ValidationError(f"Invalid task parameter: {e}")
+
+        # Always save ball task network assignment (first network = top, second = bottom)
+        # This must be saved regardless of task_type since the dropdowns control ball behavior
+        if "ball" not in config["task"]:
+            config["task"]["ball"] = {}
+        config["task"]["ball"]["top_network"] = self.first_network_dropdown.value
+        config["task"]["ball"]["bottom_network"] = self.second_network_dropdown.value
 
         # Update localizer task config (if not rest)
         localizer_task_type = self.localizer_task_type_dropdown.value
@@ -1848,7 +2007,11 @@ class StudyEditorScreen:
             config["sham"] = {}
         config["sham"]["enabled"] = self.sham_enabled_checkbox.value
         config["sham"]["delivery_method"] = self.sham_delivery_method_radio.value
-        # Save sham alternative networks from dropdowns
+        # Save sham mask mode and related settings
+        config["sham"]["sham_mask_mode"] = self.sham_mask_mode_radio.value
+        config["sham"]["hemisphere_network"] = self.sham_hemisphere_network_dropdown.value or "SomMotA"
+        config["sham"]["target_hemisphere"] = self.sham_target_hemisphere_radio.value or "right"
+        # Save sham alternative networks from dropdowns (for two_networks mode)
         sham_targets = []
         if self.sham_first_network_dropdown.value:
             sham_targets.append(self.sham_first_network_dropdown.value)
@@ -1858,3 +2021,9 @@ class StudyEditorScreen:
         config["sham"]["randomization_file"] = self.sham_randomization_file_field.value.strip()
         # Remove legacy replay_source_dir if present (now uses base_dir automatically)
         config["sham"].pop("replay_source_dir", None)
+
+        # Update display configuration
+        if "display" not in config:
+            config["display"] = {}
+        config["display"]["control_monitor"] = self.control_monitor_dropdown.value or "left"
+        config["display"]["presenter_monitor"] = self.presenter_monitor_dropdown.value or "right"
