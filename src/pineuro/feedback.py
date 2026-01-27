@@ -1531,6 +1531,7 @@ class NeurofeedbackCoordinator:
         error_callback: Optional[Callable[[Exception], None]] = None,
         simulator=None,  # DicomSimulator instance for simulation mode
         qc_enabled: bool = True,  # Generate QC report after session completes
+        fd_threshold: float = 0.5,  # FD threshold in mm for QC plots
         acq: str = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
         sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
         condition: str = "real",  # Participant condition: "real" or "sham"
@@ -1545,6 +1546,7 @@ class NeurofeedbackCoordinator:
         self.n_volumes = n_volumes
         self._tr = tr
         self._qc_enabled = qc_enabled
+        self._fd_threshold = fd_threshold
 
         # Validate watch directory
         if not self.watch_dir.exists():
@@ -1987,7 +1989,7 @@ class NeurofeedbackCoordinator:
         import shutil
         from .utils import dicom_to_nifti
 
-        process_start = time.time()
+        process_start = time.monotonic()
 
         # Extract TR from first DICOM if not yet set
         if self._tr is None and self.n_processed == 0:
@@ -2004,8 +2006,8 @@ class NeurofeedbackCoordinator:
         # Convert DICOM to NIfTI (timed for diagnostics)
         volume_num = self.n_processed + 1
         output_name = f"vol_{volume_num:04d}"
-        
-        dcm2niix_start = time.time()
+
+        dcm2niix_start = time.monotonic()
         try:
             nifti_path = dicom_to_nifti(
                 dicom_dir=dicom_path,
@@ -2018,12 +2020,12 @@ class NeurofeedbackCoordinator:
         except Exception as e:
             logger.error(f"Failed to convert DICOM {dicom_path}: {e}")
             return
-        dcm2niix_duration = (time.time() - dcm2niix_start) * 1000  # ms
+        dcm2niix_duration = (time.monotonic() - dcm2niix_start) * 1000  # ms
 
         json_path = Path(str(nifti_path).replace('.nii.gz', '.json').replace('.nii', '.json'))
 
         # Process through estimator (timed for diagnostics)
-        glm_start = time.time()
+        glm_start = time.monotonic()
         try:
             activations = self._estimator.process_volume(nifti_path, json_path)
             self.design_matrix.append(self._estimator._last_design_row)
@@ -2032,9 +2034,9 @@ class NeurofeedbackCoordinator:
         except Exception as e:
             logger.error(f"Failed to process volume {volume_num}: {e}")
             return
-        glm_duration = (time.time() - glm_start) * 1000  # ms
-        
-        total_duration = (time.time() - process_start) * 1000  # ms
+        glm_duration = (time.monotonic() - glm_start) * 1000  # ms
+
+        total_duration = (time.monotonic() - process_start) * 1000  # ms
         queue_depth = self._get_queue_depth()
         
         self._timing_stats['dcm2niix_ms'].append(dcm2niix_duration)
@@ -2043,7 +2045,7 @@ class NeurofeedbackCoordinator:
         self._timing_stats['queue_depth'].append(queue_depth)
 
         self.n_processed += 1
-        elapsed_time = time.time() - self._start_time if self._start_time else 0.0
+        elapsed_time = time.monotonic() - self._start_time if self._start_time else 0.0
         is_baseline = self.n_processed <= self.n_baseline
         
         expected_time = self.n_processed * (self._tr if self._tr else 1.2)  # fallback TR
@@ -2163,7 +2165,7 @@ class NeurofeedbackCoordinator:
         else:
             logger.info("Trigger received - starting acquisition")
 
-        self._start_time = time.time()
+        self._start_time = time.monotonic()
 
         if self._simulator is not None and not self._stop_event.is_set():
             self._simulator.start_time = self._start_time
@@ -2216,7 +2218,7 @@ class NeurofeedbackCoordinator:
             self._close_csv()
             self._close_design_matrix()  # Design matrix was written incrementally
 
-            elapsed = time.time() - self._start_time if self._start_time else 0.0
+            elapsed = time.monotonic() - self._start_time if self._start_time else 0.0
             logger.info(
                 f"Session complete: {self.n_processed} volumes in {elapsed:.1f}s"
             )
@@ -2286,7 +2288,8 @@ class NeurofeedbackCoordinator:
                 acq=self.acq,
                 output_dir=self.output_dir / 'qc',
                 overwrite=True,
-                open_browser=False
+                open_browser=False,
+                fd_threshold=self._fd_threshold,
             )
             logger.info(f"QC report saved to: {report_path}")
         except Exception as e:
@@ -2434,6 +2437,7 @@ def run_feedback_session(
     activation_callback: Optional[Callable[[dict[str, float], int, float, bool, bool], None]] = None,
     error_callback: Optional[Callable[[Exception], None]] = None,
     qc_enabled: bool = True,
+    fd_threshold: float = 0.5,
     step_id: Optional[str] = None,
     sham_provider: Optional["ShamActivationProvider"] = None,
     condition: str = "real",
@@ -2719,6 +2723,7 @@ def run_feedback_session(
         error_callback=error_callback,
         simulator=simulator,
         qc_enabled=qc_enabled,
+        fd_threshold=fd_threshold,
         acq=acq,
         sham_provider=sham_provider,
         condition=condition,

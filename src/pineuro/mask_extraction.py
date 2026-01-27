@@ -87,19 +87,27 @@ class MaskSelection:
     network_name : str
         Name of the network (e.g., "DefaultA", "ContA")
     source_type : str
-        Either "ica" for ICA-derived mask or "yeo_atlas" for atlas fallback
+        One of: "ica" for single ICA component, "ica_combined" for two merged
+        ICA components, or "yeo_atlas" for atlas fallback
     component_index : int or None
-        ICA component index if source_type == "ica", None for atlas masks
+        Primary ICA component index if source_type in ("ica", "ica_combined"),
+        None for atlas masks
+    secondary_component_index : int or None
+        Second ICA component index if source_type == "ica_combined", None otherwise
     correlation : float
-        Spatial correlation with Yeo atlas (0.0 for atlas masks)
+        Spatial correlation with Yeo atlas for primary component (0.0 for atlas masks)
+    secondary_correlation : float or None
+        Spatial correlation for secondary component if source_type == "ica_combined"
     selection_reason : str
-        How this selection was made: "auto", "manual", or "yeo_fallback"
+        How this selection was made: "auto", "manual", "manual_combined", or "yeo_fallback"
     """
     network_name: str
-    source_type: str  # "ica" or "yeo_atlas"
+    source_type: str  # "ica", "ica_combined", or "yeo_atlas"
     component_index: Optional[int]
     correlation: float
-    selection_reason: str  # "auto", "manual", "yeo_fallback"
+    selection_reason: str  # "auto", "manual", "manual_combined", "yeo_fallback"
+    secondary_component_index: Optional[int] = None
+    secondary_correlation: Optional[float] = None
 
 
 def save_mask_selections(
@@ -156,10 +164,17 @@ def load_mask_selections(masks_dir: Union[str, Path]) -> Dict[str, MaskSelection
     with open(selections_file, 'r') as f:
         data = json.load(f)
 
-    return {
-        name: MaskSelection(**sel_data)
-        for name, sel_data in data.items()
-    }
+    # Handle backward compatibility for older selections without combined fields
+    selections = {}
+    for name, sel_data in data.items():
+        # Add default values for new fields if missing
+        if 'secondary_component_index' not in sel_data:
+            sel_data['secondary_component_index'] = None
+        if 'secondary_correlation' not in sel_data:
+            sel_data['secondary_correlation'] = None
+        selections[name] = MaskSelection(**sel_data)
+
+    return selections
 
 
 def get_alternative_components(
@@ -384,6 +399,163 @@ def split_mask_by_hemisphere(
     return output_left, output_right
 
 
+def combine_ica_components(
+    components_file: Union[str, Path],
+    component_idx_1: int,
+    component_idx_2: int,
+    output_file: Union[str, Path],
+    threshold: int = 2000,
+    overwrite: bool = False
+) -> Path:
+    """Combine two ICA components into a single thresholded mask.
+
+    Averages the raw (unthresholded) component maps, then applies
+    thresholding to retain the top N voxels. This preserves spatial
+    weighting and ensures consistent voxel count.
+
+    This is useful when ICA splits a network into two components (e.g.,
+    left/right ContA, frontal/occipital DMN). Averaging then thresholding
+    produces a mask that includes contributions from both components.
+
+    Parameters
+    ----------
+    components_file : str or Path
+        Path to 4D ICA components NIfTI file
+    component_idx_1 : int
+        Index of first ICA component
+    component_idx_2 : int
+        Index of second ICA component
+    output_file : str or Path
+        Path to save combined thresholded mask
+    threshold : int
+        Number of voxels to keep (default: 2000)
+    overwrite : bool
+        Overwrite existing output
+
+    Returns
+    -------
+    Path
+        Path to saved combined mask file
+
+    Raises
+    ------
+    FileNotFoundError
+        If components_file does not exist
+    ValueError
+        If component indices are out of range or identical
+    """
+    components_file = Path(components_file)
+    output_file = Path(output_file)
+
+    if output_file.exists() and not overwrite:
+        logger.info(f"Output exists and overwrite=False, skipping: {output_file}")
+        return output_file
+
+    if not components_file.exists():
+        raise FileNotFoundError(f"Components file not found: {components_file}")
+
+    if component_idx_1 == component_idx_2:
+        raise ValueError(f"Cannot combine component with itself: {component_idx_1}")
+
+    # Load ICA components
+    components_img = load(components_file)
+    components_data = components_img.get_fdata()
+    n_components = components_data.shape[3]
+
+    # Validate indices
+    for idx in [component_idx_1, component_idx_2]:
+        if idx < 0 or idx >= n_components:
+            raise ValueError(
+                f"Component index {idx} out of range (0 to {n_components - 1})"
+            )
+
+    # Extract both raw component maps
+    comp1_data = components_data[..., component_idx_1]
+    comp2_data = components_data[..., component_idx_2]
+
+    # Average the component maps
+    combined = (comp1_data + comp2_data) / 2
+
+    logger.info(
+        f"Combining ICA components {component_idx_1} and {component_idx_2} "
+        f"(averaging then thresholding to {threshold} voxels)"
+    )
+
+    # Threshold to keep top N voxels
+    flat = combined.ravel()
+    mask = np.zeros(flat.shape, dtype=bool)
+    mask[np.argpartition(flat, -threshold)[-threshold:]] = True
+    mask = mask.reshape(combined.shape)
+
+    # Create binary mask (only keep positive values after thresholding)
+    thresholded = ((combined * mask) > 0).astype("uint8")
+    n_voxels = int(thresholded.sum())
+
+    # Save
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    save(Nifti1Image(thresholded, components_img.affine, components_img.header), output_file)
+    logger.info(f"Saved combined mask ({n_voxels} voxels) to {output_file}")
+
+    return output_file
+
+
+def combine_ica_components_unthresholded(
+    components_file: Union[str, Path],
+    component_idx_1: int,
+    component_idx_2: int,
+    output_file: Union[str, Path],
+    overwrite: bool = False
+) -> Path:
+    """Combine two ICA components into a single unthresholded map.
+
+    Averages the raw component maps without any thresholding. Used to save
+    an unthresholded version alongside the thresholded mask.
+
+    Parameters
+    ----------
+    components_file : str or Path
+        Path to 4D ICA components NIfTI file
+    component_idx_1 : int
+        Index of first ICA component
+    component_idx_2 : int
+        Index of second ICA component
+    output_file : str or Path
+        Path to save combined (unthresholded) map
+    overwrite : bool
+        Overwrite existing output
+
+    Returns
+    -------
+    Path
+        Path to saved combined map file
+    """
+    components_file = Path(components_file)
+    output_file = Path(output_file)
+
+    if output_file.exists() and not overwrite:
+        logger.info(f"Output exists and overwrite=False, skipping: {output_file}")
+        return output_file
+
+    if not components_file.exists():
+        raise FileNotFoundError(f"Components file not found: {components_file}")
+
+    # Load ICA components
+    components_img = load(components_file)
+    components_data = components_img.get_fdata()
+
+    # Extract and average
+    comp1_data = components_data[..., component_idx_1]
+    comp2_data = components_data[..., component_idx_2]
+    combined = (comp1_data + comp2_data) / 2
+
+    # Save
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    save(Nifti1Image(combined, components_img.affine, components_img.header), output_file)
+    logger.info(f"Saved unthresholded combined map to {output_file}")
+
+    return output_file
+
+
 def regenerate_mask_from_selection(
     participant_id: str,
     masks_dir: Union[str, Path],
@@ -483,6 +655,42 @@ def regenerate_mask_from_selection(
         save(Nifti1Image(thresholded, components_img.affine, components_img.header), thr_file)
 
         logger.info(f"Saved regenerated mask ({int(thresholded.sum())} voxels) to {thr_file}")
+
+    elif selection.source_type == "ica_combined":
+        # Combine two ICA components
+        component_idx_1 = selection.component_index
+        component_idx_2 = selection.secondary_component_index
+
+        if component_idx_1 is None or component_idx_2 is None:
+            raise ValueError(
+                f"Combined ICA selection for {network_name} requires both "
+                f"component_index ({component_idx_1}) and "
+                f"secondary_component_index ({component_idx_2})"
+            )
+
+        logger.info(
+            f"Regenerating {network_name} from combined ICA components "
+            f"{component_idx_1} + {component_idx_2}"
+        )
+
+        # Save thresholded combined mask
+        combine_ica_components(
+            components_file=components_file,
+            component_idx_1=component_idx_1,
+            component_idx_2=component_idx_2,
+            output_file=thr_file,
+            threshold=threshold,
+            overwrite=True
+        )
+
+        # Save unthresholded combined map
+        combine_ica_components_unthresholded(
+            components_file=components_file,
+            component_idx_1=component_idx_1,
+            component_idx_2=component_idx_2,
+            output_file=network_file,
+            overwrite=True
+        )
 
     else:
         raise ValueError(f"Unknown source_type: {selection.source_type}")

@@ -97,6 +97,7 @@ class ActivationPlot:
         height: float = 250,
         y_min: float = -2.0,
         y_max: float = 2.0,
+        display_names: Optional[List[str]] = None,
     ):
         """Initialize the activation plot.
 
@@ -106,8 +107,11 @@ class ActivationPlot:
             height: Chart height in pixels
             y_min: Minimum Y axis value
             y_max: Maximum Y axis value
+            display_names: Optional display names for legend (for blind mode).
+                If None, uses mask_names.
         """
         self.mask_names = mask_names
+        self.display_names = display_names if display_names else mask_names
         self.n_volumes = n_volumes
         self.height = height
         self.y_min = y_min
@@ -321,9 +325,10 @@ class ActivationPlot:
             expand=True,
         )
 
-        # Create legend
+        # Create legend (use display_names for blind mode)
         legend_items = []
-        for mask_name in self.mask_names:
+        for i, mask_name in enumerate(self.mask_names):
+            display_name = self.display_names[i] if i < len(self.display_names) else mask_name
             legend_items.append(
                 ft.Row(
                     [
@@ -333,7 +338,7 @@ class ActivationPlot:
                             bgcolor=self.mask_colors[mask_name],
                             border_radius=2,
                         ),
-                        ft.Text(mask_name, size=12),
+                        ft.Text(display_name, size=12),
                     ],
                     spacing=5,
                 )

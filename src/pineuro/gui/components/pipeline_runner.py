@@ -13,6 +13,7 @@ from pineuro.preprocessing import collect_dicoms, preprocessing
 from pineuro.mask_extraction import mask_extraction_rest, coregister_2vol, generate_2vol_qc_overlays
 from pineuro.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
 from pineuro.tasks.ball import compute_boxcar_task_regressor
+from pineuro.tasks.session import SessionState
 from pineuro.sham import (
     load_randomization,
     get_condition_for_participant,
@@ -468,6 +469,17 @@ class PipelineRunner:
         # Get network mask files (thresholded only)
         network_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
 
+        # Filter out combined hemisphere network mask if using hemisphere_split sham mode
+        # (we only want left/right split masks, not the combined one)
+        sham_config = config.get("sham", {})
+        if sham_config.get("enabled", False):
+            delivery_method = sham_config.get("delivery_method", "alternative_masks")
+            mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+            if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
+                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                combined_mask_name = f"{self.participant_id}_{hemisphere_network}_thr.nii.gz"
+                network_files = [f for f in network_files if f.name != combined_mask_name]
+
         self._emit_progress(f"Coregistering {len(network_files)} masks to 2vol {run_str}...")
 
         # Initial 2vol (run-01) goes to mask_extraction, realtime (run-02+) goes to feedback
@@ -837,6 +849,7 @@ class PipelineRunner:
                 simulator_speed=simulator_speed,
                 step_id=step_id,  # Use slot-based naming with acq entity
                 qc_enabled=True,
+                fd_threshold=config["feedback"].get("fd_threshold", 0.5),
                 condition=condition,  # Log the actual condition
                 sham_provider=sham_provider,  # Replay provider for sham participants
             )
@@ -864,6 +877,10 @@ class PipelineRunner:
             display_config = config.get("display", {})
             presenter_monitor = display_config.get("presenter_monitor", "right")
 
+            # Load session state for adaptive difficulty persistence across runs
+            session_state = SessionState.load(output_dir)
+            self._emit_progress(f"Session state: scale_factor={session_state.scale_factor}, runs={len(session_state.completed_runs)}")
+
             task = BallTask(
                 coordinator=coordinator,
                 mask_names=ball_mask_names,  # Which 2 masks control the ball
@@ -878,6 +895,7 @@ class PipelineRunner:
                 scale_adjust_factor=task_config.get("scale_adjust_factor", 0.25),
                 feedback_mode=feedback_mode,
                 presenter_monitor=presenter_monitor,
+                session_state=session_state,
             )
 
             # Register callback so coordinator updates task with new activations

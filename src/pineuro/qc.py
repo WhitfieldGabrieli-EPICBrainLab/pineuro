@@ -1773,6 +1773,118 @@ def generate_yeo_network_overlay(
             temp_mask.unlink()
 
 
+def generate_mask_overlay(
+        mask_path: Path,
+        ref_path: Path,
+        output_dir: Path,
+        network_name: str,
+        atlas_path: Path | None = None,
+        n_yeo: int = 17,
+        overwrite: bool = False
+) -> Path | None:
+    """
+    Generate a simple overlay image for any mask file.
+
+    This is a lightweight utility for generating mask overlay previews,
+    particularly useful for combined ICA component masks.
+
+    Parameters
+    ----------
+    mask_path : Path
+        Path to the mask file (thresholded binary NIfTI)
+    ref_path : Path
+        Path to the BOLD reference for background
+    output_dir : Path
+        Directory to save the overlay image
+    network_name : str
+        Name for the overlay file (used in filename and title)
+    atlas_path : Path, optional
+        Path to Yeo atlas in subject space for slice selection.
+        If not provided, slices are selected from the mask itself.
+    n_yeo : int, default=17
+        Yeo parcellation (7 or 17) for labels
+    overwrite : bool, default=False
+        Regenerate overlay even if it exists
+
+    Returns
+    -------
+    Path or None
+        Path to generated overlay, or None if generation failed
+    """
+    import logging
+
+    from pineuro.utils import get_yeo_labels
+
+    logger = logging.getLogger(__name__)
+
+    mask_path = Path(mask_path)
+    ref_path = Path(ref_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create output filename
+    overlay_png = output_dir / f"{network_name}_overlay.png"
+
+    if not overwrite and overlay_png.exists():
+        return overlay_png
+
+    if not mask_path.exists():
+        logger.warning(f"Mask file not found: {mask_path}")
+        return None
+
+    if not ref_path.exists():
+        logger.warning(f"Reference file not found: {ref_path}")
+        return None
+
+    logger.info(f"Generating mask overlay for {network_name}")
+
+    try:
+        # Load mask to get voxel count
+        mask_img = load(mask_path)
+        mask_data = mask_img.get_fdata()
+        n_voxels = int((mask_data > 0).sum())
+
+        # Select slices based on mask or atlas
+        labels = get_yeo_labels(n_networks=n_yeo)
+
+        # Extract base network name (remove _combined suffix if present)
+        base_network = network_name.replace("_combined", "").replace("_thr", "")
+        target_label = base_network if base_network in labels else labels[0]
+
+        if atlas_path and atlas_path.exists():
+            slices = select_slices_from_atlas(
+                atlas_path=atlas_path,
+                labels=labels,
+                target_label=target_label,
+                top_n_per_plane=1,
+                mask_path=mask_path
+            )
+        else:
+            # Select slices directly from mask
+            slices = select_slices_from_atlas(
+                atlas_path=mask_path,  # Use mask as "atlas" - will be ignored
+                labels=labels,
+                target_label=target_label,
+                top_n_per_plane=1,
+                mask_path=mask_path  # This will be used for selection
+            )
+
+        # Generate overlay
+        plot_mask_overlay_tripanel(
+            mask_path=mask_path,
+            ref_path=ref_path,
+            out_path=overlay_png,
+            slices=slices,
+            title=f"{network_name} ({n_voxels} voxels)"
+        )
+
+        return overlay_png
+
+    except Exception as e:
+        logger.error(f"Failed to generate overlay for {network_name}: {e}")
+        return None
+
+
 def generate_hemisphere_overlays(
         mask_extraction_dir: Path,
         participant_id: str,
@@ -1920,9 +2032,15 @@ def plot_activation_timeseries(
     # Load feedback log
     df = pd.read_csv(feedback_log_path, sep='\t')
 
-    # Get mask columns (all columns except volume, time, is_baseline, is_outlier)
-    meta_cols = ['volume', 'time', 'is_baseline', 'is_outlier']
+    # Get mask columns (all columns except metadata)
+    meta_cols = ['volume', 'time', 'is_baseline', 'is_outlier', 'fd', 'condition']
     mask_cols = [col for col in df.columns if col not in meta_cols]
+
+    # Ensure numeric columns are properly typed (handles edge cases where pandas infers object dtype)
+    numeric_cols = ['volume', 'time', 'fd'] + mask_cols
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
     n_volumes = len(df)
 
@@ -1951,80 +2069,6 @@ def plot_activation_timeseries(
         ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
     else:
         ax.set_title('Mask Activation Timeseries', fontsize=12, fontweight='bold', pad=10)
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path)
-    plt.close(fig)
-
-
-def plot_baseline_distributions(
-        feedback_log_path: Path,
-        out_path: Path,
-        n_baseline: int,
-        title: str | None = None
-) -> None:
-    """
-    Plot baseline distribution histograms to verify normalization.
-
-    Parameters
-    ----------
-    feedback_log_path : Path
-        Path to feedback log TSV file
-    out_path : Path
-        Path to save the PNG
-    n_baseline : int
-        Number of baseline volumes
-    title : str, optional
-        Figure title
-    """
-    # Load feedback log
-    df = pd.read_csv(feedback_log_path, sep='\t')
-
-    # Get mask columns
-    meta_cols = ['volume', 'time', 'is_baseline', 'is_outlier']
-    mask_cols = [col for col in df.columns if col not in meta_cols]
-
-    # Extract baseline data
-    baseline_df = df.iloc[:n_baseline]
-
-    # Determine subplot layout
-    n_masks = len(mask_cols)
-    n_cols = min(3, n_masks)
-    n_rows = (n_masks + n_cols - 1) // n_cols
-
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3 * n_rows), constrained_layout=True)
-    if n_masks == 1:
-        axes = [axes]
-    else:
-        axes = axes.flatten() if n_masks > 1 else [axes]
-
-    for idx, mask_name in enumerate(mask_cols):
-        ax = axes[idx]
-        baseline_vals = baseline_df[mask_name].values
-
-        # Histogram
-        ax.hist(baseline_vals, bins=15, color='#0173B2', alpha=0.7, edgecolor='black')
-
-        # Add mean and std lines
-        mean_val = np.mean(baseline_vals)
-        std_val = np.std(baseline_vals)
-        ax.axvline(mean_val, color='#d62728', linestyle='--', linewidth=2, label=f'Mean: {mean_val:.3f}')
-        ax.axvline(mean_val - std_val, color='#d62728', linestyle=':', linewidth=1.5, alpha=0.7)
-        ax.axvline(mean_val + std_val, color='#d62728', linestyle=':', linewidth=1.5, alpha=0.7, label=f'±1 SD: {std_val:.3f}')
-
-        ax.set_xlabel('Activation', fontweight='bold')
-        ax.set_ylabel('Count', fontweight='bold')
-        ax.set_title(mask_name, fontsize=10)
-        ax.legend(loc='best', fontsize=8)
-
-    # Hide unused subplots
-    for idx in range(n_masks, len(axes)):
-        axes[idx].set_visible(False)
-
-    if title:
-        fig.suptitle(title, fontsize=14, fontweight='bold')
-    else:
-        fig.suptitle('Baseline Distributions', fontsize=14, fontweight='bold')
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -2100,6 +2144,86 @@ def plot_design_matrix(
     plt.close(fig)
 
 
+def plot_fd_timeseries(
+        feedback_log_path: Path,
+        out_path: Path,
+        n_baseline: int | None = None,
+        threshold: float = 0.5,
+        title: str | None = None
+) -> None:
+    """
+    Plot framewise displacement timeseries from feedback log.
+
+    Parameters
+    ----------
+    feedback_log_path : Path
+        Path to feedback log TSV file
+    out_path : Path
+        Path to save the PNG
+    n_baseline : int, optional
+        Number of baseline volumes (will be shaded differently)
+    threshold : float, default=0.5
+        FD threshold in mm for highlighting excessive motion
+    title : str, optional
+        Figure title
+    """
+    # Load feedback log
+    df = pd.read_csv(feedback_log_path, sep='\t')
+
+    # Check if FD column exists
+    if 'fd' not in df.columns:
+        logger.warning("No 'fd' column in feedback log, skipping FD plot")
+        return
+
+    # Ensure numeric
+    df['fd'] = pd.to_numeric(df['fd'], errors='coerce')
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+
+    fd = df['fd'].values
+    volumes = df['volume'].values
+    n_volumes = len(fd)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
+
+    ax.plot(volumes, fd, linewidth=1.5, color='#0173B2', label='FD')
+    ax.axhline(threshold, color='#d62728', linestyle='--', linewidth=1.5,
+               label=f'Threshold ({threshold} mm)')
+
+    # Shade baseline period
+    if n_baseline is not None and n_baseline > 0:
+        ax.axvspan(-0.5, n_baseline - 0.5, color='gray', alpha=0.1, label='Baseline')
+        ax.axvline(n_baseline - 0.5, color='gray', linestyle='--', linewidth=1.0, alpha=0.5)
+
+    # Shade regions above threshold
+    above_thresh = fd > threshold
+    if above_thresh.any():
+        for i in range(n_volumes):
+            if above_thresh[i]:
+                ax.axvspan(volumes[i] - 0.5, volumes[i] + 0.5, color='#d62728', alpha=0.2)
+
+    # Summary statistics
+    mean_fd = np.nanmean(fd)
+    pct_above = (np.sum(above_thresh) / n_volumes) * 100
+    ax.text(0.02, 0.98, f'Mean FD: {mean_fd:.3f} mm\n{pct_above:.1f}% volumes > {threshold} mm',
+            transform=ax.transAxes, fontsize=10, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    ax.set_xlabel('Volume Index', fontweight='bold')
+    ax.set_ylabel('Framewise Displacement (mm)', fontweight='bold')
+    ax.legend(loc='upper right')
+    ax.set_xlim(-0.5, n_volumes - 0.5)
+
+    if title:
+        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+    else:
+        ax.set_title('Framewise Displacement', fontsize=12, fontweight='bold', pad=10)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
 def generate_feedback_report(
         feedback_dir: Path,
         subject: str,
@@ -2110,6 +2234,7 @@ def generate_feedback_report(
         open_browser: bool = False,
         expected_volumes: int | None = None,
         acq: str | None = None,
+        fd_threshold: float = 0.5,
 ) -> Path:
     """
     Generate comprehensive QC report for feedback session outputs.
@@ -2140,6 +2265,9 @@ def generate_feedback_report(
     acq : str, optional
         Acquisition letter (e.g., 'a', 'b'). If provided, uses BIDS acq entity
         in file naming pattern. If None, uses legacy naming without acq.
+    fd_threshold : float, default=0.5
+        Framewise displacement threshold in mm for highlighting excessive motion
+        in the FD timeseries plot.
 
     Returns
     -------
@@ -2199,7 +2327,7 @@ def generate_feedback_report(
     n_volumes_recorded = 0
     if feedback_log.exists():
         df = pd.read_csv(feedback_log, sep='\t')
-        meta_cols = ['volume', 'time', 'is_baseline', 'is_outlier']
+        meta_cols = ['volume', 'time', 'is_baseline', 'is_outlier', 'fd', 'condition']
         mask_cols = [col for col in df.columns if col not in meta_cols]
         n_volumes_recorded = len(df)
         summary_data['Volumes recorded'] = str(n_volumes_recorded)
@@ -2221,8 +2349,51 @@ def generate_feedback_report(
                     summary_data['Status'] = 'PARTIAL (target volume count unknown)'
                 else:
                     summary_data['Status'] = 'PARTIAL (missing volumes detected)'
+
+        # Compute FD statistics
+        if 'fd' in df.columns:
+            fd_values = pd.to_numeric(df['fd'], errors='coerce').values
+            fd_mean = np.nanmean(fd_values)
+            fd_max = np.nanmax(fd_values)
+            fd_above = np.sum(fd_values > fd_threshold)
+            fd_pct = (fd_above / len(fd_values)) * 100 if len(fd_values) > 0 else 0
+            summary_data['Mean FD'] = f'{fd_mean:.3f} mm'
+            summary_data['Max FD'] = f'{fd_max:.3f} mm'
+            summary_data[f'Volumes > {fd_threshold}mm'] = f'{fd_above} ({fd_pct:.1f}%)'
+            # Motion quality rating
+            if fd_pct < 5:
+                summary_data['Motion quality'] = 'Good'
+            elif fd_pct < 15:
+                summary_data['Motion quality'] = 'Moderate'
+            else:
+                summary_data['Motion quality'] = 'High motion'
     else:
         summary_data['Status'] = 'NO DATA'
+
+    # Try to find and parse PsychoPy log for hit counts
+    if acq is not None:
+        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
+        psychopy_pattern = f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_psychopylog.tsv"
+    else:
+        psychopy_pattern = f"{subject}_task-{task}_run-{run:02d}_psychopylog.tsv"
+    psychopy_log = feedback_dir / psychopy_pattern
+
+    if psychopy_log.exists():
+        try:
+            psych_df = pd.read_csv(psychopy_log, sep='\t')
+            hit_cols = [col for col in psych_df.columns if col.endswith('_hits')]
+            total_hits = 0
+            hit_strs = []
+            for col in hit_cols:
+                network_name = col.replace('_hits', '')
+                hits = int(psych_df[col].max())
+                total_hits += hits
+                hit_strs.append(f'{network_name}: {hits}')
+            if hit_strs:
+                summary_data['Network hits'] = ', '.join(hit_strs)
+                summary_data['Total hits'] = str(total_hits)
+        except Exception as e:
+            logger.warning(f"Failed to parse PsychoPy log for hits: {e}")
 
     sections.append({'type': 'summary', 'content': summary_data})
 
@@ -2261,25 +2432,28 @@ def generate_feedback_report(
             'alt': 'Activation timeseries'
         })
 
-    # Baseline distributions
-    if feedback_log.exists() and n_baseline and n_baseline > 0:
-        sections.append({'type': 'heading', 'content': 'Baseline Distributions'})
+    # FD timeseries
+    if feedback_log.exists():
+        sections.append({'type': 'heading', 'content': 'Framewise Displacement'})
 
-        baseline_out = output_dir / "baseline_distributions.png"
-        if overwrite or not baseline_out.exists():
-            logger.info("Generating baseline distributions")
-            plot_baseline_distributions(
+        fd_out = output_dir / "fd_timeseries.png"
+        if overwrite or not fd_out.exists():
+            logger.info("Generating FD timeseries")
+            plot_fd_timeseries(
                 feedback_log_path=feedback_log,
-                out_path=baseline_out,
+                out_path=fd_out,
                 n_baseline=n_baseline,
-                title=f"Baseline Distributions (n={n_baseline})"
+                threshold=fd_threshold,
+                title=f"Framewise Displacement - {subject} (task: {task}, run: {run})"
             )
 
-        sections.append({
-            'type': 'single_image',
-            'path': baseline_out.relative_to(output_dir).as_posix(),
-            'alt': 'Baseline distributions'
-        })
+        if fd_out.exists():
+            sections.append({
+                'type': 'single_image',
+                'path': fd_out.relative_to(output_dir).as_posix(),
+                'alt': 'Framewise displacement timeseries'
+            })
+
 
     # Design matrix
     if design_file.exists():
@@ -2300,12 +2474,18 @@ def generate_feedback_report(
             'alt': 'Design matrix'
         })
 
-    # Generate HTML report
-    html_report = output_dir / f"{subject}_task-{task}_run-{run:02d}_feedback_qc.html"
+    # Generate HTML report with acq entity if provided
+    if acq is not None:
+        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
+        html_report = output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_feedback_qc.html"
+        stage_str = f"Feedback (task: {task}, run: {run}, acq: {acq_str})"
+    else:
+        html_report = output_dir / f"{subject}_task-{task}_run-{run:02d}_feedback_qc.html"
+        stage_str = f"Feedback (task: {task}, run: {run})"
     html = _generate_html_template(
         title=f"Feedback QC - {subject}",
         participant_id=subject,
-        stage=f"Feedback (task: {task}, run: {run})",
+        stage=stage_str,
         sections=sections
     )
     html_report.write_text(html)

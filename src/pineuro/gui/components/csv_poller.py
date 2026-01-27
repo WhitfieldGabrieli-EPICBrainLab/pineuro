@@ -253,3 +253,34 @@ class FeedbackMonitor:
 
         # Call update callback
         self.on_update(volume, mask_activations, motion_params, fd)
+
+
+def get_hits_from_psychopylog(log_path: Path) -> Dict[str, int]:
+    """Read hit counts from last row of psychopylog.tsv.
+
+    The psychopylog.tsv is written per-frame by the ball task and includes
+    columns ending in _hits (e.g., ContA_hits, DefaultA_hits).
+
+    Args:
+        log_path: Path to the psychopylog.tsv file
+
+    Returns:
+        Dict mapping mask name to hit count, or empty dict if file not found/empty.
+    """
+    if not log_path.exists():
+        return {}
+    try:
+        with open(log_path, 'r') as f:
+            lines = f.readlines()
+        if len(lines) < 2:  # Need header + at least one data row
+            return {}
+        header = lines[0].strip().split('\t')
+        last_row = lines[-1].strip().split('\t')
+        hits = {}
+        for i, col in enumerate(header):
+            if col.endswith('_hits') and i < len(last_row):
+                mask_name = col.replace('_hits', '')
+                hits[mask_name] = int(last_row[i])
+        return hits
+    except Exception:
+        return {}

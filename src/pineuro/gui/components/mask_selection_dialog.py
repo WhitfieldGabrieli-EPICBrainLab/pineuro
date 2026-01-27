@@ -35,6 +35,7 @@ class MaskReviewInfo:
     alternative_overlay_paths: Dict[int, Path]  # component_idx -> overlay path
     yeo_overlay_path: Optional[Path]  # Path to Yeo atlas overlay
     accepted: bool = True  # Default to accepted
+    combined_overlay_path: Optional[Path] = None  # Path to combined mask preview (when two components selected)
 
 
 class MaskSelectionDialog:
@@ -145,6 +146,11 @@ class MaskSelectionDialog:
         self._current_reject_network: Optional[str] = None
         self._selections: Dict[str, MaskSelection] = {}
 
+        # Combine mode state (for merging two ICA components)
+        self._combine_mode = False
+        self._combine_checkboxes: Dict[int, ft.Checkbox] = {}  # comp_idx -> checkbox
+        self._combine_preview_container: Optional[ft.Container] = None
+
         # Load existing selections
         existing = load_mask_selections(masks_dir)
         for name, info in self.masks_info.items():
@@ -222,6 +228,15 @@ class MaskSelectionDialog:
                 # Use Yeo overlay if available
                 if info.yeo_overlay_path and info.yeo_overlay_path.exists():
                     overlay_path = info.yeo_overlay_path
+            elif selection and selection.source_type == "ica_combined":
+                # Combined ICA components
+                source_label = "ICA Combined"
+                comp_idx_1 = selection.component_index
+                comp_idx_2 = selection.secondary_component_index
+                component_label = f"IC {comp_idx_1} + IC {comp_idx_2}"
+                # Use combined overlay if available
+                if info.combined_overlay_path and info.combined_overlay_path.exists():
+                    overlay_path = info.combined_overlay_path
             else:
                 source_label = "ICA"
                 comp_idx = selection.component_index if selection else info.current_component
@@ -526,7 +541,17 @@ class MaskSelectionDialog:
         info = self.masks_info[network_name]
         alternatives = info.alternative_components
 
-        # Radio group for alternatives
+        # Reset combine mode state
+        self._combine_checkboxes = {}
+
+        # Combine mode toggle
+        combine_toggle = ft.Switch(
+            label="Combine two components",
+            value=self._combine_mode,
+            on_change=lambda e: self._on_combine_mode_toggled(e, network_name),
+        )
+
+        # Radio group for single-select mode
         self._alternative_selection = ft.RadioGroup(
             content=ft.Column([], spacing=10),
         )
@@ -570,10 +595,21 @@ class MaskSelectionDialog:
             else:
                 corr_color = ft.Colors.RED
 
+            # Create both radio and checkbox for this component
+            radio = ft.Radio(value=f"ica_{comp_idx}")
+            checkbox = ft.Checkbox(
+                value=False,
+                on_change=lambda e, idx=comp_idx: self._on_combine_checkbox_changed(e, network_name, idx),
+            )
+            self._combine_checkboxes[comp_idx] = checkbox
+
+            # Container that switches between radio/checkbox based on combine mode
+            selector = radio if not self._combine_mode else checkbox
+
             item = ft.Container(
                 content=ft.Row(
                     [
-                        ft.Radio(value=f"ica_{comp_idx}"),
+                        selector,
                         ft.Column(
                             [
                                 ft.Text(f"IC {comp_idx}", weight=ft.FontWeight.W_500),
@@ -593,7 +629,81 @@ class MaskSelectionDialog:
             )
             alternative_items.append(item)
 
-        # Add Yeo atlas option - use larger images for better visibility
+        # Add Yeo atlas option (only in single-select mode)
+        yeo_item = self._build_yeo_atlas_option(info) if not self._combine_mode else None
+
+        # Update radio group content
+        self._alternative_selection.content = ft.Column(alternative_items, spacing=5)
+
+        # Combined preview container (shown only in combine mode)
+        self._combine_preview_container = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Divider(),
+                    ft.Text("Combined Mask Preview:", size=12, weight=ft.FontWeight.W_500),
+                    ft.Container(
+                        content=ft.Text(
+                            "Select exactly 2 components above, then click 'Preview Combined'",
+                            color=ft.Colors.GREY_500,
+                            size=12,
+                        ),
+                        height=180,
+                        alignment=ft.Alignment(0, 0),
+                        bgcolor=ft.Colors.GREY_100,
+                        border=ft.border.all(1, ft.Colors.GREY_300),
+                        border_radius=5,
+                    ),
+                ],
+                spacing=8,
+            ),
+            visible=self._combine_mode,
+            padding=ft.padding.only(top=10),
+        )
+
+        # Build the content column
+        content_items = [
+            ft.Container(
+                content=ft.Row(
+                    [
+                        combine_toggle,
+                        ft.Container(expand=True),
+                        ft.Text(
+                            "Combine two ICA components when a network is split",
+                            size=11,
+                            color=ft.Colors.GREY_600,
+                            italic=True,
+                        ),
+                    ],
+                ),
+                padding=ft.padding.only(bottom=10),
+                border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.GREY_300)),
+            ),
+            # Combined preview at the top (visible only in combine mode)
+            self._combine_preview_container,
+            ft.Text(
+                "Select two components to combine:" if self._combine_mode else "Select an alternative mask:",
+                size=13,
+                color=ft.Colors.GREY_700,
+            ),
+            self._alternative_selection,
+        ]
+
+        if yeo_item and not self._combine_mode:
+            content_items.append(yeo_item)
+
+        return ft.Container(
+            content=ft.Column(
+                content_items,
+                spacing=10,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            width=700,
+            height=650,
+            padding=10,
+        )
+
+    def _build_yeo_atlas_option(self, info: MaskReviewInfo) -> ft.Control:
+        """Build the Yeo atlas fallback option for Stage 2."""
         yeo_overlay: ft.Control
         if info.yeo_overlay_path and info.yeo_overlay_path.exists():
             yeo_overlay = self._create_image(info.yeo_overlay_path, height=180, width=500)
@@ -606,7 +716,7 @@ class MaskSelectionDialog:
                 content=ft.Text("No preview", size=12, color=ft.Colors.GREY_500),
             )
 
-        yeo_item = ft.Container(
+        return ft.Container(
             content=ft.Column(
                 [
                     ft.Divider(),
@@ -636,39 +746,184 @@ class MaskSelectionDialog:
             ),
             padding=10,
         )
-        alternative_items.append(yeo_item)
 
-        # Update radio group content
-        self._alternative_selection.content = ft.Column(alternative_items, spacing=5)
+    def _on_combine_mode_toggled(self, e, network_name: str):
+        """Handle combine mode toggle."""
+        self._combine_mode = e.control.value
+        # Clear any checkbox selections when toggling
+        for checkbox in self._combine_checkboxes.values():
+            checkbox.value = False
+        # Refresh the stage 2 dialog
+        if self._dialog:
+            self._dialog.open = False
+            self.page.update()
+        self._show_stage2(network_name)
 
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(
-                        "Select an alternative mask for this network:",
-                        size=13,
-                        color=ft.Colors.GREY_700,
-                    ),
-                    self._alternative_selection,
-                ],
-                spacing=10,
-                scroll=ft.ScrollMode.AUTO,
-            ),
-            width=700,
-            height=600,
-            padding=10,
-        )
+    def _on_combine_checkbox_changed(self, e, network_name: str, comp_idx: int):
+        """Handle checkbox change in combine mode."""
+        # Count how many are selected
+        selected = [idx for idx, cb in self._combine_checkboxes.items() if cb.value]
+
+        # Enforce max 2 selections
+        if len(selected) > 2:
+            # Uncheck the one that was just checked
+            self._combine_checkboxes[comp_idx].value = False
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Select exactly 2 components to combine."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        self.page.update()
+
+    def _get_selected_combine_components(self) -> List[int]:
+        """Get list of selected component indices in combine mode."""
+        return [idx for idx, cb in self._combine_checkboxes.items() if cb.value]
 
     def _build_stage2_actions(self) -> List[ft.Control]:
         """Build action buttons for Stage 2."""
-        return [
+        actions = [
             ft.TextButton("Back", on_click=self._on_back_clicked),
+        ]
+
+        if self._combine_mode:
+            actions.append(
+                ft.OutlinedButton(
+                    "Preview Combined",
+                    icon=ft.Icons.PREVIEW,
+                    on_click=self._on_preview_combined_clicked,
+                )
+            )
+
+        actions.append(
             ft.FilledButton(
                 "Select",
                 icon=ft.Icons.CHECK,
                 on_click=self._on_select_alternative_clicked,
-            ),
-        ]
+            )
+        )
+
+        return actions
+
+    def _on_preview_combined_clicked(self, e):
+        """Handle Preview Combined button - generate and show preview of combined mask."""
+        if not self._current_reject_network:
+            logger.warning("No current reject network set")
+            return
+
+        selected = self._get_selected_combine_components()
+        if len(selected) != 2:
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Select exactly 2 components to preview."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        # Check required files exist
+        if not self.ref_file or not Path(self.ref_file).exists():
+            error_msg = f"BOLD reference file not found: {self.ref_file}"
+            logger.error(error_msg)
+            if self.on_log:
+                self.on_log(f"[ERROR] {error_msg}")
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Cannot preview: BOLD reference file not found"),
+                bgcolor=ft.Colors.RED,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        network_name = self._current_reject_network
+        comp_idx_1, comp_idx_2 = selected[0], selected[1]
+
+        if self.on_log:
+            self.on_log(f"[INFO] Generating preview of combined IC {comp_idx_1} + IC {comp_idx_2}...")
+
+        try:
+            from pineuro.mask_extraction import combine_ica_components
+            from pineuro import qc
+
+            # Generate temporary combined mask
+            temp_dir = self.mask_extraction_dir / "qc" / "temp"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_mask = temp_dir / f"{self.participant_id}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
+
+            logger.info(f"Generating combined mask: {temp_mask}")
+            combine_ica_components(
+                components_file=self.components_file,
+                component_idx_1=comp_idx_1,
+                component_idx_2=comp_idx_2,
+                output_file=temp_mask,
+                threshold=self.threshold,
+                overwrite=True,
+            )
+
+            # Generate overlay
+            logger.info(f"Generating overlay with ref_file: {self.ref_file}")
+            overlay_path = qc.generate_mask_overlay(
+                mask_path=temp_mask,
+                ref_path=self.ref_file,
+                output_dir=temp_dir,
+                network_name=f"{network_name}_combined",
+                atlas_path=self.yeo_subject_space,
+                n_yeo=self.n_yeo,
+                overwrite=True,
+            )
+
+            logger.info(f"Overlay generated: {overlay_path}")
+
+            # Update the preview container
+            if overlay_path and overlay_path.exists():
+                info = self.masks_info[network_name]
+                info.combined_overlay_path = overlay_path
+
+                # Update the preview container content
+                if self._combine_preview_container:
+                    new_content = ft.Column(
+                        [
+                            ft.Divider(),
+                            ft.Row(
+                                [
+                                    ft.Text("Combined Mask Preview:", size=12, weight=ft.FontWeight.W_500),
+                                    ft.Container(expand=True),
+                                    ft.Text(
+                                        f"IC {comp_idx_1} + IC {comp_idx_2}",
+                                        size=12,
+                                        color=ft.Colors.BLUE,
+                                    ),
+                                ],
+                            ),
+                            ft.Container(
+                                content=self._create_image(overlay_path, height=180, width=500),
+                                border=ft.border.all(1, ft.Colors.BLUE_300),
+                                border_radius=5,
+                            ),
+                        ],
+                        spacing=8,
+                    )
+                    self._combine_preview_container.content = new_content
+                    self._combine_preview_container.update()
+
+                if self.on_log:
+                    self.on_log(f"[SUCCESS] Combined mask preview generated")
+            else:
+                error_msg = f"Overlay not generated or not found: {overlay_path}"
+                logger.error(error_msg)
+                if self.on_log:
+                    self.on_log(f"[ERROR] {error_msg}")
+
+        except Exception as ex:
+            logger.error(f"Failed to generate combined preview: {ex}")
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text(f"Failed to generate preview: {ex}"),
+                bgcolor=ft.Colors.RED,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
 
     def _on_accept_clicked(self, network_name: str):
         """Handle accept button click for a mask."""
@@ -712,46 +967,87 @@ class MaskSelectionDialog:
 
     def _on_select_alternative_clicked(self, e):
         """Handle Select button in Stage 2 - apply alternative selection."""
-        if not self._current_reject_network or not self._alternative_selection.value:
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text("Please select an alternative."),
-                bgcolor=ft.Colors.ORANGE,
-            )
-            self.page.snack_bar.open = True
-            self.page.update()
+        network_name = self._current_reject_network
+        if not network_name:
             return
 
-        network_name = self._current_reject_network
-        selection_value = self._alternative_selection.value
+        # Handle combine mode
+        if self._combine_mode:
+            selected = self._get_selected_combine_components()
+            if len(selected) != 2:
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text("Select exactly 2 components to combine."),
+                    bgcolor=ft.Colors.ORANGE,
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+                return
 
-        if selection_value == "yeo_atlas":
-            # User chose Yeo atlas fallback
-            self._selections[network_name] = MaskSelection(
-                network_name=network_name,
-                source_type="yeo_atlas",
-                component_index=None,
-                correlation=0.0,
-                selection_reason="yeo_fallback",
-            )
-        elif selection_value.startswith("ica_"):
-            # User chose a different ICA component
-            comp_idx = int(selection_value.split("_")[1])
+            comp_idx_1, comp_idx_2 = selected[0], selected[1]
             info = self.masks_info[network_name]
 
-            # Find correlation for this component
-            corr = 0.0
+            # Find correlations for both components
+            corr_1, corr_2 = 0.0, 0.0
             for idx, c in info.alternative_components:
-                if idx == comp_idx:
-                    corr = c
-                    break
+                if idx == comp_idx_1:
+                    corr_1 = c
+                elif idx == comp_idx_2:
+                    corr_2 = c
 
             self._selections[network_name] = MaskSelection(
                 network_name=network_name,
-                source_type="ica",
-                component_index=comp_idx,
-                correlation=corr,
-                selection_reason="manual",
+                source_type="ica_combined",
+                component_index=comp_idx_1,
+                correlation=corr_1,
+                selection_reason="manual_combined",
+                secondary_component_index=comp_idx_2,
+                secondary_correlation=corr_2,
             )
+
+            if self.on_log:
+                self.on_log(f"[INFO] Selected combined IC {comp_idx_1} + IC {comp_idx_2} for {network_name}")
+
+        else:
+            # Single-select mode (original logic)
+            if not self._alternative_selection.value:
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text("Please select an alternative."),
+                    bgcolor=ft.Colors.ORANGE,
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+                return
+
+            selection_value = self._alternative_selection.value
+
+            if selection_value == "yeo_atlas":
+                # User chose Yeo atlas fallback
+                self._selections[network_name] = MaskSelection(
+                    network_name=network_name,
+                    source_type="yeo_atlas",
+                    component_index=None,
+                    correlation=0.0,
+                    selection_reason="yeo_fallback",
+                )
+            elif selection_value.startswith("ica_"):
+                # User chose a different ICA component
+                comp_idx = int(selection_value.split("_")[1])
+                info = self.masks_info[network_name]
+
+                # Find correlation for this component
+                corr = 0.0
+                for idx, c in info.alternative_components:
+                    if idx == comp_idx:
+                        corr = c
+                        break
+
+                self._selections[network_name] = MaskSelection(
+                    network_name=network_name,
+                    source_type="ica",
+                    component_index=comp_idx,
+                    correlation=corr,
+                    selection_reason="manual",
+                )
 
         # Mark as accepted with new selection
         self.masks_info[network_name].accepted = True
@@ -1057,6 +1353,8 @@ class MaskSelectionDialog:
                 if (
                     selection.source_type != old.source_type
                     or selection.component_index != old.component_index
+                    # Also check secondary_component_index for combined selections
+                    or selection.secondary_component_index != old.secondary_component_index
                 ):
                     modified_networks.append(name)
             else:

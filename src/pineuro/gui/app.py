@@ -149,7 +149,7 @@ class PyrtnfApp:
         return ft.GridView(
             controls=cards,
             runs_count=3,
-            max_extent=400,
+            max_extent=500,
             child_aspect_ratio=1.2,
             spacing=10,
             run_spacing=10,
@@ -172,21 +172,21 @@ class PyrtnfApp:
                     [
                         ft.Text(
                             study_meta.name,
-                            size=18,
+                            size=24,
                             weight=ft.FontWeight.BOLD,
                         ),
                         ft.Divider(),
                         ft.Container(
                             content=ft.Text(
                                 truncate_text(study_meta.description, 80),
-                                size=12,
+                                size=16,
                                 color=ft.Colors.GREY_700,
                             ),
-                            height=40,
+                            height=60,
                         ),
                         ft.Text(
                             f"Modified: {format_timestamp(study_meta.modified)}",
-                            size=10,
+                            size=14,
                             color=ft.Colors.GREY_500,
                         ),
                         ft.Divider(),
@@ -194,19 +194,19 @@ class PyrtnfApp:
                             [
                                 ft.IconButton(
                                     icon=ft.icons.Icons.EDIT,
-                                    icon_size=20,
+                                    icon_size=24,
                                     tooltip="Edit Study Configuration",
                                     on_click=lambda _, name=study_meta.name: self.show_study_editor(name),
                                 ),
                                 ft.IconButton(
                                     icon=ft.icons.Icons.CONTENT_COPY,
-                                    icon_size=20,
+                                    icon_size=24,
                                     tooltip="Duplicate",
                                     on_click=lambda _, name=study_meta.name: self._duplicate_study(name),
                                 ),
                                 ft.IconButton(
                                     icon=ft.icons.Icons.DELETE_OUTLINE,
-                                    icon_size=20,
+                                    icon_size=24,
                                     tooltip="Delete",
                                     on_click=lambda _, name=study_meta.name: self._confirm_delete_study(name),
                                 ),
@@ -215,9 +215,9 @@ class PyrtnfApp:
                             spacing=5,
                         ),
                     ],
-                    spacing=8,
+                    spacing=12,
                 ),
-                padding=15,
+                padding=20,
                 ink=True,
                 on_click=lambda _, name=study_meta.name: self._prompt_start_session(name),
             ),

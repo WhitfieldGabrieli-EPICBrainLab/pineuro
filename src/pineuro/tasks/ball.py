@@ -926,7 +926,17 @@ class BallTask(BaseTask):
 
                 # Shrink circle to increase difficulty (configurable reduction per hit, min 0.03)
                 # Makes it progressively harder to hit the same target repeatedly
-                self.circle_radii[i] = max(self.circle_radii[i] * self.circle_shrink_factor, 0.03)
+                # Move circle further from ball so inner edge recedes (harder to reach)
+                old_radius = self.circle_radii[i]
+                new_radius = max(old_radius * self.circle_shrink_factor, 0.03)
+                radius_reduction = old_radius - new_radius
+
+                # Move circle center further from ball (away from screen center)
+                # This makes hit detection require more ball travel distance
+                self.circle_positions[i] += self.network_directions[i] * radius_reduction
+                self.circle_radii[i] = new_radius
+
+                self.circles[i].pos = (0, self.circle_positions[i])
                 self.circles[i].radius = self.circle_radii[i]
 
                 return True

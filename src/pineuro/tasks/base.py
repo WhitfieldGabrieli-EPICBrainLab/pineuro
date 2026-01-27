@@ -174,6 +174,18 @@ class BaseTask(ABC):
         if not hasattr(self, 'win'):
             return
 
+        # Frame skipping: only capture every Nth frame to reduce overhead
+        # unless force=True (for important screens like instructions)
+        if not force:
+            self._mirror_frame_counter += 1
+            if self._mirror_frame_counter < self._mirror_frame_skip:
+                return
+            self._mirror_frame_counter = 0
+
+        frame = None
+        frame_resized = None
+        buffer = None
+
         try:
             import io
             import base64
@@ -194,6 +206,14 @@ class BaseTask(ABC):
             self._mirror_callback({'type': 'screenshot', 'image': f'data:image/jpeg;base64,{img_base64}'})
         except Exception as e:
             logger.debug(f"Screenshot capture failed: {e}")
+        finally:
+            # Clean up PIL Images and BytesIO to prevent memory leaks
+            if buffer is not None:
+                buffer.close()
+            if frame_resized is not None:
+                frame_resized.close()
+            if frame is not None:
+                frame.close()
 
     def _update_data(
         self,

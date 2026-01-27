@@ -12,6 +12,7 @@ This package contains reusable components and utilities for the GUI:
 - RunSelectionDialog: Dialog for selecting runs for preprocessing
 - MaskSelectionDialog: Dialog for reviewing and customizing network masks
 - VisitSelectionDialog: Dialog for selecting/creating visits in multi-visit studies
+- FeedbackSummaryDialog: Post-run summary with hit counts and motion stats
 """
 
 from .pipeline_runner import PipelineRunner
@@ -24,6 +25,7 @@ from .collection_progress import CollectionProgressPanel
 from .run_selection_dialog import RunSelectionDialog, RunInfo
 from .mask_selection_dialog import MaskSelectionDialog, MaskReviewInfo
 from .visit_selection_dialog import VisitSelectionDialog
+from .feedback_summary import FeedbackSummaryDialog, FeedbackSummaryData, compute_feedback_summary
 
 __all__ = [
     "PipelineRunner",
@@ -42,4 +44,7 @@ __all__ = [
     "MaskSelectionDialog",
     "MaskReviewInfo",
     "VisitSelectionDialog",
+    "FeedbackSummaryDialog",
+    "FeedbackSummaryData",
+    "compute_feedback_summary",
 ]

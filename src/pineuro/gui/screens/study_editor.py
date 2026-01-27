@@ -126,6 +126,7 @@ class StudyEditorScreen:
                 "n_baseline": 25,
                 "n_volumes": 150,
                 "use_efficiency_weights": True,
+                "fd_threshold": 0.5,
             },
             "localizer_task": {
                 # Localizer task parameters (when not rest)
@@ -163,6 +164,7 @@ class StudyEditorScreen:
             },
             "sham": {
                 "enabled": False,
+                "blind_mode": False,  # Hide network names in GUI (show Target/Non-Target)
                 "delivery_method": "alternative_masks",
                 "sham_mask_mode": "hemisphere_split",
                 "hemisphere_network": "SomMotA",
@@ -381,6 +383,15 @@ class StudyEditorScreen:
             on_change=lambda _: self._validate_field("n_baseline", self.n_baseline_field, validate_positive_int),
         )
 
+        # FD threshold for motion monitoring
+        self.fd_threshold_field = ft.TextField(
+            label="FD threshold (mm)",
+            value=str(config.get("feedback", {}).get("fd_threshold", 0.5)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Frames exceeding this will be flagged in real-time",
+            on_change=lambda _: self._validate_field("fd_threshold", self.fd_threshold_field, validate_positive_number),
+        )
+
         # Create dynamic task parameter fields for current feedback task type
         self._create_task_parameter_fields()
 
@@ -431,6 +442,11 @@ class StudyEditorScreen:
             label="Enable Sham/Control Conditions",
             value=sham_config.get("enabled", False),
             on_change=self._on_sham_enabled_changed,
+        )
+
+        self.blind_mode_checkbox = ft.Checkbox(
+            label="Enable Blind Mode (show Target/Non-Target instead of network names)",
+            value=sham_config.get("blind_mode", False),
         )
 
         self.sham_delivery_method_radio = ft.RadioGroup(
@@ -1299,6 +1315,7 @@ class StudyEditorScreen:
                 ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
                 self.max_feedback_runs_field,
                 self.n_baseline_field,
+                self.fd_threshold_field,
                 ft.Text(
                     "Note: Transfer runs are optional (configure in task-specific parameters below)",
                     size=12,
@@ -1488,6 +1505,7 @@ class StudyEditorScreen:
                     color=ft.Colors.GREY_600,
                 ),
                 self.sham_enabled_checkbox,
+                self.blind_mode_checkbox,
                 self.sham_config_container,
                 self.sham_alternative_section,
                 self.sham_replay_section,
@@ -1792,6 +1810,10 @@ class StudyEditorScreen:
                 participant_id_field.update()
                 return
 
+            # Sync form values to study_config before starting session
+            # This ensures the participant workflow gets current form values
+            self._update_study_from_form()
+
             self.page.pop_dialog()
 
             logger.info(f"Starting session for participant: {participant_id}")
@@ -1903,9 +1925,13 @@ class StudyEditorScreen:
         try:
             config["task"]["max_feedback_runs"] = int(self.max_feedback_runs_field.value)
 
-            # Save n_baseline to feedback config (used by pipeline)
+            # Save n_baseline, n_volumes, and fd_threshold to feedback config (used by pipeline)
             n_baseline = int(self.n_baseline_field.value)
             config["feedback"]["n_baseline"] = n_baseline
+            # Sync n_volumes from scan config to feedback config
+            config["feedback"]["n_volumes"] = int(self.feedback_n_volumes_field.value)
+            # FD threshold for motion monitoring
+            config["feedback"]["fd_threshold"] = float(self.fd_threshold_field.value)
             # Also save to task-specific config for reference
             if task_type not in config["task"]:
                 config["task"][task_type] = {}
@@ -2006,6 +2032,7 @@ class StudyEditorScreen:
         if "sham" not in config:
             config["sham"] = {}
         config["sham"]["enabled"] = self.sham_enabled_checkbox.value
+        config["sham"]["blind_mode"] = self.blind_mode_checkbox.value
         config["sham"]["delivery_method"] = self.sham_delivery_method_radio.value
         # Save sham mask mode and related settings
         config["sham"]["sham_mask_mode"] = self.sham_mask_mode_radio.value

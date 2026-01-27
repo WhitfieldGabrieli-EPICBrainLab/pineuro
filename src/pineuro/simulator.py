@@ -155,7 +155,7 @@ class DicomSimulator:
         Parameters
         ----------
         deadline : float
-            Absolute time (from time.time()) to sleep until.
+            Absolute time (from time.monotonic()) to sleep until.
         stop_event : threading.Event, optional
             If provided, check this event periodically and return early if set.
 
@@ -164,7 +164,7 @@ class DicomSimulator:
         float
             Actual sleep duration (may be 0 if deadline already passed).
         """
-        now = time.time()
+        now = time.monotonic()
         sleep_duration = deadline - now
         if sleep_duration > 0:
             if stop_event is not None:
@@ -248,7 +248,7 @@ class DicomSimulator:
 
         # Set start time if not already set (coordinator may set it earlier)
         if self.start_time is None:
-            self.start_time = time.time()
+            self.start_time = time.monotonic()
 
         volumes_copied = 0
         for i, src_file in enumerate(files_to_send):
@@ -272,12 +272,12 @@ class DicomSimulator:
 
             # Copy the file
             dst_file = self.target_dir / src_file.name
-            copy_start = time.time()
+            copy_start = time.monotonic()
             shutil.copy2(src_file, dst_file)
-            copy_duration = time.time() - copy_start
+            copy_duration = time.monotonic() - copy_start
             volumes_copied += 1
 
-            actual_elapsed = time.time() - self.start_time
+            actual_elapsed = time.monotonic() - self.start_time
             logger.debug(
                 f"Copied volume {i+1}/{n_total}: {src_file.name} "
                 f"(expected={expected_time:.3f}s, actual={actual_elapsed:.3f}s, "
@@ -331,25 +331,25 @@ class DicomSimulator:
         print(f"{'='*60}\n")
 
         # Set start time
-        self.start_time = time.time()
-        
+        self.start_time = time.monotonic()
+
         for i, src_file in enumerate(files_to_send):
             # Compute deadline for this volume
             expected_time = (i + 1) * self.delay
             deadline = self.start_time + expected_time
-            
+
             # Sleep until deadline
             self._sleep_until_deadline(deadline)
 
             dst_file = self.target_dir / src_file.name
             shutil.copy2(src_file, dst_file)
-            
-            actual_elapsed = time.time() - self.start_time
+
+            actual_elapsed = time.monotonic() - self.start_time
             drift = actual_elapsed - expected_time
             drift_str = f"+{drift:.3f}" if drift >= 0 else f"{drift:.3f}"
             print(f"[{actual_elapsed:7.2f}s] Volume {i+1:4d}/{n_total}: {src_file.name} (drift: {drift_str}s)")
 
-        total_time = time.time() - self.start_time
+        total_time = time.monotonic() - self.start_time
         expected_total = n_total * self.delay
         print(f"\n{'='*60}")
         print(f"Simulation complete. Total time: {total_time:.1f}s (expected: {expected_total:.1f}s)")

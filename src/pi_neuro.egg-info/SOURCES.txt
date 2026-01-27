@@ -29,6 +29,7 @@ src/pineuro/gui/components/activation_plot.py
 src/pineuro/gui/components/collection_progress.py
 src/pineuro/gui/components/csv_poller.py
 src/pineuro/gui/components/fd_plot.py
+src/pineuro/gui/components/feedback_summary.py
 src/pineuro/gui/components/mask_selection_dialog.py
 src/pineuro/gui/components/pipeline_runner.py
 src/pineuro/gui/components/qc_plot_viewer.py

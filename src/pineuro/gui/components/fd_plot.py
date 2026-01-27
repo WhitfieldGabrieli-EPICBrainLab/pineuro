@@ -20,6 +20,7 @@ try:
     LineChartDataPoint = fch.LineChartDataPoint
     ChartGridLines = fch.ChartGridLines
     ChartAxis = fch.ChartAxis
+    ChartCirclePoint = fch.ChartCirclePoint
     CHARTS_AVAILABLE = True
 except ImportError:
     # Fallback: charts not available
@@ -28,12 +29,18 @@ except ImportError:
     LineChartDataPoint = None
     ChartGridLines = None
     ChartAxis = None
+    ChartCirclePoint = None
     CHARTS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 # Colors
 FD_LINE_COLOR = ft.Colors.ORANGE_500
+THRESHOLD_LINE_COLOR = ft.Colors.RED_600
+THRESHOLD_FILL_COLOR = ft.Colors.with_opacity(0.15, ft.Colors.RED_600)
+
+# Default threshold value
+DEFAULT_THRESHOLD = 0.5  # mm
 
 
 @dataclass
@@ -79,6 +86,30 @@ class FDData:
             return 0.0
         return max(self.fd_values)
 
+    def count_above_threshold(self, threshold: float = 0.5) -> int:
+        """Count frames with FD above threshold.
+
+        Args:
+            threshold: FD threshold in mm
+
+        Returns:
+            Number of frames exceeding threshold
+        """
+        return sum(1 for fd in self.fd_values if fd > threshold)
+
+    def get_pct_above_threshold(self, threshold: float = 0.5) -> float:
+        """Get percentage of frames above threshold.
+
+        Args:
+            threshold: FD threshold in mm
+
+        Returns:
+            Percentage (0-100) of frames exceeding threshold
+        """
+        if not self.fd_values:
+            return 0.0
+        return (self.count_above_threshold(threshold) / len(self.fd_values)) * 100
+
 
 class FDPlot:
     """Real-time framewise displacement timeseries plot using Flet LineChart.
@@ -92,29 +123,35 @@ class FDPlot:
         self,
         n_volumes: int,
         height: float = 120,
+        threshold: float = DEFAULT_THRESHOLD,
     ):
         """Initialize the FD plot.
 
         Args:
             n_volumes: Total expected number of volumes (fixes x-axis range)
             height: Chart height in pixels
+            threshold: FD threshold in mm for flagging (default: 0.5)
         """
         self.n_volumes = n_volumes
         self.height = height
+        self.threshold = threshold
 
         # Data storage
         self.data = FDData()
 
-        # Y-axis range (dynamic, starts at 0-1)
+        # Y-axis range (dynamic, starts at threshold * 1.2)
         self.y_min = 0.0
-        self.y_max = 1.0
+        self.y_max = max(1.0, threshold * 1.2)
 
         # Chart control (created in build())
         self.chart: Optional[LineChart] = None
         self._data_series: List[LineChartData] = []
 
+        # Summary text control (created in build())
+        self._summary_text: Optional[ft.Text] = None
+
     def _create_data_series(self) -> List[LineChartData]:
-        """Create LineChartData objects for FD line.
+        """Create LineChartData objects for FD line and threshold reference.
 
         Returns:
             List of LineChartData controls
@@ -124,14 +161,28 @@ class FDPlot:
             return []
 
         series = []
+        min_x, max_x, _, _ = self._calculate_axis_range()
 
-        # FD timeseries line
+        # 1. FD timeseries line with threshold shading and point markers
         fd_points = []
         for i in range(len(self.data.volumes)):
+            fd_value = self.data.fd_values[i]
+
+            # Add point marker for frames above threshold
+            point_marker = None
+            if ChartCirclePoint is not None and fd_value > self.threshold:
+                point_marker = ChartCirclePoint(
+                    color=THRESHOLD_LINE_COLOR,
+                    radius=4,
+                    stroke_color=ft.Colors.RED_900,
+                    stroke_width=1,
+                )
+
             fd_points.append(
                 LineChartDataPoint(
                     x=float(self.data.volumes[i]),
-                    y=self.data.fd_values[i],
+                    y=fd_value,
+                    point=point_marker,
                 )
             )
 
@@ -142,6 +193,23 @@ class FDPlot:
                 stroke_width=2,
                 curved=False,  # Keep FD line sharp for quick motion detection
                 rounded_stroke_cap=True,
+                below_line_bgcolor=THRESHOLD_FILL_COLOR,
+                below_line_cutoff_y=self.threshold,
+            )
+        )
+
+        # 2. Threshold reference line (dashed horizontal line)
+        threshold_points = [
+            LineChartDataPoint(x=float(min_x), y=self.threshold),
+            LineChartDataPoint(x=float(max_x), y=self.threshold),
+        ]
+        series.append(
+            LineChartData(
+                points=threshold_points,
+                color=THRESHOLD_LINE_COLOR,
+                stroke_width=1.5,
+                dash_pattern=[5, 5],
+                curved=False,
             )
         )
 
@@ -157,12 +225,16 @@ class FDPlot:
         min_x = 1
         max_x = self.n_volumes
 
-        # Y axis: dynamic based on data
+        # Y axis: dynamic based on data, but always show threshold with padding
         min_y = 0.0
-        max_y = max(self.y_max, self.data.get_max_fd() * 1.2)
+        data_max = self.data.get_max_fd() if self.data.fd_values else 0.0
+        max_y = max(
+            self.threshold * 1.2,  # At least threshold + 20%
+            data_max * 1.2,
+        )
 
-        # Ensure reasonable minimum y_max
-        max_y = max(max_y, 0.5)
+        # Ensure reasonable minimum y_max (slightly above threshold)
+        max_y = max(max_y, self.threshold + 0.1)
 
         return (min_x, max_x, min_y, max_y)
 
@@ -170,7 +242,7 @@ class FDPlot:
         """Build the chart control.
 
         Returns:
-            Container with chart and legend
+            Container with chart, legend, and summary
         """
         # Check if LineChart is available
         if LineChart is None:
@@ -220,11 +292,54 @@ class FDPlot:
             expand=True,
         )
 
+        # Create summary text for threshold exceedances
+        self._summary_text = ft.Text(
+            f"0 frames > {self.threshold}mm (0.0%)",
+            size=11,
+            color=ft.Colors.GREY_600,
+        )
+
+        # Create legend row
+        legend = ft.Row(
+            [
+                # FD line indicator
+                ft.Row(
+                    [
+                        ft.Container(width=20, height=3, bgcolor=FD_LINE_COLOR, border_radius=2),
+                        ft.Text("FD", size=11),
+                    ],
+                    spacing=4,
+                ),
+                # Threshold indicator
+                ft.Row(
+                    [
+                        ft.Container(
+                            width=20,
+                            height=0,
+                            border=ft.border.only(top=ft.BorderSide(1.5, THRESHOLD_LINE_COLOR)),
+                        ),
+                        ft.Text(f"Threshold ({self.threshold}mm)", size=11),
+                    ],
+                    spacing=4,
+                ),
+                # Summary
+                self._summary_text,
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            spacing=15,
+        )
+
         return ft.Container(
-            content=ft.Container(
-                content=self.chart,
-                height=self.height,
-                expand=True,
+            content=ft.Column(
+                [
+                    ft.Container(
+                        content=self.chart,
+                        height=self.height,
+                        expand=True,
+                    ),
+                    legend,
+                ],
+                spacing=5,
             ),
             padding=10,
         )
@@ -254,8 +369,22 @@ class FDPlot:
         self.chart.min_y = min_y
         self.chart.max_y = max_y
 
+        # Update summary text
+        if self._summary_text is not None:
+            n_above = self.data.count_above_threshold(self.threshold)
+            pct_above = self.data.get_pct_above_threshold(self.threshold)
+            self._summary_text.value = f"{n_above} frames > {self.threshold}mm ({pct_above:.1f}%)"
+
+            # Change color to red if there are frames above threshold
+            if n_above > 0:
+                self._summary_text.color = THRESHOLD_LINE_COLOR
+            else:
+                self._summary_text.color = ft.Colors.GREY_600
+
         try:
             self.chart.update()
+            if self._summary_text is not None:
+                self._summary_text.update()
         except Exception as e:
             logger.debug(f"Chart update failed (may be expected during shutdown): {e}")
 

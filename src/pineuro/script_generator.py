@@ -334,7 +334,20 @@ def _generate_selection_code(
     # so running the script fresh gives auto-selected ICA components
     selection_defs = []
     for name, sel in manual_selections.items():
-        selection_defs.append(f'''        #     "{name}": MaskSelection(
+        if sel.source_type == "ica_combined":
+            # Combined ICA selection - include secondary component
+            selection_defs.append(f'''        #     "{name}": MaskSelection(
+        #         network_name="{sel.network_name}",
+        #         source_type="{sel.source_type}",
+        #         component_index={sel.component_index},
+        #         correlation={sel.correlation},
+        #         selection_reason="{sel.selection_reason}",
+        #         secondary_component_index={sel.secondary_component_index},
+        #         secondary_correlation={sel.secondary_correlation},
+        #     ),''')
+        else:
+            # Single ICA or Yeo atlas selection
+            selection_defs.append(f'''        #     "{name}": MaskSelection(
         #         network_name="{sel.network_name}",
         #         source_type="{sel.source_type}",
         #         component_index={sel.component_index},
@@ -375,6 +388,8 @@ def _generate_selection_code(
         #     print(f"  {{name}}: {{selection.source_type}}", end="")
         #     if selection.source_type == "ica":
         #         print(f" (IC {{selection.component_index}}, r={{selection.correlation:.2f}})")
+        #     elif selection.source_type == "ica_combined":
+        #         print(f" (IC {{selection.component_index}} + IC {{selection.secondary_component_index}})")
         #     else:
         #         print(" (Yeo atlas fallback)")
         #
