@@ -117,6 +117,7 @@ class StudyEditorScreen:
             "mask": {
                 "n_yeo": 17,
                 "yeo_targets": ["ContA", "DefaultA"],
+                "n_components": 15,  # Reduced from 20 for faster ICA (~50% speedup)
                 "smooth_fwhm": 5.0,
                 "highpass": 0.01,
                 "lowpass": None,
@@ -315,8 +316,8 @@ class StudyEditorScreen:
                 ft.Radio(value="17", label="17 Networks"),
             ]),
             value=str(config["mask"]["n_yeo"]),
+            on_change=self._on_n_yeo_changed,
         )
-        self.n_yeo_radio.on_change = self._on_n_yeo_changed
 
         # Network selection dropdowns (replacing checkboxes)
         # Get current targets from config
@@ -325,13 +326,13 @@ class StudyEditorScreen:
         second_network = yeo_targets[1] if len(yeo_targets) > 1 else None
 
         self.first_network_dropdown = ft.Dropdown(
-            label="First Network (top of ball task)",
+            label="First Network",
             options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
             value=first_network,
         )
 
         self.second_network_dropdown = ft.Dropdown(
-            label="Second Network (bottom of ball task)",
+            label="Second Network",
             options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
             value=second_network,
         )
@@ -360,7 +361,6 @@ class StudyEditorScreen:
             ],
             value=config["task"].get("task_type", "ball"),
         )
-        # Set event handler as property (not in constructor)
         self.task_type_dropdown.on_change = self._on_task_type_changed
 
         self.max_feedback_runs_field = ft.TextField(
@@ -455,8 +455,8 @@ class StudyEditorScreen:
                 ft.Radio(value="replay", label="Replay Previous Participant"),
             ]),
             value=sham_config.get("delivery_method", "alternative_masks"),
+            on_change=self._on_sham_method_changed,
         )
-        self.sham_delivery_method_radio.on_change = self._on_sham_method_changed
 
         # Sham mask mode radio (hemisphere_split vs two_networks)
         self.sham_mask_mode_radio = ft.RadioGroup(
@@ -465,8 +465,8 @@ class StudyEditorScreen:
                 ft.Radio(value="two_networks", label="Two Distinct Networks"),
             ]),
             value=sham_config.get("sham_mask_mode", "hemisphere_split"),
+            on_change=self._on_sham_mask_mode_changed,
         )
-        self.sham_mask_mode_radio.on_change = self._on_sham_mask_mode_changed
 
         # Hemisphere split controls
         self.sham_hemisphere_network_dropdown = ft.Dropdown(
@@ -717,10 +717,11 @@ class StudyEditorScreen:
 
     def _create_task_parameter_fields(self):
         """Create form fields for current feedback task type's parameters."""
-        task_type = self.task_type_dropdown.value
+        # Read from config (source of truth) rather than dropdown
+        config = self.study_config.session_config
+        task_type = config["task"].get("task_type", "ball")
         metadata = get_task_metadata(task_type)
 
-        config = self.study_config.session_config
         task_config = config["task"].get(task_type, {})
 
         self.task_param_fields.clear()
@@ -772,53 +773,79 @@ class StudyEditorScreen:
             )
 
     def _on_task_type_changed(self, e):
-        """Handle feedback task type dropdown change (dynamic tab rebuild)."""
-        task_type = self.task_type_dropdown.value
+        """Handle feedback task type dropdown change.
+
+        Updates network dropdown visibility and task-specific parameters
+        without rebuilding tabs (which would corrupt field values).
+        """
+        task_type = e.control.value if e and hasattr(e, 'control') else self.task_type_dropdown.value
         logger.info(f"Feedback task type changed to: {task_type}")
+
+        # Store task type in config as source of truth
+        self.study_config.session_config["task"]["task_type"] = task_type
+
+        # Get task metadata to determine n_networks
+        try:
+            task_metadata = get_task_metadata(task_type)
+            n_networks = task_metadata.n_networks
+        except ValueError:
+            task_metadata = None
+            n_networks = 2
+
+        # Update network dropdown visibility in Localizer tab
+        if hasattr(self, 'second_network_dropdown'):
+            self.second_network_dropdown.visible = (n_networks >= 2)
+            self.second_network_dropdown.update()
+
+        # Update target networks label in Localizer tab
+        if hasattr(self, 'target_networks_label'):
+            self.target_networks_label.value = f"Target Networks (select {n_networks})"
+            self.target_networks_label.update()
 
         # Recreate task parameter fields for new task type
         self._create_task_parameter_fields()
 
-        is_ball_task = (task_type == "ball")
-
-        # Update ball-task-specific section visibility
-        if hasattr(self, 'session_structure_section'):
-            self.session_structure_section.visible = is_ball_task
-            self.session_structure_section.update()
-
+        # Update task-specific section content in Feedback tab
         if hasattr(self, 'task_specific_section'):
-            self.task_specific_section.visible = is_ball_task
+            task_specific_controls = self._build_task_specific_params()
+            self.task_specific_section.content = ft.Column(task_specific_controls)
+            # Update visibility based on whether task has parameters
+            has_parameters = task_metadata and len(task_metadata.parameters) > 0
+            self.task_specific_section.visible = has_parameters
             self.task_specific_section.update()
 
-        # Rebuild the task tab dynamically
-        # Find the TabsWidget and update its content
-        # For now, show a message that changes will appear on save
-        self.page.snack_bar = ft.SnackBar(
-            ft.Text(f"Feedback task type changed to {task_type}. Task parameters will update when you reopen this study."),
-            open=True,
-        )
+        # Show snackbar feedback
+        if task_metadata:
+            msg = f"Task: {task_metadata.display_name} (requires {n_networks} network(s))"
+        else:
+            msg = f"Task changed to {task_type}"
+
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg), open=True)
         self.page.update()
 
     def _on_localizer_task_type_changed(self, e):
-        """Handle localizer task type dropdown change."""
-        localizer_task_type = self.localizer_task_type_dropdown.value
+        """Handle localizer task type dropdown change.
+
+        Updates network section visibility without rebuilding tabs
+        (which would corrupt field values).
+        """
+        localizer_task_type = e.control.value if e and hasattr(e, 'control') else self.localizer_task_type_dropdown.value
         logger.info(f"Localizer task type changed to: {localizer_task_type}")
 
-        # Recreate localizer task parameter fields
-        self._create_localizer_task_parameter_fields()
+        # Store in config as source of truth
+        self.study_config.session_config["scan"]["localizer_task_type"] = localizer_task_type
 
-        # Update Networks section visibility (now in Feedback tab)
+        # Toggle network extraction section visibility
         is_rest = localizer_task_type == "rest"
         if hasattr(self, 'networks_section'):
             self.networks_section.visible = is_rest
             self.networks_section.update()
 
-        # Show message about the change
-        if is_rest:
-            msg = "Localizer set to Rest. Network configuration is now available in the Feedback tab."
-        else:
-            msg = f"Localizer set to {localizer_task_type}. GLM-based mask extraction coming soon."
+        # Recreate localizer task parameter fields
+        self._create_localizer_task_parameter_fields()
 
+        # Show snackbar feedback
+        msg = "Localizer: Rest (ICA-based network extraction)" if is_rest else f"Localizer: {localizer_task_type} (GLM-based coming soon)"
         self.page.snack_bar = ft.SnackBar(ft.Text(msg), open=True)
         self.page.update()
 
@@ -1004,7 +1031,7 @@ class StudyEditorScreen:
             Flet control for the study editor
         """
         # Create tab headers (Networks and Sham integrated into Feedback tab)
-        tab_bar = ft.TabBar(
+        self.tab_bar = ft.TabBar(
             tabs=[
                 ft.Tab(label="Study"),
                 ft.Tab(label="Localizer"),
@@ -1013,8 +1040,8 @@ class StudyEditorScreen:
             ],
         )
 
-        # Create tab content panels
-        tab_view = ft.TabBarView(
+        # Create tab content panels - store reference for dynamic rebuilding
+        self.tab_view = ft.TabBarView(
             controls=[
                 self._build_study_tab(),
                 self._build_localizer_tab(),
@@ -1025,15 +1052,16 @@ class StudyEditorScreen:
         )
 
         # Wrap TabBar and TabBarView in a Column for Tabs
-        tabs_content = ft.Column(
-            [tab_bar, tab_view],
+        # Store reference for dynamic tab rebuilding when task type changes
+        self.tabs_content = ft.Column(
+            [self.tab_bar, self.tab_view],
             spacing=0,
             expand=True,
         )
 
         # Create Tabs control
         tabs = ft.Tabs(
-            content=tabs_content,
+            content=self.tabs_content,
             length=4,  # Number of tabs
         )
 
@@ -1093,7 +1121,11 @@ class StudyEditorScreen:
         )
 
     def _build_study_tab(self) -> ft.Container:
-        """Build the study information and acquisition mode tab."""
+        """Build the study information, experiment design, and acquisition mode tab.
+
+        Task selection is placed here (early) so subsequent tabs can be built
+        based on the selected task's requirements (e.g., n_networks).
+        """
         # Create browse button for scanner DICOM directory
         self.scanner_dicom_dir_browse_btn = self._create_browse_button(self.scanner_dicom_dir_field)
 
@@ -1104,6 +1136,14 @@ class StudyEditorScreen:
         self.scanner_dicom_dir_field.visible = not is_simulator
         self.scanner_dicom_dir_browse_btn.visible = not is_simulator
 
+        # Get task info for display
+        task_type = self.task_type_dropdown.value
+        try:
+            task_metadata = get_task_metadata(task_type)
+            task_info = f"Requires {task_metadata.n_networks} network(s)"
+        except ValueError:
+            task_info = ""
+
         return ft.Container(
             content=ft.Column(
                 [
@@ -1112,7 +1152,14 @@ class StudyEditorScreen:
                     self.description_field,
                     self.example_participant_id_field,
                     ft.Divider(),
-                    ft.Text("Study Design", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text("Experiment Design", size=16, weight=ft.FontWeight.BOLD),
+                    self.task_type_dropdown,
+                    ft.Text(
+                        task_info,
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
                     self.multi_visit_enabled_checkbox,
                     ft.Text(
                         "When enabled, participants can have multiple visits (ses-01, ses-02, etc.). "
@@ -1158,9 +1205,64 @@ class StudyEditorScreen:
         )
 
     def _build_localizer_tab(self) -> ft.Container:
-        """Build the localizer parameters tab."""
+        """Build the localizer parameters tab with network configuration.
+
+        Network extraction settings are here because they are part of the
+        localizer analysis phase. The number of network dropdowns shown
+        depends on the task selected in the Study tab (n_networks).
+        """
         # Build localizer task-specific parameters section
         localizer_task_params = self._build_localizer_task_specific_params()
+
+        # Get task metadata to determine n_networks
+        # Read from config (source of truth) rather than dropdown
+        task_type = self.study_config.session_config["task"].get("task_type", "ball")
+        try:
+            task_metadata = get_task_metadata(task_type)
+            n_networks = task_metadata.n_networks
+        except ValueError:
+            n_networks = 2  # Default fallback
+
+        # Only show network section for rest localizer (ICA-based)
+        is_rest_localizer = self.localizer_task_type_dropdown.value == "rest"
+
+        # Store the target networks label so it can be updated dynamically
+        self.target_networks_label = ft.Text(
+            f"Target Networks (select {n_networks})",
+            size=14,
+            weight=ft.FontWeight.BOLD,
+        )
+
+        # Set second network dropdown visibility based on n_networks
+        self.second_network_dropdown.visible = (n_networks >= 2)
+
+        # Network Configuration section (only visible when localizer is rest)
+        self.networks_section = ft.Container(
+            content=ft.Column([
+                ft.Text("Network Extraction", size=16, weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    "ICA-based network extraction from resting-state localizer",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+                ft.Divider(),
+                ft.Text("Yeo Atlas", size=14, weight=ft.FontWeight.BOLD),
+                self.n_yeo_radio,
+                ft.Divider(),
+                self.target_networks_label,
+                ft.Row([
+                    self.first_network_dropdown,
+                    self.second_network_dropdown,
+                ]),
+                ft.Divider(),
+                ft.Text("Preprocessing", size=14, weight=ft.FontWeight.BOLD),
+                self.smooth_fwhm_field,
+                self.highpass_field,
+                ft.Divider(),
+            ]),
+            visible=is_rest_localizer,
+        )
 
         return ft.Container(
             content=ft.Column(
@@ -1174,11 +1276,12 @@ class StudyEditorScreen:
                         italic=True,
                     ),
                     ft.Divider(),
-                    ft.Text("Scanner Parameters", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
                     self.localizer_tr_field,
                     self.localizer_n_volumes_field,
                     self.localizer_n_runs_field,
                     ft.Divider(),
+                    self.networks_section,
                     ft.Text("2vol Initial Reference", size=16, weight=ft.FontWeight.BOLD),
                     self.twovol_initial_enabled_checkbox,
                     ft.Text(
@@ -1253,25 +1356,52 @@ class StudyEditorScreen:
         return controls
 
     def _build_feedback_tab(self) -> ft.Container:
-        """Build the feedback parameters tab with integrated networks and sham.
+        """Build the feedback session parameters tab.
+
+        Task selection is in the Study tab. Network config is in the Localizer tab.
+        This tab focuses on feedback session runtime settings.
 
         Order follows workflow sequence:
-        1. Scanner Parameters
-        2. 2vol Realtime Reference
-        3. Feedback Task selection
-        4. Session Structure (ball task specific)
-        5. Preprocessing
-        6. Network Configuration (with dropdowns for first/second network)
-        7. Sham/Control Conditions
-        8. Task Parameters (ball task specific)
+        1. Scan Parameters
+        2. Session Structure
+        3. 2vol Realtime Reference
+        4. Task-Specific Parameters
+        5. Sham/Control Conditions
         """
         # Scanner parameters for feedback
         scanner_section = [
-            ft.Text("Scanner Parameters", size=16, weight=ft.FontWeight.BOLD),
+            ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
             self.feedback_tr_field,
             self.feedback_n_volumes_field,
             ft.Divider(),
         ]
+
+        # Get task metadata to determine whether task has parameters
+        # Read from config (source of truth) rather than dropdown
+        task_type = self.study_config.session_config["task"].get("task_type", "ball")
+        try:
+            task_metadata = get_task_metadata(task_type)
+            has_parameters = len(task_metadata.parameters) > 0
+        except ValueError:
+            has_parameters = True
+
+        # Session structure - generic for all tasks
+        self.session_structure_section = ft.Container(
+            content=ft.Column([
+                ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
+                self.max_feedback_runs_field,
+                self.n_baseline_field,
+                self.fd_threshold_field,
+                ft.Text(
+                    "Note: Transfer runs are optional (configure in task-specific parameters below)",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+                ft.Divider(),
+            ]),
+            visible=True,  # Always visible for all tasks
+        )
 
         # 2vol Realtime section
         # Create note for when 2vol is disabled
@@ -1299,89 +1429,24 @@ class StudyEditorScreen:
             ft.Divider(),
         ]
 
-        # Feedback task selection - right after 2vol section
-        task_selection = [
-            ft.Text("Feedback Task", size=16, weight=ft.FontWeight.BOLD),
-            self.task_type_dropdown,
-            ft.Divider(),
-        ]
-
-        # Ball task specific sections (only visible when task_type is ball)
-        is_ball_task = self.task_type_dropdown.value == "ball"
-
-        # Session structure - ball task specific
-        self.session_structure_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
-                self.max_feedback_runs_field,
-                self.n_baseline_field,
-                self.fd_threshold_field,
-                ft.Text(
-                    "Note: Transfer runs are optional (configure in task-specific parameters below)",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                ft.Divider(),
-            ]),
-            visible=is_ball_task,
-        )
-
-        # Preprocessing section (only visible when localizer is rest)
-        is_rest_localizer = self.localizer_task_type_dropdown.value == "rest"
-        self.preprocessing_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Preprocessing", size=16, weight=ft.FontWeight.BOLD),
-                self.smooth_fwhm_field,
-                self.highpass_field,
-                ft.Divider(),
-            ]),
-            visible=is_rest_localizer,
-        )
-
-        # Network Configuration section (only visible when localizer is rest)
-        self.networks_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Network Configuration", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "ICA-based network extraction from resting-state localizer",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                ft.Divider(),
-                ft.Text("Yeo Atlas", size=14, weight=ft.FontWeight.BOLD),
-                self.n_yeo_radio,
-                ft.Divider(),
-                ft.Text("Target Networks (select 2)", size=14, weight=ft.FontWeight.BOLD),
-                ft.Row([
-                    self.first_network_dropdown,
-                    self.second_network_dropdown,
-                ]),
-                ft.Divider(),
-            ]),
-            visible=is_rest_localizer,
+        # Task-specific parameters (wrapped in container for visibility control)
+        # Visible for any task that has configurable parameters
+        task_specific_controls = self._build_task_specific_params()
+        self.task_specific_section = ft.Container(
+            content=ft.Column(task_specific_controls),
+            visible=has_parameters,
         )
 
         # Sham section (integrated from sham tab)
         sham_section = self._build_sham_section()
 
-        # Task-specific parameters (wrapped in container for visibility control)
-        task_specific_controls = self._build_task_specific_params()
-        self.task_specific_section = ft.Container(
-            content=ft.Column(task_specific_controls),
-            visible=is_ball_task,
-        )
-
         return ft.Container(
             content=ft.Column(
-                scanner_section + twovol_section +
-                task_selection +
+                scanner_section +
                 [self.session_structure_section] +
-                [self.preprocessing_section] +
-                [self.networks_section] +
-                [sham_section] +
-                [self.task_specific_section],
+                twovol_section +
+                [self.task_specific_section] +
+                [sham_section],
                 scroll=ft.ScrollMode.AUTO,
             ),
             padding=20,
@@ -1519,7 +1584,8 @@ class StudyEditorScreen:
         Returns:
             List of Flet controls for the current task type
         """
-        task_type = self.task_type_dropdown.value
+        # Read from config (source of truth) rather than dropdown
+        task_type = self.study_config.session_config["task"].get("task_type", "ball")
 
         try:
             metadata = get_task_metadata(task_type)
@@ -1902,18 +1968,41 @@ class StudyEditorScreen:
 
         # Update network config with validation
         try:
-            config["mask"]["n_yeo"] = int(self.n_yeo_radio.value)
-            config["mask"]["smooth_fwhm"] = float(self.smooth_fwhm_field.value)
-            config["mask"]["highpass"] = float(self.highpass_field.value)
+            n_yeo_val = self.n_yeo_radio.value
+            smooth_val = self.smooth_fwhm_field.value
+            highpass_val = self.highpass_field.value
+
+            # Debug: log values if they look wrong
+            if not n_yeo_val or n_yeo_val == "None":
+                logger.warning(f"n_yeo_radio has invalid value: {n_yeo_val!r}, using default 7")
+                n_yeo_val = "7"
+            if not smooth_val or smooth_val == "None":
+                logger.warning(f"smooth_fwhm_field has invalid value: {smooth_val!r}, using default 6.0")
+                smooth_val = "6.0"
+            if not highpass_val or highpass_val == "None":
+                logger.warning(f"highpass_field has invalid value: {highpass_val!r}, using default 0.01")
+                highpass_val = "0.01"
+
+            config["mask"]["n_yeo"] = int(n_yeo_val)
+            config["mask"]["smooth_fwhm"] = float(smooth_val)
+            config["mask"]["highpass"] = float(highpass_val)
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid network parameter: {e}")
             raise ValidationError(f"Invalid network parameter: {e}")
 
         # Update selected networks from dropdowns
+        # Only save as many networks as the task requires (n_networks)
+        task_type = self.task_type_dropdown.value
+        try:
+            task_meta = get_task_metadata(task_type)
+            n_networks = task_meta.n_networks
+        except ValueError:
+            n_networks = 2  # Default fallback
+
         selected_networks = []
         if self.first_network_dropdown.value:
             selected_networks.append(self.first_network_dropdown.value)
-        if self.second_network_dropdown.value:
+        if n_networks >= 2 and self.second_network_dropdown.value:
             selected_networks.append(self.second_network_dropdown.value)
         config["mask"]["yeo_targets"] = selected_networks
         config["mask"]["mask_names"] = selected_networks

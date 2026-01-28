@@ -15,7 +15,8 @@ Examples
 ... )
 """
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
+import logging
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from .base import BaseTask
 from .task_registry import get_task_metadata
@@ -23,10 +24,19 @@ from .task_registry import get_task_metadata
 if TYPE_CHECKING:
     from .session import SessionState
 
+logger = logging.getLogger(__name__)
 
 # Map task_id to task class
 # This is populated when task modules are imported
 _TASK_CLASSES: Dict[str, type] = {}
+
+# Runtime parameters that can be passed to any task (not defined in metadata)
+# These are runtime-specific settings that the framework provides
+RUNTIME_PARAMETERS = {
+    "mask_names",       # List of mask names to use
+    "feedback_mode",    # Whether feedback is on/off
+    "presenter_monitor", # Which monitor to use for display
+}
 
 
 def register_task_class(task_id: str, task_class: type) -> None:
@@ -56,11 +66,13 @@ def create_task(
     Parameters
     ----------
     task_id : str
-        Registered task identifier (e.g., 'ball')
+        Registered task identifier (e.g., 'ball', 'thermometer')
     coordinator : NeurofeedbackCoordinator
         Coordinator providing activation data
     config : dict
-        Task configuration parameters (validated against registry metadata)
+        Task configuration parameters. Includes:
+        - Parameters defined in TaskMetadata (validated)
+        - Runtime parameters: mask_names, feedback_mode, presenter_monitor
     session_state : SessionState, optional
         Session state for adaptive difficulty
     output_dir : str, optional
@@ -74,7 +86,8 @@ def create_task(
     Raises
     ------
     ValueError
-        If task_id is not registered or config validation fails
+        If task_id is not registered, config validation fails, or
+        insufficient networks are provided
     """
     # Get metadata and validate config
     metadata = get_task_metadata(task_id)
@@ -89,9 +102,21 @@ def create_task(
 
     task_class = _TASK_CLASSES[task_id]
 
-    # Filter config to only include parameters defined in metadata
-    valid_keys = {p.key for p in metadata.parameters}
+    # Validate network count
+    mask_names = config.get("mask_names", coordinator.mask_names)
+    if len(mask_names) < metadata.n_networks:
+        raise ValueError(
+            f"Task '{task_id}' requires {metadata.n_networks} network(s), "
+            f"but only {len(mask_names)} mask(s) provided: {mask_names}"
+        )
+
+    # Filter config to include:
+    # 1. Parameters defined in metadata
+    # 2. Runtime parameters (mask_names, feedback_mode, etc.)
+    valid_keys = {p.key for p in metadata.parameters} | RUNTIME_PARAMETERS
     filtered_config = {k: v for k, v in config.items() if k in valid_keys}
+
+    logger.info(f"Creating task '{task_id}' with {len(mask_names)} mask(s)")
 
     # Create task instance
     return task_class(

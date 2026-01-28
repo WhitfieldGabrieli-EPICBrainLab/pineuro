@@ -784,6 +784,15 @@ def run_ica(
     # type: ignore - nibabel typing doesn't recognize header.get_zooms()[3]
     tr = img.header.get_zooms()[3] # type: ignore
 
+    # Convert nan to None (nilearn needs None to skip smoothing/filtering)
+    import math
+    if smooth_fwhm is not None and math.isnan(smooth_fwhm):
+        smooth_fwhm = None
+    if highpass is not None and math.isnan(highpass):
+        highpass = None
+    if lowpass is not None and math.isnan(lowpass):
+        lowpass = None
+
     # Initialize CanICA
     logger.info("Initializing CanICA...")
     canica: Any = CanICA(
@@ -960,7 +969,7 @@ def mask_extraction_rest(
         ref_file: Union[str, Path],
         n_yeo: int = 17,
         yeo_targets : Union[str, List[str]] = ["DefaultA", "ContA"],
-        n_components: int = 20,
+        n_components: int = 15,  # Reduced from 20 for faster ICA (~50% speedup)
         threshold: int = 2000,
         smooth_fwhm: Optional[float] = None,
         highpass: Optional[float] = None,
@@ -1515,12 +1524,14 @@ def generate_2vol_qc_overlays(
     network_names = [name for name, _ in overlays]
 
     # Regenerate report with 2vol overlays and open in browser
+    # Use overwrite=False to skip regenerating existing images (ICA, corr, subject overlays)
+    # The HTML will still be regenerated to include new 2vol overlays
     qc.generate_mask_extraction_report(
         mask_extraction_dir=mask_extraction_dir,
         participant_id=participant_id,
         network_names=network_names,
         output_dir=qc_dir,
         n_yeo=n_yeo,
-        overwrite=True,  # Force regeneration to include new 2vol overlays
+        overwrite=False,  # Skip existing images, just update HTML
         open_browser=False
     )

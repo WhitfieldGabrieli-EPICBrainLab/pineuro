@@ -557,6 +557,229 @@ def get_tr_from_dicom(dicom_path: Path, default: float = 2.0) -> float:
 
 
 # ==============================================================
+#  NIfTI Utilities
+# ==============================================================
+
+# NIfTI file extensions to search for
+NIFTI_EXTENSIONS = ['*.nii', '*.nii.gz', '*.NII', '*.NII.GZ']
+
+# Combined extensions for volume files (DICOM + NIfTI)
+VOLUME_EXTENSIONS = DICOM_EXTENSIONS + NIFTI_EXTENSIONS
+
+
+def get_nifti_files(directory: Path) -> List[Path]:
+    """
+    Get all NIfTI files in a directory, sorted by filename.
+
+    Parameters
+    ----------
+    directory : Path
+        Directory to search for NIfTI files
+
+    Returns
+    -------
+    List[Path]
+        Sorted list of NIfTI file paths
+
+    """
+    nifti_files = []
+    for ext in NIFTI_EXTENSIONS:
+        nifti_files.extend(directory.glob(ext))
+
+    # Filter to only files and sort by name
+    valid_niftis = [f for f in nifti_files if f.is_file()]
+    valid_niftis.sort()
+    return valid_niftis
+
+
+def get_volume_files(directory: Path) -> List[Path]:
+    """
+    Get all volume files (DICOM or NIfTI) in a directory, sorted by filename.
+
+    Auto-detects file type and returns all valid volume files.
+
+    Parameters
+    ----------
+    directory : Path
+        Directory to search for volume files
+
+    Returns
+    -------
+    List[Path]
+        Sorted list of volume file paths (DICOM or NIfTI)
+
+    """
+    volume_files = []
+    for ext in VOLUME_EXTENSIONS:
+        volume_files.extend(directory.glob(ext))
+
+    # Filter to only files and sort by name
+    valid_volumes = [f for f in volume_files if f.is_file()]
+    valid_volumes.sort()
+    return valid_volumes
+
+
+def is_nifti_file(file_path: Path) -> bool:
+    """
+    Check if a file is a NIfTI file based on extension.
+
+    Parameters
+    ----------
+    file_path : Path
+        Path to file to check
+
+    Returns
+    -------
+    bool
+        True if file has NIfTI extension, False otherwise
+
+    """
+    name = str(file_path).lower()
+    return name.endswith('.nii') or name.endswith('.nii.gz')
+
+
+def is_valid_nifti(file_path: Path) -> bool:
+    """
+    Check if a file is a valid NIfTI by attempting to read its header.
+
+    Parameters
+    ----------
+    file_path : Path
+        Path to file to check
+
+    Returns
+    -------
+    bool
+        True if file is a valid NIfTI, False otherwise
+
+    """
+    try:
+        nib.load(str(file_path))
+        return True
+    except Exception:
+        return False
+
+
+def is_valid_volume(file_path: Path) -> bool:
+    """
+    Check if a file is a valid volume (DICOM or NIfTI).
+
+    Auto-detects file type and validates accordingly.
+
+    Parameters
+    ----------
+    file_path : Path
+        Path to file to check
+
+    Returns
+    -------
+    bool
+        True if file is a valid DICOM or NIfTI, False otherwise
+
+    """
+    if is_nifti_file(file_path):
+        return is_valid_nifti(file_path)
+    else:
+        return is_valid_dicom(file_path)
+
+
+def get_json_sidecar_path(nifti_path: Path) -> Path:
+    """
+    Get the expected JSON sidecar path for a NIfTI file.
+
+    Follows the naming convention: vol_001.nii -> vol_001.json
+                                   vol_001.nii.gz -> vol_001.json
+
+    Parameters
+    ----------
+    nifti_path : Path
+        Path to NIfTI file
+
+    Returns
+    -------
+    Path
+        Path to corresponding JSON sidecar file
+
+    """
+    nifti_path = Path(nifti_path)
+    name = nifti_path.name
+    # Handle both .nii and .nii.gz
+    if name.lower().endswith('.nii.gz'):
+        base_name = name[:-7]  # Remove .nii.gz
+    elif name.lower().endswith('.nii'):
+        base_name = name[:-4]  # Remove .nii
+    else:
+        base_name = nifti_path.stem
+
+    return nifti_path.parent / f"{base_name}.json"
+
+
+def get_tr_from_json_sidecar(json_path: Path, default: float = 2.0) -> float:
+    """
+    Extract repetition time (TR) from JSON sidecar file.
+
+    Parameters
+    ----------
+    json_path : Path
+        Path to JSON sidecar file
+    default : float, default=2.0
+        Default TR value to return if extraction fails
+
+    Returns
+    -------
+    float
+        TR in seconds. Returns default value if TR cannot be read.
+
+    """
+    try:
+        with open(json_path, 'r') as f:
+            metadata = json.load(f)
+
+        # Check for RepetitionTime field (standard BIDS)
+        if 'RepetitionTime' in metadata:
+            return float(metadata['RepetitionTime'])
+
+        logger.warning(f"TR not found in JSON sidecar, using default {default}s")
+        return default
+    except Exception as e:
+        logger.warning(f"Error reading TR from JSON: {e}, using default {default}s")
+        return default
+
+
+def get_tr_from_volume(file_path: Path, default: float = 2.0) -> float:
+    """
+    Extract repetition time (TR) from a volume file (DICOM or NIfTI sidecar).
+
+    Auto-detects file type and extracts TR accordingly:
+    - For DICOM: reads from DICOM header
+    - For NIfTI: reads from JSON sidecar (if exists)
+
+    Parameters
+    ----------
+    file_path : Path
+        Path to volume file (DICOM or NIfTI)
+    default : float, default=2.0
+        Default TR value to return if extraction fails
+
+    Returns
+    -------
+    float
+        TR in seconds. Returns default value if TR cannot be read.
+
+    """
+    file_path = Path(file_path)
+    if is_nifti_file(file_path):
+        json_path = get_json_sidecar_path(file_path)
+        if json_path.exists():
+            return get_tr_from_json_sidecar(json_path, default)
+        else:
+            logger.warning(f"JSON sidecar not found for {file_path}, using default {default}s")
+            return default
+    else:
+        return get_tr_from_dicom(file_path, default)
+
+
+# ==============================================================
 #  Helper Functions
 # ==============================================================
 def run_command(

@@ -55,8 +55,8 @@ class MaskSelectionDialog:
     """
 
     # Correlation quality thresholds
-    CORR_GOOD = 0.4
-    CORR_MODERATE = 0.25
+    CORR_GOOD = 0.15
+    CORR_MODERATE = 0.1
 
     def __init__(
         self,
@@ -425,6 +425,12 @@ class MaskSelectionDialog:
     def _build_stage1_actions(self) -> List[ft.Control]:
         """Build action buttons for Stage 1."""
         return [
+            ft.OutlinedButton(
+                "Open in FSLeyes",
+                icon=ft.Icons.OPEN_IN_NEW,
+                on_click=self._on_open_fsleyes_clicked,
+                tooltip="Open thresholded masks and BOLD reference in FSLeyes",
+            ),
             ft.OutlinedButton(
                 "Generate Script",
                 icon=ft.Icons.CODE,
@@ -1167,6 +1173,61 @@ class MaskSelectionDialog:
             self.page.update()
         if self.on_cancel:
             self.on_cancel()
+
+    def _on_open_fsleyes_clicked(self, e):
+        """Open thresholded masks and BOLD reference in FSLeyes."""
+        import shutil
+        import subprocess
+
+        # Check if fsleyes is available
+        if not shutil.which("fsleyes"):
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("FSLeyes not found. Please ensure FSL is installed and in PATH."),
+                bgcolor=ft.Colors.RED,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        # Check BOLD reference exists
+        if not self.ref_file or not Path(self.ref_file).exists():
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("BOLD reference file not found."),
+                bgcolor=ft.Colors.RED,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        # Collect all thresholded mask files
+        mask_files = sorted(self.masks_dir.glob("*_thr.nii.gz"))
+        if not mask_files:
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("No thresholded masks found."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        # Build FSLeyes command: fsleyes <ref> <mask1> <mask2> ...
+        cmd = ["fsleyes", str(self.ref_file)]
+        for mask_file in mask_files:
+            cmd.append(str(mask_file))
+
+        # Launch FSLeyes (non-blocking)
+        try:
+            subprocess.Popen(cmd, start_new_session=True)
+            if self.on_log:
+                self.on_log(f"[INFO] Opened FSLeyes with {len(mask_files)} masks")
+        except Exception as ex:
+            logger.error(f"Failed to launch FSLeyes: {ex}")
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text(f"Failed to launch FSLeyes: {ex}"),
+                bgcolor=ft.Colors.RED,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
 
     def _on_reload_clicked(self, e):
         """Handle Reload button - reload selections, correlations, and images from disk."""

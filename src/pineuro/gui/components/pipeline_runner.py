@@ -354,6 +354,7 @@ class PipelineRunner:
         # Mask extraction parameters
         n_yeo = config["mask"]["n_yeo"]
         yeo_targets = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
+        n_components = config["mask"].get("n_components", 15)
         smooth_fwhm = config["mask"]["smooth_fwhm"]
         highpass = config["mask"]["highpass"]
         lowpass = config["mask"].get("lowpass")
@@ -393,6 +394,7 @@ class PipelineRunner:
             ref_file=ref_file,
             n_yeo=n_yeo,
             yeo_targets=yeo_targets,
+            n_components=n_components,
             smooth_fwhm=smooth_fwhm,
             highpass=highpass,
             lowpass=lowpass,
@@ -864,38 +866,37 @@ class PipelineRunner:
             # Launch PsychoPy task in separate thread
             self._emit_progress(f"Launching PsychoPy task...")
 
-            # Import task class
-            from pineuro.tasks import BallTask
+            # Import task factory
+            from pineuro.tasks import create_task
 
             # Get task configuration
             task_config = config.get("task", {})
+            feedback_task_type = task_config.get("task_type", "ball")
+            task_specific_config = task_config.get(feedback_task_type, {})
 
-            # Create and run task
-            # BallTask uses ball_mask_names to determine which 2 masks control movement
-            # For sham, this substitutes the sham mask for ball control
             # Get display configuration
             display_config = config.get("display", {})
             presenter_monitor = display_config.get("presenter_monitor", "right")
 
             # Load session state for adaptive difficulty persistence across runs
-            session_state = SessionState.load(output_dir)
-            self._emit_progress(f"Session state: scale_factor={session_state.scale_factor}, runs={len(session_state.completed_runs)}")
+            session_state = SessionState.load(output_dir, task_id=feedback_task_type)
+            self._emit_progress(f"Session state: task={feedback_task_type}, runs={len(session_state.completed_runs)}")
 
-            task = BallTask(
+            # Build factory config with task parameters plus runtime settings
+            factory_config = {
+                **task_specific_config,
+                "mask_names": ball_mask_names,
+                "feedback_mode": feedback_mode,
+                "presenter_monitor": presenter_monitor,
+            }
+
+            # Create task via factory (validates config against task metadata)
+            task = create_task(
+                task_id=feedback_task_type,
                 coordinator=coordinator,
-                mask_names=ball_mask_names,  # Which 2 masks control the ball
-                scale_factor=task_config.get("initial_scale_factor", 10.0),
-                fullscreen=task_config.get("fullscreen", True),
-                trigger_keys=task_config.get("trigger_keys", ["t", "+", "5", "equal"]),
-                left_button=task_config.get("left_button", "1"),
-                right_button=task_config.get("right_button", "2"),
-                enter_button=task_config.get("enter_button", "0"),
-                min_hits_threshold=task_config.get("min_hits_threshold", 3),
-                max_hits_threshold=task_config.get("max_hits_threshold", 5),
-                scale_adjust_factor=task_config.get("scale_adjust_factor", 0.25),
-                feedback_mode=feedback_mode,
-                presenter_monitor=presenter_monitor,
+                config=factory_config,
                 session_state=session_state,
+                output_dir=str(output_dir),
             )
 
             # Register callback so coordinator updates task with new activations
@@ -926,15 +927,17 @@ class PipelineRunner:
 
             # Extract results from coordinator and task
             volumes_processed = coordinator.n_processed
-            hits = {
-                ball_mask_names[0]: task.hit_counters[0],
-                ball_mask_names[1]: task.hit_counters[1],
-            }
 
-            self._emit_progress(
-                f"{task_type.capitalize()} run {task_run_number} complete! "
-                f"Processed {volumes_processed} volumes. Hits: {hits}"
-            )
+            # Build results message (handle tasks with/without hit_counters)
+            result_msg = f"{task_type.capitalize()} run {task_run_number} complete! Processed {volumes_processed} volumes."
+            if hasattr(task, 'hit_counters') and task.hit_counters:
+                hits = {
+                    ball_mask_names[i]: task.hit_counters[i]
+                    for i in range(min(len(ball_mask_names), len(task.hit_counters)))
+                }
+                result_msg += f" Hits: {hits}"
+
+            self._emit_progress(result_msg)
         finally:
             # Clear coordinator reference
             self._current_coordinator = None

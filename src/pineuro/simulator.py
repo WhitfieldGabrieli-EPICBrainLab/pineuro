@@ -1,36 +1,39 @@
 """
-DICOM simulator for offline testing of real-time neurofeedback.
+Volume simulator for offline testing of real-time neurofeedback.
 
 Summary
 -------
-Copies DICOM files from a source folder to a target folder at TR-paced
-intervals to mimic scanner acquisition for testing pipelines.
+Copies volume files (DICOM or NIfTI) from a source folder to a target folder
+at TR-paced intervals to mimic scanner acquisition for testing pipelines.
 
 Components
 ----------
-- DicomSimulator: Deadline-based copier that preserves timing and ordering
+- VolumeSimulator: Deadline-based copier that preserves timing and ordering
+- DicomSimulator: Alias for VolumeSimulator (backward compatibility)
 
 Workflow
 --------
-- Sort source DICOMs
-- Determine TR (argument or header)
+- Sort source volumes (auto-detect DICOM or NIfTI)
+- Determine TR (argument, DICOM header, or NIfTI JSON sidecar)
 - Copy to target at TR/speed deadlines, invoking optional callbacks
+- For NIfTI files, also copy JSON sidecar if present
 - Optional cleanup of target directory on completion
 
 Dependencies
 ------------
-pydicom, pathlib, shutil
+pydicom, nibabel, pathlib, shutil
 
 Notes
 -----
-Files are sorted to keep temporal order. TR can be provided or read from
-DICOM headers. The speed parameter accelerates or slows delivery (e.g.,
-speed=2.0 for 2x). Deadline-based timing avoids drift from variable copy
-durations, making this suitable for end-to-end dry runs without a scanner.
+Files are sorted to keep temporal order. TR can be provided, read from
+DICOM headers, or read from NIfTI JSON sidecars. The speed parameter
+accelerates or slows delivery (e.g., speed=2.0 for 2x). Deadline-based
+timing avoids drift from variable copy durations, making this suitable
+for end-to-end dry runs without a scanner.
 Further reading: see docs/references.md.
 
 Command-line usage:
-    python -m pineuro.simulator --source /path/to/dicoms --target /path/to/incoming --tr 1.5 --speed 1.0
+    python -m pineuro.simulator --source /path/to/volumes --target /path/to/incoming --tr 1.5 --speed 1.0
 
 References
 ----------
@@ -49,14 +52,22 @@ from typing import Union, Optional, List, Callable
 import pydicom
 
 # Local imports
-from .utils import get_dicom_files, get_tr_from_dicom
+from .utils import (
+    get_volume_files,
+    get_tr_from_volume,
+    is_nifti_file,
+    get_json_sidecar_path,
+)
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
 
-class DicomSimulator:
+class VolumeSimulator:
     """
-    Simulates real-time DICOM acquisition by copying files at TR intervals.
+    Simulates real-time volume acquisition by copying files at TR intervals.
+
+    Supports both DICOM and NIfTI input files. For NIfTI files, also copies
+    the JSON sidecar file alongside each volume.
 
     Uses deadline-based timing to ensure consistent TR intervals regardless of
     copy operation duration. Each volume has an expected arrival time, and the
@@ -65,11 +76,12 @@ class DicomSimulator:
     Parameters
     ----------
     source_dir : str or Path
-        Directory containing source DICOM files
+        Directory containing source volume files (DICOM or NIfTI)
     target_dir : str or Path
-        Directory to copy DICOMs to
+        Directory to copy volumes to
     tr : float, optional
-        Repetition time in seconds. If None, reads from DICOM headers.
+        Repetition time in seconds. If None, reads from DICOM headers or
+        NIfTI JSON sidecar.
     speed : float, default=1.0
         Speed multiplier for simulation
     clear_target : bool, default=True
@@ -79,6 +91,8 @@ class DicomSimulator:
 
     Attributes
     ----------
+    source_type : str
+        Detected source type: 'dicom', 'nifti', or 'mixed'
     start_time : float or None
         Unix timestamp when simulation started (set by start() or copy_volumes_iter)
     volume_copied_callback : callable or None
@@ -90,24 +104,30 @@ class DicomSimulator:
     FileNotFoundError
         If source_dir does not exist
     ValueError
-        If source_dir is not a directory or contains no DICOM files
+        If source_dir is not a directory or contains no volume files
 
     Notes
     -----
     **Timing Model:**
-    
+
     Volume N should arrive at time N * TR (0-indexed). The simulator computes
     the expected arrival time for each volume and sleeps until that deadline.
     This compensates for variable copy duration and prevents cumulative drift.
-    
+
     Example at TR=1.2s, speed=1x:
     - Volume 0: deadline = 0.0s (copy immediately after start)
     - Volume 1: deadline = 1.2s
     - Volume 2: deadline = 2.4s
     - etc.
-    
+
     If a copy takes 0.1s, the next sleep is 1.1s (not 1.2s), maintaining
     the overall schedule.
+
+    **NIfTI Support:**
+
+    For NIfTI files (.nii, .nii.gz), the simulator also copies the JSON sidecar
+    file if present (e.g., vol_001.nii + vol_001.json). TR is extracted from
+    the JSON sidecar's RepetitionTime field.
     """
 
     def __init__(
@@ -125,7 +145,7 @@ class DicomSimulator:
         self.speed = speed
         self.clear_target = clear_target
         self.cleanup_on_complete = cleanup_on_complete
-        
+
         # Timing state
         self.start_time: Optional[float] = None
         self.volume_copied_callback: Optional[Callable[[int, float, float], None]] = None
@@ -135,18 +155,28 @@ class DicomSimulator:
         if not self.source_dir.is_dir():
             raise ValueError(f"Source is not a directory: {self.source_dir}")
 
-        self.dicom_files = get_dicom_files(self.source_dir)
-        if len(self.dicom_files) == 0:
-            raise ValueError(f"No DICOM files found in: {self.source_dir}")
+        # Auto-detect source type and get volume files
+        self.volume_files = get_volume_files(self.source_dir)
+        if len(self.volume_files) == 0:
+            raise ValueError(f"No volume files (DICOM or NIfTI) found in: {self.source_dir}")
 
-        logger.info(f"Found {len(self.dicom_files)} DICOM files in source")
+        # Determine source type based on first file
+        if is_nifti_file(self.volume_files[0]):
+            self.source_type = 'nifti'
+        else:
+            self.source_type = 'dicom'
+
+        logger.info(f"Found {len(self.volume_files)} {self.source_type} files in source")
 
         if self.tr is None:
-            self.tr = get_tr_from_dicom(self.dicom_files[0])
-            logger.info(f"Read TR from DICOM: {self.tr}s")
+            self.tr = get_tr_from_volume(self.volume_files[0])
+            logger.info(f"Read TR from {self.source_type}: {self.tr}s")
 
         self.delay = self.tr / self.speed
         logger.info(f"Effective delay: {self.delay:.3f}s (speed={self.speed}x)")
+
+        # For backward compatibility, also expose as dicom_files
+        self.dicom_files = self.volume_files
     
     def _sleep_until_deadline(self, deadline: float, stop_event=None) -> float:
         """
@@ -205,6 +235,32 @@ class DicomSimulator:
             shutil.rmtree(self.target_dir)
             logger.info(f"Deleted target directory: {self.target_dir}")
 
+    def _copy_volume_file(self, src_file: Path) -> Path:
+        """
+        Copy a volume file (and its JSON sidecar for NIfTI) to target directory.
+
+        Parameters
+        ----------
+        src_file : Path
+            Source volume file to copy
+
+        Returns
+        -------
+        Path
+            Path to copied volume file in target directory
+        """
+        dst_file = self.target_dir / src_file.name
+        shutil.copy2(src_file, dst_file)
+
+        # For NIfTI files, also copy the JSON sidecar if it exists
+        if is_nifti_file(src_file):
+            json_src = get_json_sidecar_path(src_file)
+            if json_src.exists():
+                json_dst = get_json_sidecar_path(dst_file)
+                shutil.copy2(json_src, json_dst)
+
+        return dst_file
+
     def copy_volumes_iter(self, n_volumes: Optional[int] = None, stop_event=None):
         """
         Generator that copies volumes one at a time, yielding after each.
@@ -216,6 +272,8 @@ class DicomSimulator:
         Uses deadline-based timing: each volume has an expected arrival time,
         and we sleep until that deadline rather than sleeping a fixed duration.
         This ensures consistent TR intervals regardless of copy operation duration.
+
+        For NIfTI files, also copies the JSON sidecar file if present.
 
         Parameters
         ----------
@@ -231,7 +289,7 @@ class DicomSimulator:
 
         Examples
         --------
-        >>> sim = DicomSimulator(source_dir, target_dir, tr=1.5, speed=2.0)
+        >>> sim = VolumeSimulator(source_dir, target_dir, tr=1.5, speed=2.0)
         >>> for vol_num in sim.copy_volumes_iter(n_volumes=10):
         ...     print(f"Copied volume {vol_num}")
         """
@@ -240,10 +298,10 @@ class DicomSimulator:
         if self.clear_target:
             self._clear_target_directory()
 
-        files_to_send = self.dicom_files[:n_volumes] if n_volumes else self.dicom_files
+        files_to_send = self.volume_files[:n_volumes] if n_volumes else self.volume_files
         n_total = len(files_to_send)
 
-        logger.info(f"Starting DICOM simulator: {n_total} volumes at {self.speed}x speed")
+        logger.info(f"Starting {self.source_type} simulator: {n_total} volumes at {self.speed}x speed")
         logger.debug(f"TR: {self.tr}s | Delay: {self.delay:.3f}s")
 
         # Set start time if not already set (coordinator may set it earlier)
@@ -270,10 +328,9 @@ class DicomSimulator:
                 logger.info(f"Simulator stopped by user after {volumes_copied}/{n_total} volumes")
                 return
 
-            # Copy the file
-            dst_file = self.target_dir / src_file.name
+            # Copy the file (and JSON sidecar for NIfTI)
             copy_start = time.monotonic()
-            shutil.copy2(src_file, dst_file)
+            self._copy_volume_file(src_file)
             copy_duration = time.monotonic() - copy_start
             volumes_copied += 1
 

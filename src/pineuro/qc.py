@@ -1163,7 +1163,6 @@ def generate_mask_extraction_report(
     # Find overlays
     overlays_dir = output_dir / "overlays"
     subject_overlay_dir = overlays_dir / "subject"
-    mni_overlay_dir = overlays_dir / "mni"
 
     # Build QC sections
     sections = []
@@ -1269,86 +1268,8 @@ def generate_mask_extraction_report(
                     title=f"{network} ({summary.voxels} voxels)"
                 )
 
-    # MNI space overlays
-    if network_masks:
-        import templateflow.api as tflow
-        from typing import cast
-
-        mni_overlay_dir.mkdir(parents=True, exist_ok=True)
-
-        # Get MNI template for background
-        mni_template = cast(Path, tflow.get(
-            "MNI152NLin2009cAsym",
-            resolution=2,
-            desc="fMRIPrep",
-            suffix="boldref"
-        ))
-
-        # Get Yeo atlas in MNI space from nilearn
-        from nilearn import datasets
-        try:
-            yeo_atlas = datasets.fetch_atlas_yeo_2011()
-            yeo_mni = Path(yeo_atlas[f"thick_{n_networks}"])
-        except Exception as e:
-            logger.warning(f"Failed to fetch Yeo {n_networks}-network atlas from nilearn: {e}")
-            yeo_mni = None
-
-        # Find MNI transform files (try multiple naming patterns)
-        sub2mni_xfm_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "*sub2mni_*.mat")))
-        if not sub2mni_xfm_files:
-            # Try alternate pattern: *_to_MNI_*.mat
-            sub2mni_xfm_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "*_to_MNI_*.mat")))
-
-        if not sub2mni_xfm_files:
-            logger.warning("No sub2mni transform files found, skipping MNI overlays")
-        else:
-            from pineuro.utils import apply_xfm
-
-            for network, mask_path in network_masks.items():
-                mask_mni = mni_overlay_dir / f"{participant_id}_{network}_mni.nii.gz"
-                overlay_png = mni_overlay_dir / f"{participant_id}_{network}_overlay.png"
-
-                if overwrite or not overlay_png.exists():
-                    logger.info(f"Generating {network} overlay (MNI)")
-
-                    # Warp mask to MNI if needed
-                    if overwrite or not mask_mni.exists():
-                        # Use MNI template as fixed image
-                        apply_xfm(
-                            moving=mask_path,
-                            fixed=mni_template,
-                            transform_files=[Path(sub2mni_xfm_files[0])],
-                            output_file=mask_mni,
-                            interpolator='nearestNeighbor',
-                            overwrite=overwrite
-                        )
-
-                    # Select slices using warped mask (use Yeo atlas if available, otherwise just the mask)
-                    if yeo_mni is not None:
-                        atlas_slices_mni = select_slices_from_atlas(
-                            atlas_path=yeo_mni,
-                            labels=labels,
-                            target_label=network,
-                            top_n_per_plane=1,
-                            mask_path=mask_mni if mask_mni.exists() else None
-                        )
-                    else:
-                        # No Yeo atlas available - use mask for slice selection
-                        atlas_slices_mni = select_slices_from_atlas(
-                            atlas_path=mni_template,  # Dummy atlas (not used when mask_path provided)
-                            labels=labels,
-                            target_label=network,
-                            top_n_per_plane=1,
-                            mask_path=mask_mni if mask_mni.exists() else mask_path
-                        )
-
-                    plot_mask_overlay_tripanel(
-                        mask_path=mask_mni if mask_mni.exists() else mask_path,
-                        ref_path=mni_template,
-                        out_path=overlay_png,
-                        slices=atlas_slices_mni,
-                        title=f"{network} (MNI)"
-                    )
+    # MNI space overlays removed for performance optimization
+    # (was taking ~15-20s per network with no significant QC benefit)
 
     # 2vol space overlays (feedback coregistration)
     # Check both locations: initial 2vol in mask_extraction/04_2vol, realtime in feedback/01_2vol
@@ -1413,10 +1334,9 @@ def generate_mask_extraction_report(
                             title=f"{network} (2vol run {run_str}, {summary.voxels} voxels)"
                         )
 
-    # Display overlays in report (subject, MNI, and 2vol)
+    # Display overlays in report (subject and 2vol - MNI removed for performance)
     overlay_spaces = [
         ("BOLD reference", subject_overlay_dir),
-        ("MNI", mni_overlay_dir),
         ("2vol feedback", overlays_dir / "2vol")
     ]
 
