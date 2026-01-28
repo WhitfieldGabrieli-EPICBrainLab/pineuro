@@ -969,8 +969,8 @@ def run_dicom_collection(
     list[Path]
         Paths to collected DICOM folders (one per run)
     """
-    from .preprocessing import collect_dicoms
-    from .utils import DICOM_EXTENSIONS
+    from .preprocessing import collect_volumes
+    from .utils import VOLUME_EXTENSIONS
 
     logger.info("")
     logger.info("=" * 60)
@@ -1005,19 +1005,19 @@ def run_dicom_collection(
 
         # Skip if simulator outputs already present
         if use_simulator and output_dir.exists():
-            existing_dicoms = []
-            for ext in DICOM_EXTENSIONS:
-                existing_dicoms.extend(output_dir.glob(ext))
-            if len(existing_dicoms) >= n_volumes:
+            existing_volumes = []
+            for ext in VOLUME_EXTENSIONS:
+                existing_volumes.extend(output_dir.glob(ext))
+            if len(existing_volumes) >= n_volumes:
                 logger.info(
-                    f"Skipping simulator collection for run {run_num}: {len(existing_dicoms)} files already exist in {output_dir}"
+                    f"Skipping simulator collection for run {run_num}: {len(existing_volumes)} files already exist in {output_dir}"
                 )
                 collected_folders.append(output_dir)
                 continue
 
         if use_simulator:
             watch_dir = collection_dir / "incoming"
-            dicom_folder = collect_dicoms(
+            volume_folder = collect_volumes(
                 watch_dir=watch_dir,
                 output_dir=output_dir,
                 n_volumes=n_volumes,
@@ -1029,7 +1029,7 @@ def run_dicom_collection(
             )
         else:
             watch_dir = collection_dir / "incoming"
-            dicom_folder = collect_dicoms(
+            volume_folder = collect_volumes(
                 watch_dir=watch_dir,
                 output_dir=output_dir,
                 n_volumes=n_volumes,
@@ -1038,8 +1038,8 @@ def run_dicom_collection(
                 clear_output_dir=True,
             )
 
-        collected_folders.append(dicom_folder)
-        logger.info(f"  Collected {n_volumes} volumes to {dicom_folder}")
+        collected_folders.append(volume_folder)
+        logger.info(f"  Collected {n_volumes} volumes to {volume_folder}")
 
     logger.info(f"Collection complete: {len(collected_folders)} runs")
     return collected_folders

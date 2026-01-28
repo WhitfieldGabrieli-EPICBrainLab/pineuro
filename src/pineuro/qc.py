@@ -1,30 +1,125 @@
 """
-Quality control utilities for mask extraction outputs.
+Quality control visualization and reporting for the pineuro pipeline.
 
-Summary
--------
-Generate lightweight QC artifacts for the mask extraction pipeline:
-- Mask overlays on participant BOLD reference (and other spaces when provided)
-- ICA component × Yeo network correlation heatmap
-- Mask summaries (voxels, volume, centroid, chosen component)
-- Simple per-participant HTML report linking all artifacts
+This module provides comprehensive QC visualization and HTML report generation
+for all stages of the neurofeedback pipeline: preprocessing, mask extraction,
+and feedback sessions. Each stage has a dedicated high-level report generator
+that auto-discovers outputs and creates professional HTML reports with
+embedded plots.
 
-Functions
----------
-- plot_mask_overlay: Save slice overlays of a mask on reference
-- plot_corr_heatmap: Visualize component × network correlations
-- summarize_mask: Compute basic mask metrics
-- write_html_report: Assemble an HTML QC page for a participant
+Key Components
+--------------
+generate_preprocessing_report : Create QC report for preprocessing stage
+    Visualizes motion parameters, framewise displacement, brain mask
+    coverage, and multi-run coregistration quality.
+
+generate_mask_extraction_report : Create QC report for mask extraction stage
+    Visualizes ICA components, network-Yeo correlations, mask overlays
+    in multiple spaces (subject, MNI, 2vol), and mask metrics.
+
+generate_feedback_report : Create QC report for feedback sessions
+    Visualizes activation timeseries, framewise displacement, design
+    matrix, and run completion status.
+
+Core Plotting Functions
+-----------------------
+plot_mask_overlay_tripanel : Tri-planar (sagittal/coronal/axial) mask overlays
+plot_motion_timeseries : 6-DOF motion parameter timeseries (2×3 grid)
+plot_motion_framewise_displacement : Framewise displacement with threshold
+plot_brain_mask_coverage : Brain extraction quality verification
+plot_registration_overlay : Edge overlay for registration verification
+plot_corr_heatmap : ICA × Yeo network spatial correlation heatmap
+plot_ica_component_grid : Grid display of ICA components
+plot_activation_timeseries : Per-mask activation over time
+plot_design_matrix : GLM design matrix heatmap
+plot_fd_timeseries : Framewise displacement during feedback
+
+Helper Functions
+----------------
+select_slices_from_atlas : Automatic slice selection based on network coverage
+summarize_mask : Compute mask metrics (voxels, volume, centroid)
+generate_alternative_overlays : Overlays for alternative ICA components
+generate_yeo_network_overlay : Fallback overlay using Yeo atlas directly
+generate_hemisphere_overlays : Left/right hemisphere split overlays
+
+Data Classes
+------------
+MaskSummary : Container for per-mask QC metrics
+
+Workflow
+--------
+1. **Automatic QC** (recommended): Enable `qc_enabled=True` in pipeline
+   functions (preprocessing, mask_extraction_rest, run_feedback_session)
+   to generate QC reports automatically during execution.
+
+2. **Manual QC**: Call report generators directly for post-hoc analysis:
+   - generate_preprocessing_report() for motion and registration QC
+   - generate_mask_extraction_report() for ICA and mask QC
+   - generate_feedback_report() for activation and session QC
+
+Output Structure
+----------------
+All reports follow a consistent output pattern:
+
+    {stage_dir}/qc/
+    ├── {participant}_*_qc.html    # Main HTML report
+    ├── *.png                       # Individual plot images
+    └── overlays/                   # Mask overlay images
+        ├── subject/                # Subject space overlays
+        ├── mni/                    # MNI space overlays (if generated)
+        └── 2vol/                   # Feedback space overlays
+
+Design Philosophy
+-----------------
+- **Lightweight**: Only matplotlib, numpy, pandas, nibabel dependencies
+- **Static HTML**: No JavaScript, pure CSS - works offline
+- **Professional styling**: Consistent colorblind-safe palette, clean layout
+- **Auto-discovery**: Finds outputs automatically from directory structure
+- **Incremental**: Skips existing plots unless overwrite=True
 
 Dependencies
 ------------
-matplotlib, numpy, pandas, nibabel
+matplotlib : Plotting and visualization
+numpy : Array operations for slice extraction
+pandas : Data loading (TSV files)
+nibabel : NIfTI file loading and spatial information
 
 Notes
 -----
-These helpers are intentionally lightweight and rely only on in-tree
-dependencies. Images are written as PNGs; HTML is pure static to allow quick
-local inspection before running feedback.
+- All plots use Agg backend (non-interactive, thread-safe)
+- Colorblind-safe palette based on seaborn defaults
+- Images are 120 DPI PNGs for web viewing
+- Radiological convention: patient's left on viewer's right
+
+Examples
+--------
+Generate QC report for preprocessing:
+
+>>> from pineuro import qc
+>>> report = qc.generate_preprocessing_report(
+...     preprocessing_dir=Path('/data/sub-01/preprocessing'),
+...     participant_id='sub-01',
+...     task='rest'
+... )
+
+Generate QC report for mask extraction with browser preview:
+
+>>> report = qc.generate_mask_extraction_report(
+...     mask_extraction_dir=Path('/data/sub-01/mask_extraction'),
+...     participant_id='sub-01',
+...     network_names=['DefaultA', 'ContA'],
+...     open_browser=True
+... )
+
+Generate QC report for feedback session:
+
+>>> report = qc.generate_feedback_report(
+...     feedback_dir=Path('/data/sub-01/feedback'),
+...     subject='sub-01',
+...     task='nback',
+...     run=1,
+...     expected_volumes=200
+... )
 """
 
 # Standard library imports
@@ -46,7 +141,23 @@ from nibabel import load
 # ============================================================================
 
 def _configure_plot_style():
-    """Apply consistent, publication-quality style to all plots."""
+    """Apply consistent, publication-quality style to all plots.
+
+    This function sets matplotlib rcParams to achieve:
+    - Clean, modern sans-serif fonts (Arial, DejaVu Sans)
+    - Colorblind-safe palette from seaborn
+    - Professional styling (no top/right spines, subtle grid)
+    - Consistent DPI (120) for web viewing
+    - White backgrounds for clean HTML embedding
+
+    The style is applied once on module import and affects all
+    subsequent plots created by this module.
+
+    Notes
+    -----
+    Uses Agg backend which is thread-safe and doesn't require
+    a display, making it suitable for server-side generation.
+    """
     plt.rcParams.update({
         # Figure
         'figure.dpi': 120,
@@ -197,17 +308,77 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
 
 @dataclass
 class MaskSummary:
-    """Container for per-mask QC metrics."""
+    """Container for per-mask QC metrics.
+
+    Stores computed metrics for a single network mask, used for
+    summary tables in QC reports. All spatial measurements are
+    derived from the thresholded mask NIfTI file.
+
+    Attributes
+    ----------
+    name : str
+        Display name of the network mask (e.g., 'DefaultA', 'ContA').
+    voxels : int
+        Total number of non-zero voxels in the thresholded mask.
+    volume_ml : float
+        Mask volume in milliliters, computed from voxel count and
+        voxel dimensions from the NIfTI header.
+    centroid_ijk : tuple of float
+        Center of mass in voxel indices (i, j, k). Useful for
+        verifying mask location matches expected network anatomy.
+    chosen_component : int
+        Index of the ICA component selected for this network.
+        Set to -1 if component selection is not applicable.
+    correlation : float
+        Spatial correlation (Pearson r) between the selected ICA
+        component and the corresponding Yeo atlas network region.
+        Higher values indicate better network identification.
+
+    Examples
+    --------
+    >>> summary = MaskSummary(
+    ...     name='DefaultA',
+    ...     voxels=2543,
+    ...     volume_ml=10.17,
+    ...     centroid_ijk=(45.2, 60.1, 35.8),
+    ...     chosen_component=3,
+    ...     correlation=0.42
+    ... )
+    """
     name: str
     voxels: int
     volume_ml: float
     centroid_ijk: Tuple[float, float, float]
     chosen_component: int
-    correlation: float = 0.0  # Spatial correlation with Yeo network
+    correlation: float = 0.0
 
 
 def _pick_slices(n_slices: int, count: int = 6) -> list[int]:
-    """Evenly sample slice indices across the axial dimension."""
+    """Evenly sample slice indices across a dimension for visualization.
+
+    Used when automatic slice selection is not available (e.g., no atlas
+    coverage information). Samples slices uniformly to show a representative
+    cross-section of the volume.
+
+    Parameters
+    ----------
+    n_slices : int
+        Total number of slices along the dimension.
+    count : int, default=6
+        Number of slices to select. If n_slices <= count, returns all indices.
+
+    Returns
+    -------
+    list of int
+        Evenly-spaced slice indices from 0 to n_slices-1.
+
+    Examples
+    --------
+    >>> _pick_slices(100, count=5)
+    [0, 25, 50, 75, 100]
+    >>> _pick_slices(3, count=6)  # Returns all if fewer slices than count
+    [0, 1, 2]
+    """
     if n_slices <= count:
         return list(range(n_slices))
     lin = np.linspace(0, n_slices - 1, count)
@@ -221,37 +392,75 @@ def select_slices_from_atlas(
         top_n_per_plane: int = 1,
         mask_path: Path | None = None
 ) -> Dict[str, list[int]]:
-    """
-    Choose slice indices based on the Yeo atlas presence for a target network.
+    """Choose optimal slice indices for visualizing a network mask.
+
+    Selects slices that maximize network visibility by finding indices
+    with the highest voxel coverage. This ensures overlay plots show
+    the most informative views of each network rather than arbitrary
+    middle slices.
+
+    The algorithm:
+    1. Create a binary mask of the target network (from atlas or mask_path)
+    2. For each plane (axial/coronal/sagittal), count voxels per slice
+    3. Select the top N slices with highest counts per plane
+    4. Always include the centroid slice for anatomical reference
 
     Parameters
     ----------
     atlas_path : Path
-        Path to the Yeo atlas already resampled to participant space
+        Path to the Yeo atlas already resampled to participant space.
+        Used for slice selection when mask_path is not provided.
     labels : sequence of str
-        Atlas labels in order (index+1 matches NIfTI values)
+        Atlas network labels in order. Index position + 1 gives the
+        corresponding voxel value in the atlas NIfTI (e.g., labels[0]
+        corresponds to atlas value 1).
     target_label : str
-        Network label to select slices for
+        Name of the network to select slices for (must be in labels).
     top_n_per_plane : int, default=1
-        Number of highest-coverage slices per plane to include
+        Number of highest-coverage slices to return per plane.
+        The centroid slice is always added if not already included.
     mask_path : Path, optional
-        If provided, use this mask for slice selection instead of atlas
-        (useful when displaying participant-specific masks)
+        If provided, use this mask for slice selection instead of atlas.
+        Preferred when displaying participant-specific ICA-derived masks,
+        as they may differ spatially from atlas regions.
 
     Returns
     -------
     dict
-        Slice indices keyed by plane: {"axial": [...], "coronal": [...], "sagittal": [...]}
+        Slice indices keyed by plane name:
+        {"axial": [z1, z2, ...], "coronal": [y1, ...], "sagittal": [x1, ...]}
+
+    Notes
+    -----
+    Fallback behavior if network not found or empty:
+    - Returns middle slice for each plane
+    - Ensures plots are still generated even for sparse masks
+
+    Examples
+    --------
+    >>> slices = select_slices_from_atlas(
+    ...     atlas_path=Path('/data/yeo_to_subject.nii.gz'),
+    ...     labels=['VisA', 'VisB', 'DefaultA', ...],
+    ...     target_label='DefaultA',
+    ...     top_n_per_plane=2
+    ... )
+    >>> print(slices)
+    {'axial': [45, 52], 'coronal': [60, 65], 'sagittal': [30, 35]}
     """
-    # If mask provided, use it for slice selection; otherwise use atlas
+    # --- Determine which mask to use for slice selection ---
+    # If a participant-specific mask is provided, prefer it over the atlas
+    # because ICA-derived masks may have different spatial extent than
+    # the group-level Yeo parcellation
     if mask_path is not None:
         slice_img = load(mask_path)
         slice_data = slice_img.get_fdata()
-        mask = slice_data > 0  # Binary mask
+        mask = slice_data > 0  # Binary mask from any non-zero voxels
     else:
+        # Use atlas to create mask for the target network
         atlas_img = load(atlas_path)
         atlas_data = atlas_img.get_fdata().astype(int)
 
+        # Fallback: if network label unknown, use center slices
         if target_label not in labels:
             return {
                 "axial": _pick_slices(atlas_data.shape[2], 1),
@@ -259,9 +468,11 @@ def select_slices_from_atlas(
                 "sagittal": [atlas_data.shape[0] // 2],
             }
 
+        # Atlas values are 1-indexed: labels[0] -> value 1, labels[1] -> value 2, etc.
         target_idx = labels.index(target_label) + 1
         mask = atlas_data == target_idx
 
+    # Fallback for empty masks: use center slices to ensure valid output
     if not mask.any():
         shape = mask.shape
         return {
@@ -270,27 +481,47 @@ def select_slices_from_atlas(
             "sagittal": [shape[0] // 2],
         }
 
+    # --- Compute mask centroid for anatomical reference ---
+    # The centroid slice is always included to show the "center" of the network,
+    # even if it's not the slice with maximum coverage
     coords = np.argwhere(mask)
     centroid = coords.mean(axis=0)
 
     def _top_slices(along: int, top_n: int) -> list[int]:
+        """Find slices with highest voxel coverage along a given axis.
+
+        For example, to find the best axial slices (along=2, the Z axis):
+        - Sum voxels across X and Y for each Z position
+        - Select top N slices by count
+        - Always include the centroid slice
+        """
+        # Sum mask along all axes except 'along' to get per-slice coverage
+        # For axial (along=2): sum over axes (0,1) -> counts per Z slice
         axes = tuple(i for i in range(3) if i != along)
         counts = mask.sum(axis=axes)
+
+        # Sort slices by voxel count (descending)
         order = counts.argsort()[::-1]
+
+        # Take top N slices that have non-zero coverage
         chosen: list[int] = []
         for idx in order[:top_n]:
             if counts[idx] > 0 and 0 <= int(idx) < counts.shape[0]:
                 chosen.append(int(idx))
-        # Always include centroid slice
+
+        # Always include centroid slice for anatomical reference
         c_idx = int(round(centroid[along]))
         if 0 <= c_idx < counts.shape[0] and c_idx not in chosen:
             chosen.append(c_idx)
+
+        # Final fallback: middle slice if nothing else selected
         return chosen or [counts.shape[0] // 2]
 
+    # Axis mapping: sagittal=X(0), coronal=Y(1), axial=Z(2)
     return {
-        "axial": _top_slices(2, top_n_per_plane),
-        "coronal": _top_slices(1, top_n_per_plane),
-        "sagittal": _top_slices(0, top_n_per_plane),
+        "axial": _top_slices(2, top_n_per_plane),      # Best Z slices
+        "coronal": _top_slices(1, top_n_per_plane),    # Best Y slices
+        "sagittal": _top_slices(0, top_n_per_plane),   # Best X slices
     }
 
 
@@ -302,24 +533,68 @@ def plot_mask_overlay_tripanel(
         title: str | None = None,
         cmap: str = "autumn"
 ) -> None:
-    """
-    Save tri-planar overlays (sagittal, coronal, axial) using provided slice indices.
+    """Create a tri-planar (sagittal, coronal, axial) mask overlay visualization.
+
+    Generates a publication-quality figure showing the network mask overlaid
+    on the BOLD reference in three orthogonal planes. Uses radiological
+    convention (patient's left on viewer's right) for clinical compatibility.
+
+    The overlay uses a dual-contour technique for visibility:
+    1. White outer contour for contrast against dark brain regions
+    2. Red inner contour for clear boundary definition
+    3. Semi-transparent color fill to show mask extent
 
     Parameters
     ----------
     mask_path : Path
-        Path to the mask NIfTI file
+        Path to the mask NIfTI file (thresholded, binary or weighted).
     ref_path : Path
-        Path to the BOLD reference NIfTI file (same space as mask)
+        Path to the BOLD reference NIfTI file. Must be in the same
+        space and have identical dimensions as the mask.
     out_path : Path
-        Path to save the overlay PNG
+        Output path for the PNG file. Parent directories are created
+        if they don't exist.
     slices : dict
-        Slice indices keyed by plane {"axial": [...], "coronal": [...], "sagittal": [...]}
+        Slice indices keyed by plane name:
+        {"axial": [z_idx], "coronal": [y_idx], "sagittal": [x_idx]}
+        Uses first index from each list if multiple provided.
     title : str, optional
-        Figure title
+        Figure title displayed above the panels.
     cmap : str, default="autumn"
-        Matplotlib colormap for mask fill
+        Matplotlib colormap for the mask fill color. "autumn" provides
+        red-orange tones that contrast well with grayscale anatomy.
+
+    Raises
+    ------
+    ValueError
+        If reference and mask volumes have different shapes.
+
+    Notes
+    -----
+    **Radiological Convention:**
+    - Axial/Coronal: Patient's left appears on viewer's right
+    - Sagittal: Anterior (frontal) appears on viewer's left
+
+    The function automatically detects volume orientation from the NIfTI
+    affine matrix and applies appropriate flips to achieve radiological
+    convention regardless of the original acquisition orientation.
+
+    **Display intensity:**
+    Reference intensity is windowed to the 2nd-98th percentile range
+    to handle outliers and optimize tissue contrast.
+
+    Examples
+    --------
+    >>> slices = {'axial': [45], 'coronal': [60], 'sagittal': [30]}
+    >>> plot_mask_overlay_tripanel(
+    ...     mask_path=Path('/data/masks/DefaultA_thr.nii.gz'),
+    ...     ref_path=Path('/data/sub-01_boldref.nii.gz'),
+    ...     out_path=Path('/data/qc/DefaultA_overlay.png'),
+    ...     slices=slices,
+    ...     title='Default Mode Network A'
+    ... )
     """
+    # --- Load volumes ---
     mask_img = load(mask_path)
     ref_img = load(ref_path)
 
@@ -329,21 +604,37 @@ def plot_mask_overlay_tripanel(
     if ref.shape != mask.shape:
         raise ValueError(f"Shape mismatch for overlay: ref {ref.shape} vs mask {mask.shape}")
 
-    # Check orientation for proper display
+    # =========================================================================
+    # ORIENTATION DETECTION FOR RADIOLOGICAL CONVENTION
+    # =========================================================================
+    # NIfTI affine matrix encodes the mapping from voxel indices (i,j,k) to
+    # world coordinates (x,y,z in RAS+ convention: Right, Anterior, Superior).
+    #
+    # The diagonal elements indicate axis direction:
+    # - affine[0,0] > 0: X increases left-to-right (R orientation)
+    # - affine[0,0] < 0: X increases right-to-left (L orientation)
+    # - affine[1,1] > 0: Y increases posterior-to-anterior (A orientation)
+    # - affine[1,1] < 0: Y increases anterior-to-posterior (P orientation)
+    #
+    # Radiological convention requires:
+    # - Axial/Coronal views: patient's LEFT on viewer's RIGHT
+    # - Sagittal view: ANTERIOR (frontal lobe) on viewer's LEFT
+    # =========================================================================
     import nibabel as nib
-    ref_orient = nib.aff2axcodes(ref_img.affine)
+    ref_orient = nib.aff2axcodes(ref_img.affine)  # e.g., ('R', 'A', 'S')
 
-    # For coronal/axial: X-axis determines left-right
-    x_negative = ref_img.affine[0, 0] < 0  # True for LAS/RAS-, False for RAS/LAS+
+    # Detect X-axis direction (affects axial and coronal flip)
+    x_negative = ref_img.affine[0, 0] < 0  # True = L orientation (need flip)
 
-    # For sagittal: Y-axis determines anterior-posterior
-    # Positive Y = anterior to posterior (P orientation code)
-    # Negative Y = posterior to anterior (A orientation code)
-    y_negative = ref_img.affine[1, 1] < 0  # True if A in second position
+    # Detect Y-axis direction (affects sagittal flip)
+    y_negative = ref_img.affine[1, 1] < 0  # True = A orientation (no flip needed)
 
+    # --- Set up figure with three panels ---
     planes = [("sagittal", 0), ("coronal", 1), ("axial", 2)]
     fig, axes = plt.subplots(1, 3, figsize=(10, 3.5), constrained_layout=True)
 
+    # Robust intensity windowing: clip to 2nd-98th percentile to handle
+    # outliers (e.g., bright vessels or susceptibility artifacts)
     ref_min, ref_max = np.percentile(ref, [2, 98])
 
     def _get_slice(data: np.ndarray, plane: str, idx: int) -> np.ndarray:
@@ -355,51 +646,64 @@ def plot_mask_overlay_tripanel(
             return data[idx, :, :]
         raise ValueError(f"Unknown plane: {plane}")
 
+    # --- Render each plane ---
     for ax, (plane, axis_idx) in zip(axes, planes):
+        # Get slice index, falling back to middle slice if not specified
         plane_slices = slices.get(plane, [])
         if not plane_slices:
             plane_slices = [_pick_slices(ref.shape[axis_idx], 1)[0]]
-        idx = plane_slices[0]
+        idx = plane_slices[0]  # Use first slice if multiple provided
 
+        # Extract 2D slices from 3D volumes
         base = _get_slice(ref, plane, idx)
         overlay = _get_slice(mask, plane, idx)
 
-        # Apply radiological convention based on plane and orientation
-        # For sagittal: anterior (frontal lobe) should be on LEFT
-        # For coronal/axial: patient's left should be on RIGHT
-
+        # =================================================================
+        # APPLY RADIOLOGICAL CONVENTION FLIPS
+        # =================================================================
+        # After slicing, we have a 2D array that needs to be properly
+        # oriented for display. The .T transpose swaps axes for correct
+        # aspect ratio, and fliplr() handles left-right orientation.
+        # =================================================================
         if plane == "sagittal":
-            # Sagittal slice is Y-Z plane (anterior-posterior × inferior-superior)
-            # Y-axis determines anterior-posterior orientation
-            # Standard: anterior on left (when Y increases = P to A direction, need flip)
+            # Sagittal view: Y-Z plane (anterior-posterior × inferior-superior)
+            # Standard convention: frontal lobe (anterior) on LEFT side
             if y_negative:
-                # A orientation (posterior to anterior): anterior already on left
+                # A orientation: Y decreases left-to-right, anterior already left
                 base = base.T
                 overlay = overlay.T
             else:
-                # P orientation (anterior to posterior): need flip to get anterior on left
+                # P orientation: Y increases left-to-right, flip for anterior-left
                 base = np.fliplr(base.T)
                 overlay = np.fliplr(overlay.T)
         elif x_negative and plane in ["coronal", "axial"]:
-            # L orientation: patient's right on left, need flip
+            # L orientation in X: patient's right is on left, need flip
+            # to achieve radiological standard (patient left on viewer right)
             base = np.fliplr(base.T)
             overlay = np.fliplr(overlay.T)
         else:
-            # R orientation: patient's left already on right
+            # R orientation: already radiological (patient left on right)
             base = base.T
             overlay = overlay.T
 
+        # --- Draw the overlay with dual-contour technique ---
+        # 1. Grayscale anatomical background
         ax.imshow(base, cmap="gray", origin="lower", vmin=ref_min, vmax=ref_max)
-        # Add white boundary for better visibility
+
+        # 2. White outer contour provides contrast against dark brain regions
         ax.contour(overlay, levels=[0.5], colors=["white"], linewidths=2.0, alpha=0.8)
-        # Add red contour for definition
+
+        # 3. Red inner contour defines the mask boundary clearly
         ax.contour(overlay, levels=[0.5], colors=["#d62728"], linewidths=1.2, alpha=0.9)
+
+        # 4. Semi-transparent color fill shows mask extent without obscuring anatomy
         ax.imshow(
-            np.ma.masked_where(overlay <= 0, overlay),
+            np.ma.masked_where(overlay <= 0, overlay),  # Only show non-zero regions
             cmap=cmap,
-            alpha=0.35,
+            alpha=0.35,  # 35% opacity for visibility through the fill
             origin="lower",
         )
+
         ax.set_axis_off()
         ax.set_title(f"{plane.capitalize()} (slice {idx})", fontweight='normal')
 
@@ -1035,19 +1339,46 @@ def summarize_mask(
         chosen_component: int = -1,
         correlation: float = 0.0
 ) -> MaskSummary:
-    """
-    Compute basic mask metrics.
+    """Compute basic metrics for a network mask.
+
+    Loads a thresholded mask NIfTI and computes summary statistics
+    for inclusion in QC reports. Metrics help verify mask quality:
+    voxel count should be close to threshold, centroid should be
+    anatomically plausible for the network.
 
     Parameters
     ----------
     mask_path : Path
-        Path to the mask NIfTI file
+        Path to the thresholded mask NIfTI file (binary or weighted).
     name : str
-        Display name for the mask
+        Display name for the mask (used in reports).
     chosen_component : int, default=-1
-        ICA component index selected for this mask
+        Index of the ICA component used to create this mask.
+        Set to -1 if not applicable (e.g., for atlas-derived masks).
     correlation : float, default=0.0
-        Spatial correlation with Yeo network
+        Spatial correlation with the corresponding Yeo network region.
+
+    Returns
+    -------
+    MaskSummary
+        Dataclass containing computed metrics: voxels, volume_ml,
+        centroid_ijk, chosen_component, and correlation.
+
+    Notes
+    -----
+    Volume is computed as: voxels × (voxel_x × voxel_y × voxel_z) / 1000
+    where voxel dimensions come from the NIfTI header's zooms.
+
+    Examples
+    --------
+    >>> summary = summarize_mask(
+    ...     mask_path=Path('/data/sub-01/masks/DefaultA_thr.nii.gz'),
+    ...     name='DefaultA',
+    ...     chosen_component=3,
+    ...     correlation=0.42
+    ... )
+    >>> print(f"{summary.name}: {summary.voxels} voxels, {summary.volume_ml:.1f} mL")
+    DefaultA: 2000 voxels, 8.0 mL
     """
     img = load(mask_path)
     data = img.get_fdata()
@@ -2428,26 +2759,72 @@ def _generate_html_template(
         stage: str,
         sections: list[dict]
 ) -> str:
-    """
-    Generate professional HTML report with consistent styling.
+    """Generate a professional HTML QC report with consistent styling.
+
+    Creates a complete, self-contained HTML document with embedded CSS
+    for professional-quality QC reports. The resulting HTML is static
+    (no JavaScript) and works offline for easy sharing.
 
     Parameters
     ----------
     title : str
-        Page title
+        Page title displayed in browser tab and as main heading.
     participant_id : str
-        Participant identifier
+        Participant identifier displayed in the header.
     stage : str
-        Pipeline stage (e.g., "Preprocessing", "Mask Extraction", "Feedback")
+        Pipeline stage name (e.g., "Preprocessing", "Mask Extraction",
+        "Feedback (task: nback, run: 1)") for context.
     sections : list of dict
-        List of content sections. Each dict should have:
-        - 'type': 'heading', 'summary', 'grid', 'table', or 'single_image'
-        - 'content': appropriate content for the type
+        Content sections to render. Each dict must have a 'type' key
+        and appropriate content:
+
+        - ``{'type': 'heading', 'content': 'Section Title'}``
+          Renders as an <h2> heading.
+
+        - ``{'type': 'summary', 'content': {'Key': 'Value', ...}}``
+          Renders as a styled info box with key-value pairs.
+
+        - ``{'type': 'grid', 'content': [{'title': ..., 'path': ..., 'alt': ...}, ...]}``
+          Renders images in a responsive grid layout.
+
+        - ``{'type': 'single_image', 'path': 'relative/path.png', 'alt': '...'}``
+          Renders a single full-width image.
+
+        - ``{'type': 'table', 'headers': [...], 'rows': [[...], ...]}``
+          Renders a styled data table.
 
     Returns
     -------
     str
-        Complete HTML document
+        Complete HTML document as a string, ready to write to a file.
+
+    Notes
+    -----
+    **Styling Features:**
+    - Modern sans-serif typography (system fonts for fast loading)
+    - Responsive grid layout that adapts to screen width
+    - Colorblind-safe blue accent color (#0173B2)
+    - Clean, professional appearance suitable for publications
+    - Print-friendly styling
+
+    **Image Paths:**
+    All image paths in sections should be relative to the HTML file's
+    location. Use Path.relative_to() to compute paths correctly.
+
+    Examples
+    --------
+    >>> sections = [
+    ...     {'type': 'summary', 'content': {'Subject': 'sub-01', 'Task': 'rest'}},
+    ...     {'type': 'heading', 'content': 'Motion Parameters'},
+    ...     {'type': 'single_image', 'path': 'motion.png', 'alt': 'Motion plot'}
+    ... ]
+    >>> html = _generate_html_template(
+    ...     title='Preprocessing QC - sub-01',
+    ...     participant_id='sub-01',
+    ...     stage='Preprocessing',
+    ...     sections=sections
+    ... )
+    >>> Path('report.html').write_text(html)
     """
     from datetime import datetime
 
@@ -2604,21 +2981,59 @@ def write_html_report(
         heatmap_png: Path | None,
         summaries: Iterable[MaskSummary]
 ) -> None:
-    """
-    Create a professional HTML QC report for mask extraction.
+    """Create an HTML QC report for mask extraction (legacy API).
+
+    This is the original mask extraction report generator, kept for
+    backwards compatibility. For new code, prefer using
+    generate_mask_extraction_report() which auto-discovers outputs.
+
+    The report includes:
+    1. ICA × Yeo network correlation heatmap (if provided)
+    2. Mask overlays organized by coordinate space
+    3. Summary table with mask metrics
 
     Parameters
     ----------
     out_path : Path
-        Output HTML path
+        Output path for the HTML report file.
     participant_id : str
-        Participant identifier for display
+        Participant identifier displayed in report header.
     overlays_by_space : iterable of (space_name, overlays)
-        Mask overlay image paths grouped by space; each overlays iterable is (name, path)
+        Mask overlay images organized by coordinate space.
+        Each item is a tuple of (space_name, overlay_list) where
+        overlay_list contains (mask_name, png_path) tuples.
+        Example: [("BOLD reference", [("DefaultA", Path("..."))])]
     heatmap_png : Path or None
-        Path to heatmap PNG
+        Path to the ICA × Yeo correlation heatmap PNG.
+        If None, the correlation section is omitted.
     summaries : iterable of MaskSummary
-        Mask summary rows to include
+        Mask metrics for the summary table. One MaskSummary per
+        extracted network mask.
+
+    See Also
+    --------
+    generate_mask_extraction_report : Preferred high-level API
+    MaskSummary : Dataclass for mask metrics
+
+    Examples
+    --------
+    >>> summaries = [
+    ...     MaskSummary('DefaultA', 2000, 8.0, (45, 60, 35), 3, 0.42),
+    ...     MaskSummary('ContA', 1800, 7.2, (50, 40, 45), 7, 0.38),
+    ... ]
+    >>> overlays = [
+    ...     ("BOLD reference", [
+    ...         ("DefaultA", Path("overlays/DefaultA.png")),
+    ...         ("ContA", Path("overlays/ContA.png")),
+    ...     ])
+    ... ]
+    >>> write_html_report(
+    ...     out_path=Path("qc_report.html"),
+    ...     participant_id="sub-01",
+    ...     overlays_by_space=overlays,
+    ...     heatmap_png=Path("heatmap.png"),
+    ...     summaries=summaries
+    ... )
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

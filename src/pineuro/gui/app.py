@@ -1,15 +1,70 @@
-"""Main Flet application entry point.
+"""Main Flet application entry point for the pineuro GUI.
 
-This module provides the root application class (PyrtnfApp) and navigation
-between screens:
-- Study Manager: Browse, create, duplicate, and delete studies
-- Study Editor: Configure study parameters with tabbed interface
-- Participant Workflow: Execute pipeline steps per participant (Phase 4+)
+This module provides the root application class and serves as the
+central hub for all GUI navigation. It implements a single-page
+application pattern where different "screens" are rendered by
+clearing and rebuilding the page content.
 
-The app manages screen transitions, study state, and provides consistent
-UI layout across all screens.
+Screens
+-------
+**Study Manager** (default screen)
+    Browse saved studies as cards with metadata preview.
+    Actions: New Study, Edit, Duplicate, Delete, Start Session.
 
-Entry point: main() function calls ft.run() with the app factory.
+**Study Editor**
+    Configure study parameters in a tabbed interface.
+    Tabs: General, Paths, Preprocessing, Mask Extraction, Feedback, Sham.
+
+**Participant Workflow**
+    Execute and monitor pipeline steps for a specific participant.
+    Shows real-time progress, QC reports, and run controls.
+
+Navigation Flow
+---------------
+1. App starts → Study Manager
+2. Click study card → Prompt for participant ID → Participant Workflow
+3. Click "Edit" → Study Editor → Save → Study Manager
+4. Click "Back" in any screen → Study Manager
+
+Key Components
+--------------
+PyrtnfApp : Main application class
+    Manages screen transitions, current study state, and page configuration.
+
+main() : Entry point function
+    Creates the Flet app and launches the GUI window.
+
+Configuration
+-------------
+The app uses ConfigManager to persist study configurations in
+~/.pineuro/studies/ as YAML files.
+
+Window Configuration
+--------------------
+- Title: "pineuro - Real-time fMRI Neurofeedback"
+- Default size: 1400×900, maximized
+- Theme: Light mode
+- Padding: 0 (screens manage their own padding)
+
+Usage
+-----
+From command line:
+    python -m pineuro.gui.app
+
+Programmatically:
+    >>> from pineuro.gui.app import main
+    >>> main()
+
+Dependencies
+------------
+flet : Cross-platform GUI framework
+ConfigManager : Study configuration persistence
+StudyConfig : Study data model
+
+See Also
+--------
+screens.study_editor : Study configuration screen
+screens.participant_workflow : Pipeline execution screen
 """
 
 import logging

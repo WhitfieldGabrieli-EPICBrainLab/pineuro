@@ -1,13 +1,14 @@
 """pineuro - Python Real-Time fMRI Neurofeedback
 
-A complete pipeline for real-time fMRI neurofeedback research, from DICOM acquisition
+A complete pipeline for real-time fMRI neurofeedback research, from volume acquisition
 through preprocessing, network mask extraction, and moment-to-moment BOLD activation estimation.
 
 Main Functions
 --------------
 run_feedback_session : Run complete real-time feedback session
 preprocessing : DICOM conversion, motion correction, brain extraction
-collect_dicoms : Watch for and collect incoming scanner DICOMs
+collect_volumes : Watch for and collect incoming scanner volumes (DICOM or NIfTI)
+collect_dicoms : Alias for collect_volumes (backward compatibility)
 mask_extraction_rest : Extract network masks using ICA and Yeo atlas
 coregister_2vol : Coregister masks to real-time scanner position
 
@@ -55,7 +56,7 @@ Examples
 """
 
 from .feedback import run_feedback_session, get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
-from .preprocessing import preprocessing, collect_dicoms
+from .preprocessing import preprocessing, collect_volumes, collect_dicoms
 from .mask_extraction import mask_extraction_rest, coregister_2vol
 from .tasks import BaseTask, BallTask, ActivationSmoother, ActivationNormalizer
 from .tasks.session import SessionState, RunInfo
@@ -120,7 +121,8 @@ __all__ = [
     'get_slot_run_info',
     'STEP_TO_RUN_NUMBER',
     'preprocessing',
-    'collect_dicoms',
+    'collect_volumes',
+    'collect_dicoms',  # Backward compatibility alias for collect_volumes
     'mask_extraction_rest',
     'coregister_2vol',
     # Task classes

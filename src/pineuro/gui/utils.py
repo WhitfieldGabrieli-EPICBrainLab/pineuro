@@ -1,7 +1,51 @@
-"""
-Utility functions for GUI operations.
+"""Utility functions for the pineuro GUI.
 
-Includes validation helpers, threading utilities, and common UI functions.
+This module provides shared utilities used across GUI components:
+validation helpers for form input, threading utilities for background
+operations, and common UI helper functions.
+
+Validation Functions
+--------------------
+validate_positive_number : Validate positive float values
+validate_positive_int : Validate positive integer values
+validate_path : Validate file/directory paths
+validate_yeo_targets : Validate Yeo network target selection
+
+Constants
+---------
+YEO_7_LABELS : list of str
+    Network labels for the Yeo 7-network parcellation.
+YEO_17_LABELS : list of str
+    Network labels for the Yeo 17-network parcellation.
+
+Formatting Functions
+--------------------
+format_timestamp : Format ISO timestamp for display
+truncate_text : Truncate long text with ellipsis
+
+Exceptions
+----------
+ValidationError : Raised when form validation fails
+
+Threading
+---------
+BackgroundRunner : Run blocking operations in a thread
+    Prevents GUI freezing during long-running operations.
+
+Notes
+-----
+All validation functions raise ValidationError with descriptive
+messages suitable for displaying to users in the GUI.
+
+Examples
+--------
+>>> from pineuro.gui.utils import validate_positive_number, ValidationError
+>>> try:
+...     tr = validate_positive_number("1.2", "TR")
+...     print(f"Valid TR: {tr}")
+... except ValidationError as e:
+...     print(f"Error: {e}")
+Valid TR: 1.2
 """
 
 import logging

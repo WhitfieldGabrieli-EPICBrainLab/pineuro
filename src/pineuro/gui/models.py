@@ -1,5 +1,57 @@
-"""
-Data models for GUI state management.
+"""Data models for GUI state management and configuration.
+
+This module defines the data structures used by the pineuro GUI to
+manage study configurations. These models bridge the gap between
+the GUI's visual representation and the underlying YAML configuration
+files stored on disk.
+
+Key Components
+--------------
+StudyMetadata : Study-level metadata
+    Name, description, and timestamps for a study configuration.
+    This information is displayed in the study manager cards.
+
+StudyConfig : Complete study configuration
+    Combines metadata with the actual pipeline configuration
+    (session_config dict). This is the primary data structure
+    passed between GUI screens.
+
+Serialization
+-------------
+Both models support bidirectional conversion with dictionaries
+for YAML serialization:
+
+- to_dict() : Convert model to dictionary for saving
+- from_dict() : Create model from loaded dictionary
+
+The StudyConfig merges metadata into the YAML structure using
+a special "_metadata" key to keep everything in one file.
+
+File Structure
+--------------
+Studies are stored as YAML files with this structure:
+
+    _metadata:
+      name: "My Study"
+      description: "Description..."
+      created: "2024-01-15T10:30:00"
+      modified: "2024-01-15T14:45:00"
+    paths:
+      base_dir: "/data/study"
+      ...
+    preprocessing:
+      ...
+    feedback:
+      ...
+
+Dependencies
+------------
+dataclasses, datetime, pathlib
+
+See Also
+--------
+ConfigManager : Handles loading/saving of these models
+pineuro.session : SessionConfig class for pipeline configuration
 """
 
 from dataclasses import dataclass, field

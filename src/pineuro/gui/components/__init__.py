@@ -1,18 +1,76 @@
-"""Reusable GUI components for the pineuro application.
+"""Reusable GUI components for the pineuro participant workflow.
 
-This package contains reusable components and utilities for the GUI:
-- PipelineRunner: Background thread execution of pipeline steps
-- ActivationPlot: Real-time activation timeseries chart
-- FDPlot: Real-time framewise displacement timeseries chart
-- TaskMirror: Generic task visualization mirror
-- FeedbackLogPoller: Polls TSV files for new data
-- FeedbackMonitor: High-level monitor for feedback sessions
-- QCReportManager: Manages QC report discovery and viewing
-- CollectionProgressPanel: Progress display for DICOM collection
-- RunSelectionDialog: Dialog for selecting runs for preprocessing
-- MaskSelectionDialog: Dialog for reviewing and customizing network masks
-- VisitSelectionDialog: Dialog for selecting/creating visits in multi-visit studies
-- FeedbackSummaryDialog: Post-run summary with hit counts and motion stats
+This package contains Flet-based UI components used primarily in the
+participant workflow screen. These components provide real-time
+visualization, dialog interactions, and background task management.
+
+Pipeline Execution
+------------------
+PipelineRunner : Background thread execution of pipeline steps
+    Runs preprocessing, mask extraction, and feedback in a thread
+    while providing progress updates to the GUI.
+
+Real-Time Visualization
+-----------------------
+ActivationPlot : Network activation timeseries chart
+    Displays real-time activation values for each network mask.
+    Uses flet-charts LineChart for smooth updates.
+
+FDPlot : Framewise displacement timeseries chart
+    Shows motion (FD) over time with threshold highlighting.
+    Helps identify volumes with excessive motion.
+
+TaskMirror : PsychoPy task screen mirroring
+    Displays a scaled mirror of the PsychoPy stimulus window
+    for experimenter monitoring.
+
+Data Polling
+------------
+FeedbackLogPoller : Background TSV file watcher
+    Polls feedbacklog.tsv for new rows and triggers callbacks.
+
+FeedbackMonitor : High-level feedback session monitor
+    Combines log polling with activation/FD plotting.
+
+QC Integration
+--------------
+QCReportManager : QC report discovery and management
+    Finds and catalogs QC reports across pipeline stages.
+
+open_qc_report() : Open QC report in browser
+    Platform-aware browser launch for HTML reports.
+
+Collection Progress
+-------------------
+CollectionProgressPanel : DICOM/NIfTI collection display
+    Shows progress during volume collection with file counts.
+
+Dialogs
+-------
+RunSelectionDialog : Feedback run selection
+    Configure which runs to execute with acquisition parameters.
+
+MaskSelectionDialog : ICA component review
+    Review and optionally modify network mask assignments.
+
+VisitSelectionDialog : Multi-visit session management
+    Select existing visits or create new ones for longitudinal studies.
+
+FeedbackSummaryDialog : Post-run summary
+    Display hit counts, motion statistics, and run completion status.
+
+Usage
+-----
+Components are typically instantiated by the ParticipantWorkflowScreen
+and added to the page controls. Example:
+
+>>> from pineuro.gui.components import ActivationPlot
+>>> plot = ActivationPlot(
+...     mask_names=['DefaultA', 'ContA'],
+...     n_volumes=200,
+...     height=250,
+... )
+>>> container = plot.build()  # Returns Flet Container
 """
 
 from .pipeline_runner import PipelineRunner

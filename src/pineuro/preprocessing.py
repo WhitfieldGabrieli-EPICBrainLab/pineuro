@@ -1,75 +1,166 @@
 """
 Real-time fMRI preprocessing pipeline for neurofeedback research.
 
-Summary
--------
-DICOM conversion, motion correction, brain extraction, and multi-run
-coregistration with consistent, numbered output folders.
+This module handles the complete preprocessing workflow for fMRI data before
+neurofeedback sessions. It converts raw DICOM images from the scanner into
+analysis-ready NIfTI volumes with motion correction and brain extraction.
 
-Functions
----------
-- dicom_to_nifti: Convert DICOM files to NIfTI
-- motion_correction: Apply motion correction using FSL's mcflirt
-- brain_extraction: Perform brain extraction using FSL's bet
-- preprocessing: Complete preprocessing pipeline
+The preprocessing pipeline is designed for real-time neurofeedback studies where:
+- Multiple functional runs need to be combined (e.g., localizer + feedback runs)
+- Speed matters for between-run processing during scanner sessions
+- Consistent output structure enables automated downstream processing
+
+Key Components
+--------------
+preprocessing : Main pipeline function
+    Runs the complete 4-step preprocessing workflow.
+collect_volumes : DICOM/NIfTI collection function
+    Watches for incoming volumes during scanner acquisition.
+motion_correction : Motion correction wrapper
+    Calls FSL's mcflirt for head motion estimation and correction.
+brain_extraction : Brain extraction wrapper
+    Calls FSL's bet to create a brain mask.
 
 Workflow
 --------
-- Convert raw DICOMs to NIfTI
-- Run motion correction and brain extraction
-- Optionally smooth/filter and coregister across runs
-- Produce standardized outputs for downstream mask extraction/feedback
+The pipeline follows these steps (with numbered output directories for traceability):
+
+1. **DICOM to NIfTI** (01_nifti/)
+   Convert raw DICOMs to NIfTI format using dcm2niix.
+   Preserves scanner metadata (TR, slice timing, etc.) in JSON sidecars.
+
+2. **Motion Correction** (02_motion_correction/)
+   Estimate and correct head motion using FSL's mcflirt.
+   Outputs .par files with 6 motion parameters for QC.
+
+3. **Brain Extraction** (03_brain_extraction/)
+   Compute temporal mean of each run and extract brain mask using bet.
+   The mask excludes non-brain tissue to improve GLM estimation.
+
+4. **Coregistration** (04_coregistered/)
+   Align all runs to the first run's coordinate space using ANTs.
+   Concatenate aligned runs into a single 4D timeseries.
+
+Output Files
+------------
+After preprocessing, the root directory contains:
+- {participant}_task-{task}_preproc.nii.gz : Masked, preprocessed 4D timeseries
+- {participant}_task-{task}_preproc_mask.nii.gz : Eroded brain mask
+- {participant}_task-{task}_boldref.nii.gz : Masked BOLD reference (mean of run-01)
 
 Dependencies
 ------------
-FSL, nibabel, numpy
+External:
+    - FSL (mcflirt, bet) - Must be in PATH
+    - dcm2niix - For DICOM conversion
+    - ANTs (via ANTsPy) - For multi-run coregistration
+
+Python:
+    - nibabel : NIfTI I/O
+    - nilearn : Spatial smoothing
+    - scipy : Temporal filtering
+    - watchdog : Filesystem monitoring for DICOM collection
 
 Notes
 -----
-Outputs use a standard layout:
-- 01_nifti : Converted NIfTI files
-- 02_motion_correction : Motion-corrected data
-- 03_brain_extraction : Means and brain-extracted data
-- 04_coregistered : Coregistered and concatenated runs
+**Performance Optimization:**
+Motion correction uses `-stages 1` (single refinement stage) which is 1.66x faster
+than the default 4 stages while maintaining r=0.9999 correlation with full results.
+This tradeoff is appropriate for real-time use where speed matters.
 
-FSL binaries must be available in PATH. Each step honors overwrite=False to
-skip work when outputs already exist.
-Further reading: see docs/references.md for reference list.
+**Overwrite Behavior:**
+All functions support `overwrite=False` (the default). When False, existing outputs
+are skipped, enabling efficient re-runs of the pipeline. Set `overwrite=True` to
+force regeneration of all outputs.
+
+**Parallel Processing:**
+Multi-run preprocessing supports parallel execution via `n_jobs`. DICOM conversion
+and motion correction run in parallel across runs when n_jobs != 1.
+
+See Also
+--------
+mask_extraction : Extracts network masks from preprocessed resting-state data
+feedback : Real-time activation estimation using preprocessed reference data
 
 References
 ----------
-Jenkinson, M., Beckmann, C. F., Behrens, T. E., Woolrich, M. W., & Smith, S. M. (2012). FSL. NeuroImage, 62(2), 782-790.
+.. [1] Jenkinson, M., Beckmann, C. F., Behrens, T. E., Woolrich, M. W., & Smith, S. M.
+       (2012). FSL. NeuroImage, 62(2), 782-790.
+.. [2] Li, X., Morgan, P. S., Ashburner, J., Smith, J., & Rorden, C. (2016).
+       The first step for neuroimaging data analysis: DICOM to NIfTI conversion.
+       Journal of Neuroscience Methods, 264, 47-56.
 """
 
-# Standard library imports
+# =============================================================================
+# IMPORTS
+# =============================================================================
+
+# --- Standard Library ---
+# Type hints for function signatures (improves IDE support and documentation)
 from typing import Union, List, Optional, Callable
 from pathlib import Path
-import heapq
-import shutil
-import copy
-import threading
-import time
+import heapq      # Priority queue for ordered volume collection
+import shutil     # File operations (copy during DICOM collection)
+import copy       # Deep copy for data structures
+import threading  # Multi-threading for volume collection with watchdog
+import time       # Timing for collection timeout and progress tracking
+import logging    # Structured logging throughout the pipeline
 
-# Third-party imports
+# --- Third-Party: Neuroimaging ---
 import numpy as np
 import nibabel as nib
 from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
-from nilearn.image import smooth_img
-from scipy.signal import butter, filtfilt
+from nilearn.image import smooth_img        # Gaussian spatial smoothing
+from scipy.signal import butter, filtfilt   # Butterworth temporal filtering
+
+# --- Third-Party: Filesystem Monitoring ---
+# Watchdog provides cross-platform filesystem event monitoring for detecting
+# new DICOM files as they arrive from the scanner during acquisition
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, DirCreatedEvent
 
-# Local imports
+# --- Local Imports ---
 from pineuro.utils import (
-    run_command, dicom_to_nifti, compute_xfm, apply_xfm, compute_mean, apply_mask,
-    DICOM_EXTENSIONS, is_valid_dicom, get_tr_from_dicom, Timer, parallel_run_command,
-    erode_mask
+    # Command execution
+    run_command,           # Wrapper for FSL commands with validation
+    parallel_run_command,  # Parallel execution for multi-run processing
+
+    # DICOM/NIfTI operations
+    dicom_to_nifti,        # dcm2niix wrapper
+    VOLUME_EXTENSIONS,     # Supported file extensions (.dcm, .nii.gz, etc.)
+    is_valid_volume,       # Validate DICOM/NIfTI files
+    is_nifti_file,         # Check if file is NIfTI format
+    get_json_sidecar_path, # Get path to JSON sidecar for NIfTI
+
+    # Registration (ANTs-backed)
+    compute_xfm,           # Compute transformation matrix
+    apply_xfm,             # Apply transformation to volume
+    compute_mean,          # Compute temporal mean of 4D volume
+
+    # Masking
+    apply_mask,            # Apply brain mask to volume
+    erode_mask,            # Erode mask to reduce edge effects
+
+    # Timing
+    Timer,                 # Performance timing context manager
 )
 
-# Configure module-level logger
-import logging
+# --- Module Logger ---
+# Use __name__ to create a logger hierarchy (pineuro.preprocessing)
+# This allows users to configure logging at the pineuro level
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# SECTION 1: CORE PREPROCESSING FUNCTIONS
+# =============================================================================
+# These functions wrap FSL commands for individual preprocessing steps.
+# Each function follows a consistent pattern:
+#   - Validate inputs
+#   - Check if outputs exist (skip if overwrite=False)
+#   - Run the FSL command via run_command()
+#   - Return output paths
+
 
 def motion_correction(
         input_file: Union[str, Path],
@@ -79,33 +170,67 @@ def motion_correction(
     """
     Perform motion correction on fMRI data using FSL's mcflirt.
 
+    Motion correction aligns each volume in the 4D timeseries to a reference
+    volume (middle volume by default) to compensate for head movement during
+    the scan. This is critical for neurofeedback because uncorrected motion
+    can cause spurious activation signals.
+
     Parameters
     ----------
     input_file : str or Path
-        Path to input 4D NIfTI file containing fMRI timeseries
+        Path to input 4D NIfTI file containing fMRI timeseries.
     output_file : str or Path
-        Path for output motion-corrected NIfTI file. Parent directory will be created if it doesn't exist
+        Path for output motion-corrected NIfTI file.
+        Parent directory will be created if it doesn't exist.
     overwrite : bool, default=False
-        If True, always run command and overwrite existing outputs.
-        If False, skip command if all output files already exist.
+        If True, always run mcflirt and overwrite existing outputs.
+        If False, skip if output file already exists.
 
+    Returns
+    -------
+    None
+        Writes output file to disk. Also creates {output_file}.par with
+        motion parameters (6 columns: rot_x, rot_y, rot_z, trans_x, trans_y, trans_z).
+
+    Notes
+    -----
+    **Speed Optimization:**
+    We use `-stages 1` (single refinement stage) instead of the default 4 stages.
+    Benchmarking shows this is 1.66x faster while maintaining r=0.9999 correlation
+    with full results. For real-time neurofeedback where preprocessing happens
+    between runs, this speedup is valuable.
+
+    **Cost Function:**
+    We use `-cost normcorr` (normalized correlation) which is optimized for
+    EPI-to-EPI registration. This is faster than the default cost function.
+
+    See Also
+    --------
+    preprocessing : Main pipeline function that calls this.
     """
 
+    # Build mcflirt command with optimized parameters for real-time use
     cmd = [
         'mcflirt',
         '-in', str(input_file),
         '-out', str(output_file),
-        '-plots',  # Generate .par file with motion parameters for QC
-        '-cost', 'normcorr',  # Faster cost function for EPI
-        '-stages', '1'  # Single stage (1.66x faster, r=0.999992 vs default)
+        '-plots',           # Generate .par file with 6 motion parameters for QC
+        '-cost', 'normcorr',  # Normalized correlation - fast and robust for EPI
+        '-stages', '1'      # Single refinement stage (1.66x faster, r=0.9999)
     ]
 
+    # Execute via run_command which handles:
+    # - Input validation (file exists)
+    # - Output directory creation
+    # - Overwrite logic (skip if outputs exist)
+    # - Command availability check (mcflirt in PATH)
+    # - Performance timing
     run_command(
         cmd_name='mcflirt',
         cmd=cmd,
         description='Motion correction',
         inputs=input_file,
-        outputs=[output_file, str(output_file) + '.par'],  # Include .par file in outputs
+        outputs=[output_file, str(output_file) + '.par'],  # .par file is also an output
         overwrite=overwrite,
         timing_category='preprocessing'
     )
@@ -116,42 +241,79 @@ def concat(
         overwrite: bool = False
 ) -> None:
     """
-    Concatenate a set of fMRI data along the time axis.
+    Concatenate multiple fMRI volumes along the time axis.
+
+    This function combines multiple 4D NIfTI files (e.g., from separate runs)
+    into a single 4D timeseries. Used after coregistration to create a unified
+    dataset for ICA-based mask extraction.
 
     Parameters
     ----------
-    input_files : List of str or Path
-        List of path to input NIfTI files
-    output_file: str or Path
-        Path to save concatenated data
+    input_files : list of str or Path
+        List of paths to input 4D NIfTI files. Files are concatenated in the
+        order provided, so ensure chronological ordering (run-01, run-02, etc.).
+    output_file : str or Path
+        Path for output concatenated NIfTI file.
     overwrite : bool, default=False
-        If True, always run command and overwrite existing outputs.
-        If False, skip command if all output files already exist.
+        If True, always concatenate and overwrite existing output.
+        If False, skip if output file already exists.
 
+    Returns
+    -------
+    None
+        Writes concatenated 4D volume to disk.
+
+    Notes
+    -----
+    **Header Handling:**
+    The affine transformation matrix and header are taken from the first input
+    file. This assumes all runs are in the same coordinate space (i.e., have
+    been coregistered).
+
+    **Memory Usage:**
+    All input files are loaded into memory simultaneously for concatenation.
+    For very long acquisitions, this may require significant RAM.
+
+    Examples
+    --------
+    >>> concat(
+    ...     input_files=['run-01_mcf.nii.gz', 'run-02_coreg.nii.gz'],
+    ...     output_file='all_runs.nii.gz'
+    ... )
     """
     output_path = Path(output_file)
-    
-    # Check if output exists
+
+    # --- Check for existing output (skip if not overwriting) ---
     if not overwrite and output_path.exists():
         logger.info(f"Output file exists and overwrite=False. Skipping concatenation.")
         return
-    
+
     logger.info("Concatenating...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Load all images and concatenate
+
+    # --- Load all input images ---
+    # nibabel loads headers lazily, but get_fdata() loads the full array
     images = [nib.load(str(f)) for f in input_files]
-    
-    # Get data arrays and concatenate along time axis
+
+    # --- Concatenate along time axis (axis=-1 = 4th dimension) ---
+    # For 4D volumes with shape (X, Y, Z, T), this appends timepoints
     data_arrays = [img.get_fdata() for img in images]
     concatenated = np.concatenate(data_arrays, axis=-1)
-    
-    # Use affine and header from first image
+
+    # --- Create output image ---
+    # Use affine and header from first image (assumes all are coregistered)
     first_img = images[0]
     out_img = Nifti1Image(concatenated, first_img.affine, first_img.header)
-    
+
     save(out_img, output_path)
     logger.info(f"Output: {output_path}")
+
+# =============================================================================
+# SECTION 2: OPTIONAL PREPROCESSING STEPS
+# =============================================================================
+# These functions are not part of the default pipeline but can be applied
+# for specific use cases (e.g., smoothing for group-level analysis).
+
 
 def spatial_smoothing(
         input_file: Union[str, Path],
@@ -160,32 +322,57 @@ def spatial_smoothing(
         overwrite: bool = False
 ) -> None:
     """
-    Apply Gaussian spatial smoothing to fMRI data using nilearn.
+    Apply Gaussian spatial smoothing to fMRI data.
+
+    Spatial smoothing increases signal-to-noise ratio (SNR) by averaging
+    neighboring voxels, at the cost of spatial resolution. This is typically
+    used for group-level analysis rather than individual neurofeedback.
 
     Parameters
     ----------
     input_file : str or Path
-        Path to input NIfTI file
+        Path to input 3D or 4D NIfTI file.
     output_file : str or Path
-        Path for output smoothed NIfTI file. Parent directory will be created if it doesn't exist
+        Path for output smoothed NIfTI file.
+        Parent directory will be created if it doesn't exist.
     fwhm : float, default=5.0
-        Full width at half maximum (FWHM) of the Gaussian smoothing kernel in mm
+        Full width at half maximum (FWHM) of the Gaussian smoothing kernel
+        in millimeters. Common values:
+        - 5-6 mm : Standard for single-subject analysis
+        - 8 mm : Standard for group analysis
+        - 0 or None : No smoothing
     overwrite : bool, default=False
-        If True, always run command and overwrite existing outputs.
-        If False, skip command if all output files already exist.
+        If True, always smooth and overwrite existing output.
+        If False, skip if output file already exists.
 
+    Returns
+    -------
+    None
+        Writes smoothed volume to disk.
+
+    Notes
+    -----
+    **When to Use:**
+    For real-time neurofeedback, smoothing is typically applied during mask
+    extraction (before ICA) rather than during preprocessing. The default
+    pipeline does NOT apply smoothing.
+
+    **FWHM vs Sigma:**
+    FWHM = sigma * 2.355 (for Gaussian kernels). A 6mm FWHM corresponds to
+    sigma ≈ 2.55mm.
     """
     output_path = Path(output_file)
-    
-    # Check if output exists
+
+    # --- Check for existing output ---
     if not overwrite and output_path.exists():
         logger.info(f"Output file exists and overwrite=False. Skipping spatial smoothing.")
         return
-    
+
     logger.info("Spatial smoothing...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Use nilearn for smoothing
+
+    # --- Apply Gaussian smoothing via nilearn ---
+    # nilearn handles 3D and 4D inputs automatically
     smoothed = smooth_img(str(input_file), fwhm=fwhm)
     smoothed.to_filename(str(output_path))
     logger.info(f"Output: {output_path}")
@@ -198,78 +385,118 @@ def temporal_filtering(
         overwrite: bool = False
 ) -> None:
     """
-    Apply temporal bandpass filtering to fMRI data using scipy Butterworth filter.
+    Apply temporal bandpass filtering to fMRI data.
+
+    Temporal filtering removes unwanted frequency components from the BOLD signal.
+    High-pass filtering removes slow drifts (scanner drift, physiological), while
+    low-pass filtering removes high-frequency noise.
 
     Parameters
     ----------
     input_file : str or Path
-        Path to input NIfTI file
+        Path to input 4D NIfTI file.
     output_file : str or Path
-        Path for output filtered NIfTI file. Parent directory will be created if it doesn't exist
+        Path for output filtered NIfTI file.
+        Parent directory will be created if it doesn't exist.
     highpass : float, optional
-        High-pass filter cutoff in Hz. If None, no high-pass filtering is applied
+        High-pass filter cutoff in Hz. Removes frequencies below this value.
+        Common value: 0.01 Hz (removes drifts slower than 100s).
+        If None, no high-pass filtering is applied.
     lowpass : float, optional
-        Low-pass filter cutoff in Hz. If None, no low-pass filtering is applied
+        Low-pass filter cutoff in Hz. Removes frequencies above this value.
+        Common value: 0.1 Hz (removes noise faster than 10s).
+        If None, no low-pass filtering is applied.
     overwrite : bool, default=False
-        If True, always run command and overwrite existing outputs.
-        If False, skip command if all output files already exist.
+        If True, always filter and overwrite existing output.
+        If False, skip if output file already exists.
 
+    Returns
+    -------
+    None
+        Writes filtered volume to disk.
+
+    Notes
+    -----
+    **Filter Design:**
+    Uses a 2nd-order Butterworth filter (same as FSL's default) for smooth
+    frequency response without ringing artifacts.
+
+    **Zero-Phase Filtering:**
+    The filter is applied forward and backward (filtfilt) to eliminate phase
+    distortion. This is important for preserving the timing of neural events.
+
+    **TR Extraction:**
+    The repetition time (TR) is read from the NIfTI header to compute the
+    sampling frequency. Ensure your NIfTI files have correct TR metadata.
+
+    **When to Use:**
+    For resting-state analysis, bandpass filtering (0.01-0.1 Hz) is standard.
+    For task-based neurofeedback, filtering may remove task-related signal
+    and is generally NOT recommended.
     """
     output_path = Path(output_file)
-    
-    # Check if output exists
+
+    # --- Check for existing output ---
     if not overwrite and output_path.exists():
         logger.info(f"Output file exists and overwrite=False. Skipping temporal filtering.")
         return
-    
-    # Load image
+
+    # --- Load image and extract timing parameters ---
     img = nib.load(str(input_file))
     data = img.get_fdata()
-    
-    # Get TR from header (4th element of zooms is temporal spacing)
-    # type: ignore needed because nibabel typing doesn't recognize header.get_zooms()[3]
+
+    # Extract TR from NIfTI header (4th element of zooms is temporal spacing)
+    # nibabel's type hints don't recognize this, hence type: ignore
     tr = img.header.get_zooms()[3]  # type: ignore
-    fs = 1.0 / tr  # Sampling frequency in Hz
-    nyquist = fs / 2.0
-    
+    fs = 1.0 / tr          # Sampling frequency in Hz
+    nyquist = fs / 2.0     # Nyquist frequency (max representable frequency)
+
     logger.info(f"Temporal filtering (TR={tr}s, fs={fs:.3f}Hz)...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Determine filter type and cutoffs
+
+    # --- Determine filter type based on provided cutoffs ---
     if highpass is not None and lowpass is not None:
-        # Bandpass filter
+        # Bandpass: keep frequencies between highpass and lowpass
         btype = 'bandpass'
-        Wn = [highpass / nyquist, lowpass / nyquist]
+        Wn = [highpass / nyquist, lowpass / nyquist]  # Normalize to Nyquist
     elif highpass is not None:
-        # High-pass filter
+        # High-pass: remove frequencies below highpass (removes slow drifts)
         btype = 'highpass'
         Wn = highpass / nyquist
     elif lowpass is not None:
-        # Low-pass filter  
+        # Low-pass: remove frequencies above lowpass (removes high-freq noise)
         btype = 'lowpass'
         Wn = lowpass / nyquist
     else:
-        # No filtering requested
+        # No filtering requested - save unchanged
         logger.info("No filter cutoffs specified. Saving unchanged.")
         save(img, output_path)
         return
-    
-    # Design Butterworth filter (order 2 to match FSL behavior)
+
+    # --- Design Butterworth filter ---
+    # Order 2 matches FSL's default and provides good balance between
+    # sharpness (frequency selectivity) and smoothness (minimal ringing)
     b, a = butter(2, Wn, btype=btype)
-    
-    # Apply filter along time axis (axis=-1)
-    # Reshape to 2D for filtering, then reshape back
+
+    # --- Apply filter to each voxel's timeseries ---
+    # Reshape 4D (X, Y, Z, T) to 2D (voxels, timepoints) for efficient filtering
     original_shape = data.shape
     data_2d = data.reshape(-1, original_shape[-1])
-    
-    # Apply zero-phase filtering
+
+    # filtfilt applies filter forward then backward to eliminate phase shift
+    # This is critical for task timing - phase distortion would shift events
     filtered_2d = filtfilt(b, a, data_2d, axis=-1)
     filtered = filtered_2d.reshape(original_shape)
-    
-    # Save output
+
+    # --- Save filtered output ---
     out_img = Nifti1Image(filtered, img.affine, img.header)
     save(out_img, output_path)
     logger.info(f"Output: {output_path}")
+
+# =============================================================================
+# SECTION 3: BRAIN EXTRACTION
+# =============================================================================
+
 
 def brain_extraction(
         input_file: Union[str, Path],
@@ -279,32 +506,63 @@ def brain_extraction(
     """
     Perform brain extraction using FSL's bet.
 
+    Brain extraction (skull stripping) creates a binary mask that identifies
+    brain voxels vs. non-brain tissue (skull, scalp, air). This mask is used
+    to restrict analysis to brain tissue, which improves GLM estimation and
+    reduces computation.
+
     Parameters
     ----------
     input_file : str or Path
-        Path to input NIfTI file
+        Path to input 3D NIfTI file (typically temporal mean of fMRI data).
+        bet works best on 3D volumes, not 4D timeseries.
     output_dir : str or Path
-        Directory where the NIfTI file will be saved. Will be created if it doesn't exist
+        Directory for output files. Will be created if it doesn't exist.
     overwrite : bool, default=False
-        If True, always run command and overwrite existing outputs.
-        If False, skip command if all output files already exist.
+        If True, always run bet and overwrite existing outputs.
+        If False, skip if output files already exist.
 
+    Returns
+    -------
+    brain_file : Path
+        Path to brain-extracted volume ({input_name}_brain.nii.gz).
+    mask_file : Path
+        Path to binary brain mask ({input_name}_brain_mask.nii.gz).
+
+    Notes
+    -----
+    **Why Use Temporal Mean:**
+    bet is designed for structural images with clear tissue contrast. The
+    temporal mean of an fMRI run has better SNR than individual volumes,
+    making brain boundaries easier to detect.
+
+    **Default Parameters:**
+    We use bet's default fractional intensity threshold (0.5). For EPI data
+    with significant signal dropout, you may need to adjust with `-f` flag,
+    but for typical whole-brain coverage the default works well.
+
+    **Mask Erosion:**
+    The mask from bet often includes edge voxels that contain partial-volume
+    effects. The main preprocessing function erodes the mask by 2 voxels to
+    exclude these unreliable edge voxels.
     """
-    
-    # Construct the expected outputs
+
+    # --- Construct output paths ---
+    # Remove .nii.gz suffix to get the base name
     output_name = Path(input_file).with_suffix("").stem
     brain_file = Path(output_dir) / f"{output_name}_brain.nii.gz"
     mask_file = Path(output_dir) / f"{output_name}_brain_mask.nii.gz"
-    
-    # Build bet command
+
+    # --- Build bet command ---
+    # -m flag creates the binary mask in addition to the brain-extracted volume
     cmd = [
         'bet',
         str(input_file),
         str(brain_file),
-        "-m"
+        "-m"  # Output binary brain mask
     ]
 
-    # Run bet
+    # --- Execute bet ---
     run_command(
         cmd_name='bet',
         cmd=cmd,
@@ -317,6 +575,11 @@ def brain_extraction(
 
     return brain_file, mask_file
 
+# =============================================================================
+# SECTION 4: MAIN PREPROCESSING PIPELINE
+# =============================================================================
+
+
 def preprocessing(
         participant_id: str,
         task: str,
@@ -328,50 +591,130 @@ def preprocessing(
         progress_callback: Optional[callable] = None
 ) -> tuple[Path, Path, Path]:
     """
-    Run the preprocessing pipeline for fMRI data (task or rest).
+    Run the complete preprocessing pipeline for fMRI data.
+
+    This is the main entry point for preprocessing. It executes the full 4-step
+    pipeline: DICOM conversion, motion correction, brain extraction, and
+    multi-run coregistration. Outputs are written to numbered subdirectories
+    for easy traceability.
 
     Parameters
     ----------
     participant_id : str
-        Participant ID
+        Participant identifier (e.g., 'sub-01'). Used in output filenames.
     task : str
-        Task name (e.g., rest)
+        Task name (e.g., 'rest', 'nback'). Used in output filenames following
+        BIDS naming conventions.
     root_dir : str or Path
-        Path to the root directory for all outputs
+        Root directory for all preprocessing outputs. Subdirectories
+        (01_nifti/, 02_motion_correction/, etc.) are created here.
     input_dicoms : str or Path or list of str or Path
-        Path to a single DICOM folder, or list of paths to multiple files
+        Path(s) to DICOM folder(s). Can be:
+        - Single path: One run of data
+        - List of paths: Multiple runs to be coregistered and concatenated
     overwrite : bool, default=False
-        If True, always run command and overwrite existing outputs.
-        If False, skip command if all output files already exist.
+        If True, regenerate all outputs even if they exist.
+        If False, skip steps where outputs already exist (faster re-runs).
     n_jobs : int, default=-1
         Number of parallel jobs for DICOM conversion and motion correction.
-        -1 uses all available CPUs. Set to 1 for sequential processing.
+        - -1: Use all available CPU cores
+        - 1: Sequential processing (useful for debugging)
+        - N: Use exactly N cores
     qc_enabled : bool, default=True
-        If True, generate QC report after preprocessing completes.
-        Report includes motion parameters, framewise displacement, brain mask coverage,
-        and multi-run coregistration overlays (if applicable).
+        If True, generate HTML QC report after preprocessing completes.
+        Report includes motion timeseries, framewise displacement, and
+        brain mask coverage visualizations.
     progress_callback : callable, optional
-        Callback function for progress updates. Called with (step, detail) arguments.
-        Used by GUI to display real-time progress in log console.
+        Callback function for progress updates with signature:
+        ``callback(step: str, detail: str)``.
+        Used by GUI to display real-time progress.
 
     Returns
     -------
     preproc_file : Path
-        Preprocessed file
+        Path to preprocessed 4D timeseries (masked, motion-corrected,
+        coregistered if multi-run).
     mask_file : Path
-        Mask file
+        Path to eroded brain mask (binary NIfTI).
     ref_file : Path
-        BOLD reference file
+        Path to BOLD reference image (masked mean of first run).
 
     Raises
     ------
     FileNotFoundError
-        If any folder in input_dicoms does not exist or is empty
+        If any DICOM folder does not exist or is empty.
 
+    Notes
+    -----
+    **Output Directory Structure:**
+    ::
+
+        root_dir/
+        ├── 01_nifti/                    # DICOM → NIfTI conversion
+        │   └── {participant}_task-{task}_run-{N}.nii.gz
+        ├── 02_motion_correction/        # Motion-corrected volumes
+        │   ├── {participant}_task-{task}_run-{N}_mcf.nii.gz
+        │   └── {participant}_task-{task}_run-{N}_mcf.nii.gz.par
+        ├── 03_brain_extraction/         # Temporal means and brain mask
+        │   ├── {participant}_task-{task}_run-{N}_mean.nii.gz
+        │   └── {participant}_task-{task}_run-01_mean_brain_mask.nii.gz
+        ├── 04_coregistered/             # Multi-run alignment (if >1 run)
+        │   ├── {participant}_task-{task}.nii.gz
+        │   └── xfm/                     # ANTs transform files
+        ├── {participant}_task-{task}_preproc.nii.gz      # Final masked output
+        ├── {participant}_task-{task}_preproc_mask.nii.gz # Eroded brain mask
+        ├── {participant}_task-{task}_boldref.nii.gz      # BOLD reference
+        └── qc/                          # QC report (if enabled)
+            └── preprocessing_qc.html
+
+    **Multi-Run Coregistration:**
+    When multiple DICOM folders are provided, all runs are registered to the
+    first run's coordinate space using rigid-body (6 DOF) ANTs registration.
+    This ensures voxel correspondence across runs for concatenation.
+
+    **Mask Erosion:**
+    The brain mask is eroded by 2 voxels to exclude edge voxels that may
+    contain partial-volume effects or be affected by motion artifacts.
+
+    Examples
+    --------
+    Single run preprocessing:
+
+    >>> preproc_file, mask_file, ref_file = preprocessing(
+    ...     participant_id='sub-01',
+    ...     task='rest',
+    ...     root_dir='/data/sub-01/preproc',
+    ...     input_dicoms='/scanner/sub-01/rest_dicoms',
+    ... )
+
+    Multi-run preprocessing (coregistered):
+
+    >>> preproc_file, mask_file, ref_file = preprocessing(
+    ...     participant_id='sub-01',
+    ...     task='rest',
+    ...     root_dir='/data/sub-01/preproc',
+    ...     input_dicoms=[
+    ...         '/scanner/sub-01/rest_run1_dicoms',
+    ...         '/scanner/sub-01/rest_run2_dicoms',
+    ...     ],
+    ...     n_jobs=4,  # Use 4 cores for parallel processing
+    ... )
+
+    See Also
+    --------
+    collect_volumes : Collect DICOMs from scanner before preprocessing.
+    mask_extraction : Extract network masks from preprocessed resting-state data.
     """
 
-    # Helper to emit progress to both logger and callback
+    # -------------------------------------------------------------------------
+    # Setup: Progress reporting helper
+    # -------------------------------------------------------------------------
+    # This helper function sends progress updates to both the Python logger
+    # and an optional GUI callback. This dual output ensures progress is
+    # visible in terminal mode (via logger) and GUI mode (via callback).
+
     def emit_progress(step: str, detail: str = ""):
+        """Emit progress to logger and optional GUI callback."""
         if detail:
             logger.info(f"{step}: {detail}")
         else:
@@ -379,42 +722,70 @@ def preprocessing(
         if progress_callback:
             progress_callback(step, detail)
 
-    # Log the command
     emit_progress(f"Running preprocessing for {participant_id}")
 
-    # Convert to Path object
+    # -------------------------------------------------------------------------
+    # Input Validation
+    # -------------------------------------------------------------------------
+    # Validate all input DICOM directories before starting any processing.
+    # This catches common issues (wrong path, empty folder) early rather than
+    # failing mid-pipeline.
+
     root_dir = Path(root_dir)
 
-    # Convert inputs to list if single file provided
+    # Normalize input_dicoms to a list (single path becomes a 1-element list)
     if isinstance(input_dicoms, (str, Path)):
         input_dicoms = [input_dicoms]
 
-    # Convert to strings and validate
+    # Validate each input directory
     input_paths: list[str] = []
     logger.info(f"Input DICOM folders:\n")
     for f in input_dicoms:
         path = Path(f)
+
+        # Check existence
         if not path.exists():
             raise FileNotFoundError(f"Folder not found: {path}")
+
+        # Check it's a directory (not a file)
         if not path.is_dir():
             raise FileNotFoundError(f"Not a directory: {path}")
+
+        # Check it contains at least one file (catches common "wrong path" errors)
         if not any(path.iterdir()):
             raise FileNotFoundError(f"Directory is empty: {path}")
+
         input_paths.append(str(path))
         logger.info(f"  {str(path)}")
 
-    # Step 1: Convert DICOMs to NIfTI
+    # =========================================================================
+    # STEP 1: DICOM TO NIFTI CONVERSION
+    # =========================================================================
+    # Convert raw DICOM files from the scanner into NIfTI format (.nii.gz).
+    # NIfTI is the standard format for neuroimaging analysis, supported by
+    # FSL, ANTs, nilearn, and other tools.
+    #
+    # Why dcm2niix?
+    # - Preserves all scanner metadata (TR, slice timing, phase encoding)
+    # - Handles all major scanner vendors (Siemens, GE, Philips)
+    # - Outputs JSON sidecars with BIDS-compatible metadata
+
     emit_progress("Step 1/4: DICOM to NIfTI conversion")
     nifti_dir = root_dir / "01_nifti"
     nifti_files = []
 
-    # Use parallel processing for DICOM conversion if multiple runs
+    # --- Parallel Conversion (for multi-run datasets) ---
+    # When we have multiple runs AND parallel processing is enabled,
+    # convert all runs simultaneously. This is significantly faster
+    # for multi-run datasets on multi-core machines.
     if n_jobs != 1 and len(input_paths) > 1:
         emit_progress("Step 1/4", f"Converting {len(input_paths)} runs in parallel...")
-        # Build job list for parallel execution
+
+        # Build job specifications for parallel execution
         dcm_jobs = []
         nifti_file_paths = []
         for run, path in enumerate(input_paths):
+            # BIDS-style naming: sub-XX_task-YY_run-01.nii.gz
             output_name = f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}"
             nifti_file_path = nifti_dir / f"{output_name}.nii.gz"
             nifti_file_paths.append(nifti_file_path)
@@ -426,13 +797,15 @@ def preprocessing(
                 'inputs': path,
                 'outputs': nifti_file_path,
                 'overwrite': overwrite,
-                'verbose': False
+                'verbose': False  # Suppress per-job output in parallel mode
             })
 
+        # Execute all jobs in parallel using joblib
         parallel_run_command(dcm_jobs, n_jobs=n_jobs, timing_category='preprocessing')
         nifti_files = nifti_file_paths
+
     else:
-        # Sequential processing
+        # --- Sequential Conversion (single run or n_jobs=1) ---
         for run, path in enumerate(input_paths):
             emit_progress("Step 1/4", f"Converting run {run+1}/{len(input_paths)}...")
             nifti_file = dicom_to_nifti(
@@ -445,15 +818,31 @@ def preprocessing(
 
     emit_progress("Step 1/4", f"Complete ({len(nifti_files)} runs converted)")
 
-    # Step 2: Motion correction
+    # =========================================================================
+    # STEP 2: MOTION CORRECTION
+    # =========================================================================
+    # Estimate and correct for head motion during scanning. Even small head
+    # movements (1-2mm) can cause significant artifacts in fMRI data because
+    # the BOLD signal changes we're measuring are only 1-5% of the baseline.
+    #
+    # How mcflirt works:
+    # 1. Select reference volume (middle of the timeseries by default)
+    # 2. For each volume, estimate 6 rigid-body parameters (3 translation, 3 rotation)
+    # 3. Apply inverse transformation to align each volume to reference
+    #
+    # The .par file contains the motion parameters for QC visualization.
+
     emit_progress("Step 2/4: Motion correction (mcflirt)")
     mcf_dir = root_dir / "02_motion_correction"
     mcf_files = []
 
-    # Use parallel processing for motion correction if multiple runs
+    # --- Parallel Motion Correction (for multi-run datasets) ---
+    # mcflirt is CPU-intensive, so running multiple runs in parallel
+    # provides significant speedup on multi-core systems.
     if n_jobs != 1 and len(nifti_files) > 1:
         emit_progress("Step 2/4", f"Running mcflirt on {len(nifti_files)} runs in parallel...")
-        # Build job list for parallel execution
+
+        # Build job specifications
         mc_jobs = []
         mcf_file_paths = []
         for run, nifti in enumerate(nifti_files):
@@ -472,8 +861,9 @@ def preprocessing(
 
         parallel_run_command(mc_jobs, n_jobs=n_jobs, timing_category='preprocessing')
         mcf_files = mcf_file_paths
+
     else:
-        # Sequential processing
+        # --- Sequential Motion Correction ---
         for run, nifti in enumerate(nifti_files):
             emit_progress("Step 2/4", f"Running mcflirt on run {run+1}/{len(nifti_files)}...")
             mcf_file = mcf_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mcf.nii.gz")
@@ -482,11 +872,28 @@ def preprocessing(
 
     emit_progress("Step 2/4", f"Complete ({len(mcf_files)} runs corrected)")
 
-    # Step 3: Brain extraction - compute temporal means and extract brain mask
+    # =========================================================================
+    # STEP 3: BRAIN EXTRACTION
+    # =========================================================================
+    # Create a brain mask to exclude non-brain tissue from analysis.
+    # This step has two sub-parts:
+    #
+    # 1. Compute temporal mean of each run
+    #    - Averaging over time improves SNR and makes brain boundaries clearer
+    #    - These means are also used as reference images for coregistration
+    #
+    # 2. Extract brain mask from first run
+    #    - bet (Brain Extraction Tool) identifies brain vs. non-brain voxels
+    #    - We only run bet on the first run because all runs will be aligned
+    #      to the same space (via coregistration in Step 4)
+
     emit_progress("Step 3/4: Brain extraction (bet)")
     bet_dir = root_dir / "03_brain_extraction"
 
-    # Compute mean of each motion-corrected run for use in coregistration
+    # --- Compute temporal mean of each motion-corrected run ---
+    # The temporal mean has better SNR than individual volumes, making it
+    # easier for bet to find accurate brain boundaries. These means also
+    # serve as reference images for multi-run coregistration.
     emit_progress("Step 3/4", "Computing temporal mean images...")
     mean_files = []
     for run, nifti in enumerate(mcf_files):
@@ -494,69 +901,136 @@ def preprocessing(
         compute_mean(input_file=nifti, output_file=mean_file, overwrite=overwrite)
         mean_files.append(mean_file)
 
-    # Extract brain mask from first run's mean (used for all runs)
+    # --- Extract brain mask from first run ---
+    # We use run-01 as the reference space for the entire dataset.
+    # All subsequent runs will be aligned to this space, so we only need
+    # one brain mask (created from run-01's mean).
     emit_progress("Step 3/4", "Running brain extraction (bet)...")
-    sub_ref = mean_files[0]
+    sub_ref = mean_files[0]  # Run-01 mean serves as the subject reference
     _, mean_mask = brain_extraction(input_file=sub_ref, output_dir=bet_dir, overwrite=overwrite)
     emit_progress("Step 3/4", "Complete (brain mask extracted)")
 
-    # Step 4: Co-registration across runs (if more than one)
+    # =========================================================================
+    # STEP 4: COREGISTRATION AND FINALIZATION
+    # =========================================================================
+    # For multi-run datasets, align all runs to a common coordinate space
+    # (the first run), then concatenate into a single 4D timeseries.
+    #
+    # Why coregister?
+    # - Between runs, the participant may shift position in the scanner
+    # - Without coregistration, the same brain region would be at different
+    #   voxel coordinates in different runs
+    # - ICA and other analyses require consistent voxel correspondence
+    #
+    # Coregistration method:
+    # - Rigid-body (6 DOF): 3 translations + 3 rotations
+    # - This preserves brain shape while correcting for position changes
+    # - We use ANTs for robust, accurate registration
+
     emit_progress("Step 4/4: Coregistration and finalization")
     coreg_dir = root_dir / "04_coregistered"
     coreg_file = coreg_dir / Path(f"{participant_id}_task-{task}.nii.gz")
-    xfm_dir = coreg_dir / "xfm"
+    xfm_dir = coreg_dir / "xfm"  # Store ANTs transform files
 
     if len(mcf_files) == 1:
-        # Single run: skip coregistration and use motion-corrected data directly
+        # --- Single Run: No Coregistration Needed ---
+        # When there's only one run, skip coregistration entirely.
+        # The motion-corrected data is used directly for downstream analysis.
         emit_progress("Step 4/4", "Single run - skipping coregistration")
         coreg_file = mcf_files[0]
 
     else:
-        # Multiple runs: coregister each to the first run's mean, then concatenate
+        # --- Multiple Runs: Coregister to First Run ---
+        # Run-01 serves as the reference. All subsequent runs are aligned to it.
         emit_progress("Step 4/4", f"Coregistering {len(mcf_files)} runs to run 1...")
-        sub_ref = mean_files[0]
+        sub_ref = mean_files[0]  # Run-01 mean is the target for registration
         concat_files = []
 
         for run, mean_file in enumerate(mean_files):
 
             if run == 0:
-                # First run serves as reference - no coregistration needed
+                # First run IS the reference - no transformation needed
+                # Just add its motion-corrected data to the concatenation list
                 concat_files.append(mcf_files[run])
 
             else:
-                # Compute rigid transformation from this run's mean to reference mean
+                # --- Compute Rigid Transform ---
+                # Estimate the 6 rigid-body parameters (3 translation, 3 rotation)
+                # that align this run's mean to run-01's mean
                 emit_progress("Step 4/4", f"Computing transform for run {run+1}/{len(mean_files)}...")
                 output_prefix = xfm_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mean_to_run-01_mean")
-                _, xfm_files = compute_xfm(moving=mean_file, fixed=sub_ref, output_prefix=output_prefix, type_of_transform='Rigid', overwrite=overwrite)
+                _, xfm_files = compute_xfm(
+                    moving=mean_file,       # This run's mean (to be transformed)
+                    fixed=sub_ref,          # Run-01 mean (target space)
+                    output_prefix=output_prefix,
+                    type_of_transform='Rigid',  # 6 DOF: preserves brain shape
+                    overwrite=overwrite
+                )
 
-                # Apply transformation to full 4D timeseries (not just mean)
+                # --- Apply Transform to Full 4D Timeseries ---
+                # The transform was computed on the mean, but we apply it to the
+                # full 4D timeseries so all volumes are in the same space
                 emit_progress("Step 4/4", f"Applying transform to run {run+1}/{len(mean_files)}...")
                 output_file = coreg_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_to_run-01.nii.gz")
-                apply_xfm(moving=mcf_files[run], fixed=sub_ref, transform_files=xfm_files, output_file=output_file, interpolator='linear', overwrite=overwrite)
+                apply_xfm(
+                    moving=mcf_files[run],  # Full 4D timeseries
+                    fixed=sub_ref,          # Reference space
+                    transform_files=xfm_files,
+                    output_file=output_file,
+                    interpolator='linear',  # Linear interpolation for smooth results
+                    overwrite=overwrite
+                )
                 concat_files.append(output_file)
 
-        # Concatenate all coregistered runs along time axis
+        # --- Concatenate All Runs ---
+        # Combine all coregistered runs into a single 4D timeseries.
+        # The order is chronological (run-01, run-02, ...).
         emit_progress("Step 4/4", f"Concatenating {len(concat_files)} runs...")
         concat(input_files=concat_files, output_file=coreg_file, overwrite=overwrite)
 
-    # Erode brain mask (2 voxels) and save to final output location
+    # -------------------------------------------------------------------------
+    # Finalization: Create Final Output Files
+    # -------------------------------------------------------------------------
+    # Generate the three main outputs that downstream processing expects:
+    # 1. Masked preprocessed timeseries (for ICA, feedback estimation)
+    # 2. Eroded brain mask (for masking operations)
+    # 3. BOLD reference (for registration, overlay visualization)
+
+    # --- Erode Brain Mask ---
+    # bet's mask often includes edge voxels with partial-volume effects.
+    # Erosion by 2 voxels removes these unreliable edge voxels, which
+    # improves GLM estimation by excluding noisy boundary regions.
     emit_progress("Step 4/4", "Eroding and saving brain mask...")
     mask_file = root_dir / Path(f"{participant_id}_task-{task}_preproc_mask.nii.gz")
     erode_mask(mean_mask, mask_file, overwrite=overwrite)
 
-    # Apply mask to preprocessed timeseries (final masked 4D output)
+    # --- Apply Mask to Preprocessed Timeseries ---
+    # Zero out non-brain voxels to reduce file size and exclude them from
+    # downstream analysis. This creates the final analysis-ready 4D file.
     preproc_file = root_dir / Path(f"{participant_id}_task-{task}_preproc.nii.gz")
     if not preproc_file.exists() or overwrite:
         apply_mask(input_file=coreg_file, mask_file=mask_file, output_file=preproc_file, overwrite=overwrite)
 
-    # Apply mask to BOLD reference (masked mean of first run)
+    # --- Create BOLD Reference ---
+    # The masked mean of run-01 serves as a reference image for:
+    # - Registration to MNI space (mask extraction)
+    # - Overlay visualization (QC reports)
+    # - 2-volume coregistration (feedback sessions)
     ref_file = root_dir / Path(f"{participant_id}_task-{task}_boldref.nii.gz")
     if not ref_file.exists() or overwrite:
         apply_mask(input_file=sub_ref, mask_file=mask_file, output_file=ref_file, overwrite=overwrite)
 
     emit_progress("Step 4/4", "Complete")
 
-    # Generate QC report
+    # -------------------------------------------------------------------------
+    # QC Report Generation (Optional)
+    # -------------------------------------------------------------------------
+    # Generate an HTML report with visualizations for quality control:
+    # - Motion parameter timeseries (detect sudden movements)
+    # - Framewise displacement (quantify motion severity)
+    # - Brain mask coverage (verify brain extraction quality)
+    # - Multi-run coregistration overlays (verify alignment)
+
     if qc_enabled:
         emit_progress("Generating QC report...")
         try:
@@ -569,27 +1043,63 @@ def preprocessing(
             )
             emit_progress("QC report", f"Saved to {qc_report.name}")
         except Exception as e:
+            # QC failure shouldn't stop preprocessing from succeeding
             logger.warning(f"QC report generation failed: {e}")
 
-    # Return preprocessed file
+    # -------------------------------------------------------------------------
+    # Return Output Paths
+    # -------------------------------------------------------------------------
     return preproc_file, mask_file, ref_file
 
 
-# ==============================================================================
-# DICOM Collection - Watch for incoming DICOMs during scanner acquisition
-# ==============================================================================
+# =============================================================================
+# SECTION 5: VOLUME COLLECTION (REAL-TIME SCANNER INTERFACE)
+# =============================================================================
+# These functions handle real-time volume collection from the scanner.
+# During an fMRI acquisition, the scanner exports DICOM or NIfTI files
+# one at a time to an "incoming" directory. These functions watch that
+# directory and copy files as they arrive, enabling:
+#
+# - Real-time neurofeedback: Process volumes immediately after acquisition
+# - Offline simulation: Test pipelines without scanner access
+# - Resting-state collection: Gather all volumes before preprocessing
+#
+# The collector uses filesystem monitoring (watchdog) for responsive
+# detection of new files, combined with periodic scanning for reliability.
 
 
 class _CollectorEventHandler(FileSystemEventHandler):
-    """Watchdog event handler for DICOM file detection during collection."""
+    """
+    Watchdog event handler that detects new files in the watch directory.
+
+    This handler is triggered by the operating system's filesystem event
+    notification system (inotify on Linux, FSEvents on macOS, etc.), providing
+    near-instant detection of new files.
+
+    Parameters
+    ----------
+    callback : callable
+        Function to call when a new file is detected.
+        Called with Path object for the new file.
+
+    Notes
+    -----
+    We use filesystem events for speed (sub-second detection), but also do
+    periodic scanning as a backup because filesystem events can be missed
+    under heavy I/O load or network filesystem issues.
+    """
 
     def __init__(self, callback):
         super().__init__()
         self._callback = callback
 
     def on_created(self, event):
+        """Handle file creation events from the filesystem."""
+        # Ignore directory creation events (we only want files)
         if event.is_directory:
             return
+
+        # Handle both str and bytes paths (Windows vs Unix compatibility)
         src_path = event.src_path
         if isinstance(src_path, bytes):
             self._callback(Path(src_path.decode()))
@@ -597,7 +1107,7 @@ class _CollectorEventHandler(FileSystemEventHandler):
             self._callback(Path(src_path))
 
 
-def collect_dicoms(
+def collect_volumes(
     watch_dir: Union[str, Path],
     output_dir: Union[str, Path],
     n_volumes: int,
@@ -611,20 +1121,23 @@ def collect_dicoms(
     stop_event: Optional[threading.Event] = None,
 ) -> Path:
     """
-    Watch for incoming DICOMs during scanner acquisition and collect them.
+    Watch for incoming volumes (DICOM or NIfTI) during scanner acquisition and collect them.
 
     This function mirrors MURFI's resting_state step - it watches an incoming
-    directory for DICOMs from the scanner, copies them to an output folder,
+    directory for volumes from the scanner, copies them to an output folder,
     and returns when the expected number of volumes have been collected.
+
+    Supports both DICOM and NIfTI input files. For NIfTI files, also copies
+    the JSON sidecar file if present.
 
     Works for both resting-state and task data collection.
 
     Parameters
     ----------
     watch_dir : str or Path
-        Directory where scanner exports DICOM files (incoming folder).
+        Directory where scanner exports volume files (incoming folder).
     output_dir : str or Path
-        Directory to copy collected DICOMs to.
+        Directory to copy collected volumes to.
     n_volumes : int
         Number of volumes to collect.
     timeout : float, default=300.0
@@ -634,8 +1147,8 @@ def collect_dicoms(
     clear_output_dir : bool, default=True
         Clear output_dir before starting.
     simulator_source_dir : str or Path, optional
-        If provided, runs DicomSimulator to feed files into watch_dir.
-        Useful for offline testing.
+        If provided, runs VolumeSimulator to feed files into watch_dir.
+        Useful for offline testing. Supports both DICOM and NIfTI source files.
     simulator_speed : float, default=1.0
         Speed multiplier for simulation (e.g., 10.0 for 10x speed).
         Only used if simulator_source_dir is provided.
@@ -643,7 +1156,7 @@ def collect_dicoms(
         How often to check for new files when queue is empty (seconds).
     progress_callback : callable, optional
         Function called after each volume with signature:
-        callback(volumes_collected, n_volumes, elapsed_time, dicom_path).
+        callback(volumes_collected, n_volumes, elapsed_time, volume_path).
         Use this to update progress displays during collection.
     stop_event : threading.Event, optional
         Event to signal early termination. If set, collection stops gracefully.
@@ -651,7 +1164,7 @@ def collect_dicoms(
     Returns
     -------
     Path
-        Path to output_dir containing collected DICOMs (ready for preprocessing).
+        Path to output_dir containing collected volumes (ready for preprocessing).
 
     Raises
     ------
@@ -664,37 +1177,47 @@ def collect_dicoms(
     --------
     Collect resting-state DICOMs from scanner:
 
-    >>> dicom_folder = collect_dicoms(
+    >>> dicom_folder = collect_volumes(
     ...     watch_dir='/scanner/export/incoming',
     ...     output_dir='/data/sub-01/raw/rest',
     ...     n_volumes=200,
     ...     clear_watch_dir=True,
     ... )
 
-    Offline testing with simulator:
+    Offline testing with simulator (supports DICOM or NIfTI source):
 
-    >>> dicom_folder = collect_dicoms(
+    >>> volume_folder = collect_volumes(
     ...     watch_dir='/tmp/incoming',
     ...     output_dir='/data/sub-01/raw/rest',
     ...     n_volumes=200,
-    ...     simulator_source_dir='/path/to/source_dicoms',
+    ...     simulator_source_dir='/path/to/source_volumes',
     ...     simulator_speed=10.0,
     ... )
 
     """
+    # -------------------------------------------------------------------------
+    # Directory Setup and Validation
+    # -------------------------------------------------------------------------
     watch_dir = Path(watch_dir)
     output_dir = Path(output_dir)
 
-    # Validate or create directories
+    # --- Validate/Create Directories ---
+    # In real-time mode (no simulator), watch_dir must exist (scanner export folder).
+    # In simulation mode, we create watch_dir if needed.
     if simulator_source_dir is None:
+        # Real-time mode: watch_dir must be pre-configured by scanner
         if not watch_dir.exists():
             raise FileNotFoundError(f"Watch directory not found: {watch_dir}")
     else:
+        # Simulation mode: create watch_dir to receive simulated volumes
         watch_dir.mkdir(parents=True, exist_ok=True)
 
+    # Always create output_dir (where we'll store collected volumes)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clear directories if requested
+    # --- Clear Directories (Optional) ---
+    # Clearing ensures we start fresh without leftover files from previous runs.
+    # For real-time use, this mimics MURFI's "rm -rf tmp/murfi_input" pattern.
     if clear_watch_dir and watch_dir.exists():
         for f in watch_dir.iterdir():
             if f.is_file():
@@ -707,24 +1230,48 @@ def collect_dicoms(
                 f.unlink()
         logger.info(f"Cleared output directory: {output_dir}")
 
-    # Collection state
-    pending_heap: list[tuple[str, Path]] = []
-    processed_files: set[str] = set()
+    # -------------------------------------------------------------------------
+    # Collection State
+    # -------------------------------------------------------------------------
+    # We use a min-heap (priority queue) to process files in alphabetical order.
+    # This is important because scanner naming conventions (img001, img002, ...)
+    # encode chronological order, and we need to maintain this order.
+    #
+    # Thread safety: Multiple threads access this state (watchdog handler,
+    # main loop, scanner callback), so all access is protected by a lock.
+
+    pending_heap: list[tuple[str, Path]] = []  # (filename, path) tuples sorted by filename
+    processed_files: set[str] = set()           # Track processed files to avoid duplicates
     collected_count = 0
     lock = threading.Lock()
 
     def on_new_file(file_path: Path) -> None:
-        """Add file to pending queue."""
+        """
+        Callback invoked by watchdog when a new file appears.
+
+        Adds the file to the pending queue for ordered processing.
+        Thread-safe: acquires lock before modifying shared state.
+        """
         with lock:
+            # Skip if already processed (shouldn't happen but defensive)
             if file_path.name not in processed_files:
+                # Check if already in queue (watchdog may fire multiple times)
                 existing_names = {item[0] for item in pending_heap}
                 if file_path.name not in existing_names:
+                    # Add to heap - files are sorted by filename (alphabetical order)
                     heapq.heappush(pending_heap, (file_path.name, file_path))
 
     def scan_for_existing_files() -> None:
-        """Scan watch directory for any files not yet queued."""
+        """
+        Periodically scan watch directory for any missed files.
+
+        Filesystem event notifications can be missed under heavy load or on
+        network filesystems. This backup scan ensures we eventually find all
+        files even if watchdog misses some events.
+        """
         found_files: list[Path] = []
-        for ext in DICOM_EXTENSIONS:
+        # Search for all supported volume extensions (DICOM and NIfTI)
+        for ext in VOLUME_EXTENSIONS:
             found_files.extend(watch_dir.glob(ext))
 
         with lock:
@@ -736,113 +1283,174 @@ def collect_dicoms(
                         existing_names.add(file_path.name)
 
     def get_next_file() -> Optional[Path]:
-        """Get the next valid DICOM file in order."""
+        """
+        Get the next valid volume file to process, in alphabetical order.
+
+        Returns None if no valid files are pending. Files are validated
+        (DICOM header check or NIfTI format check) before being returned.
+        Invalid files are logged and skipped.
+        """
         with lock:
             while pending_heap:
+                # Peek at the smallest (alphabetically first) file
                 filename, file_path = pending_heap[0]
 
+                # Skip if already processed (defensive check)
                 if filename in processed_files:
                     heapq.heappop(pending_heap)
                     continue
 
-                if is_valid_dicom(file_path):
+                # Validate the file (check DICOM header or NIfTI format)
+                if is_valid_volume(file_path):
                     heapq.heappop(pending_heap)
                     processed_files.add(filename)
                     return file_path
                 else:
+                    # Invalid file (corrupt, incomplete, or not a volume)
                     heapq.heappop(pending_heap)
-                    logger.debug(f"Skipping invalid DICOM: {filename}")
+                    logger.debug(f"Skipping invalid volume: {filename}")
 
             return None
 
-    # Set up watchdog observer
+    # -------------------------------------------------------------------------
+    # Filesystem Watcher Setup
+    # -------------------------------------------------------------------------
+    # Use watchdog to monitor the watch directory for new files.
+    # Watchdog uses the OS's native filesystem event system (inotify on Linux,
+    # FSEvents on macOS) for responsive, low-overhead file detection.
+
     event_handler = _CollectorEventHandler(on_new_file)
     observer = Observer()
-    observer.schedule(event_handler, str(watch_dir), recursive=False)
+    observer.schedule(event_handler, str(watch_dir), recursive=False)  # No subdirectories
     observer.start()
 
-    # Set up simulator if requested
+    # -------------------------------------------------------------------------
+    # Simulator Setup (Optional - for Offline Testing)
+    # -------------------------------------------------------------------------
+    # When simulator_source_dir is provided, we spin up a VolumeSimulator
+    # that copies files from the source at TR intervals, mimicking scanner
+    # acquisition. This enables testing the full pipeline without scanner access.
+
     simulator = None
     simulator_thread = None
     if simulator_source_dir is not None:
-        from .simulator import DicomSimulator
+        from .simulator import VolumeSimulator
 
-        simulator = DicomSimulator(
+        # Create simulator with user-specified speed multiplier
+        # speed=10.0 means 10x real-time (TR/10 delay between volumes)
+        simulator = VolumeSimulator(
             source_dir=simulator_source_dir,
             target_dir=watch_dir,
             speed=simulator_speed,
-            clear_target=False,  # We already cleared it
-            cleanup_on_complete=False,
+            clear_target=False,      # Already cleared above
+            cleanup_on_complete=False,  # Leave files for collection
         )
 
         def run_simulator():
+            """Background thread that runs the simulator."""
             for _ in simulator.copy_volumes_iter(stop_event=stop_event):
-                pass
+                pass  # Iterator handles timing and copying
 
+        # Run simulator in a daemon thread (automatically stops when main exits)
         simulator_thread = threading.Thread(target=run_simulator, daemon=True)
         simulator_thread.start()
-        logger.info(f"Started DICOM simulator (speed={simulator_speed}x)")
+        logger.info(f"Started {simulator.source_type} simulator (speed={simulator_speed}x)")
 
     logger.info(f"Collecting {n_volumes} volumes from {watch_dir}")
     logger.info(f"Output directory: {output_dir}")
+
+    # -------------------------------------------------------------------------
+    # Main Collection Loop
+    # -------------------------------------------------------------------------
+    # Poll for new files until we've collected the expected number of volumes.
+    # The loop combines filesystem events (fast) with periodic scanning (reliable)
+    # to ensure we never miss files.
 
     start_time = time.time()
 
     try:
         while collected_count < n_volumes:
-            # Check for stop signal
+            # --- Check for Early Termination ---
+            # The stop_event allows external code (e.g., GUI "Stop" button) to
+            # gracefully terminate collection before all volumes arrive
             if stop_event is not None and stop_event.is_set():
                 logger.info(f"Collection stopped by user after {collected_count}/{n_volumes} volumes")
                 break
 
-            # Check timeout
+            # --- Check Timeout ---
+            # Prevent infinite waiting if scanner stops sending files
             elapsed = time.time() - start_time
             if elapsed > timeout:
                 raise TimeoutError(
                     f"Timeout after {elapsed:.1f}s: collected {collected_count}/{n_volumes} volumes"
                 )
 
-            # Scan for any missed files
+            # --- Periodic Backup Scan ---
+            # Filesystem events can be missed under heavy load or on network
+            # filesystems. This backup scan ensures we eventually find all files.
             scan_for_existing_files()
 
-            # Get next file to process
+            # --- Get Next File (in alphabetical/chronological order) ---
             file_path = get_next_file()
 
             if file_path is not None:
-                # Copy file to output directory
+                # --- Copy File to Output Directory ---
+                # We copy rather than move to leave the scanner's export intact
+                # (some scanner software expects files to remain)
                 dest_path = output_dir / file_path.name
-                shutil.copy2(file_path, dest_path)
+                shutil.copy2(file_path, dest_path)  # copy2 preserves metadata
+
+                # --- Handle JSON Sidecars for NIfTI Files ---
+                # dcm2niix outputs create JSON sidecars with acquisition parameters.
+                # If collecting NIfTI files (from dcm2niix), copy the sidecar too.
+                if is_nifti_file(file_path):
+                    json_src = get_json_sidecar_path(file_path)
+                    if json_src.exists():
+                        json_dst = get_json_sidecar_path(dest_path)
+                        shutil.copy2(json_src, json_dst)
+
                 collected_count += 1
 
-                # Call progress callback
+                # --- Progress Callback ---
+                # Notify external code (GUI) of progress
                 if progress_callback is not None:
                     elapsed = time.time() - start_time
                     try:
                         progress_callback(collected_count, n_volumes, elapsed, dest_path)
                     except Exception as e:
+                        # Don't let callback errors stop collection
                         logger.warning(f"Progress callback error: {e}")
 
+                # Log progress every 10 volumes (avoid log spam)
                 if collected_count % 10 == 0 or collected_count == n_volumes:
                     logger.info(f"Collected {collected_count}/{n_volumes} volumes")
             else:
-                # Wait for more files
+                # --- Wait for More Files ---
+                # No files ready yet; sleep briefly before checking again
                 time.sleep(poll_interval)
 
     finally:
-        # Stop watchdog observer
+        # -------------------------------------------------------------------------
+        # Cleanup
+        # -------------------------------------------------------------------------
+        # Always clean up resources, even if collection was interrupted
+
+        # Stop filesystem watcher
         observer.stop()
         observer.join()
 
-        # Wait for simulator to finish (skip if stopped early to avoid blocking)
+        # Wait for simulator thread (if running) to complete
         if simulator_thread is not None:
             if stop_event is not None and stop_event.is_set():
-                # Don't wait for simulator when stopped - it's a daemon thread
+                # User stopped early - don't wait for simulator (it's a daemon thread)
                 logger.debug("Skipping simulator join (stopped by user)")
             else:
-                simulator_thread.join()  # Wait for completion
+                # Normal completion - wait for simulator to finish
+                simulator_thread.join()
                 logger.debug("Simulator thread completed")
 
-        # Clean up watch directory (remove incoming DICOMs)
+        # Clean up watch directory (remove leftover incoming files)
+        # This prevents stale files from affecting future runs
         if clear_watch_dir and watch_dir.exists():
             for f in watch_dir.iterdir():
                 if f.is_file():
@@ -850,6 +1458,13 @@ def collect_dicoms(
             logger.debug(f"Cleaned up watch directory: {watch_dir}")
 
     elapsed = time.time() - start_time
-    logger.info(f"✓ Collection complete: {collected_count} volumes in {elapsed:.1f}s")
+    logger.info(f"Collection complete: {collected_count} volumes in {elapsed:.1f}s")
 
     return output_dir
+
+
+# =============================================================================
+# BACKWARD COMPATIBILITY
+# =============================================================================
+# Old name for collect_volumes - kept for existing code that uses it
+collect_dicoms = collect_volumes

@@ -1,81 +1,199 @@
 """
 Real-time feedback estimation for fMRI neurofeedback.
 
-Summary
--------
-Incremental GLM fitting for continuous BOLD activation estimates, plus a
-coordinator that watches for incoming DICOMs and streams activations to
-tasks.
+This module provides the core algorithms for real-time neurofeedback signal
+estimation. It implements an incremental GLM that updates in O(p²) time per
+volume, enabling sub-second latency between volume acquisition and feedback
+delivery.
 
-Components
-----------
-- IncrementalGLM: Online least-squares solver using Gentleman's algorithm
-- FeedbackEstimator: Per-volume activation estimation with nuisance removal
-- NeurofeedbackCoordinator: Watches for DICOMs, converts to NIfTI, logs results
+The key innovation is using Gentleman's algorithm for incremental QR decomposition,
+which avoids expensive full-matrix recomputation while maintaining numerical
+stability. Combined with continuous normalization (rather than post-hoc z-scoring),
+this provides moment-to-moment activation estimates suitable for real-time feedback.
+
+Key Components
+--------------
+IncrementalGLM : Core algorithm
+    Online least-squares solver using Gentleman's algorithm. Updates the QR
+    decomposition incrementally as new observations arrive.
+
+FeedbackEstimator : Signal processing
+    Processes fMRI volumes, extracts motion parameters, builds GLM design
+    matrices, and computes per-mask activation estimates.
+
+NeurofeedbackCoordinator : Pipeline orchestration
+    Watches for incoming volumes (DICOM or NIfTI), handles conversion,
+    coordinates timing, and streams results to display tasks.
+
+run_feedback_session : High-level API
+    One-call function that sets up and runs a complete feedback session,
+    handling both real-time and simulation modes.
 
 Workflow
 --------
-- Compute task regressor (HRF boxcar), load masks, and build voxel index map
-- For each volume: extract motion, build design row, update incremental GLM
-- Aggregate voxel activations per mask (optionally efficiency-weighted)
-- Coordinator watches incoming DICOMs, converts to NIfTI, streams activations/logs
+The feedback pipeline operates as follows:
+
+1. **Setup Phase**
+   - Load network masks and build voxel index mapping
+   - Compute HRF-convolved task regressor (or use custom design)
+   - Initialize incremental GLM with appropriate dimensions
+
+2. **Baseline Period** (volumes 0 to n_baseline-1)
+   - Task regressor = 0 (no task effect)
+   - Accumulate baseline statistics for normalization
+   - Freeze variance estimates at end of baseline
+
+3. **Feedback Period** (volumes n_baseline onwards)
+   - For each incoming volume:
+     a. Extract motion parameters from JSON sidecar
+     b. Build design row: [task_regressors, intercept, drift, motion]
+     c. Extract voxel values from masked regions
+     d. Update GLM and compute normalized activation
+     e. Aggregate voxel activations per mask (mean or efficiency-weighted)
+     f. Stream activation to display task
+
+GLM Design Matrix
+-----------------
+The design matrix has the following column structure::
+
+    [task_columns] [intercept] [drift] [motion_x6]
+    ↑              ↑                   ↑
+    Signal of     Nuisance regressors (removed from signal)
+    interest
+
+- Task columns (0 to n_task-1): NOT removed from error signal
+- Nuisance columns: Removed to isolate task-related signal
+- Motion: 6 rigid-body parameters (3 translation, 3 rotation)
+
+Normalization
+-------------
+Activation is computed using continuous normalization (Hinds et al., 2011)::
+
+    error = y - X_nuisance @ beta_nuisance   # Remove only nuisance
+    deviation = sqrt(RSS / t)                 # Running standard deviation
+    activation = error / deviation            # Normalized activation
+
+After baseline, the deviation is frozen to prevent drift during feedback.
 
 Dependencies
 ------------
-numpy, nibabel, watchdog
+External:
+    - dcm2niix (optional): For DICOM-to-NIfTI conversion during real-time
+
+Python:
+    - numpy : Array operations and linear algebra
+    - nibabel : NIfTI I/O
+    - pydicom : DICOM header reading
+    - scipy : HRF computation (gamma distribution)
+    - watchdog : Filesystem monitoring for incoming volumes
 
 Notes
 -----
-Incremental updates avoid recomputing the QR decomposition every TR, which
-keeps latency low enough for real-time use.
+**Performance:**
+The incremental GLM achieves O(p²) complexity per update (where p = number
+of regressors), compared to O(np²) for full recomputation. For typical
+neurofeedback designs (p ≈ 10, n ≈ 500), this is ~50x faster.
+
+**Numerical Stability:**
+Gentleman's algorithm uses Givens rotations rather than Householder
+reflections. While slightly slower, Givens rotations better handle the
+rank-deficient case that occurs during baseline (when task regressor = 0).
+
+**Input Formats:**
+The coordinator accepts both DICOM and NIfTI inputs. For NIfTI files,
+motion parameters should be in the JSON sidecar's ImageComments field
+(format: "Motion: rx,ry,rz,tx,ty,tz").
+
+See Also
+--------
+preprocessing : Prepares fMRI data for feedback sessions
+mask_extraction : Creates network masks for feedback regions
+tasks : Display tasks that receive and visualize activations
 
 References
 ----------
-Gentleman, W.M. (1974). Algorithm AS 75: Basic procedures for large, sparse
-    or weighted linear least problems. Journal of the Royal Statistical
-    Society. Series C (Applied Statistics), 23(3), 448-454.
+.. [1] Gentleman, W.M. (1974). Algorithm AS 75: Basic procedures for large,
+       sparse or weighted linear least problems. Journal of the Royal
+       Statistical Society. Series C (Applied Statistics), 23(3), 448-454.
 
-Hinds, O., et al. (2011). Computing moment-to-moment BOLD activation for
-    real-time neurofeedback. NeuroImage, 54(1), 361-368.
+.. [2] Hinds, O., et al. (2011). Computing moment-to-moment BOLD activation
+       for real-time neurofeedback. NeuroImage, 54(1), 361-368.
+
+.. [3] Koush, Y., et al. (2012). Signal quality and Bayesian signal processing
+       in neurofeedback based on real-time fMRI. NeuroImage, 59(1), 478-489.
 """
 
-# Standard library imports
-import csv
+# =============================================================================
+# IMPORTS
+# =============================================================================
+
+# --- Standard Library ---
+import csv                  # TSV logging for feedback results
 from datetime import datetime
-import json
-import logging
+import json                 # JSON sidecar parsing for NIfTI metadata
+import logging              # Structured logging
 from pathlib import Path
-import shutil
-import threading
-import time
+import shutil               # File operations during collection
+import threading            # Multi-threading for volume watching
+import time                 # Timing for volume collection
 from typing import Callable, Optional, Sequence, TextIO, TYPE_CHECKING
 from collections import OrderedDict
-import heapq
-import re
+import heapq                # Priority queue for ordered volume processing
+import re                   # Regex for motion parameter extraction
 
+# Type-checking only imports (avoid circular dependencies)
 if TYPE_CHECKING:
     from .sham import ShamActivationProvider
 
-# Third-party imports
+# --- Third-Party: Neuroimaging ---
 import nibabel as nib
 from nibabel.nifti1 import Nifti1Image
 import numpy as np
 from numpy.typing import NDArray
-import pydicom
-from scipy.stats import gamma as gamma_dist
+import pydicom              # DICOM header reading for motion parameters
+from scipy.stats import gamma as gamma_dist  # HRF computation
+
+# --- Third-Party: Filesystem Monitoring ---
+# Watchdog provides cross-platform filesystem event monitoring for detecting
+# new volume files as they arrive from the scanner
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, DirCreatedEvent
 
-# Local imports
-from .utils import DICOM_EXTENSIONS, is_valid_dicom, get_tr_from_dicom
+# --- Local Imports ---
+from .utils import (
+    VOLUME_EXTENSIONS,      # Supported file extensions (.dcm, .nii.gz, etc.)
+    is_valid_volume,        # Validate DICOM/NIfTI files
+    is_nifti_file,          # Check if file is NIfTI format
+    get_json_sidecar_path,  # Get path to JSON sidecar
+    get_tr_from_volume,     # Extract TR from volume metadata
+)
 
-# Configure module-level logger
+# --- Module Logger ---
 logger = logging.getLogger(__name__)
 
 
-# ==============================================================================
-# INCREMENTAL GLM - Online least squares using Gentleman's algorithm
-# ==============================================================================
+# =============================================================================
+# SECTION 1: INCREMENTAL GLM
+# =============================================================================
+# This section implements the core algorithm for real-time GLM estimation.
+#
+# Why Incremental?
+# ----------------
+# Traditional GLM fitting requires O(np²) operations where n = observations
+# and p = regressors. For real-time use, we can't afford to recompute the
+# entire solution every TR. Gentleman's algorithm achieves O(p²) per update
+# by incrementally updating the QR decomposition.
+#
+# How It Works:
+# -------------
+# 1. Maintain the R matrix from QR decomposition (X = QR)
+# 2. When a new observation arrives, apply Givens rotations to incorporate it
+# 3. Solve for beta via back-substitution on the updated R
+# 4. Compute normalized activation from residuals
+#
+# The key insight is that Givens rotations can update R in-place, and the
+# back-substitution only depends on R (not Q), so we never need to store
+# or manipulate the full Q matrix.
 
 
 class IncrementalGLM:
@@ -403,9 +521,22 @@ class IncrementalGLM:
             )
 
 
-# ==============================================================================
-# HRF and Task Regressor Computation
-# ==============================================================================
+# =============================================================================
+# SECTION 2: HRF AND TASK REGRESSOR COMPUTATION
+# =============================================================================
+# These functions create the task regressors that model expected BOLD responses.
+#
+# The Hemodynamic Response Function (HRF):
+# ----------------------------------------
+# Neural activity doesn't directly cause BOLD signal changes. Instead, neural
+# activity triggers a hemodynamic response that peaks ~5-6 seconds later and
+# takes ~15-20 seconds to return to baseline. The HRF models this delay.
+#
+# Task Regressor Construction:
+# ----------------------------
+# 1. Create a boxcar function (0 during baseline, 1 during task)
+# 2. Convolve with the HRF to model the expected BOLD response
+# 3. The result shows how BOLD signal should evolve given the task timing
 
 
 def _compute_hrf(tr: float, duration: float = 32.0) -> NDArray[np.float64]:
@@ -503,9 +634,29 @@ def _compute_task_regressor(
     return regressor.astype(np.float64)
 
 
-# ==============================================================================
-# FeedbackEstimator - Real-time GLM fitting for neurofeedback
-# ==============================================================================
+# =============================================================================
+# SECTION 3: FEEDBACK ESTIMATOR
+# =============================================================================
+# The FeedbackEstimator orchestrates real-time BOLD activation estimation.
+# It brings together:
+# - Mask loading and voxel indexing
+# - Design matrix construction (task + nuisance regressors)
+# - Incremental GLM updates
+# - Per-mask activation aggregation
+#
+# Key Design Decisions:
+# ---------------------
+# 1. Single GLM for all voxels: Rather than fitting separate GLMs per voxel,
+#    we fit one GLM with n_outputs = n_voxels. This is more efficient because
+#    all voxels share the same design matrix.
+#
+# 2. Continuous normalization: Instead of z-scoring after baseline, we
+#    normalize continuously using running variance estimates. After baseline
+#    completes, we "freeze" the variance to prevent drift.
+#
+# 3. Optional efficiency weighting: For ROI aggregation, users can choose
+#    inverse-variance weighting (more reliable voxels contribute more) or
+#    simple averaging.
 
 
 class FeedbackEstimator:
@@ -1058,7 +1209,7 @@ class FeedbackEstimator:
 
 
 class _DicomEventHandler(FileSystemEventHandler):
-    """Watchdog event handler for DICOM file detection."""
+    """Watchdog event handler for volume file (DICOM or NIfTI) detection."""
 
     def __init__(self, callback: Callable[[Path], None]) -> None:
         super().__init__()
@@ -1432,16 +1583,40 @@ def get_slot_run_info(
     }
 
 
-# ==============================================================================
-# NeurofeedbackCoordinator - Watch for DICOMs and coordinate processing
-# ==============================================================================
+# =============================================================================
+# SECTION 4: NEUROFEEDBACK COORDINATOR
+# =============================================================================
+# The NeurofeedbackCoordinator is the top-level orchestrator for real-time
+# neurofeedback sessions. It handles:
+#
+# 1. **Volume Watching**: Monitors a directory for incoming files using
+#    filesystem events (watchdog) plus periodic polling for reliability.
+#
+# 2. **DICOM Handling**: Converts DICOMs to NIfTI on-the-fly using dcm2niix.
+#    Extracts motion parameters from DICOM headers for GLM nuisance modeling.
+#
+# 3. **Processing Coordination**: Feeds volumes to FeedbackEstimator, collects
+#    activations, and makes them available to display tasks.
+#
+# 4. **Logging**: Records all activations, motion parameters, and design
+#    matrix rows to TSV files for post-hoc analysis.
+#
+# 5. **Timing**: Manages acquisition timing, start triggers, and volume
+#    counting to keep feedback synchronized with scanner acquisition.
+#
+# Threading Model:
+# ----------------
+# The coordinator runs in a background thread, watching for volumes and
+# processing them as they arrive. The main thread (running the display task)
+# polls for new activations without blocking the feedback loop.
 
 
 class NeurofeedbackCoordinator:
-    """Coordinates real-time neurofeedback by watching for DICOMs.
+    """Coordinates real-time neurofeedback by watching for volume files.
 
-    Monitors a directory for incoming DICOM files, converts them to NIfTI,
-    processes through FeedbackEstimator, and logs results to CSV.
+    Monitors a directory for incoming volume files (DICOM or NIfTI), converts
+    them to NIfTI if needed, processes through FeedbackEstimator, and logs
+    results to CSV.
 
     **Timing Model:**
 
@@ -1452,10 +1627,16 @@ class NeurofeedbackCoordinator:
     Processing time per volume is logged for diagnostics. If processing
     consistently takes longer than TR, a warning is issued (queue depth > 0).
 
+    **NIfTI Support:**
+
+    For NIfTI input files (.nii, .nii.gz), a JSON sidecar should be present
+    alongside each volume containing motion parameters (ImageComments field)
+    and TR (RepetitionTime field). The dcm2niix conversion step is skipped.
+
     Parameters
     ----------
     watch_dir : Path or str
-        Directory to watch for incoming DICOM files.
+        Directory to watch for incoming volume files (DICOM or NIfTI).
     output_dir : Path or str
         Directory for NIfTI outputs and CSV log.
     mask_paths : list of Path or str
@@ -1489,9 +1670,9 @@ class NeurofeedbackCoordinator:
 
     Notes
     -----
-    Uses watchdog for efficient filesystem event detection. Each new DICOM
-    triggers conversion via dcm2niix and processing through FeedbackEstimator.
-    Results are logged to CSV after each volume.
+    Uses watchdog for efficient filesystem event detection. Each new volume
+    triggers processing through FeedbackEstimator (with dcm2niix conversion
+    for DICOM input). Results are logged to CSV after each volume.
 
     Task regressors should be pre-computed and passed to the constructor.
     If not provided, a nuisance-only model is used (intercept + drift + motion).
@@ -1940,14 +2121,14 @@ class NeurofeedbackCoordinator:
                 heapq.heappush(self._pending_heap, (file_path.name, file_path))
 
     def _scan_for_existing_files(self) -> None:
-        """Scan watch directory for any DICOM files not yet processed.
+        """Scan watch directory for any volume files (DICOM or NIfTI) not yet processed.
 
         This handles files that may have been missed by watchdog events,
         particularly when the simulator runs faster than processing.
         """
         # Glob files OUTSIDE the lock to avoid blocking other threads during I/O
         found_files: list[Path] = []
-        for ext in DICOM_EXTENSIONS:
+        for ext in VOLUME_EXTENSIONS:
             found_files.extend(self.watch_dir.glob(ext))
 
         # Only hold lock for the quick heap operations
@@ -1969,13 +2150,13 @@ class NeurofeedbackCoordinator:
                     heapq.heappop(self._pending_heap)
                     continue
 
-                if is_valid_dicom(file_path):
+                if is_valid_volume(file_path):
                     heapq.heappop(self._pending_heap)
                     self._processed_files.add(filename)
                     return file_path
                 else:
                     heapq.heappop(self._pending_heap)
-                    logger.debug(f"Skipping invalid DICOM: {filename}")
+                    logger.debug(f"Skipping invalid volume: {filename}")
 
             return None
     
@@ -1984,45 +2165,78 @@ class NeurofeedbackCoordinator:
         with self._lock:
             return len(self._pending_heap)
 
-    def _process_volume(self, dicom_path: Path) -> None:
-        """Convert DICOM and process through estimator, tracking timing."""
+    def _process_volume(self, volume_path: Path) -> None:
+        """Convert volume (if DICOM) and process through estimator, tracking timing.
+
+        Handles both DICOM and NIfTI input files. For DICOM, converts via dcm2niix.
+        For NIfTI, copies directly to the output directory along with JSON sidecar.
+        """
         import shutil
         from .utils import dicom_to_nifti
 
         process_start = time.monotonic()
 
-        # Extract TR from first DICOM if not yet set
+        # Extract TR from first volume if not yet set
         if self._tr is None and self.n_processed == 0:
-            self._tr = get_tr_from_dicom(dicom_path)
-            logger.info(f"Extracted TR from DICOM: {self._tr}s")
+            self._tr = get_tr_from_volume(volume_path)
+            logger.info(f"Extracted TR from volume: {self._tr}s")
 
-        # Copy DICOM to collection directory (for unified collection with rest/2vol)
+        # Copy volume to collection directory (for unified collection with rest/2vol)
         try:
-            dest_path = self._dicom_collection_dir / dicom_path.name
-            shutil.copy2(dicom_path, dest_path)
+            dest_path = self._dicom_collection_dir / volume_path.name
+            shutil.copy2(volume_path, dest_path)
+            # For NIfTI, also copy JSON sidecar
+            if is_nifti_file(volume_path):
+                json_src = get_json_sidecar_path(volume_path)
+                if json_src.exists():
+                    json_dst = get_json_sidecar_path(dest_path)
+                    shutil.copy2(json_src, json_dst)
         except Exception as e:
-            logger.warning(f"Failed to copy DICOM to collection: {e}")
+            logger.warning(f"Failed to copy volume to collection: {e}")
 
-        # Convert DICOM to NIfTI (timed for diagnostics)
+        # Convert to NIfTI or copy if already NIfTI (timed for diagnostics)
         volume_num = self.n_processed + 1
         output_name = f"vol_{volume_num:04d}"
 
         dcm2niix_start = time.monotonic()
-        try:
-            nifti_path = dicom_to_nifti(
-                dicom_dir=dicom_path,
-                output_dir=self.nifti_dir,
-                output_name=output_name,
-                overwrite=True,
-                verbose=False,
-                compress=False,  # Uncompressed for faster real-time processing
-            )
-        except Exception as e:
-            logger.error(f"Failed to convert DICOM {dicom_path}: {e}")
-            return
-        dcm2niix_duration = (time.monotonic() - dcm2niix_start) * 1000  # ms
 
-        json_path = Path(str(nifti_path).replace('.nii.gz', '.json').replace('.nii', '.json'))
+        if is_nifti_file(volume_path):
+            # Input is already NIfTI - copy directly to output directory
+            # Determine extension (.nii or .nii.gz)
+            if str(volume_path).lower().endswith('.nii.gz'):
+                ext = '.nii.gz'
+            else:
+                ext = '.nii'
+            nifti_path = self.nifti_dir / f"{output_name}{ext}"
+            try:
+                shutil.copy2(volume_path, nifti_path)
+                # Also copy JSON sidecar if present
+                json_src = get_json_sidecar_path(volume_path)
+                json_path = self.nifti_dir / f"{output_name}.json"
+                if json_src.exists():
+                    shutil.copy2(json_src, json_path)
+                else:
+                    json_path = None  # No sidecar available
+            except Exception as e:
+                logger.error(f"Failed to copy NIfTI {volume_path}: {e}")
+                return
+        else:
+            # Input is DICOM - convert to NIfTI
+            try:
+                nifti_path = dicom_to_nifti(
+                    dicom_dir=volume_path,
+                    output_dir=self.nifti_dir,
+                    output_name=output_name,
+                    overwrite=True,
+                    verbose=False,
+                    compress=False,  # Uncompressed for faster real-time processing
+                )
+            except Exception as e:
+                logger.error(f"Failed to convert DICOM {volume_path}: {e}")
+                return
+            json_path = Path(str(nifti_path).replace('.nii.gz', '.json').replace('.nii', '.json'))
+
+        dcm2niix_duration = (time.monotonic() - dcm2niix_start) * 1000  # ms
 
         # Process through estimator (timed for diagnostics)
         glm_start = time.monotonic()
@@ -2411,9 +2625,20 @@ class NeurofeedbackCoordinator:
             }
 
 
-# ==============================================================================
-# HIGH-LEVEL SESSION ORCHESTRATION - Run complete feedback sessions
-# ==============================================================================
+# =============================================================================
+# SECTION 5: HIGH-LEVEL SESSION ORCHESTRATION
+# =============================================================================
+# This section provides the user-facing API for running feedback sessions.
+#
+# run_feedback_session() is designed to be the primary entry point for most
+# users. It handles all the complexity of:
+# - Setting up the coordinator with appropriate parameters
+# - Configuring simulation mode for offline testing
+# - Managing the background thread that processes volumes
+# - Setting up sham conditions for control groups
+#
+# For users who need more control, they can instantiate NeurofeedbackCoordinator
+# directly. But for typical use cases, run_feedback_session() is recommended.
 
 
 def run_feedback_session(
@@ -2442,10 +2667,11 @@ def run_feedback_session(
     sham_provider: Optional["ShamActivationProvider"] = None,
     condition: str = "real",
 ) -> dict:
-    """Run a complete feedback session with optional DICOM simulation.
+    """Run a complete feedback session with optional volume simulation.
 
     This is the main entry point for running neurofeedback sessions. It handles
-    both simulated (offline) and real-time (scanner) acquisition modes.
+    both simulated (offline) and real-time (scanner) acquisition modes. Supports
+    both DICOM and NIfTI input files.
 
     Parameters
     ----------
@@ -2460,8 +2686,8 @@ def run_feedback_session(
     output_dir : Path or str
         Base directory for all outputs (NIfTI conversions, logs, etc.).
     collection_dir : Path or str
-        Directory for collecting raw DICOMs (consistent with rest/2vol collection).
-        DICOMs are copied to collection_dir/{task}_run-{XX}/ and incoming_dir
+        Directory for collecting raw volumes (consistent with rest/2vol collection).
+        Volumes are copied to collection_dir/{task}_run-{XX}/ and incoming_dir
         defaults to collection_dir/incoming. This provides a unified collection
         structure for all scan types.
     n_baseline : int
@@ -2475,18 +2701,18 @@ def run_feedback_session(
         nuisance-only model. Task-specific designs (e.g., boxcar+HRF for ball task)
         should be computed externally and passed here.
     incoming_dir : Path or str, optional
-        Directory to watch for incoming DICOMs. If None, uses collection_dir/incoming.
+        Directory to watch for incoming volumes. If None, uses collection_dir/incoming.
         For scanner acquisition, this should be the directory where the scanner
-        writes DICOMs.
+        writes volumes.
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
         If True, use inverse-variance weighting for ROI aggregation (computed
         from residual MSE). If False, use simple mean. Default is False.
     simulator_source_dir : Path or str, optional
-        If provided, runs in simulation mode. Directory containing source DICOM
-        files to simulate scanner acquisition. If None, runs in real-time mode
-        and watches incoming_dir for scanner-generated DICOMs.
+        If provided, runs in simulation mode. Directory containing source volume
+        files (DICOM or NIfTI) to simulate scanner acquisition. If None, runs in
+        real-time mode and watches incoming_dir for scanner-generated volumes.
     simulator_speed : float, optional
         Speed multiplier for simulation (e.g., 2.0 for 2x speed). Default is 1.0.
         Only used if simulator_source_dir is provided.
@@ -2601,7 +2827,7 @@ def run_feedback_session(
 
     Results are logged to CSV and the design matrix is saved to TSV.
     """
-    from .simulator import DicomSimulator
+    from .simulator import VolumeSimulator
     import threading
 
     # Convert paths
@@ -2690,7 +2916,7 @@ def run_feedback_session(
         # Create simulator instance
         # Note: cleanup_on_complete is set to False here because the coordinator
         # handles cleanup of both incoming and nifti directories after completion
-        simulator = DicomSimulator(
+        simulator = VolumeSimulator(
             source_dir=simulator_source_dir,
             target_dir=incoming_dir,
             tr=tr,

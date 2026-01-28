@@ -3,6 +3,56 @@
 This module provides functions to generate standalone Python scripts that
 reproduce the mask extraction pipeline with all parameters captured. Users
 can modify these scripts and re-run them outside the GUI for custom workflows.
+
+Key Features
+------------
+- **Reproducibility**: All parameters are captured in the generated script
+- **Self-contained**: Scripts include all imports and can run standalone
+- **Modifiable**: Users can edit parameters and re-run for customization
+- **QC Support**: Option to regenerate only QC reports without re-running ICA
+
+Generated Script Structure
+--------------------------
+The generated script includes:
+1. Header with participant ID and generation timestamp
+2. Input file paths (preprocessed data, brain mask, BOLD reference)
+3. ICA parameters (n_components, smoothing, filtering)
+4. Mask parameters (Yeo network targets, threshold)
+5. Main execution block with cleanup and regeneration logic
+
+Workflow
+--------
+1. User runs mask extraction through the GUI
+2. Script is generated with all current parameters
+3. User can later modify the script (e.g., change threshold)
+4. Running the script regenerates masks with new parameters
+5. Use --qc-only flag to update QC without re-running ICA
+
+Functions
+---------
+generate_mask_extraction_script : Create reproducible mask extraction script
+
+Dependencies
+------------
+datetime, pathlib, typing
+
+Notes
+-----
+Generated scripts handle cleanup of stale outputs (04_2vol/, qc/) to prevent
+inconsistent state when masks are regenerated. The approval marker
+(.masks_approved) is also removed, requiring re-approval after regeneration.
+
+Examples
+--------
+>>> script = generate_mask_extraction_script(
+...     participant_id='sub-01',
+...     mask_extraction_dir='/data/sub-01/mask_extraction',
+...     input_file='/data/sub-01/preprocessing/sub-01_preproc.nii.gz',
+...     mask_file='/data/sub-01/preprocessing/sub-01_mask.nii.gz',
+...     ref_file='/data/sub-01/preprocessing/sub-01_boldref.nii.gz',
+...     yeo_targets=['DefaultA', 'ContA'],
+... )
+>>> Path('reproduce_masks.py').write_text(script)
 """
 
 from datetime import datetime

@@ -357,13 +357,15 @@ class VolumeSimulator:
             self.cleanup()
 
     def run(self, n_volumes: Optional[int] = None) -> None:
-        """Run the DICOM simulation with CLI progress output.
-        
+        """Run the volume simulation with CLI progress output.
+
         Uses deadline-based timing to ensure consistent TR intervals.
-        
+
         This method uses print() instead of logging for user-facing CLI output
         with formatted banners and real-time progress. For programmatic use,
         see copy_volumes_iter() which uses logging instead.
+
+        For NIfTI files, also copies the JSON sidecar file if present.
 
         Parameters
         ----------
@@ -376,11 +378,12 @@ class VolumeSimulator:
         if self.clear_target:
             self._clear_target_directory()
 
-        files_to_send = self.dicom_files[:n_volumes] if n_volumes else self.dicom_files
+        files_to_send = self.volume_files[:n_volumes] if n_volumes else self.volume_files
         n_total = len(files_to_send)
 
+        source_type_label = self.source_type.upper()
         print(f"\n{'='*60}")
-        print("DICOM Simulator Started")
+        print(f"{source_type_label} Simulator Started")
         print(f"{'='*60}")
         print(f"Volumes: {n_total}")
         print(f"TR: {self.tr}s | Speed: {self.speed}x")
@@ -398,8 +401,8 @@ class VolumeSimulator:
             # Sleep until deadline
             self._sleep_until_deadline(deadline)
 
-            dst_file = self.target_dir / src_file.name
-            shutil.copy2(src_file, dst_file)
+            # Copy the file (and JSON sidecar for NIfTI)
+            self._copy_volume_file(src_file)
 
             actual_elapsed = time.monotonic() - self.start_time
             drift = actual_elapsed - expected_time
@@ -416,10 +419,14 @@ class VolumeSimulator:
             self.cleanup()
 
 
+# Backward compatibility alias
+DicomSimulator = VolumeSimulator
+
+
 def main():
-    """Command-line entry point for DICOM simulator."""
-    parser = argparse.ArgumentParser(description='Simulate real-time DICOM acquisition')
-    parser.add_argument('--source', '-s', required=True, help='Source DICOM directory')
+    """Command-line entry point for volume simulator."""
+    parser = argparse.ArgumentParser(description='Simulate real-time volume acquisition (DICOM or NIfTI)')
+    parser.add_argument('--source', '-s', required=True, help='Source volume directory (DICOM or NIfTI)')
     parser.add_argument('--target', '-t', required=True, help='Target directory')
     parser.add_argument('--tr', type=float, default=None, help='TR in seconds')
     parser.add_argument('--speed', type=float, default=1.0, help='Speed multiplier')
@@ -434,7 +441,7 @@ def main():
         format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
-    sim = DicomSimulator(
+    sim = VolumeSimulator(
         source_dir=args.source,
         target_dir=args.target,
         tr=args.tr,

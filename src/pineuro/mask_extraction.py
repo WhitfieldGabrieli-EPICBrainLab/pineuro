@@ -1,81 +1,190 @@
 """
 Functional network mask extraction pipeline for real-time fMRI neurofeedback.
 
-Summary
--------
-Extract participant-specific network masks from resting-state fMRI using ICA
-and spatial correlation with reference atlases.
+This module extracts participant-specific functional network masks from
+resting-state fMRI data. These masks define the brain regions used for
+computing neurofeedback signals during subsequent task sessions.
 
-Functions
----------
-- run_ica: Canonical ICA decomposition on fMRI data
-- spatial_correlation: Correlate ICA components with parcellations
-- mask_extraction_rest: End-to-end mask extraction workflow
+The extraction pipeline uses Independent Component Analysis (ICA) to identify
+spatially independent networks in the participant's resting-state data, then
+matches these components to canonical networks from the Yeo atlas. This
+data-driven approach produces masks tailored to each participant's brain
+organization, rather than using a fixed atlas.
+
+Key Components
+--------------
+mask_extraction_rest : Main pipeline function
+    End-to-end workflow for mask extraction from resting-state data.
+
+run_ica : ICA decomposition
+    Runs CanICA (nilearn) on preprocessed fMRI data to extract
+    spatially independent components.
+
+spatial_correlation : Network matching
+    Computes spatial correlations between ICA components and atlas
+    networks to identify which component best represents each target network.
+
+MaskSelection : Data class
+    Tracks selection state for each mask (auto/manual, ICA component used,
+    correlation values) for reproducibility.
 
 Workflow
 --------
-- Run ICA on resting-state data within a mask
-- Register reference atlas to participant space
-- Correlate components with atlas networks and select targets
-- Threshold and save network masks for feedback
+The pipeline follows these steps:
+
+1. **ICA Decomposition** (01_ica/)
+   Run CanICA on preprocessed resting-state data to extract spatially
+   independent components. Default: 20 components.
+
+2. **Registration to MNI** (02_mnireg/)
+   Compute transformation between participant space and MNI152 space.
+   Pull the Yeo atlas into participant space for correlation.
+
+3. **Network Selection** (03_masks/)
+   For each target network (e.g., DefaultA, ContA):
+   - Compute spatial correlation between each ICA component and atlas network
+   - Select the component with highest correlation
+   - Threshold to retain ~2000 highest-loading voxels
+   - Save as binary mask
+
+4. **QC Report** (qc/)
+   Generate visualizations for quality control: component overlays,
+   correlation heatmaps, mask coverage.
+
+Why ICA-Based Masks?
+--------------------
+Group atlases (like Yeo) are derived from large samples and represent
+population averages. Individual brains show systematic deviations from
+these averages due to:
+- Anatomical variability (sulcal patterns, cortical folding)
+- Functional variability (individual network topography)
+
+ICA-based masks capture each participant's actual network boundaries,
+improving signal specificity for neurofeedback. The atlas is only used
+to identify which component corresponds to which network.
+
+Output Files
+------------
+After extraction, the root directory contains::
+
+    root_dir/
+    ├── 01_ica/
+    │   ├── {participant}_components.nii.gz    # 4D ICA components
+    │   ├── {participant}_ica_info.json        # ICA parameters
+    │   └── {participant}_correlations.csv     # Component × network correlations
+    ├── 02_mnireg/
+    │   ├── {participant}_to_MNI.nii.gz        # Participant→MNI warped
+    │   ├── Yeo_to_{participant}.nii.gz        # Atlas in participant space
+    │   └── xfm/                               # ANTs transform files
+    ├── 03_masks/
+    │   ├── {participant}_{network}_mask.nii.gz  # Per-network masks
+    │   └── mask_selections.json               # Selection metadata
+    └── qc/
+        └── mask_extraction_qc.html            # QC report
 
 Dependencies
 ------------
-nilearn, ANTsPy, nibabel, numpy, pandas, scipy
+External:
+    - ANTs (via ANTsPy) : Registration to MNI space
+
+Python:
+    - nilearn : CanICA and atlas fetching
+    - nibabel : NIfTI I/O
+    - numpy, pandas : Data manipulation
+    - scipy : Spatial correlation
 
 Notes
 -----
-Outputs follow a standardized layout:
-- 01_ica : ICA components and metadata
-- 02_mnireg : MNI registrations and transforms
-- 03_masks : Extracted and thresholded network masks
+**Component Selection:**
+The auto-selection algorithm chooses the ICA component with highest absolute
+spatial correlation to each target network. Manual override is supported via
+the GUI for cases where auto-selection fails.
 
-This expects FSL and nilearn installed and available; external commands are
-invoked via the utilities in this package.
-Further reading: see docs/references.md for reference list.
+**Thresholding:**
+Masks are thresholded to retain a fixed number of voxels (default 2000) by
+selecting the highest-loading voxels within each component. This provides
+consistent mask sizes across networks and participants.
+
+**Multi-Network Masks:**
+For some networks (e.g., DMN), the signal may be split across multiple ICA
+components. The GUI supports combining two components into a single mask.
+
+See Also
+--------
+preprocessing : Prepare resting-state data for mask extraction
+feedback : Use extracted masks for real-time neurofeedback
+qc.generate_mask_extraction_report : Generate QC visualizations
 
 References
 ----------
-[1] Varoquaux, G., Sadaghiani, S., Pinel, P., Kleinschmidt, A., Poline, J. B., 
-    & Thirion, B. (2010). A group model for stable multi-subject ICA on fMRI 
-    datasets. NeuroImage, 51(1), 288-299.
-[2] Jenkinson, M., Beckmann, C. F., Behrens, T. E., Woolrich, M. W., & Smith, 
-    S. M. (2012). FSL. NeuroImage, 62(2), 782-790.
-[3] Yeo, B. T., Krienen, F. M., Sepulcre, J., Sabuncu, M. R., Lashkari, D., 
-    Hollinshead, M., ... & Buckner, R. L. (2011). The organization of the 
-    human cerebral cortex estimated by intrinsic functional connectivity. 
-    Journal of Neurophysiology, 106(3), 1125-1165.
+.. [1] Varoquaux, G., Sadaghiani, S., Pinel, P., Kleinschmidt, A., Poline, J. B.,
+       & Thirion, B. (2010). A group model for stable multi-subject ICA on fMRI
+       datasets. NeuroImage, 51(1), 288-299.
+
+.. [2] Yeo, B. T., Krienen, F. M., Sepulcre, J., Sabuncu, M. R., Lashkari, D.,
+       Hollinshead, M., ... & Buckner, R. L. (2011). The organization of the
+       human cerebral cortex estimated by intrinsic functional connectivity.
+       Journal of Neurophysiology, 106(3), 1125-1165.
+
+.. [3] Hacker, C. D., Laumann, T. O., Szrama, N. P., Baldassarre, A., Snyder, A. Z.,
+       Leuthardt, E. C., & Corbetta, M. (2013). Resting state network estimation
+       in individual subjects. NeuroImage, 82, 616-633.
 """
 
-# Standard library imports
-import json
-import re
+# =============================================================================
+# IMPORTS
+# =============================================================================
+
+# --- Standard Library ---
+import json                 # JSON I/O for selection metadata
+import re                   # Regex for filename parsing
 from dataclasses import dataclass, asdict
 from typing import Union, Any, Dict, List, Optional, Sequence, Tuple
 from pathlib import Path
+import logging
 
-# Third-party imports
+# --- Third-Party: Neuroimaging ---
 import numpy as np
 import pandas as pd
-from nilearn.decomposition import CanICA
-from nilearn import datasets
+from nilearn.decomposition import CanICA  # Independent Component Analysis
+from nilearn import datasets               # Atlas fetching (Yeo networks)
 from nilearn.image import get_data, resample_to_img
 import nibabel as nib
 from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
 from nibabel.spatialimages import SpatialImage
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr           # Spatial correlation
 
-# Local imports
+# --- Local Imports ---
 from pineuro import qc
 from pineuro.utils import (
-    compute_mean, compute_xfm, compute_xfm_to_mni, apply_xfm,
-    get_yeo_labels, dicom_to_nifti, apply_xfm_sform_to_mni, Timer
+    # Registration helpers (ANTs-backed)
+    compute_mean,           # Compute temporal mean of 4D volume
+    compute_xfm,            # Compute transformation matrix
+    compute_xfm_to_mni,     # Compute transform to MNI space
+    apply_xfm,              # Apply transformation
+    apply_xfm_sform_to_mni, # Quick MNI alignment via sform
+
+    # Atlas helpers
+    get_yeo_labels,         # Get Yeo network names (7 or 17 networks)
+
+    # DICOM helpers
+    dicom_to_nifti,         # DICOM conversion (for 2vol coregistration)
+
+    # Timing
+    Timer,                  # Performance timing
 )
 
-# Configure module-level logger
-import logging
+# --- Module Logger ---
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# SECTION 1: DATA STRUCTURES
+# =============================================================================
+# These data structures track the selection state for each network mask.
+# They enable reproducibility (re-running with the same selections) and
+# support the GUI's ability to manually override automatic selections.
 
 
 @dataclass
@@ -698,6 +807,26 @@ def regenerate_mask_from_selection(
     return thr_file
 
 
+# =============================================================================
+# SECTION 2: ICA DECOMPOSITION
+# =============================================================================
+# ICA (Independent Component Analysis) identifies spatially independent
+# patterns of brain activity from resting-state fMRI. Each component
+# represents a coherent network of brain regions that activate together.
+#
+# Why CanICA?
+# -----------
+# We use nilearn's CanICA (Canonical ICA), which is designed specifically
+# for fMRI data. It includes built-in regularization and handles the high
+# dimensionality (many voxels) and temporal structure of fMRI data.
+#
+# Component Interpretation:
+# -------------------------
+# - High positive loadings: voxels that are part of the network
+# - High negative loadings: anti-correlated voxels (can be included if desired)
+# - Near-zero loadings: voxels not part of this network
+
+
 def run_ica(
         input_file: Union[str, Path],
         mask_file: Union[str, Path],
@@ -960,6 +1089,15 @@ def spatial_correlation(
     corr_df.to_csv(output_file, index=False)
 
     return corr_df
+
+
+# =============================================================================
+# SECTION 3: MAIN MASK EXTRACTION PIPELINE
+# =============================================================================
+# This section contains the high-level pipeline function that orchestrates
+# the entire mask extraction process. It combines ICA, registration, and
+# network selection into a single, reproducible workflow.
+
 
 def mask_extraction_rest(
         participant_id: str,
@@ -1265,6 +1403,24 @@ def mask_extraction_rest(
         emit_progress("QC report", f"Saved to {report_path.name}")
 
     return network_thr_files
+
+
+# =============================================================================
+# SECTION 4: 2-VOLUME COREGISTRATION
+# =============================================================================
+# Between sessions, the participant's head position in the scanner may change.
+# The "2-volume" coregistration addresses this by:
+#
+# 1. Acquiring a brief (2-volume) EPI scan at the start of each new session
+# 2. Registering this to the original resting-state reference
+# 3. Applying the inverse transform to bring masks into the new position
+#
+# This ensures the network masks align with the participant's current brain
+# position, even if they've moved since the original resting-state scan.
+#
+# The name "2vol" refers to the minimal acquisition needed - just 2 volumes
+# are enough to create a reliable registration target (averaged to reduce noise).
+
 
 def coregister_2vol(
         participant_id: str,
