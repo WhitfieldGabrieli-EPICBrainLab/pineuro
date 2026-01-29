@@ -863,6 +863,11 @@ class PipelineRunner:
         # Run feedback session (this will handle DICOM collection + processing)
         # Pass ALL masks so all activations are computed and logged
         try:
+            # Get MURFI design path (only used if non-empty and in simulator mode)
+            murfi_design_path = config["scan"].get("murfi_design_path", "")
+            if not murfi_design_path or not simulator_enabled:
+                murfi_design_path = None
+
             session_info = run_feedback_session(
                 mask_paths=[str(f) for f in all_mask_files],
                 subject=self.participant_id,
@@ -874,7 +879,7 @@ class PipelineRunner:
                 n_baseline=n_baseline,
                 n_volumes=n_volumes,
                 tr=tr,
-                task_regressors=task_regressor,  # Pass the computed task regressor
+                task_regressors=task_regressor,  # Pass the computed task regressor (overridden by MURFI if provided)
                 mask_names=all_mask_names,  # All masks for logging
                 use_efficiency_weights=config["feedback"].get("use_efficiency_weights", True),
                 simulator_source_dir=simulator_source_dir,
@@ -885,6 +890,7 @@ class PipelineRunner:
                 condition=condition,  # Log the actual condition
                 sham_provider=sham_provider,  # Replay provider for sham participants
                 moco_enabled=config["feedback"].get("moco_enabled", True),  # Motion correction mode
+                murfi_design_path=murfi_design_path,  # External design matrix (MURFI format)
             )
 
             # Wait for the coordinator thread to complete

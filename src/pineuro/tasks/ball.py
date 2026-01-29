@@ -955,6 +955,15 @@ class BallTask(BaseTask):
                 if remaining > 0:
                     core.wait(remaining, hogCPUperiod=0.001)
 
+            # Process final volume if not yet seen (race condition fix)
+            # The loop exits when is_complete() returns True, which happens
+            # immediately when the coordinator finishes the last volume.
+            # This ensures we don't miss the final volume's data.
+            data = self.get_latest_data()
+            if data.get('volume', 0) > self.current_volume:
+                self.update(data)
+                self.update_frame()
+
         except KeyboardInterrupt:
             logger.info("Task interrupted by user")
             pass

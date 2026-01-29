@@ -114,6 +114,7 @@ class StudyEditorScreen:
                 "collection_speed": 10.0,  # Speed for localizer/collection
                 "feedback_simulator_speed": 1.0,  # Speed for feedback runs
                 "scanner_dicom_dir": "/BOLD_DICOM",
+                "murfi_design_path": "",  # Path to MURFI design file for external design matrix
             },
             "mask": {
                 "n_yeo": 17,
@@ -476,6 +477,13 @@ class StudyEditorScreen:
                 hint_text="Path to DICOM directory for simulator (optional)",
             )
             self.transfer_source_fields.append(field)
+
+        # MURFI design file path (for external design matrix in simulator mode)
+        self.murfi_design_path_field = ft.TextField(
+            label="MURFI Design File (optional)",
+            value=config["scan"].get("murfi_design_path", ""),
+            hint_text="Path to MURFI design .mat file for external task/motion design",
+        )
 
         # --- Sham/Control tab fields ---
         sham_config = config.get("sham", {})
@@ -1024,6 +1032,86 @@ class StudyEditorScreen:
             icon=ft.icons.Icons.FOLDER_OPEN,
             tooltip="Browse for folder",
             on_click=pick_directory,
+        )
+
+    def _create_file_browse_button(
+        self,
+        field: ft.TextField,
+        filetypes: list[tuple[str, str]] = None,
+    ) -> ft.IconButton:
+        """Create a browse button for file selection.
+
+        Args:
+            field: TextField to update with selected file path
+            filetypes: List of (description, pattern) tuples for file filter.
+                       Example: [("MURFI Design", "*.mat"), ("All Files", "*.*")]
+
+        Returns:
+            IconButton that opens file picker
+        """
+        if filetypes is None:
+            filetypes = [("All Files", "*.*")]
+
+        def pick_file(e):
+            """Handle file picker click event."""
+            logger.info(f"File picker clicked for field: {field.label}")
+
+            # Use tkinter file dialog as a workaround for Flet FilePicker issues on Linux
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+            except ImportError:
+                logger.error("tkinter is not available")
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"),
+                    open=True,
+                )
+                self.page.update()
+                return
+
+            try:
+                # Create a temporary tkinter root window
+                root = tk.Tk()
+                root.withdraw()  # Hide the main window
+                root.attributes('-topmost', True)  # Bring to front
+
+                # Get initial directory from current value
+                import os
+                initial_dir = None
+                if field.value:
+                    if os.path.isfile(field.value):
+                        initial_dir = os.path.dirname(field.value)
+                    elif os.path.isdir(field.value):
+                        initial_dir = field.value
+
+                # Open file picker
+                path = filedialog.askopenfilename(
+                    title=f"Select {field.label}",
+                    initialdir=initial_dir,
+                    filetypes=filetypes,
+                )
+
+                # Clean up
+                root.destroy()
+
+                logger.info(f"Selected file: {path}")
+                if path:
+                    field.value = path
+                    field.update()
+
+            except Exception as ex:
+                logger.error(f"Error opening file picker: {ex}")
+                # Show error to user
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text(f"Error opening file browser: {ex}"),
+                    open=True,
+                )
+                self.page.update()
+
+        return ft.IconButton(
+            icon=ft.icons.Icons.FILE_OPEN,
+            tooltip="Browse for file",
+            on_click=pick_file,
         )
 
     def _create_file_browse_button(self, field: ft.TextField, filetypes: list = None) -> ft.IconButton:
@@ -1807,6 +1895,23 @@ class StudyEditorScreen:
         # Add feedback source rows
         simulator_content.extend(self.feedback_source_rows)
 
+        # Add MURFI design file section
+        simulator_content.append(ft.Divider())
+        simulator_content.append(ft.Text("External Design (optional)", size=14, weight=ft.FontWeight.W_500))
+        simulator_content.append(ft.Text(
+            "Provide a MURFI design file to use pre-computed task regressors and motion parameters",
+            size=11,
+            color=ft.Colors.GREY_600,
+        ))
+        self.murfi_design_row = ft.Row([
+            self.murfi_design_path_field,
+            self._create_file_browse_button(
+                self.murfi_design_path_field,
+                filetypes=[("MURFI Design Files", "*.mat"), ("All Files", "*.*")],
+            ),
+        ])
+        simulator_content.append(self.murfi_design_row)
+
         self.simulator_paths_container = ft.Column(
             simulator_content,
             visible=is_simulator,
@@ -2084,6 +2189,7 @@ class StudyEditorScreen:
             config["scan"]["collection_speed"] = float(self.collection_speed_field.value)
             config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value)
             config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip()
+            config["scan"]["murfi_design_path"] = self.murfi_design_path_field.value.strip()
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid scanner parameter: {e}")
             raise ValidationError(f"Invalid scanner parameter: {e}")

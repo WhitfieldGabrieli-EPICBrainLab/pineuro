@@ -814,7 +814,7 @@ class FeedbackEstimator:
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
         If True, use inverse-variance weighting for ROI aggregation (computed
-        from residual MSE). If False, use simple mean. Default is False.
+        from residual MSE). If False, use simple mean. Default is True.
 
     Attributes
     ----------
@@ -850,8 +850,9 @@ class FeedbackEstimator:
         tr: float,
         task_regressors: Optional[NDArray[np.float64]] = None,
         mask_names: Optional[list[str]] = None,
-        use_efficiency_weights: bool = False,
+        use_efficiency_weights: bool = True,
         sham_provider: Optional["ShamActivationProvider"] = None,
+        external_motion_diff: Optional[NDArray[np.float64]] = None,
     ) -> None:
         if len(mask_paths) == 0:
             raise ValueError("At least one mask path required")
@@ -932,14 +933,35 @@ class FeedbackEstimator:
         self._sham_provider = sham_provider
         self._last_real_activations: dict[str, float] = {}
 
+        # External motion diff support (e.g., from MURFI design files)
+        # When provided, these pre-computed differential motion parameters are used
+        # instead of computing motion_diff from absolute motion params
+        if external_motion_diff is not None:
+            external_motion_diff = np.asarray(external_motion_diff, dtype=np.float64)
+            if external_motion_diff.ndim != 2 or external_motion_diff.shape[1] != 6:
+                raise ValueError(
+                    f"external_motion_diff must have shape (n_volumes, 6), "
+                    f"got {external_motion_diff.shape}"
+                )
+            if external_motion_diff.shape[0] != n_volumes:
+                raise ValueError(
+                    f"external_motion_diff has {external_motion_diff.shape[0]} rows, "
+                    f"expected {n_volumes} to match n_volumes"
+                )
+            self._external_motion_diff = external_motion_diff
+            logger.info(f"Using external motion diff parameters ({n_volumes} rows)")
+        else:
+            self._external_motion_diff = None
+
         sham_status = "SHAM MODE" if sham_provider is not None else "disabled"
+        motion_status = "external" if external_motion_diff is not None else "computed"
         logger.info(
             f"FeedbackEstimator initialized with {len(mask_paths)} masks, "
             f"{self._n_voxels} total voxels, "
             f"n_baseline={n_baseline}, n_volumes={n_volumes}, tr={tr:.3f}s, "
             f"task_regressors={self._n_task_regressors}, "
             f"efficiency_weights={'enabled' if use_efficiency_weights else 'disabled'}, "
-            f"sham={sham_status}"
+            f"sham={sham_status}, motion={motion_status}"
         )
 
     def _load_single_mask(
@@ -1158,26 +1180,35 @@ class FeedbackEstimator:
         ----------
         motion_params : ndarray, shape (6,)
             Raw motion parameters for current volume (absolute values).
+            Ignored if external_motion_diff was provided at initialization.
 
         Returns
         -------
         X : ndarray, shape (n_regressors,)
             Design row: [task_cols..., intercept, drift, motion_diff...]
         """
-        # Use frame-to-frame motion
-        if self.n_volumes == 0:
-            motion_diff = np.zeros(6, dtype=np.float64)
+        # Use external motion diff if available, otherwise compute from absolute motion
+        vol_idx = self.n_volumes  # Current volume index (0-based)
+
+        if self._external_motion_diff is not None:
+            # Use pre-loaded motion diff (e.g., from MURFI design file)
+            if vol_idx < len(self._external_motion_diff):
+                motion_diff = self._external_motion_diff[vol_idx, :]
+            else:
+                # Extrapolate with last row if we exceed design length
+                motion_diff = self._external_motion_diff[-1, :]
         else:
-            prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
-            motion_diff = motion_params - prev
+            # Compute frame-to-frame motion from absolute parameters
+            if self.n_volumes == 0:
+                motion_diff = np.zeros(6, dtype=np.float64)
+            else:
+                prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
+                motion_diff = motion_params - prev
 
         self._prev_motion = motion_params.copy()
 
         # Build design row
         X = np.zeros(self._n_regressors, dtype=np.float64)
-
-        # Current volume index (0-based for array access)
-        vol_idx = self.n_volumes  # This is the volume we're about to process
 
         # Fill in task regressors (if any)
         if self._task_regressors is not None:
@@ -1790,7 +1821,7 @@ class NeurofeedbackCoordinator:
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
         If True, use inverse-variance weighting for ROI aggregation (computed
-        from residual MSE). If False, use simple mean. Default is False.
+        from residual MSE). If False, use simple mean. Default is True.
 
     Attributes
     ----------
@@ -1836,7 +1867,7 @@ class NeurofeedbackCoordinator:
         tr: float,
         task_regressors: Optional[NDArray[np.float64]] = None,
         mask_names: Optional[list[str]] = None,
-        use_efficiency_weights: bool = False,
+        use_efficiency_weights: bool = True,
         activation_callback: Optional[Callable[[dict[str, float], int, float, bool, bool], None]] = None,
         error_callback: Optional[Callable[[Exception], None]] = None,
         simulator=None,  # DicomSimulator instance for simulation mode
@@ -1846,6 +1877,7 @@ class NeurofeedbackCoordinator:
         sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
         condition: str = "real",  # Participant condition: "real" or "sham"
         moco_enabled: bool = True,  # Whether Siemens MoCo is enabled on scanner
+        external_motion_diff: Optional[NDArray[np.float64]] = None,  # Pre-loaded motion diff (e.g., MURFI)
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -1909,6 +1941,7 @@ class NeurofeedbackCoordinator:
             mask_names=mask_names,
             use_efficiency_weights=use_efficiency_weights,
             sham_provider=sham_provider,
+            external_motion_diff=external_motion_diff,
         )
 
         # Processing state
@@ -2834,7 +2867,7 @@ def run_feedback_session(
     task_regressors: Optional[NDArray[np.float64]] = None,
     incoming_dir: Optional[Path | str] = None,
     mask_names: Optional[list[str]] = None,
-    use_efficiency_weights: bool = False,
+    use_efficiency_weights: bool = True,
     simulator_source_dir: Optional[Path | str] = None,
     simulator_speed: float = 1.0,
     simulator_clear_target: bool = True,
@@ -2847,6 +2880,7 @@ def run_feedback_session(
     sham_provider: Optional["ShamActivationProvider"] = None,
     condition: str = "real",
     moco_enabled: bool = True,
+    murfi_design_path: Optional[Path | str] = None,
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -2889,7 +2923,7 @@ def run_feedback_session(
         Names for each mask. If not provided, uses mask filenames.
     use_efficiency_weights : bool, optional
         If True, use inverse-variance weighting for ROI aggregation (computed
-        from residual MSE). If False, use simple mean. Default is False.
+        from residual MSE). If False, use simple mean. Default is True.
     simulator_source_dir : Path or str, optional
         If provided, runs in simulation mode. Directory containing source volume
         files (DICOM or NIfTI) to simulate scanner acquisition. If None, runs in
@@ -2936,6 +2970,14 @@ def run_feedback_session(
         (default), motion parameters are extracted from JSON sidecar (ImageComments).
         When False, uses ANTsPy multi-resolution rigid registration (~400-500ms per
         volume) to compute motion parameters and correct volumes.
+    murfi_design_path : Path or str, optional
+        Path to a MURFI design matrix file (.mat). When provided, the design matrix
+        (task regressors and motion parameters) is loaded from this file instead of
+        being constructed. The MURFI motion_diff columns are used directly in the GLM,
+        while ANTsPy registration is still used for volume motion correction if
+        moco_enabled=False. This enables replaying archived data with its original
+        design. When murfi_design_path is provided, the task_regressors parameter
+        is ignored.
 
     Returns
     -------
@@ -3116,6 +3158,33 @@ def run_feedback_session(
     if sham_provider is not None:
         logger.info(f"SHAM MODE ACTIVE: condition='{condition}'")
 
+    # Parse MURFI design file if provided
+    external_motion_diff = None
+    if murfi_design_path is not None:
+        from .utils import parse_murfi_design
+        murfi_design_path = Path(murfi_design_path)
+        logger.info(f"Loading MURFI design file: {murfi_design_path}")
+        murfi_design = parse_murfi_design(murfi_design_path)
+
+        # Validate volume count matches
+        if murfi_design['n_volumes'] != n_volumes:
+            raise ValueError(
+                f"MURFI design has {murfi_design['n_volumes']} volumes, "
+                f"but n_volumes={n_volumes}. These must match."
+            )
+
+        # Override task_regressors with MURFI design
+        if murfi_design['task_regressors'].shape[1] > 0:
+            task_regressors = murfi_design['task_regressors']
+            logger.info(f"Using {task_regressors.shape[1]} task regressor(s) from MURFI design")
+        else:
+            task_regressors = None
+            logger.info("MURFI design has no task regressors (nuisance-only)")
+
+        # Extract external motion diff (used instead of computing from volumes)
+        external_motion_diff = murfi_design['motion_diff']
+        logger.info(f"Using pre-loaded motion diff from MURFI design ({n_volumes} rows)")
+
     # Initialize coordinator with simulator and sham configuration
     coordinator = NeurofeedbackCoordinator(
         watch_dir=incoming_dir,
@@ -3140,6 +3209,7 @@ def run_feedback_session(
         sham_provider=sham_provider,
         condition=condition,
         moco_enabled=moco_enabled,
+        external_motion_diff=external_motion_diff,
     )
 
     # Set cleanup flags for simulation mode

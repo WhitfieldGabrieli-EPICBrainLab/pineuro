@@ -256,6 +256,12 @@ class ThermometerTask(BaseTask):
                 # Small sleep to avoid busy-waiting
                 core.wait(0.001)
 
+            # Process final data after loop exits (race condition fix)
+            # The loop exits when is_complete() returns True, which may happen
+            # before we've had a chance to process the final volume.
+            data = self.coordinator.get_latest_activations() or {}
+            self.update(data)
+
         except KeyboardInterrupt:
             logger.info("ThermometerTask interrupted")
         finally:

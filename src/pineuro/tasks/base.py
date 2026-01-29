@@ -595,6 +595,13 @@ class BaseTask(ABC):
                 if elapsed < self.frame_duration:
                     time.sleep(self.frame_duration - elapsed)
 
+            # Process final data after loop exits (race condition fix)
+            # The loop exits when is_complete() returns True, which may happen
+            # before we've had a chance to process the final volume.
+            data = self.get_latest_data()
+            self.update(data)
+            self._emit_mirror_state()
+
         except KeyboardInterrupt:
             pass
         finally:

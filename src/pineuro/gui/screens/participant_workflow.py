@@ -456,7 +456,9 @@ class ParticipantWorkflowScreen:
         if not collection_dir.exists():
             return StepStatus.PENDING
 
-        dicom_count = len(list(collection_dir.glob("*.dcm")))
+        # Count all files in directory - DICOM files from scanners often lack .dcm extension
+        # (e.g., Siemens names them with UIDs like "MR.1.3.12.2...")
+        dicom_count = len([f for f in collection_dir.iterdir() if f.is_file()])
         if dicom_count >= expected_volumes:
             return StepStatus.COMPLETE
         elif dicom_count > 0:
