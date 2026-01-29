@@ -236,10 +236,21 @@ class BallTask(BaseTask):
         self.circle_positions = [1.0 / 3, -1.0 / 3]
         self.circle_radii = [0.15, 0.15]
         self.circle_colors = ['yellow', '#1E90FF']
-        
+
+        # Store slot info from coordinator for session state tracking
+        self._slot_run_number = getattr(coordinator, 'run_number', None)
+        self._acq = getattr(coordinator, 'acq', None)
+
         if session_state is not None:
-            self.scale_factor = session_state.scale_factor
-            logger.info(f"Restored scale_factor from session: {self.scale_factor}")
+            # Use slot-aware scale factor lookup for retries
+            if self._slot_run_number is not None and self._acq is not None:
+                self.scale_factor = session_state.get_scale_factor_for_slot(
+                    self._slot_run_number, self._acq
+                )
+                logger.info(f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, acq={self._acq})")
+            else:
+                self.scale_factor = session_state.scale_factor
+                logger.info(f"Restored scale_factor from session: {self.scale_factor}")
 
         self.network_directions = np.array([1, -1])  # +1 = up, -1 = down
 
@@ -742,7 +753,7 @@ class BallTask(BaseTask):
 
     def save_state(self, session_state: Optional["SessionState"] = None) -> None:
         """Save current task state to session state for multi-run continuity.
-        
+
         Parameters
         ----------
         session_state : SessionState, optional
@@ -753,7 +764,7 @@ class BallTask(BaseTask):
         if state is None:
             logger.debug("No session state provided, skipping save")
             return
-        
+
         run_type = 'feedback' if self.feedback_mode else 'transfer'
         state.record_run(
             run_type=run_type,
@@ -764,6 +775,9 @@ class BallTask(BaseTask):
             min_hits_threshold=self._min_hits_threshold,
             max_hits_threshold=self._max_hits_threshold,
             scale_adjust_factor=self._scale_adjust_factor,
+            # Slot-based tracking
+            slot_run_number=self._slot_run_number,
+            acq=self._acq,
         )
 
     def _record_run_completion(self) -> None:
@@ -784,6 +798,9 @@ class BallTask(BaseTask):
             min_hits_threshold=self._min_hits_threshold,
             max_hits_threshold=self._max_hits_threshold,
             scale_adjust_factor=self._scale_adjust_factor,
+            # Slot-based tracking
+            slot_run_number=self._slot_run_number,
+            acq=self._acq,
         )
 
     def get_mirror_state(self) -> dict:

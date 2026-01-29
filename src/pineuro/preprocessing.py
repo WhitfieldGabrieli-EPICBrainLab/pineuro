@@ -128,7 +128,6 @@ from pineuro.utils import (
 
     # DICOM/NIfTI operations
     dicom_to_nifti,        # dcm2niix wrapper
-    VOLUME_EXTENSIONS,     # Supported file extensions (.dcm, .nii.gz, etc.)
     is_valid_volume,       # Validate DICOM/NIfTI files
     is_nifti_file,         # Check if file is NIfTI format
     get_json_sidecar_path, # Get path to JSON sidecar for NIfTI
@@ -1269,10 +1268,8 @@ def collect_volumes(
         network filesystems. This backup scan ensures we eventually find all
         files even if watchdog misses some events.
         """
-        found_files: list[Path] = []
-        # Search for all supported volume extensions (DICOM and NIfTI)
-        for ext in VOLUME_EXTENSIONS:
-            found_files.extend(watch_dir.glob(ext))
+        # Get all files in watch directory (supports extensionless DICOMs)
+        found_files = [f for f in watch_dir.iterdir() if f.is_file()]
 
         with lock:
             existing_names = {item[0] for item in pending_heap}

@@ -108,7 +108,8 @@ class StudyEditorScreen:
                 "twovol_realtime_dicoms": "",
                 # Simulator/acquisition
                 "localizer_source_dicoms": ["", ""],
-                "feedback_dicoms": "",
+                "feedback_source_dicoms": ["", ""],  # Per-run feedback DICOM sources
+                "transfer_source_dicoms": ["", ""],  # Per-run transfer DICOM sources (transfer_1, transfer_2)
                 "simulator_enabled": True,
                 "collection_speed": 10.0,  # Speed for localizer/collection
                 "feedback_simulator_speed": 1.0,  # Speed for feedback runs
@@ -128,6 +129,7 @@ class StudyEditorScreen:
                 "n_volumes": 150,
                 "use_efficiency_weights": True,
                 "fd_threshold": 0.5,
+                "moco_enabled": True,
             },
             "localizer_task": {
                 # Localizer task parameters (when not rest)
@@ -368,6 +370,7 @@ class StudyEditorScreen:
             value=str(config["task"]["max_feedback_runs"]),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Total feedback runs (transfer runs are optional)",
+            on_change=self._on_max_feedback_runs_changed,
         )
 
         # Baseline volumes - task-specific but shown in Session Structure
@@ -390,6 +393,13 @@ class StudyEditorScreen:
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Frames exceeding this will be flagged in real-time",
             on_change=lambda _: self._validate_field("fd_threshold", self.fd_threshold_field, validate_positive_number),
+        )
+
+        # Motion correction mode (Siemens MoCo vs ANTsPy fallback)
+        self.moco_enabled_checkbox = ft.Checkbox(
+            label="Siemens MoCo enabled",
+            value=config.get("feedback", {}).get("moco_enabled", True),
+            tooltip="Uncheck if Siemens MoCo is disabled on scanner. Will use ANTsPy for motion correction.",
         )
 
         # Create dynamic task parameter fields for current feedback task type
@@ -429,11 +439,43 @@ class StudyEditorScreen:
             hint_text="Path to DICOM directory for simulator (optional)",
         )
 
-        self.feedback_source_field = ft.TextField(
-            label="Feedback runs source DICOMs",
-            value=config["scan"].get("feedback_dicoms", ""),
-            hint_text="Path to DICOM directory for simulator (optional)",
-        )
+        # Feedback source paths - create dynamically based on max_feedback_runs
+        feedback_dicoms = config["scan"].get("feedback_source_dicoms", ["", ""])
+        # Handle legacy single-path format
+        if isinstance(feedback_dicoms, str):
+            feedback_dicoms = [feedback_dicoms, feedback_dicoms]
+        # Ensure we have enough entries for max possible runs (10)
+        while len(feedback_dicoms) < 10:
+            feedback_dicoms.append("")
+
+        # Create feedback source fields (up to 10, visibility controlled dynamically)
+        self.feedback_source_fields = []
+        for i in range(10):
+            field = ft.TextField(
+                label=f"Feedback run {i+1} source DICOMs",
+                value=feedback_dicoms[i] if i < len(feedback_dicoms) else "",
+                hint_text="Path to DICOM directory for simulator (optional)",
+            )
+            self.feedback_source_fields.append(field)
+
+        # Transfer source paths - create 2 fields (transfer_1 and transfer_2)
+        transfer_dicoms = config["scan"].get("transfer_source_dicoms", ["", ""])
+        # Handle legacy single-path format
+        if isinstance(transfer_dicoms, str):
+            transfer_dicoms = [transfer_dicoms, transfer_dicoms]
+        # Ensure we have 2 entries
+        while len(transfer_dicoms) < 2:
+            transfer_dicoms.append("")
+
+        # Create transfer source fields (always 2: transfer_1 and transfer_2)
+        self.transfer_source_fields = []
+        for i in range(2):
+            field = ft.TextField(
+                label=f"Transfer run {i+1} source DICOMs",
+                value=transfer_dicoms[i] if i < len(transfer_dicoms) else "",
+                hint_text="Path to DICOM directory for simulator (optional)",
+            )
+            self.transfer_source_fields.append(field)
 
         # --- Sham/Control tab fields ---
         sham_config = config.get("sham", {})
@@ -743,9 +785,14 @@ class StudyEditorScreen:
         current_value = task_config.get(param.key, param.default)
 
         if param.type == "bool":
+            # Add special change handler for use_transfer_runs
+            on_change = None
+            if param.key == "use_transfer_runs":
+                on_change = self._on_use_transfer_runs_changed
             return ft.Checkbox(
                 label=param.label,
                 value=current_value,
+                on_change=on_change,
             )
 
         elif param.type in ["float", "int"]:
@@ -887,6 +934,36 @@ class StudyEditorScreen:
         if hasattr(self, 'twovol_realtime_note'):
             self.twovol_realtime_note.visible = not enabled
             self.twovol_realtime_note.update()
+
+    def _on_max_feedback_runs_changed(self, e):
+        """Handle max_feedback_runs field change - update paths tab visibility."""
+        # Validate the field first
+        self._validate_field("max_feedback_runs", self.max_feedback_runs_field, validate_positive_int)
+
+        # Update feedback source field visibility if paths tab has been built
+        if hasattr(self, 'feedback_source_rows'):
+            try:
+                n_runs = int(self.max_feedback_runs_field.value)
+            except (ValueError, TypeError):
+                n_runs = 2
+
+            for i, row in enumerate(self.feedback_source_rows):
+                row.visible = (i < n_runs)
+                row.update()
+
+    def _on_use_transfer_runs_changed(self, e):
+        """Handle use_transfer_runs checkbox change - update paths tab visibility."""
+        enabled = e.control.value if e and hasattr(e, 'control') else False
+
+        # Update transfer source rows and header visibility if paths tab has been built
+        if hasattr(self, 'transfer_source_rows'):
+            for row in self.transfer_source_rows:
+                row.visible = enabled
+                row.update()
+
+        if hasattr(self, 'transfer_section_header'):
+            self.transfer_section_header.visible = enabled
+            self.transfer_section_header.update()
 
     def _create_browse_button(self, field: ft.TextField) -> ft.IconButton:
         """Create a browse button for directory selection.
@@ -1392,6 +1469,7 @@ class StudyEditorScreen:
                 self.max_feedback_runs_field,
                 self.n_baseline_field,
                 self.fd_threshold_field,
+                self.moco_enabled_checkbox,
                 ft.Text(
                     "Note: Transfer runs are optional (configure in task-specific parameters below)",
                     size=12,
@@ -1643,6 +1721,17 @@ class StudyEditorScreen:
         except (ValueError, TypeError):
             n_localizer_runs = 2
 
+        # Get current number of feedback runs
+        try:
+            n_feedback_runs = int(self.max_feedback_runs_field.value)
+        except (ValueError, TypeError):
+            n_feedback_runs = 2
+
+        # Check if transfer runs are enabled
+        config = self.study_config.session_config
+        task_type = config["task"].get("task_type", "ball")
+        use_transfer_runs = config["task"].get(task_type, {}).get("use_transfer_runs", True)
+
         # Create localizer source rows with visibility based on n_runs
         self.localizer_source_rows = []
         for i, field in enumerate(self.localizer_source_fields):
@@ -1663,6 +1752,24 @@ class StudyEditorScreen:
             visible=self.twovol_realtime_enabled_checkbox.value,
         )
 
+        # Create transfer source rows (visibility based on use_transfer_runs)
+        self.transfer_source_rows = []
+        for i, field in enumerate(self.transfer_source_fields):
+            row = ft.Row(
+                [field, self._create_browse_button(field)],
+                visible=use_transfer_runs,
+            )
+            self.transfer_source_rows.append(row)
+
+        # Create feedback source rows with visibility based on n_feedback_runs
+        self.feedback_source_rows = []
+        for i, field in enumerate(self.feedback_source_fields):
+            row = ft.Row(
+                [field, self._create_browse_button(field)],
+                visible=(i < n_feedback_runs),
+            )
+            self.feedback_source_rows.append(row)
+
         # Build simulator paths content
         simulator_content = [
             ft.Divider(),
@@ -1673,17 +1780,32 @@ class StudyEditorScreen:
                 color=ft.Colors.GREY_600,
                 italic=True,
             ),
+            # Localizer section
+            ft.Text("Localizer Runs", size=14, weight=ft.FontWeight.W_500),
         ]
         # Add localizer source rows
         simulator_content.extend(self.localizer_source_rows)
-        # Add 2vol rows
+
+        # Add 2vol section
+        simulator_content.append(ft.Text("2-Volume Coregistration", size=14, weight=ft.FontWeight.W_500))
         simulator_content.append(self.twovol_initial_row)
         simulator_content.append(self.twovol_realtime_row)
-        # Add feedback source
-        simulator_content.append(ft.Row([
-            self.feedback_source_field,
-            self._create_browse_button(self.feedback_source_field),
-        ]))
+
+        # Add transfer section header (container for visibility control)
+        self.transfer_section_header = ft.Text(
+            "Transfer Runs",
+            size=14,
+            weight=ft.FontWeight.W_500,
+            visible=use_transfer_runs,
+        )
+        simulator_content.append(self.transfer_section_header)
+        # Add transfer source rows
+        simulator_content.extend(self.transfer_source_rows)
+
+        # Add feedback section
+        simulator_content.append(ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500))
+        # Add feedback source rows
+        simulator_content.extend(self.feedback_source_rows)
 
         self.simulator_paths_container = ft.Column(
             simulator_content,
@@ -2021,6 +2143,8 @@ class StudyEditorScreen:
             config["feedback"]["n_volumes"] = int(self.feedback_n_volumes_field.value)
             # FD threshold for motion monitoring
             config["feedback"]["fd_threshold"] = float(self.fd_threshold_field.value)
+            # Motion correction mode
+            config["feedback"]["moco_enabled"] = self.moco_enabled_checkbox.value
             # Also save to task-specific config for reference
             if task_type not in config["task"]:
                 config["task"][task_type] = {}
@@ -2115,7 +2239,23 @@ class StudyEditorScreen:
         ]
         config["scan"]["twovol_initial_dicoms"] = self.twovol_initial_field.value.strip()
         config["scan"]["twovol_realtime_dicoms"] = self.twovol_realtime_field.value.strip()
-        config["scan"]["feedback_dicoms"] = self.feedback_source_field.value.strip()
+
+        # Update feedback source paths (per-run)
+        try:
+            n_feedback_runs = int(self.max_feedback_runs_field.value)
+        except (ValueError, TypeError):
+            n_feedback_runs = 2
+        config["scan"]["feedback_source_dicoms"] = [
+            field.value.strip() for field in self.feedback_source_fields[:n_feedback_runs]
+        ]
+
+        # Update transfer source paths (always 2)
+        config["scan"]["transfer_source_dicoms"] = [
+            field.value.strip() for field in self.transfer_source_fields[:2]
+        ]
+
+        # Remove legacy single-path feedback_dicoms if present
+        config["scan"].pop("feedback_dicoms", None)
 
         # Update sham/control configuration
         if "sham" not in config:

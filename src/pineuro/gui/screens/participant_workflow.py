@@ -660,17 +660,24 @@ class ParticipantWorkflowScreen:
         # Build dynamic steps list
         steps = []
 
+        # Get number of feedback runs and transfer run settings from task config
+        task_config = config.get("task", {})
+        max_feedback_runs = task_config.get("max_feedback_runs", 2)
+        task_type = task_config.get("task_type", "ball")
+        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
+
         if is_mask_reuse:
             # Mask reuse mode: only need 2vol + coregistration + feedback
             # Skip localizer, preprocessing, mask extraction
             if twovol_realtime_enabled:
                 steps.extend(["2vol_realtime", "coregistration_realtime"])
-            steps.extend([
-                "transfer_1",
-                "feedback_1",
-                "feedback_2",
-                "transfer_2",
-            ])
+            # Add transfer and feedback steps dynamically
+            if use_transfer_runs:
+                steps.append("transfer_1")
+            for i in range(1, max_feedback_runs + 1):
+                steps.append(f"feedback_{i}")
+            if use_transfer_runs:
+                steps.append("transfer_2")
         else:
             # Standard mode: full pipeline
             if twovol_initial_enabled:
@@ -687,12 +694,13 @@ class ParticipantWorkflowScreen:
                 steps.append("coregistration")
             if twovol_realtime_enabled:
                 steps.extend(["2vol_realtime", "coregistration_realtime"])
-            steps.extend([
-                "transfer_1",
-                "feedback_1",
-                "feedback_2",
-                "transfer_2",
-            ])
+            # Add transfer and feedback steps dynamically
+            if use_transfer_runs:
+                steps.append("transfer_1")
+            for i in range(1, max_feedback_runs + 1):
+                steps.append(f"feedback_{i}")
+            if use_transfer_runs:
+                steps.append("transfer_2")
 
         for step in steps:
             self.step_statuses[step] = StepStatus.PENDING
@@ -774,7 +782,21 @@ class ParticipantWorkflowScreen:
         expected_feedback_vols = config["feedback"]["n_volumes"]
 
         # Check each feedback/transfer step using slot-based detection
-        for step_id in ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]:
+        # Build dynamic list based on max_feedback_runs and use_transfer_runs
+        task_config = config.get("task", {})
+        max_feedback_runs = task_config.get("max_feedback_runs", 2)
+        task_type = task_config.get("task_type", "ball")
+        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
+
+        feedback_transfer_steps = []
+        if use_transfer_runs:
+            feedback_transfer_steps.append("transfer_1")
+        for i in range(1, max_feedback_runs + 1):
+            feedback_transfer_steps.append(f"feedback_{i}")
+        if use_transfer_runs:
+            feedback_transfer_steps.append("transfer_2")
+
+        for step_id in feedback_transfer_steps:
             status = self._check_feedback_slot_status(
                 step_id=step_id,
                 output_dir=feedback_output_dir,
@@ -884,16 +906,17 @@ class ParticipantWorkflowScreen:
             preprocessing_complete = self.step_statuses.get("preprocessing") == StepStatus.COMPLETE
             steps_requiring_preprocessing = [
                 "mask_extraction", "coregistration", "2vol_realtime", "coregistration_realtime",
-                "transfer_1", "feedback_1", "feedback_2", "transfer_2"
             ]
-            requires_preprocessing = step_id in steps_requiring_preprocessing and not preprocessing_complete
+            # Also check for feedback/transfer steps (dynamic)
+            is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
+            requires_preprocessing = (step_id in steps_requiring_preprocessing or is_feedback_transfer) and not preprocessing_complete
 
             # Gate 2: Mask approval required for coregistration and all subsequent steps
             gated_steps = [
                 "coregistration", "2vol_realtime", "coregistration_realtime",
-                "transfer_1", "feedback_1", "feedback_2", "transfer_2"
             ]
-            requires_approval = step_id in gated_steps and not self._initial_qc_approved
+            # Also check for feedback/transfer steps (dynamic)
+            requires_approval = (step_id in gated_steps or is_feedback_transfer) and not self._initial_qc_approved
 
         button = ft.ElevatedButton(
             label,
@@ -1110,12 +1133,19 @@ class ParticipantWorkflowScreen:
         ])
 
         # Add each feedback/transfer step with optional "View Summary" button
-        feedback_steps = [
-            ("transfer_1", "Transfer Run 1"),
-            ("feedback_1", "Feedback Run 1"),
-            ("feedback_2", "Feedback Run 2"),
-            ("transfer_2", "Transfer Run 2"),
-        ]
+        # Build dynamic list based on max_feedback_runs and use_transfer_runs
+        task_config = config.get("task", {})
+        max_feedback_runs = task_config.get("max_feedback_runs", 2)
+        task_type = task_config.get("task_type", "ball")
+        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
+
+        feedback_steps = []
+        if use_transfer_runs:
+            feedback_steps.append(("transfer_1", "Transfer Run 1"))
+        for i in range(1, max_feedback_runs + 1):
+            feedback_steps.append((f"feedback_{i}", f"Feedback Run {i}"))
+        if use_transfer_runs:
+            feedback_steps.append(("transfer_2", "Transfer Run 2"))
         for step_id, step_label in feedback_steps:
             controls.append(
                 self._create_step_button(
@@ -1935,10 +1965,10 @@ class ParticipantWorkflowScreen:
         # Check if outputs exist (warning about existing data)
         outputs_exist = step_info.get("outputs_exist", False)
         overwrite_warning = None
-        feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
+        is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
         if outputs_exist:
             # For feedback steps, data is archived not overwritten
-            if step_id in feedback_steps:
+            if is_feedback_transfer:
                 warning_text = "Previous run data exists and will be archived before starting fresh."
                 warning_icon = ft.icons.Icons.ARCHIVE
             else:
@@ -2217,10 +2247,8 @@ class ParticipantWorkflowScreen:
             Shows what scale factor that run will use and why.
             """
             # First runs (transfer_1, feedback_1) always use initial scale factor
-            # Later runs use the adjusted scale factor from session state
-            first_runs = ["transfer_1", "feedback_1"]
-
-            if step_id in first_runs:
+            # Later feedback runs use the adjusted scale factor from session state
+            if step_id in ["transfer_1", "feedback_1"]:
                 return f"{initial_scale} (initial)"
 
             # For later runs, check if we have session state with completed feedback runs
@@ -2299,45 +2327,13 @@ class ParticipantWorkflowScreen:
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF (ball stationary)",
+                    "MoCo": "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)",
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
                 "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-transfer_run-01_feedbacklog.tsv",
             },
-            "feedback_1": {
-                "label": "Feedback Run 1",
-                "description": "First neurofeedback run with real-time activation feedback.",
-                "parameters": {
-                    "Task": "feedback (run-01)",
-                    "Volumes": config["feedback"]["n_volumes"],
-                    "Baseline": config["feedback"]["n_baseline"],
-                    "Feedback": "ON",
-                    "Networks": ", ".join(config['mask']['mask_names']),
-                    "Scale Factor": get_scale_factor_for_step("feedback_1"),
-                    "Min/Max Hits": f"{config['task'].get('min_hits_threshold', 3)} / {config['task'].get('max_hits_threshold', 5)}",
-                    "Scale Adjust": f"{config['task'].get('scale_adjust_factor', 0.25) * 100:.0f}%",
-                    "Output": base_dir / "feedback" / "02_feedback_output",
-                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
-                },
-                "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-feedback_run-01_feedbacklog.tsv",
-            },
-            "feedback_2": {
-                "label": "Feedback Run 2",
-                "description": "Second neurofeedback run with real-time activation feedback.",
-                "parameters": {
-                    "Task": "feedback (run-02)",
-                    "Volumes": config["feedback"]["n_volumes"],
-                    "Baseline": config["feedback"]["n_baseline"],
-                    "Feedback": "ON",
-                    "Networks": ", ".join(config['mask']['mask_names']),
-                    "Scale Factor": get_scale_factor_for_step("feedback_2"),
-                    "Min/Max Hits": f"{config['task'].get('min_hits_threshold', 3)} / {config['task'].get('max_hits_threshold', 5)}",
-                    "Scale Adjust": f"{config['task'].get('scale_adjust_factor', 0.25) * 100:.0f}%",
-                    "Output": base_dir / "feedback" / "02_feedback_output",
-                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
-                },
-                "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-feedback_run-02_feedbacklog.tsv",
-            },
+            # Note: feedback_N entries are generated dynamically below
             "transfer_2": {
                 "label": "Transfer Run 2",
                 "description": "Final practice run without feedback to assess learning transfer.",
@@ -2346,6 +2342,7 @@ class ParticipantWorkflowScreen:
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF (ball stationary)",
+                    "MoCo": "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)",
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
@@ -2373,6 +2370,29 @@ class ParticipantWorkflowScreen:
                 },
                 "output_path": base_dir / "collection" / f"task-rest_run-{run_num:02d}",
             }
+        # Handle dynamic feedback_N steps
+        elif step_id.startswith("feedback_"):
+            run_num = int(step_id.split("_")[-1])
+            ordinal = {1: "First", 2: "Second", 3: "Third", 4: "Fourth", 5: "Fifth"}.get(run_num, f"{run_num}th")
+
+            info = {
+                "label": f"Feedback Run {run_num}",
+                "description": f"{ordinal} neurofeedback run with real-time activation feedback.",
+                "parameters": {
+                    "Task": f"feedback (run-{run_num:02d})",
+                    "Volumes": config["feedback"]["n_volumes"],
+                    "Baseline": config["feedback"]["n_baseline"],
+                    "Feedback": "ON",
+                    "Networks": ", ".join(config['mask']['mask_names']),
+                    "Scale Factor": get_scale_factor_for_step(step_id),
+                    "Min/Max Hits": f"{config['task'].get('min_hits_threshold', 3)} / {config['task'].get('max_hits_threshold', 5)}",
+                    "Scale Adjust": f"{config['task'].get('scale_adjust_factor', 0.25) * 100:.0f}%",
+                    "MoCo": "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)",
+                    "Output": base_dir / "feedback" / "02_feedback_output",
+                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
+                },
+                "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-feedback_run-{run_num:02d}_feedbacklog.tsv",
+            }
         else:
             info = step_info_map.get(step_id, {
                 "label": step_id,
@@ -2382,7 +2402,20 @@ class ParticipantWorkflowScreen:
             })
 
         # For feedback/transfer steps, show slot-based run info with acq entity
-        feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
+        # Build dynamic list of feedback/transfer steps
+        task_config = config.get("task", {})
+        max_feedback_runs = task_config.get("max_feedback_runs", 2)
+        task_type_name = task_config.get("task_type", "ball")
+        use_transfer_runs = task_config.get(task_type_name, {}).get("use_transfer_runs", True)
+
+        feedback_steps = []
+        if use_transfer_runs:
+            feedback_steps.append("transfer_1")
+        for i in range(1, max_feedback_runs + 1):
+            feedback_steps.append(f"feedback_{i}")
+        if use_transfer_runs:
+            feedback_steps.append("transfer_2")
+
         if step_id in feedback_steps:
             task_type = "transfer" if "transfer" in step_id else "feedback"
             output_dir = base_dir / "feedback" / "02_feedback_output"
@@ -2489,8 +2522,8 @@ class ParticipantWorkflowScreen:
         self._show_monitoring_panel(step_id)
 
         # Connect task mirror callback for feedback/transfer steps
-        feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
-        if step_id in feedback_steps:
+        is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
+        if is_feedback_transfer:
             self.pipeline_runner.set_task_mirror_callback(self._on_task_mirror_update)
         else:
             self.pipeline_runner.set_task_mirror_callback(None)
@@ -2561,8 +2594,8 @@ class ParticipantWorkflowScreen:
                 self._show_qc_approval_dialog("realtime")
 
             # Auto-show feedback summary dialog after feedback/transfer steps
-            feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
-            if completed_step_id in feedback_steps:
+            is_feedback_transfer = completed_step_id.startswith("transfer_") or completed_step_id.startswith("feedback_")
+            if is_feedback_transfer:
                 self._show_feedback_summary(completed_step_id)
 
         # Schedule the UI update on the main thread
@@ -2699,8 +2732,7 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
 
         # Check if this is a feedback/transfer step
-        feedback_steps = ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]
-        is_feedback_step = step_id in feedback_steps
+        is_feedback_step = step_id.startswith("transfer_") or step_id.startswith("feedback_")
 
         if is_feedback_step:
             # Create activation plot for feedback/transfer runs
@@ -3014,10 +3046,12 @@ class ParticipantWorkflowScreen:
             "2vol_realtime": "Collect Real-time 2vol",
             "coregistration_realtime": "Coregister to Real-time 2vol",
             "transfer_1": "Transfer Run 1",
-            "feedback_1": "Feedback Run 1",
-            "feedback_2": "Feedback Run 2",
             "transfer_2": "Transfer Run 2",
         }
+        # Handle dynamic feedback_N labels
+        if step_id.startswith("feedback_"):
+            run_num = int(step_id.split("_")[-1])
+            return f"Feedback Run {run_num}"
         return labels.get(step_id, step_id)
 
     def _get_collection_n_volumes(self, step_id: str) -> int:
@@ -3218,8 +3252,9 @@ class ParticipantWorkflowScreen:
     def _on_stop_clicked(self):
         """Handle stop button click during execution - shows confirmation dialog."""
         # Check if this is a feedback/transfer step (which has post-run questions)
-        is_feedback_step = self._current_step_id in (
-            "transfer_1", "feedback_1", "feedback_2", "transfer_2"
+        is_feedback_step = (
+            self._current_step_id.startswith("transfer_") or
+            self._current_step_id.startswith("feedback_")
         )
 
         # Checkbox for showing questions (only relevant for feedback steps)
@@ -3350,13 +3385,18 @@ class ParticipantWorkflowScreen:
                 ("coregistration_realtime", "Coregister to Real-time 2vol"),
             ])
 
-        # Add feedback runs
-        workflow.extend([
-            ("transfer_1", "Transfer Run 1"),
-            ("feedback_1", "Feedback Run 1"),
-            ("feedback_2", "Feedback Run 2"),
-            ("transfer_2", "Transfer Run 2"),
-        ])
+        # Add feedback runs dynamically based on max_feedback_runs and use_transfer_runs
+        task_config = config.get("task", {})
+        max_feedback_runs = task_config.get("max_feedback_runs", 2)
+        task_type = task_config.get("task_type", "ball")
+        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
+
+        if use_transfer_runs:
+            workflow.append(("transfer_1", "Transfer Run 1"))
+        for i in range(1, max_feedback_runs + 1):
+            workflow.append((f"feedback_{i}", f"Feedback Run {i}"))
+        if use_transfer_runs:
+            workflow.append(("transfer_2", "Transfer Run 2"))
 
         # Find first pending or interrupted step (interrupted takes priority as it needs re-run)
         for step_id, step_label in workflow:

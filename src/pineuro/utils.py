@@ -554,6 +554,9 @@ def get_dicom_files(directory: Path) -> List[Path]:
     """
     Get all DICOM files in a directory, sorted by filename.
 
+    Returns all files in the directory, assuming they are valid DICOM files.
+    This supports DICOM files without extensions (common with some scanner exports).
+
     Parameters
     ----------
     directory : Path
@@ -565,14 +568,10 @@ def get_dicom_files(directory: Path) -> List[Path]:
         Sorted list of DICOM file paths
 
     """
-    dicom_files = []
-    for ext in DICOM_EXTENSIONS:
-        dicom_files.extend(directory.glob(ext))
-
-    # Filter to only files and sort by name
-    valid_dicoms = [f for f in dicom_files if f.is_file()]
-    valid_dicoms.sort()
-    return valid_dicoms
+    # Get all files in directory (supports extensionless DICOMs)
+    dicom_files = [f for f in directory.iterdir() if f.is_file()]
+    dicom_files.sort()
+    return dicom_files
 
 
 def is_valid_dicom(file_path: Path) -> bool:
@@ -663,9 +662,10 @@ def get_nifti_files(directory: Path) -> List[Path]:
 
 def get_volume_files(directory: Path) -> List[Path]:
     """
-    Get all volume files (DICOM or NIfTI) in a directory, sorted by filename.
+    Get all volume files in a directory, sorted by filename.
 
-    Auto-detects file type and returns all valid volume files.
+    Returns all files in the directory, assuming they are valid volume files.
+    This supports DICOM files without extensions (common with some scanner exports).
 
     Parameters
     ----------
@@ -675,17 +675,13 @@ def get_volume_files(directory: Path) -> List[Path]:
     Returns
     -------
     List[Path]
-        Sorted list of volume file paths (DICOM or NIfTI)
+        Sorted list of volume file paths
 
     """
-    volume_files = []
-    for ext in VOLUME_EXTENSIONS:
-        volume_files.extend(directory.glob(ext))
-
-    # Filter to only files and sort by name
-    valid_volumes = [f for f in volume_files if f.is_file()]
-    valid_volumes.sort()
-    return valid_volumes
+    # Get all files in directory (supports extensionless DICOMs)
+    volume_files = [f for f in directory.iterdir() if f.is_file()]
+    volume_files.sort()
+    return volume_files
 
 
 def is_nifti_file(file_path: Path) -> bool:

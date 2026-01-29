@@ -4,14 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-pineuro is a Python library for real-time fMRI neurofeedback research. It provides a pipeline from DICOM acquisition through preprocessing and network mask extraction, implementing a real-time approach for moment-to-moment BOLD activation estimation.
+**pineuro** (Python for Individualized Neurofeedback) is a library for real-time fMRI neurofeedback research. It provides a complete pipeline from DICOM acquisition through preprocessing, network mask extraction, and moment-to-moment BOLD activation estimation using an incremental GLM approach.
 
 ## Dependencies
 
-- **FSL** (FMRIB Software Library) - Required for preprocessing (mcflirt, bet, fslmaths, fslmerge, convert_xfm)
-- **ANTsPy** - Registration (multi-run coreg, MNI alignment, 2vol coreg)
+**External Tools:**
+- **FSL** (FMRIB Software Library) - Preprocessing (mcflirt, bet, fslmaths, fslmerge)
 - **dcm2niix** - DICOM to NIfTI conversion
-- **Python 3.11+** with: numpy, nibabel, nilearn, scipy, pandas, pydicom, templateflow, psychopy
+
+**Python (3.11+):**
+- **antspyx** - Registration (multi-run coreg, MNI alignment, 2vol coreg)
+- **nibabel** - NIfTI I/O
+- **nilearn** - ICA decomposition (CanICA)
+- **psychopy** - Task display
+- **flet** - GUI framework
+- **templateflow** - MNI152 templates
+- **watchdog** - File watching for real-time acquisition
+- numpy, scipy, pandas, matplotlib, pydicom, pyyaml, screeninfo
 
 ## Commands
 
@@ -19,88 +28,140 @@ pineuro is a Python library for real-time fMRI neurofeedback research. It provid
 # Install in development mode
 pip install -e .
 
-# Run integration tests
-python tests/test.py
+# Launch GUI application
+pineuro-gui
 
-# Run DICOM simulator for offline testing
-python -m pineuro.simulator --source /path/to/dicoms --target /path/to/incoming --tr 1.5 --speed 2.0
+# Run tests
+python tests/test_decomposition_methods.py
 ```
 
 ## Architecture
 
+### Project Structure
+
+```
+src/pineuro/
+├── Core Pipeline
+│   ├── preprocessing.py     # DICOM → preprocessed NIfTI
+│   ├── mask_extraction.py   # ICA-based network identification
+│   ├── feedback.py          # Real-time GLM estimation (~3000 lines)
+│   └── simulator.py         # Offline testing with volume replay
+├── Session Management
+│   ├── session.py           # Multi-run orchestration, multi-visit support
+│   └── sham.py              # Sham/control condition delivery
+├── Support
+│   ├── utils.py             # FSL/ANTs wrappers, DICOM utilities
+│   ├── qc.py                # QC visualization and HTML reports
+│   ├── config.py            # Global configuration
+│   ├── display.py           # Monitor detection
+│   └── script_generator.py  # Reproducible script generation
+├── tasks/                   # PsychoPy task framework
+│   ├── base.py              # BaseTask abstract class
+│   ├── ball.py              # BallTask (dual-network game)
+│   ├── thermometer.py       # Simple single-network example
+│   ├── designs.py           # TaskDesign abstractions (block, event-related)
+│   ├── task_registry.py     # Task registration and plugin system
+│   └── session.py           # SessionState persistence
+└── gui/                     # Flet GUI application
+    ├── app.py               # Main application entry
+    ├── screens/             # Navigation screens
+    └── components/          # Reusable UI components
+```
+
 ### Core Processing Pipeline
 
-The library follows a sequential pipeline with numbered output directories (01_, 02_, etc.) for easy tracing:
+The library uses numbered output directories (01_, 02_, etc.) for easy tracing:
 
-1. **DICOM Collection** (`preprocessing.py: collect_dicoms()`) - Watches for incoming DICOMs from scanner, copies to output folder. Similar to MURFI's resting_state step. Works for both resting-state and task data collection.
+**1. Volume Collection** (`preprocessing.py`)
+- `collect_volumes()` / `collect_dicoms()` - Watches for incoming volumes from scanner
+- Supports both real-time (scanner) and simulation (replay) modes
+- Works with DICOM or NIfTI input
 
-2. **Preprocessing** (`preprocessing.py`) - DICOM conversion, motion correction (mcflirt), brain extraction (bet), multi-run coregistration. FSL commands go through `run_command()` in `utils.py`; registrations now use ANTs helpers.
+**2. Preprocessing** (`preprocessing.py`)
+- `preprocessing()` - Main 4-step pipeline:
+  - 01_nifti: DICOM → NIfTI (dcm2niix)
+  - 02_motion_correction: Motion correction (FSL mcflirt)
+  - 03_brain_extraction: Brain extraction (FSL bet)
+  - 04_coregistered: Multi-run alignment (ANTs)
+- Output: `{participant}_task-{task}_preproc.nii.gz`, `_mask.nii.gz`, `_boldref.nii.gz`
 
-3. **Mask Extraction** (`mask_extraction.py`) - ICA-based network mask extraction using nilearn's CanICA:
-   - Runs CanICA on preprocessed data (20 components default)
-   - Registers participant space to MNI152 via ANTs
-   - Pulls Yeo atlas (7 or 17 networks) back to participant space using inverse ANTs transforms
-   - Identifies network components via spatial correlation
-   - Thresholds masks by voxel count (2000 default)
-   - `coregister_2vol()` handles registration to 2-volume feedback space
+**3. Mask Extraction** (`mask_extraction.py`)
+- `mask_extraction_rest()` - ICA-based network identification:
+  - 01_ica: CanICA decomposition (20 components default)
+  - 02_mnireg: Register to MNI152 via ANTs
+  - 03_masks: Pull Yeo atlas to subject space, correlate with ICA components
+  - 04_2vol: Coregister to real-time scanner position
+- `coregister_2vol()` - Aligns masks to feedback run scanner position
 
-4. **Feedback Estimation** (`feedback.py`) - Real-time activation computation:
-   - `IncrementalGLM` - Gentleman's algorithm for online least squares updates with continuous normalization
-   - `FeedbackEstimator` - Processes fMRI volumes, fits GLM to remove nuisance signals
-   - `NeurofeedbackCoordinator` - Watches for DICOMs, converts to NIfTI, processes through estimator
-   - `run_feedback_session()` - High-level function that handles both simulation and real-time modes
+**4. Feedback Estimation** (`feedback.py`)
+- `IncrementalGLM` - Gentleman's algorithm for O(p²) online least squares
+- `FeedbackEstimator` - Builds design matrix, computes normalized activation
+- `NeurofeedbackCoordinator` - Watches volumes, orchestrates processing
+- `run_feedback_session()` - High-level API for complete feedback session
+- Design matrix: `[task_regressors] [intercept] [drift] [motion_x6]`
+- **Motion correction modes** (`moco_enabled` parameter):
+  - `True` (default): Extract motion from Siemens MoCo JSON sidecar
+  - `False`: Use ANTsPy multi-resolution rigid registration (~400-500ms/vol)
 
-5. **Simulation** (`simulator.py`) - `DicomSimulator` copies DICOMs at TR intervals for offline testing. Auto-extracts TR from DICOM headers.
+**5. Simulation** (`simulator.py`)
+- `VolumeSimulator` / `DicomSimulator` - Copies volumes at TR intervals
+- Deadline-based timing for realistic acquisition simulation
+
+### Session Management
+
+**session.py** - Multi-run and multi-visit orchestration:
+- Configuration dataclasses: `SessionConfig`, `PathConfig`, `ScanConfig`, `MaskConfig`, `FeedbackConfig`, `TaskConfig`, `VisitConfig`, `ShamConfig`
+- `setup_session()` - Initialize collection, preprocessing, mask extraction
+- `run_single_task()` - Run one feedback/transfer task
+- `run_full_session()` - Complete multi-run session
+- Multi-visit support: `detect_existing_visits()`, `migrate_to_multi_visit()`, `resolve_mask_source()`
+
+**sham.py** - Sham/control condition handling:
+- `ShamActivationProvider` - Abstract base for sham sources
+- `ReplayActivationProvider` - Replays activation from another participant
+- Real activations always computed; alternative values delivered for blinding
+
+### Task Framework (`tasks/`)
+
+**BaseTask** (`base.py`) - Abstract base for PsychoPy tasks:
+- Thread-safe activation polling between coordinator and display
+- Standard lifecycle: `setup()`, `update(data)`, `cleanup()`
+- Optional session state and post-run questions
+
+**BallTask** (`ball.py`) - Dual-network ball game:
+- Two target circles (one per network)
+- Ball movement driven by relative activation
+- Adaptive difficulty scaling persisted via SessionState
+
+**Task Designs** (`designs.py`):
+- `BlockDesign` - Block design with HRF-convolved boxcar
+- `NuisanceOnlyDesign` - Resting state (no task regressors)
+- `EventRelatedDesign` - Event-related designs
+
+**Session State** (`session.py`):
+- `SessionState` - JSON-backed persistence across runs
+- `RunInfo` - Completed run metadata
 
 ### Quality Control (`qc.py`)
 
-Comprehensive QC visualization system for preprocessing, mask extraction, and feedback stages. All QC functions generate professional HTML reports with embedded plots.
+High-level report generators:
+- `generate_preprocessing_report()` - Motion, brain mask, registration
+- `generate_mask_extraction_report()` - ICA components, network correlations
+- `generate_feedback_report()` - Activation timeseries, design matrix
 
-**High-level API** - One function call per stage:
-- `generate_preprocessing_report()` - Motion QC, brain mask coverage, registration quality
-- `generate_mask_extraction_report()` - ICA components, network correlations, mask overlays
-- `generate_feedback_report()` - Activation timeseries, baseline distributions, design matrix
+Output: Static HTML reports with embedded PNG plots in `{stage_dir}/qc/`
 
-**Core plotting functions**:
-- `plot_mask_overlay_tripanel()` - 3-panel (sagittal/coronal/axial) mask overlays on anatomical
-- `plot_corr_heatmap()` - Correlation matrix heatmaps (e.g., ICA × Yeo networks)
-- `plot_motion_timeseries()` - 6-panel motion parameters (translation + rotation)
-- `plot_motion_framewise_displacement()` - FD timeseries with 0.5mm threshold
-- `plot_brain_mask_coverage()` - Brain extraction quality check
-- `plot_registration_overlay()` - Multi-run alignment validation
-- `plot_ica_component_grid()` - 5×2 grid showing top ICA components
-- `plot_activation_timeseries()` - Per-mask activation over time
-- `plot_baseline_distributions()` - Histogram of baseline normalization
-- `plot_design_matrix()` - Heatmap of GLM design matrix
+### GUI Application (`gui/`)
 
-**Integration**: QC is optional with `qc_enabled` parameter (defaults to `False` for feedback, `True` for preprocessing/mask extraction). Reports auto-discover outputs and generate HTML with all visualizations.
-
-**Output structure**:
-```
-{stage_dir}/qc/
-├── {stage}_qc.html              # Main report
-├── {plot1}.png                  # Individual plots
-├── {plot2}.png
-└── overlays/                    # Mask overlays (if applicable)
-    ├── subject/
-    ├── mni/
-    └── 2vol/
-```
-
-### Utilities (`utils.py`)
-
-Central command execution, ANTs-backed registration helpers, and DICOM utilities:
-- `run_command()` - Validates inputs/outputs, checks command availability, handles overwrite logic
-- Registration/masking helpers: `compute_mean()`, `compute_xfm()`, `apply_xfm()`, `compute_xfm_to_mni()`, `apply_mask()`, `spatial_smoothing()`, `temporal_filtering()`
-- ANTs-specific helpers: `compute_mean_ants()`, `compute_xfm_ants()`, `apply_xfm_ants()`
-- `get_yeo_labels()` - Returns Yeo network labels for 7 or 17 networks
-- Uses templateflow for MNI152 BOLD reference template
-- DICOM utilities: `DICOM_EXTENSIONS`, `get_dicom_files()`, `is_valid_dicom()`, `get_tr_from_dicom()` - shared by simulator, feedback, and preprocessing modules
+Flet-based application (`pineuro-gui` command):
+- **Study Editor**: Configure study parameters (6 tabs)
+- **Participant Workflow**: Pipeline execution and monitoring
+- Real-time visualization: activation plots, FD plots, task mirror
 
 ## Key Patterns
 
-### FSL Command Wrapper
-All external commands go through `run_command()`:
+### Command Execution
+All external commands (FSL, dcm2niix) route through `run_command()`:
 ```python
 run_command(
     cmd_name='mcflirt',
@@ -113,176 +174,170 @@ run_command(
 ```
 
 ### Overwrite Control
-All major functions support `overwrite=False` (default) - skips computation if outputs exist, enabling efficient pipeline re-runs.
+All functions support `overwrite=False` (default) - skips computation if outputs exist, enabling efficient re-runs.
 
-### Output Directory Structure
-Preprocessing creates numbered directories:
-- `01_nifti/`, `02_motion_correction/`, `03_brain_extraction/`, `04_coregistered/`
-- Final outputs: `{participant_task}_preproc.nii.gz`, `{participant_task}_preproc_mask.nii.gz`, `{participant_task}_boldref.nii.gz`
-- `qc/` - QC report and plots (if `qc_enabled=True`)
+### Threading Model
+- **Coordinator thread** (background): Processes volumes, updates shared state
+- **Task thread** (main): Runs PsychoPy at display refresh rate, polls activation
+- Thread-safe communication via `threading.Lock`
 
-Mask extraction:
-- `01_ica/`, `02_mnireg/`, `03_masks/`
-- `04_2vol/` - Initial 2vol coregistration (run-01, from setup)
-- `qc/` - QC report and plots (if `qc_enabled=True`)
-
-Feedback:
-- `01_2vol/` - Realtime 2vol coregistration (run-02+, during session)
-- `02_feedback_output/` - Feedback run outputs
-  - `nifti_task-{task}_run-{run}/` - Converted NIfTI volumes
-  - `{subject}_task-{task}_run-{run}_feedbacklog.tsv` - Activation log
-  - `{subject}_task-{task}_run-{run}_design.tsv` - GLM design matrix
-- `qc/` - QC report and plots (if `qc_enabled=True`)
+### Incremental GLM
+- Gentleman's algorithm: O(p²) per volume vs O(np²) for full recomputation
+- Givens rotations for numerical stability
+- Continuous normalization (not post-hoc z-scoring)
 
 ## Usage Examples
 
-### Collecting Resting-State DICOMs (Real-Time Mode)
-```python
-from pineuro import collect_dicoms, preprocessing
-
-# Step 1: Collect resting-state DICOMs from scanner
-# (Similar to MURFI's resting_state step)
-dicom_folder = collect_dicoms(
-    watch_dir='/scanner/export/incoming',
-    output_dir='/data/sub-01/raw/rest',
-    n_volumes=200,
-    clear_watch_dir=True,  # Like MURFI's rm -rf tmp/murfi_input
-)
-
-# Step 2: Run preprocessing on collected data
-preproc_file, mask_file, ref_file = preprocessing(
-    participant_id='sub-01',
-    task='rest',
-    root_dir='/data/sub-01/preproc',
-    input_dicoms=dicom_folder,
-)
+### Complete Session with GUI
+```bash
+pineuro-gui
 ```
 
-### Collecting DICOMs (Simulation Mode for Testing)
-```python
-from pineuro import collect_dicoms
-
-# Offline testing with simulated scanner acquisition
-dicom_folder = collect_dicoms(
-    watch_dir='/tmp/incoming',
-    output_dir='/data/sub-01/raw/rest',
-    n_volumes=200,
-    simulator_source_dir='/path/to/source_dicoms',
-    simulator_speed=10.0,  # 10x speed for testing
-)
-```
-
-### Running a Feedback Session (Simulation Mode)
-```python
-from pineuro import run_feedback_session
-
-# Offline testing with simulated DICOM acquisition
-results = run_feedback_session(
-    mask_paths=['/path/to/dmn_mask.nii.gz'],
-    subject='sub-01',
-    task='nback',
-    run=1,
-    output_dir='/path/to/output',
-    n_baseline=25,
-    n_volumes=150,
-    # Enable simulation mode
-    simulator_source_dir='/path/to/source_dicoms',
-    simulator_speed=10.0,  # 10x speed for testing
-)
-```
-
-### Running a Feedback Session (Real-Time Mode)
-```python
-from pineuro import run_feedback_session
-
-# Real-time processing with scanner acquisition
-results = run_feedback_session(
-    mask_paths=['/path/to/dmn_mask.nii.gz'],
-    subject='sub-01',
-    task='nback',
-    run=1,
-    output_dir='/path/to/output',
-    incoming_dir='/scanner/export/dicoms',  # Scanner DICOM directory
-    n_baseline=25,
-    n_volumes=200,
-)
-```
-
-### Generating QC Reports
-
-QC reports can be generated automatically during pipeline execution or manually after completion.
-
-**Automatic QC during pipeline execution**:
+### Programmatic Pipeline
 ```python
 from pineuro import preprocessing, mask_extraction_rest, run_feedback_session
 
-# Preprocessing with QC (enabled by default)
+# Step 1: Preprocess resting-state data
 preproc_file, mask_file, ref_file = preprocessing(
     participant_id='sub-01',
     task='rest',
     root_dir='/data/sub-01/preproc',
     input_dicoms='/data/sub-01/raw',
-    qc_enabled=True  # Generate QC report (default: True)
 )
-# QC report saved to: /data/sub-01/preproc/qc/preprocessing_qc.html
 
-# Mask extraction with QC (enabled by default)
+# Step 2: Extract network masks
 mask_files = mask_extraction_rest(
     participant_id='sub-01',
     root_dir='/data/sub-01/mask_extraction',
     input_file=preproc_file,
     mask_file=mask_file,
     ref_file=ref_file,
-    qc_enabled=True  # Generate QC report (default: True)
+    target_networks=['DefaultA', 'ContA'],
 )
-# QC report saved to: /data/sub-01/mask_extraction/qc/mask_extraction_qc.html
 
-# Feedback session with QC (disabled by default)
+# Step 3: Run feedback session (real-time mode)
 results = run_feedback_session(
     mask_paths=mask_files,
     subject='sub-01',
     task='nback',
     run=1,
     output_dir='/data/sub-01/feedback',
-    collection_dir='/data/sub-01/collection',
+    incoming_dir='/scanner/export/dicoms',
     n_baseline=25,
     n_volumes=200,
-    tr=1.2,
-    qc_enabled=True  # Generate QC report (default: False)
 )
-# QC report saved to: /data/sub-01/feedback/qc/sub-01_task-nback_run-01_feedback_qc.html
 ```
 
-**Manual QC report generation**:
+### Simulation Mode (Offline Testing)
 ```python
-from pineuro import qc
-from pathlib import Path
+from pineuro import collect_volumes, run_feedback_session
 
-# Generate preprocessing QC report
-qc.generate_preprocessing_report(
-    preprocessing_dir=Path('/data/sub-01/preproc'),
-    participant_id='sub-01',
-    task='rest',
-    output_dir=Path('/data/sub-01/preproc/qc'),
-    open_browser=True  # Open in browser
+# Collect with simulated acquisition
+dicom_folder = collect_volumes(
+    watch_dir='/tmp/incoming',
+    output_dir='/data/sub-01/raw/rest',
+    n_volumes=200,
+    simulator_source_dir='/path/to/source_dicoms',
+    simulator_speed=10.0,  # 10x speed
 )
 
-# Generate mask extraction QC report
-qc.generate_mask_extraction_report(
-    mask_extraction_dir=Path('/data/sub-01/mask_extraction'),
-    participant_id='sub-01',
-    network_names=['DefaultA', 'ContA'],
-    output_dir=Path('/data/sub-01/mask_extraction/qc'),
-    open_browser=True
-)
-
-# Generate feedback QC report
-qc.generate_feedback_report(
-    feedback_dir=Path('/data/sub-01/feedback'),
+# Feedback with simulation
+results = run_feedback_session(
+    mask_paths=['/path/to/mask.nii.gz'],
     subject='sub-01',
     task='nback',
     run=1,
-    output_dir=Path('/data/sub-01/feedback/qc'),
-    open_browser=True
+    output_dir='/path/to/output',
+    n_baseline=25,
+    n_volumes=150,
+    simulator_source_dir='/path/to/source_dicoms',
+    simulator_speed=10.0,
+    moco_enabled=False,  # Use ANTsPy if Siemens MoCo unavailable
 )
 ```
+
+### Multi-Run Session Orchestration
+```python
+from pineuro import SessionConfig, PathConfig, ScanConfig, setup_session, run_full_session
+
+config = SessionConfig(
+    participant_id='sub-01',
+    paths=PathConfig(
+        root_dir='/data/study',
+        incoming_dir='/scanner/export',
+    ),
+    scan=ScanConfig(tr=1.2, n_volumes_rest=200, n_volumes_task=150),
+)
+
+# Setup: collection, preprocessing, mask extraction
+setup_session(config)
+
+# Run: transfer1 → feedback runs → transfer2
+run_full_session(config)
+```
+
+### Custom Task Creation
+```python
+from pineuro.tasks import BaseTask
+from psychopy import visual
+
+class MyTask(BaseTask):
+    def setup(self):
+        self.win = visual.Window([800, 600])
+        self.stim = visual.Circle(self.win, radius=0.1)
+
+    def update(self, data: dict):
+        # data contains: activation, volume, time, is_baseline
+        self.stim.radius = 0.1 + data['activation'] * 0.05
+        self.stim.draw()
+        self.win.flip()
+
+    def cleanup(self):
+        self.win.close()
+```
+
+## Output Directory Structure
+
+**Preprocessing:**
+```
+{root}/
+├── 01_nifti/
+├── 02_motion_correction/
+├── 03_brain_extraction/
+├── 04_coregistered/
+├── {participant}_task-{task}_preproc.nii.gz
+├── {participant}_task-{task}_preproc_mask.nii.gz
+├── {participant}_task-{task}_boldref.nii.gz
+└── qc/
+```
+
+**Mask Extraction:**
+```
+{root}/
+├── 01_ica/
+├── 02_mnireg/
+├── 03_masks/
+├── 04_2vol/
+└── qc/
+```
+
+**Feedback:**
+```
+{root}/
+├── 01_2vol/
+├── 02_feedback_output/
+│   ├── nifti_task-{task}_run-{run}/
+│   ├── {subject}_task-{task}_run-{run}_feedbacklog.tsv
+│   └── {subject}_task-{task}_run-{run}_design.tsv
+└── qc/
+```
+
+## Public API
+
+Core functions exported from `pineuro`:
+- `run_feedback_session`, `preprocessing`, `collect_volumes`, `mask_extraction_rest`, `coregister_2vol`
+- `BaseTask`, `BallTask`, `ActivationSmoother`, `ActivationNormalizer`, `SessionState`
+- `SessionConfig`, `PathConfig`, `ScanConfig`, `MaskConfig`, `FeedbackConfig`, `TaskConfig`, `VisitConfig`, `ShamConfig`
+- `setup_session`, `run_single_task`, `run_full_session`, `run_next_task`
+- `ShamActivationProvider`, `ReplayActivationProvider`, `load_randomization`
+- `Timer`, `enable_timing`, `get_timing_data`, `check_platform_requirements`

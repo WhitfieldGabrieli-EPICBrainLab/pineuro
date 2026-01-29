@@ -150,7 +150,7 @@ class PipelineRunner:
                 self._run_2vol_realtime()
             elif step_id == "coregistration_realtime":
                 self._run_coregistration(run_id=2)
-            elif step_id in ["transfer_1", "feedback_1", "feedback_2", "transfer_2"]:
+            elif step_id.startswith("transfer_") or step_id.startswith("feedback_"):
                 self._run_feedback_task(step_id)
             else:
                 raise ValueError(f"Unknown step ID: {step_id}")
@@ -594,17 +594,16 @@ class PipelineRunner:
         """Run a feedback or transfer task.
 
         Args:
-            step_id: One of transfer_1, feedback_1, feedback_2, transfer_2
+            step_id: One of transfer_1, transfer_2, feedback_1, feedback_2, feedback_3, etc.
         """
         # Parse step ID to determine task type
-        task_type_map = {
-            "transfer_1": "transfer",
-            "feedback_1": "feedback",
-            "feedback_2": "feedback",
-            "transfer_2": "transfer",
-        }
+        if step_id.startswith("transfer_"):
+            task_type = "transfer"
+        elif step_id.startswith("feedback_"):
+            task_type = "feedback"
+        else:
+            raise ValueError(f"Invalid feedback task step_id: {step_id}")
 
-        task_type = task_type_map[step_id]
         feedback_mode = (task_type == "feedback")
 
         # Get output directory for slot-based run info
@@ -695,7 +694,38 @@ class PipelineRunner:
             # Simulator mode: create temp watch dir and use source DICOMs
             watch_dir = base_dir / "tmp" / f"incoming_{task_type}_acq-{task_acq:02d}_run-{task_run_number:02d}"
             watch_dir.mkdir(parents=True, exist_ok=True)
-            simulator_source_dir = config["scan"]["feedback_dicoms"]
+
+            # Get per-run simulator source path based on step_id
+            # step_id format: transfer_1, transfer_2, feedback_1, feedback_2, etc.
+            run_num_in_step = int(step_id.split("_")[-1])  # Extract run number from step_id
+
+            if task_type == "transfer":
+                # Transfer runs use transfer_source_dicoms list (index 0 for transfer_1, 1 for transfer_2)
+                transfer_sources = config["scan"].get("transfer_source_dicoms", [])
+                # Handle legacy single-path format
+                if isinstance(transfer_sources, str):
+                    transfer_sources = [transfer_sources, transfer_sources]
+                if run_num_in_step <= len(transfer_sources) and transfer_sources[run_num_in_step - 1]:
+                    simulator_source_dir = transfer_sources[run_num_in_step - 1]
+                else:
+                    # Fallback to legacy feedback_dicoms or first available path
+                    simulator_source_dir = config["scan"].get("feedback_dicoms", "")
+                    if not simulator_source_dir and transfer_sources:
+                        simulator_source_dir = transfer_sources[0]
+            else:
+                # Feedback runs use feedback_source_dicoms list (index 0 for feedback_1, etc.)
+                feedback_sources = config["scan"].get("feedback_source_dicoms", [])
+                # Handle legacy single-path format
+                if isinstance(feedback_sources, str):
+                    feedback_sources = [feedback_sources, feedback_sources]
+                if run_num_in_step <= len(feedback_sources) and feedback_sources[run_num_in_step - 1]:
+                    simulator_source_dir = feedback_sources[run_num_in_step - 1]
+                else:
+                    # Fallback to legacy feedback_dicoms or first available path
+                    simulator_source_dir = config["scan"].get("feedback_dicoms", "")
+                    if not simulator_source_dir and feedback_sources:
+                        simulator_source_dir = feedback_sources[0]
+
             simulator_speed = config["scan"].get("feedback_simulator_speed", config["scan"].get("collection_speed", 10.0))
         else:
             # Real-time mode: watch scanner DICOM directory
@@ -854,6 +884,7 @@ class PipelineRunner:
                 fd_threshold=config["feedback"].get("fd_threshold", 0.5),
                 condition=condition,  # Log the actual condition
                 sham_provider=sham_provider,  # Replay provider for sham participants
+                moco_enabled=config["feedback"].get("moco_enabled", True),  # Motion correction mode
             )
 
             # Wait for the coordinator thread to complete
@@ -880,6 +911,13 @@ class PipelineRunner:
 
             # Load session state for adaptive difficulty persistence across runs
             session_state = SessionState.load(output_dir, task_id=feedback_task_type)
+
+            # Update max_feedback_runs from config if different
+            max_feedback_runs = task_config.get("max_feedback_runs", 2)
+            if session_state.max_feedback_runs != max_feedback_runs:
+                session_state.max_feedback_runs = max_feedback_runs
+                session_state.save()
+
             self._emit_progress(f"Session state: task={feedback_task_type}, runs={len(session_state.completed_runs)}")
 
             # Build factory config with task parameters plus runtime settings

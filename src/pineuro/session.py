@@ -457,10 +457,15 @@ class FeedbackConfig:
         Total number of volumes per feedback run
     use_efficiency_weights : bool
         Whether to use efficiency weights in activation estimation
+    moco_enabled : bool
+        Whether Siemens MoCo (motion correction) is enabled on scanner.
+        When True (default), motion parameters are extracted from JSON sidecar.
+        When False, uses ANTsPy multi-resolution rigid registration.
     """
     n_baseline: int = 25
     n_volumes: int = 150
     use_efficiency_weights: bool = True
+    moco_enabled: bool = True
 
 
 @dataclass
@@ -970,7 +975,6 @@ def run_dicom_collection(
         Paths to collected DICOM folders (one per run)
     """
     from .preprocessing import collect_volumes
-    from .utils import VOLUME_EXTENSIONS
 
     logger.info("")
     logger.info("=" * 60)
@@ -1005,9 +1009,8 @@ def run_dicom_collection(
 
         # Skip if simulator outputs already present
         if use_simulator and output_dir.exists():
-            existing_volumes = []
-            for ext in VOLUME_EXTENSIONS:
-                existing_volumes.extend(output_dir.glob(ext))
+            # Get all files (supports extensionless DICOMs)
+            existing_volumes = [f for f in output_dir.iterdir() if f.is_file()]
             if len(existing_volumes) >= n_volumes:
                 logger.info(
                     f"Skipping simulator collection for run {run_num}: {len(existing_volumes)} files already exist in {output_dir}"
@@ -1456,6 +1459,7 @@ def run_single_task(
         task_regressors=task_regressors,
         mask_names=config.mask.mask_names,
         use_efficiency_weights=config.feedback.use_efficiency_weights,
+        moco_enabled=config.feedback.moco_enabled,
         **simulator_kwargs
     )
 

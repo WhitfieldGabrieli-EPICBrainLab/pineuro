@@ -55,6 +55,11 @@ class RunInfo:
     final_scale_factor: Optional[float] = None
     final_circle_radii: Optional[list[float]] = None
 
+    # Slot-based tracking: slot_run_number is the fixed run slot (1 or 2),
+    # acq is the acquisition number for retries (1, 2, 3, ...)
+    slot_run_number: Optional[int] = None
+    acq: Optional[int] = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         data = {
@@ -70,6 +75,11 @@ class RunInfo:
             data['final_scale_factor'] = self.final_scale_factor
         if self.final_circle_radii is not None:
             data['final_circle_radii'] = self.final_circle_radii
+        # Slot-based tracking fields
+        if self.slot_run_number is not None:
+            data['slot_run_number'] = self.slot_run_number
+        if self.acq is not None:
+            data['acq'] = self.acq
         return data
 
     @classmethod
@@ -83,6 +93,8 @@ class RunInfo:
             hit_counters=data.get('hit_counters'),
             final_scale_factor=data.get('final_scale_factor'),
             final_circle_radii=data.get('final_circle_radii'),
+            slot_run_number=data.get('slot_run_number'),
+            acq=data.get('acq'),
         )
 
 
@@ -126,6 +138,11 @@ class SessionState:
     task_state: Dict[str, Any] = field(default_factory=dict)
     completed_runs: list[RunInfo] = field(default_factory=list)
     max_feedback_runs: int = 5
+
+    # Slot-based tracking: maps slot_run_number to the scale_factor that should
+    # be used at the START of that slot (before any runs in that slot).
+    # This allows retries (acq > 1) to use the correct initial scale factor.
+    slot_base_scale_factors: Dict[int, float] = field(default_factory=dict)
 
     # Minimum circle radius (don't shrink below this) - kept for BallTask
     MIN_CIRCLE_RADIUS: float = field(default=0.05, repr=False)
@@ -248,12 +265,78 @@ class SessionState:
 
     @property
     def is_last_feedback_run(self) -> bool:
-        """Whether the next feedback run will be the last one.
+        """Whether we have just completed the last feedback run.
 
-        Returns True when feedback_run_count == max_feedback_runs - 1,
-        meaning the current/next run is the final feedback run.
+        Returns True when feedback_run_count >= max_feedback_runs,
+        meaning all feedback runs are complete. This is used to determine
+        when to show "last_feedback_only" post-run questions.
         """
-        return self.feedback_run_count >= self.max_feedback_runs - 1
+        return self.feedback_run_count >= self.max_feedback_runs
+
+    def get_scale_factor_for_slot(self, slot_run_number: int, acq: int = 1) -> float:
+        """Get the appropriate scale factor for a run slot.
+
+        For retries (acq > 1), returns the scale factor from before that slot
+        was first started. For first attempts (acq == 1), returns the current
+        scale factor and records it as the base for this slot.
+
+        Parameters
+        ----------
+        slot_run_number : int
+            The run slot number (1 or 2)
+        acq : int
+            The acquisition number (1, 2, 3, ...)
+
+        Returns
+        -------
+        float
+            The scale factor to use for this run
+        """
+        if acq > 1 and slot_run_number in self.slot_base_scale_factors:
+            # Retry: use the base scale factor for this slot
+            base_sf = self.slot_base_scale_factors[slot_run_number]
+            logger.info(f"Retry (acq={acq}): using base scale_factor {base_sf} for slot {slot_run_number}")
+            return base_sf
+        else:
+            # First attempt: record current scale factor as base for this slot
+            if slot_run_number not in self.slot_base_scale_factors:
+                self.slot_base_scale_factors[slot_run_number] = self.scale_factor
+                logger.info(f"First attempt at slot {slot_run_number}: recorded base scale_factor {self.scale_factor}")
+                self.save()
+            return self.scale_factor
+
+    def has_run_for_slot(self, slot_run_number: int) -> bool:
+        """Check if a run has been recorded for a given slot.
+
+        Parameters
+        ----------
+        slot_run_number : int
+            The run slot number (1 or 2)
+
+        Returns
+        -------
+        bool
+            True if a run has been recorded for this slot
+        """
+        return any(r.slot_run_number == slot_run_number for r in self.completed_runs)
+
+    def get_run_for_slot(self, slot_run_number: int) -> Optional[RunInfo]:
+        """Get the run info for a given slot, if it exists.
+
+        Parameters
+        ----------
+        slot_run_number : int
+            The run slot number (1 or 2)
+
+        Returns
+        -------
+        RunInfo or None
+            The run info for this slot, or None if no run recorded
+        """
+        for r in self.completed_runs:
+            if r.slot_run_number == slot_run_number:
+                return r
+        return None
 
     # -------------------------------------------------------------------------
     # Persistence methods
@@ -268,6 +351,8 @@ class SessionState:
             'task_state': self.task_state,
             'completed_runs': [r.to_dict() for r in self.completed_runs],
             'max_feedback_runs': self.max_feedback_runs,
+            # Slot-based tracking for retries
+            'slot_base_scale_factors': {str(k): v for k, v in self.slot_base_scale_factors.items()},
             # Also save legacy fields for backwards compatibility
             'scale_factor': self.scale_factor,
             'hit_counters': self.hit_counters,
@@ -358,6 +443,10 @@ class SessionState:
                     'circle_radii': data.get('circle_radii', [0.15, 0.15]),
                 }
 
+            # Load slot_base_scale_factors (convert string keys back to int)
+            slot_base_scale_factors_raw = data.get('slot_base_scale_factors', {})
+            slot_base_scale_factors = {int(k): v for k, v in slot_base_scale_factors_raw.items()}
+
             state = cls(
                 session_dir=session_dir,
                 task_id=data.get('task_id', task_id),
@@ -366,6 +455,7 @@ class SessionState:
                     RunInfo.from_dict(r) for r in data.get('completed_runs', [])
                 ],
                 max_feedback_runs=data.get('max_feedback_runs', 5),
+                slot_base_scale_factors=slot_base_scale_factors,
             )
             logger.info(f"Loaded session state from {state_file}")
             logger.info(f"  Task: {state.task_id}")
@@ -419,12 +509,18 @@ class SessionState:
         min_hits_threshold: int = 3,
         max_hits_threshold: int = 5,
         scale_adjust_factor: float = 0.25,
+        # Slot-based tracking parameters
+        slot_run_number: Optional[int] = None,
+        acq: Optional[int] = None,
     ) -> None:
         """Record a completed run and update state.
 
         For BallTask, also applies adaptive difficulty adjustment to scale_factor:
         - If total hits < min_hits_threshold: increase scale_factor
         - If either network > max_hits_threshold: decrease scale_factor
+
+        Scale factor adjustment only happens when moving to a new run slot, not
+        on retries (acq > 1) of the same slot.
 
         Parameters
         ----------
@@ -446,6 +542,10 @@ class SessionState:
             If either network > this, decrease scale_factor
         scale_adjust_factor : float, default=0.25
             Fraction to adjust scale_factor by (0.25 = 25%)
+        slot_run_number : int, optional
+            The run slot number (1 or 2). If provided, tracks runs by slot.
+        acq : int, optional
+            The acquisition number (1, 2, 3, ...). Used for retry tracking.
         """
         # Build task state snapshot
         if task_state_snapshot is None:
@@ -459,8 +559,24 @@ class SessionState:
         if circle_radii is not None:
             task_state_snapshot['circle_radii'] = circle_radii.copy()
 
+        # Determine if this is a retry (acq > 1 for same slot)
+        is_retry = False
+        existing_run_idx = None
+        if slot_run_number is not None:
+            for idx, r in enumerate(self.completed_runs):
+                if r.slot_run_number == slot_run_number:
+                    is_retry = True
+                    existing_run_idx = idx
+                    break
+
+        # Determine run_number for display purposes
+        if slot_run_number is not None:
+            run_number = slot_run_number
+        else:
+            run_number = self.next_run_number
+
         run_info = RunInfo(
-            run_number=self.next_run_number,
+            run_number=run_number,
             run_type=run_type,
             volumes_processed=volumes_processed,
             task_state_snapshot=task_state_snapshot,
@@ -468,9 +584,28 @@ class SessionState:
             hit_counters=hit_counters.copy() if hit_counters else None,
             final_scale_factor=scale_factor,
             final_circle_radii=circle_radii.copy() if circle_radii else None,
+            # Slot-based tracking
+            slot_run_number=slot_run_number,
+            acq=acq,
         )
 
-        self.completed_runs.append(run_info)
+        if is_retry and existing_run_idx is not None:
+            # Replace existing run for this slot (this is a retry)
+            old_run = self.completed_runs[existing_run_idx]
+            logger.info(f"Replacing run for slot {slot_run_number} (acq {old_run.acq} → {acq})")
+
+            # For retries, we need to subtract the old hits before adding the new ones
+            if hit_counters is not None and old_run.hit_counters is not None:
+                current_hits = self.hit_counters
+                # Subtract old hits
+                self.hit_counters = [
+                    current_hits[i] - old_run.hit_counters[i]
+                    for i in range(min(len(current_hits), len(old_run.hit_counters)))
+                ]
+
+            self.completed_runs[existing_run_idx] = run_info
+        else:
+            self.completed_runs.append(run_info)
 
         # BallTask-specific: update cumulative hit counters
         if hit_counters is not None:
@@ -484,7 +619,12 @@ class SessionState:
             self.circle_radii = circle_radii.copy()
 
         # BallTask-specific: adaptive difficulty adjustment
-        if hit_counters is not None and scale_factor is not None and run_type == 'feedback':
+        # Only adjust scale factor for NEW runs, not retries
+        if is_retry:
+            logger.info(f"  Retry (acq={acq}): skipping scale_factor adjustment")
+            # For retries, keep the already-adjusted scale factor from the first attempt
+            # (which was computed relative to the base scale factor)
+        elif hit_counters is not None and scale_factor is not None and run_type == 'feedback':
             total_hits = sum(hit_counters)
             max_single_network_hits = max(hit_counters)
 
@@ -502,7 +642,7 @@ class SessionState:
                 logger.info(f"  Adaptive difficulty: hits in range → keeping scale_factor at {new_scale:.1f}")
 
             self.scale_factor = new_scale
-        elif scale_factor is not None:
+        elif scale_factor is not None and not is_retry:
             self.scale_factor = scale_factor
             if run_type == 'transfer':
                 logger.info(f"  Transfer run - no adaptive difficulty adjustment")
@@ -510,6 +650,8 @@ class SessionState:
         self.save()
 
         logger.info(f"Recorded run {run_info.run_number} ({run_type})")
+        if slot_run_number is not None:
+            logger.info(f"  Slot: {slot_run_number}, Acq: {acq}")
         if hit_counters is not None:
             logger.info(f"  Hits this run: {hit_counters}")
             logger.info(f"  Cumulative hits: {self.hit_counters}")

@@ -140,12 +140,14 @@ from typing import Callable, Optional, Sequence, TextIO, TYPE_CHECKING
 from collections import OrderedDict
 import heapq                # Priority queue for ordered volume processing
 import re                   # Regex for motion parameter extraction
+import tempfile             # Temporary directory for fallback
 
 # Type-checking only imports (avoid circular dependencies)
 if TYPE_CHECKING:
     from .sham import ShamActivationProvider
 
 # --- Third-Party: Neuroimaging ---
+import ants                 # ANTsPy for fast rigid registration
 import nibabel as nib
 from nibabel.nifti1 import Nifti1Image
 import numpy as np
@@ -161,7 +163,6 @@ from watchdog.events import FileSystemEventHandler, FileCreatedEvent, DirCreated
 
 # --- Local Imports ---
 from .utils import (
-    VOLUME_EXTENSIONS,      # Supported file extensions (.dcm, .nii.gz, etc.)
     is_valid_volume,        # Validate DICOM/NIfTI files
     is_nifti_file,          # Check if file is NIfTI format
     get_json_sidecar_path,  # Get path to JSON sidecar
@@ -170,6 +171,134 @@ from .utils import (
 
 # --- Module Logger ---
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+
+def _rotation_matrix_to_euler(R: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Convert 3x3 rotation matrix to Euler angles (XYZ convention).
+
+    Uses scipy's Rotation class for robust conversion.
+    Convention matches FSL mcflirt: rotations around X, Y, Z axes.
+
+    Parameters
+    ----------
+    R : ndarray, shape (3, 3)
+        Rotation matrix.
+
+    Returns
+    -------
+    angles : ndarray, shape (3,)
+        Euler angles [rot_x, rot_y, rot_z] in radians.
+    """
+    from scipy.spatial.transform import Rotation
+
+    # Use scipy for robust conversion
+    rot = Rotation.from_matrix(R)
+    # XYZ intrinsic = xyz extrinsic, matches FSL convention
+    return rot.as_euler('xyz')
+
+
+def _ants_register_volume(
+    ref_vol: NDArray[np.float64],
+    mov_vol: NDArray[np.float64],
+    affine: NDArray[np.float64],
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Rigid body registration using ANTsPy with multi-resolution for speed.
+
+    Registers the moving volume to the reference using ANTsPy's Rigid transform
+    with a multi-resolution strategy: 5 iterations at 2x shrink factor, then
+    2 iterations at full resolution. This achieves ~400-500ms per volume while
+    maintaining motion parameter accuracy.
+
+    Parameters
+    ----------
+    ref_vol : ndarray, shape (X, Y, Z)
+        Reference volume (typically first volume of feedback session).
+    mov_vol : ndarray, shape (X, Y, Z)
+        Moving volume to register to reference.
+    affine : ndarray, shape (4, 4)
+        Affine matrix for the volumes (used to extract voxel spacing).
+
+    Returns
+    -------
+    corrected_vol : ndarray, shape (X, Y, Z)
+        Motion-corrected volume aligned to reference.
+    motion_params : ndarray, shape (6,)
+        Motion parameters in standard format:
+        [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z]
+        Translations in mm, rotations in degrees.
+    """
+    # Extract voxel spacing from affine (diagonal elements give scale)
+    spacing = np.sqrt(np.sum(affine[:3, :3] ** 2, axis=0))
+
+    # Convert numpy arrays to ANTs images with proper spacing
+    ref_ants = ants.from_numpy(ref_vol.astype(np.float32), spacing=spacing.tolist())
+    mov_ants = ants.from_numpy(mov_vol.astype(np.float32), spacing=spacing.tolist())
+
+    # Multi-resolution rigid registration for speed + accuracy balance
+    # - 5 iterations at 2x shrink (coarse alignment, fast)
+    # - 2 iterations at full resolution (fine alignment)
+    # Benchmarked at ~400-500ms max, with FD closest to Siemens MoCo reference
+    result = ants.registration(
+        fixed=ref_ants,
+        moving=mov_ants,
+        type_of_transform='Rigid',
+        aff_iterations=(5, 2),
+        aff_shrink_factors=(2, 1),
+        aff_smoothing_sigmas=(1, 0),
+        verbose=False,
+    )
+
+    corrected_vol = result['warpedmovout'].numpy()
+
+    # Extract motion parameters from transform
+    tx_path = result['fwdtransforms'][0]
+    tx = ants.read_transform(tx_path)
+
+    params = np.array(tx.parameters)
+    fixed_params = (np.array(tx.fixed_parameters)
+                    if tx.fixed_parameters is not None and len(tx.fixed_parameters) > 0
+                    else np.zeros(3))
+
+    # ANTs Rigid returns Euler3DTransform with 6 parameters:
+    # [angleX, angleY, angleZ, transX, transY, transZ]
+    if len(params) == 6:
+        euler_rad = params[:3]
+        translation = params[3:6]
+        euler_deg = np.degrees(euler_rad)
+        motion_params = np.array([
+            translation[0], translation[1], translation[2],
+            euler_deg[0], euler_deg[1], euler_deg[2],
+        ], dtype=np.float64)
+
+    elif len(params) == 12:
+        # Affine/MatrixOffsetTransform format: [M00..M22, tx, ty, tz]
+        matrix = params[:9].reshape(3, 3)
+        offset = params[9:12]
+
+        # Compute effective translation accounting for rotation center
+        if len(fixed_params) == 3:
+            center = fixed_params
+            effective_translation = offset + center - matrix @ center
+        else:
+            effective_translation = offset
+
+        euler_rad = _rotation_matrix_to_euler(matrix)
+        euler_deg = np.degrees(euler_rad)
+        motion_params = np.array([
+            effective_translation[0], effective_translation[1], effective_translation[2],
+            euler_deg[0], euler_deg[1], euler_deg[2],
+        ], dtype=np.float64)
+
+    else:
+        logger.warning(f"Unexpected ANTs transform params length: {len(params)}")
+        motion_params = np.zeros(6, dtype=np.float64)
+
+    return corrected_vol, motion_params
 
 
 # =============================================================================
@@ -1716,6 +1845,7 @@ class NeurofeedbackCoordinator:
         acq: str = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
         sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
         condition: str = "real",  # Participant condition: "real" or "sham"
+        moco_enabled: bool = True,  # Whether Siemens MoCo is enabled on scanner
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -1728,6 +1858,14 @@ class NeurofeedbackCoordinator:
         self._tr = tr
         self._qc_enabled = qc_enabled
         self._fd_threshold = fd_threshold
+
+        # Motion correction fallback (when Siemens MoCo disabled)
+        self._moco_enabled = moco_enabled
+        self._moco_reference_vol: Optional[NDArray[np.float64]] = None
+        self._moco_reference_affine: Optional[NDArray[np.float64]] = None
+        self._moco_prev_vol: Optional[NDArray[np.float64]] = None  # For incremental registration
+        if not moco_enabled:
+            logger.info("MoCo fallback enabled - will use ANTsPy multi-resolution rigid registration")
 
         # Validate watch directory
         if not self.watch_dir.exists():
@@ -2126,10 +2264,9 @@ class NeurofeedbackCoordinator:
         This handles files that may have been missed by watchdog events,
         particularly when the simulator runs faster than processing.
         """
-        # Glob files OUTSIDE the lock to avoid blocking other threads during I/O
-        found_files: list[Path] = []
-        for ext in VOLUME_EXTENSIONS:
-            found_files.extend(self.watch_dir.glob(ext))
+        # Get all files OUTSIDE the lock to avoid blocking other threads during I/O
+        # Supports extensionless DICOMs from some scanner exports
+        found_files = [f for f in self.watch_dir.iterdir() if f.is_file()]
 
         # Only hold lock for the quick heap operations
         with self._lock:
@@ -2241,7 +2378,50 @@ class NeurofeedbackCoordinator:
         # Process through estimator (timed for diagnostics)
         glm_start = time.monotonic()
         try:
-            activations = self._estimator.process_volume(nifti_path, json_path)
+            # Determine motion source based on MoCo mode
+            if self._moco_enabled:
+                # Standard path: extract motion from JSON sidecar (Siemens MoCo)
+                motion_source = json_path
+            else:
+                # Fallback path: compute motion via ANTsPy registration
+                vol_img = nib.load(nifti_path)
+                vol_data = vol_img.get_fdata()
+                vol_affine = vol_img.affine
+
+                # Ensure we have a 3D volume, not 4D
+                if vol_data.ndim == 4:
+                    logger.warning(f"MoCo fallback: volume {volume_num} is 4D with shape {vol_data.shape}, extracting first volume")
+                    vol_data = vol_data[..., 0]
+
+                if self._moco_reference_vol is None:
+                    # First volume becomes reference
+                    self._moco_reference_vol = vol_data.copy()  # Copy to avoid reference issues
+                    self._moco_reference_affine = vol_affine.copy()
+                    self._moco_prev_vol = vol_data.copy()  # Track previous volume for incremental registration
+                    motion_source = np.zeros(6, dtype=np.float64)
+                    logger.info(f"MoCo fallback: volume {volume_num} set as reference, shape={vol_data.shape}")
+                else:
+                    # Verify shapes match
+                    if vol_data.shape != self._moco_prev_vol.shape:
+                        logger.error(f"MoCo shape mismatch: prev={self._moco_prev_vol.shape}, mov={vol_data.shape}")
+
+                    # Register to PREVIOUS volume (incremental, like Siemens PACE)
+                    # This gives frame-to-frame motion, not absolute motion relative to vol 1
+                    corrected_vol, motion_params = _ants_register_volume(
+                        self._moco_prev_vol,
+                        vol_data,
+                        self._moco_reference_affine,
+                    )
+
+                    # Update previous volume to the corrected one for next iteration
+                    self._moco_prev_vol = corrected_vol.copy()
+
+                    # Overwrite NIfTI with corrected volume
+                    corrected_img = nib.Nifti1Image(corrected_vol.astype(np.float32), self._moco_reference_affine)
+                    nib.save(corrected_img, nifti_path)
+                    motion_source = motion_params
+
+            activations = self._estimator.process_volume(nifti_path, motion_source)
             self.design_matrix.append(self._estimator._last_design_row)
             # Write design row incrementally (so it's not lost on interrupt)
             self._append_design_row(self._estimator._last_design_row)
@@ -2666,6 +2846,7 @@ def run_feedback_session(
     step_id: Optional[str] = None,
     sham_provider: Optional["ShamActivationProvider"] = None,
     condition: str = "real",
+    moco_enabled: bool = True,
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -2750,6 +2931,11 @@ def run_feedback_session(
         Participant condition label to log in feedbacklog.tsv. Should be 'real'
         or 'sham'. This is logged for each volume but doesn't affect processing -
         the sham_provider determines what activations are delivered. Default is 'real'.
+    moco_enabled : bool, optional
+        Whether Siemens MoCo (motion correction) is enabled on the scanner. When True
+        (default), motion parameters are extracted from JSON sidecar (ImageComments).
+        When False, uses ANTsPy multi-resolution rigid registration (~400-500ms per
+        volume) to compute motion parameters and correct volumes.
 
     Returns
     -------
@@ -2953,6 +3139,7 @@ def run_feedback_session(
         acq=acq,
         sham_provider=sham_provider,
         condition=condition,
+        moco_enabled=moco_enabled,
     )
 
     # Set cleanup flags for simulation mode
