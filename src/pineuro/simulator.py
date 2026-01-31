@@ -239,6 +239,9 @@ class VolumeSimulator:
         """
         Copy a volume file (and its JSON sidecar for NIfTI) to target directory.
 
+        Uses atomic copy (write to temp file, then rename) to prevent the file
+        watcher from seeing incomplete files during copy.
+
         Parameters
         ----------
         src_file : Path
@@ -250,14 +253,20 @@ class VolumeSimulator:
             Path to copied volume file in target directory
         """
         dst_file = self.target_dir / src_file.name
-        shutil.copy2(src_file, dst_file)
+        tmp_file = self.target_dir / f".{src_file.name}.tmp"
+
+        # Atomic copy: write to temp file, then rename
+        shutil.copy2(src_file, tmp_file)
+        tmp_file.rename(dst_file)
 
         # For NIfTI files, also copy the JSON sidecar if it exists
         if is_nifti_file(src_file):
             json_src = get_json_sidecar_path(src_file)
             if json_src.exists():
                 json_dst = get_json_sidecar_path(dst_file)
-                shutil.copy2(json_src, json_dst)
+                json_tmp = self.target_dir / f".{json_src.name}.tmp"
+                shutil.copy2(json_src, json_tmp)
+                json_tmp.rename(json_dst)
 
         return dst_file
 

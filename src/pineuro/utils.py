@@ -401,8 +401,44 @@ class ProgressEmitter:
 # HRF and Task Regressor Computation
 # ==============================================================
 
+def _gamma_pdf_rate(t: np.ndarray, shape: float, rate: float) -> np.ndarray:
+    """Gamma PDF with rate parameterization.
+
+    Computes: rate^shape / Gamma(shape) * t^(shape-1) * exp(-rate*t)
+
+    Parameters
+    ----------
+    t : ndarray
+        Time points.
+    shape : float
+        Shape parameter (alpha).
+    rate : float
+        Rate parameter (beta = 1/scale).
+
+    Returns
+    -------
+    pdf : ndarray
+        Gamma PDF values.
+    """
+    from scipy.special import gamma as gamma_func
+
+    # Avoid division by zero at t=0
+    t_safe = np.maximum(t, 1e-10)
+
+    pdf = (
+        np.power(rate, shape)
+        / gamma_func(shape)
+        * np.power(t_safe, shape - 1)
+        * np.exp(-rate * t_safe)
+    )
+    # Set t=0 to 0 (limit of t^(a-1) as t->0 for a>1)
+    pdf[t == 0] = 0.0
+
+    return pdf
+
+
 def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
-    """Compute canonical double-gamma HRF (SPM-style).
+    """Compute canonical double-gamma HRF.
 
     Parameters
     ----------
@@ -414,14 +450,16 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     Returns
     -------
     hrf : ndarray
-        HRF sampled at TR intervals, normalized to peak at 1.0.
+        HRF sampled at TR intervals, normalized to sum to 1.0.
 
     Notes
     -----
-    Uses SPM canonical HRF parameters:
-    - Positive gamma: shape=6, scale=1 (peak ~5s)
-    - Negative gamma: shape=16, scale=1 (peak ~16s)
+    Uses high-resolution sampling for accuracy:
+    - Samples at 16 Hz internally, then downsamples to TR
+    - Positive gamma: shape=6
+    - Negative gamma: shape=16
     - Undershoot ratio: 1/6
+    - Normalized to sum to 1.0 for proper convolution scaling
 
     Examples
     --------
@@ -429,31 +467,47 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     >>> hrf = compute_hrf(tr=1.2)
     >>> print(hrf.shape)  # (27,) for 32s duration at TR=1.2
     """
-    from scipy.stats import gamma as gamma_dist
+    # High-resolution sampling for accuracy
+    hires_dt = 1.0 / 16.0  # 16 Hz sampling
 
-    # Time points at TR intervals
-    t = np.arange(0, duration, tr)
+    # Double-gamma parameters
+    shape_pos = 6.0  # positive response shape
+    shape_neg = 16.0  # undershoot shape
+    undershoot_ratio = 6.0  # positive-to-negative amplitude ratio
 
-    # SPM canonical HRF parameters
-    # Positive response: gamma(6, 1) peaks at ~5s
-    # Undershoot: gamma(16, 1) peaks at ~16s
-    a1, b1 = 6.0, 1.0  # shape, scale for positive response
-    a2, b2 = 16.0, 1.0  # shape, scale for undershoot
-    c = 1.0 / 6.0  # undershoot ratio
+    # High-resolution time points (in sample units)
+    n_hires_samples = int(duration / hires_dt)
+    t_hires = np.arange(n_hires_samples, dtype=np.float64)
 
-    # Double-gamma HRF
-    hrf = gamma_dist.pdf(t, a1, scale=b1) - c * gamma_dist.pdf(t, a2, scale=b2)
+    # Compute high-resolution HRF
+    hrf_hires = (
+        _gamma_pdf_rate(t_hires, shape_pos, hires_dt)
+        - _gamma_pdf_rate(t_hires, shape_neg, hires_dt) / undershoot_ratio
+    )
 
-    # Normalize to peak at 1.0
-    hrf = hrf / np.max(hrf)
+    # Normalize to sum to 1.0
+    hrf_sum = np.sum(hrf_hires)
+    if hrf_sum > 0:
+        hrf_hires = hrf_hires / hrf_sum
 
-    return hrf.astype(np.float64)
+    # Downsample to TR resolution
+    samples_per_tr = int(tr / hires_dt)
+    n_tr_samples = int(duration / tr)
+    hrf = np.zeros(n_tr_samples, dtype=np.float64)
+
+    for i in range(n_tr_samples):
+        hires_idx = i * samples_per_tr
+        if hires_idx < len(hrf_hires):
+            hrf[i] = hrf_hires[hires_idx]
+
+    return hrf
 
 
 def compute_boxcar_task_regressor(
     n_baseline: int,
     n_volumes: int,
     tr: float,
+    hrf_duration: float = 32.0,
 ) -> np.ndarray:
     """Compute HRF-convolved boxcar task regressor.
 
@@ -471,6 +525,8 @@ def compute_boxcar_task_regressor(
         Total number of volumes.
     tr : float
         Repetition time in seconds.
+    hrf_duration : float, optional
+        Duration of HRF in seconds. Default is 32s.
 
     Returns
     -------
@@ -479,7 +535,9 @@ def compute_boxcar_task_regressor(
 
     Notes
     -----
-    The convolution produces the characteristic HRF response shape:
+    The convolution is performed at high temporal resolution (16 Hz) for
+    accuracy, then downsampled to TR. This produces the characteristic
+    HRF response shape:
     - Stays at 0 during baseline
     - Ramps up after baseline onset following HRF shape
     - Reaches steady state (~1.0) after ~25-30s
@@ -490,26 +548,51 @@ def compute_boxcar_task_regressor(
     >>> regressor = compute_boxcar_task_regressor(n_baseline=25, n_volumes=150, tr=1.2)
     >>> print(regressor.shape)  # (150,)
     """
-    # Create boxcar: 0 during baseline, 1 during active period
-    boxcar = np.zeros(n_volumes, dtype=np.float64)
-    boxcar[n_baseline:] = 1.0
+    # High-resolution parameters: 16 Hz sampling
+    hires_dt = 1.0 / 16.0
 
-    # Compute HRF kernel
-    hrf = compute_hrf(tr)
+    # Double-gamma parameters
+    shape_pos = 6.0
+    shape_neg = 16.0
+    undershoot_ratio = 6.0
 
-    # Convolve boxcar with HRF
-    convolved = np.convolve(boxcar, hrf, mode='full')
+    # Compute high-resolution HRF (16 Hz, 32 seconds = 512 samples)
+    n_hrf_samples = int(hrf_duration / hires_dt)
+    t_hrf = np.arange(n_hrf_samples, dtype=np.float64)
+    hrf_hires = (
+        _gamma_pdf_rate(t_hrf, shape_pos, hires_dt)
+        - _gamma_pdf_rate(t_hrf, shape_neg, hires_dt) / undershoot_ratio
+    )
 
-    # Trim to original length
-    regressor = convolved[:n_volumes]
-
-    # Normalize so steady-state is ~1.0 (divide by sum of HRF)
-    # This ensures the regressor reaches 1.0 after the HRF response settles
-    hrf_sum = np.sum(hrf)
+    # Normalize HRF to sum to 1.0
+    hrf_sum = np.sum(hrf_hires)
     if hrf_sum > 0:
-        regressor = regressor / hrf_sum
+        hrf_hires = hrf_hires / hrf_sum
 
-    return regressor.astype(np.float64)
+    # Create high-resolution boxcar at 16 Hz
+    # Stimulus onset at start of n_baseline-th TR (time = n_baseline * tr)
+    total_time = n_volumes * tr
+    n_hires_samples = int(total_time / hires_dt)
+    onset_time = n_baseline * tr
+
+    boxcar_hires = np.zeros(n_hires_samples, dtype=np.float64)
+    for i in range(n_hires_samples):
+        t_sec = i * hires_dt
+        if t_sec >= onset_time:
+            boxcar_hires[i] = 1.0
+
+    # Convolve at high resolution
+    convolved_hires = np.convolve(boxcar_hires, hrf_hires, mode='full')
+
+    # Downsample to TR resolution by sampling at TR boundaries
+    regressor = np.zeros(n_volumes, dtype=np.float64)
+    for i in range(n_volumes):
+        t_sec = i * tr
+        hires_idx = int(t_sec / hires_dt)
+        if hires_idx < len(convolved_hires):
+            regressor[i] = convolved_hires[hires_idx]
+
+    return regressor
 
 
 # ==============================================================
@@ -737,7 +820,8 @@ def is_valid_volume(file_path: Path) -> bool:
     """
     Check if a file is a valid volume (DICOM or NIfTI).
 
-    Auto-detects file type and validates accordingly.
+    Auto-detects file type and validates accordingly. Ignores temporary files
+    (used by simulator for atomic copy).
 
     Parameters
     ----------
@@ -750,6 +834,10 @@ def is_valid_volume(file_path: Path) -> bool:
         True if file is a valid DICOM or NIfTI, False otherwise
 
     """
+    # Skip temporary files from atomic copy (e.g., .IM-0001.dcm.tmp)
+    if file_path.name.startswith('.') and file_path.name.endswith('.tmp'):
+        return False
+
     if is_nifti_file(file_path):
         return is_valid_nifti(file_path)
     else:

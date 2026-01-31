@@ -336,6 +336,7 @@ class MyTask(BaseTask):
 
 Core functions exported from `pineuro`:
 - `run_feedback_session`, `preprocessing`, `collect_volumes`, `mask_extraction_rest`, `coregister_2vol`
+- `compute_hrf`, `compute_boxcar_task_regressor` - HRF computation utilities
 - `BaseTask`, `BallTask`, `ActivationSmoother`, `ActivationNormalizer`, `SessionState`
 - `SessionConfig`, `PathConfig`, `ScanConfig`, `MaskConfig`, `FeedbackConfig`, `TaskConfig`, `VisitConfig`, `ShamConfig`
 - `setup_session`, `run_single_task`, `run_full_session`, `run_next_task`
