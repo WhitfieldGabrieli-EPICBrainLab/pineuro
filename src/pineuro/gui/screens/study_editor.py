@@ -2291,8 +2291,8 @@ class StudyEditorScreen:
                 logger.warning(f"highpass_field has invalid value: {highpass_val!r}, using default 0.01")
                 highpass_val = "0.01"
             if not n_components_val or n_components_val == "None":
-                logger.warning(f"n_components_field has invalid value: {n_components_val!r}, using default 20")
-                n_components_val = "20"
+                logger.warning(f"n_components_field has invalid value: {n_components_val!r}, using default 30")
+                n_components_val = "30"
 
             config["mask"]["n_yeo"] = int(n_yeo_val)
             config["mask"]["smooth_fwhm"] = float(smooth_val)

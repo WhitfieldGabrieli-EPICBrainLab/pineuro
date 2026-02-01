@@ -70,7 +70,7 @@ def generate_mask_extraction_script(
     ref_file: Union[str, Path],
     n_yeo: int = 17,
     yeo_targets: Optional[List[str]] = None,
-    n_components: int = 20,
+    n_components: int = 30,
     threshold: int = 2000,
     smooth_fwhm: Optional[float] = None,
     highpass: Optional[float] = None,

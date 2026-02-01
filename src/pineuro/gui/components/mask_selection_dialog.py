@@ -77,7 +77,7 @@ class MaskSelectionDialog:
         brain_mask_file: Optional[Path] = None,
         ref_file: Optional[Path] = None,
         yeo_targets: Optional[List[str]] = None,
-        n_components: int = 20,
+        n_components: int = 30,
         smooth_fwhm: Optional[float] = None,
         highpass: Optional[float] = None,
         lowpass: Optional[float] = None,

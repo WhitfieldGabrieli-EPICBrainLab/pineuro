@@ -354,7 +354,7 @@ class PipelineRunner:
         # Mask extraction parameters
         n_yeo = config["mask"]["n_yeo"]
         yeo_targets = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
-        n_components = config["mask"].get("n_components", 20)
+        n_components = config["mask"].get("n_components", 30)
         smooth_fwhm = config["mask"]["smooth_fwhm"]
         highpass = config["mask"]["highpass"]
         lowpass = config["mask"].get("lowpass")

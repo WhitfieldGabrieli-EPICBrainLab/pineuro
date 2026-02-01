@@ -859,7 +859,7 @@ def run_ica(
         mask_file: Union[str, Path],
         output_dir: Union[str, Path],
         output_name: str,
-        n_components: int = 20,
+        n_components: int = 30,
         smooth_fwhm: Optional[float] = None,
         highpass: Optional[float] = None,
         lowpass: Optional[float] = None,
@@ -878,7 +878,7 @@ def run_ica(
         Directory to save output files (components and reports)
     output_name : str
         Base name for output file (without extension)
-    n_components : int, default = 20
+    n_components : int, default = 30
         Number of independent components to extract
     smooth_fwhm : float, optional
         FWHM of Gaussian smoothing kernel in mm for ICA. If None, no smoothing is applied
@@ -1134,7 +1134,7 @@ def mask_extraction_rest(
         ref_file: Union[str, Path],
         n_yeo: int = 17,
         yeo_targets : Union[str, List[str]] = ["DefaultA", "ContA"],
-        n_components: int = 20,
+        n_components: int = 30,
         threshold: int = 2000,
         smooth_fwhm: Optional[float] = None,
         highpass: Optional[float] = None,
@@ -1173,7 +1173,7 @@ def mask_extraction_rest(
         Yeo network parcellation to use. Options: 7 or 17
     yeo_targets : str or List of str
         Yeo network targets to extract masks for
-    n_components : int, default=20
+    n_components : int, default=30
         Number of ICA components to extract
     threshold : int, default=2000
         Number of voxels to keep in the thresholded mask

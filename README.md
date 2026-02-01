@@ -75,7 +75,7 @@ from pineuro import mask_extraction_rest
 mask_extraction_rest(
     root_dir='/data/sub-01/masks',
     preproc_runs=['/data/sub-01/preproc/sub-01_rest_preproc.nii.gz'],
-    n_components=20,  # ICA components
+    n_components=30,  # ICA components
     yeo_networks=[7],  # Default Mode Network (DMN)
     n_atlas=7,  # Use Yeo 7-network atlas
 )

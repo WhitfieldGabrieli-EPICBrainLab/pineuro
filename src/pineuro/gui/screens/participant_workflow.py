@@ -327,7 +327,7 @@ class ParticipantWorkflowScreen:
 
         # Generate overlays only for RECOMMENDED (best) components initially
         # Alternative overlays will be generated on-demand when user rejects a mask
-        n_components = config["mask"].get("n_components", 20)
+        n_components = config["mask"].get("n_components", 30)
         self._add_log("[INFO] Generating overlays for recommended ICA components...")
         self.page.update()
 
@@ -371,7 +371,7 @@ class ParticipantWorkflowScreen:
                 current_correlation = float(corr_df[network].iloc[current_component])
 
             # Get all ICA components as alternatives (sorted by correlation)
-            n_components = config["mask"].get("n_components", 20)
+            n_components = config["mask"].get("n_components", 30)
             alternatives = get_alternative_components(corr_df, network, top_n=n_components)
 
             # Find overlay paths
@@ -410,7 +410,7 @@ class ParticipantWorkflowScreen:
         ref_file = preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
 
         # Get ICA parameters from config
-        n_components = config["mask"].get("n_components", 20)
+        n_components = config["mask"].get("n_components", 30)
         smooth_fwhm = config["mask"].get("smooth_fwhm")
         highpass = config["mask"].get("highpass")
         lowpass = config["mask"].get("lowpass")

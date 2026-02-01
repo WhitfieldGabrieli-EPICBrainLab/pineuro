@@ -506,7 +506,7 @@ def run_mask_extraction(
         ref_file=ref_file,
         n_yeo=17,
         yeo_targets=["DefaultA", "ContA"],
-        n_components=20,
+        n_components=30,
         threshold=2000,
         smooth_fwhm=5.0,
         overwrite=overwrite,
