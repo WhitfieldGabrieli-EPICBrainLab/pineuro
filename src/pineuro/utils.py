@@ -1599,7 +1599,7 @@ def apply_xfm_sform_to_mni(
 def compute_xfm_to_mni(
         input_file: Union[str, Path],
         output_prefix: Union[str, Path],
-        type_of_transform: str = 'Affine',
+        type_of_transform: str = 'SyN',
         overwrite: bool = False
 ) -> tuple[Path, list[str]]:
     """
@@ -1613,7 +1613,7 @@ def compute_xfm_to_mni(
         Path to input NIfTI file (subject space)
     output_prefix : str or Path
         Base name for output files (without extension)
-    type_of_transform : str, default='Affine'
+    type_of_transform : str, default='SyN'
         ANTs transform type: 'Rigid', 'Affine', 'SyN', etc.
     overwrite : bool, default=False
         If True, always run and overwrite existing outputs.
