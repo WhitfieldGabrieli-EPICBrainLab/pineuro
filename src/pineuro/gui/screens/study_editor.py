@@ -352,6 +352,13 @@ class StudyEditorScreen:
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
+        self.n_components_field = ft.TextField(
+            label="ICA components",
+            value=str(config["mask"].get("n_components", 20)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=lambda _: self._validate_field("n_components", self.n_components_field, validate_positive_int),
+        )
+
         # Feedback task type selection (populated from registry)
         self.task_type_dropdown = ft.Dropdown(
             label="Feedback Task Type",
@@ -1421,7 +1428,8 @@ class StudyEditorScreen:
                     self.second_network_dropdown,
                 ]),
                 ft.Divider(),
-                ft.Text("Preprocessing", size=14, weight=ft.FontWeight.BOLD),
+                ft.Text("ICA Settings", size=14, weight=ft.FontWeight.BOLD),
+                self.n_components_field,
                 self.smooth_fwhm_field,
                 self.highpass_field,
                 ft.Divider(),
@@ -2199,6 +2207,7 @@ class StudyEditorScreen:
             n_yeo_val = self.n_yeo_radio.value
             smooth_val = self.smooth_fwhm_field.value
             highpass_val = self.highpass_field.value
+            n_components_val = self.n_components_field.value
 
             # Debug: log values if they look wrong
             if not n_yeo_val or n_yeo_val == "None":
@@ -2210,10 +2219,14 @@ class StudyEditorScreen:
             if not highpass_val or highpass_val == "None":
                 logger.warning(f"highpass_field has invalid value: {highpass_val!r}, using default 0.01")
                 highpass_val = "0.01"
+            if not n_components_val or n_components_val == "None":
+                logger.warning(f"n_components_field has invalid value: {n_components_val!r}, using default 20")
+                n_components_val = "20"
 
             config["mask"]["n_yeo"] = int(n_yeo_val)
             config["mask"]["smooth_fwhm"] = float(smooth_val)
             config["mask"]["highpass"] = float(highpass_val)
+            config["mask"]["n_components"] = int(n_components_val)
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid network parameter: {e}")
             raise ValidationError(f"Invalid network parameter: {e}")
