@@ -362,9 +362,21 @@ def check_feedback_run_complete(subject_dir: Path, subject: str, run: int, n_vol
         return False
 
 
-def check_murfi_run_complete(subject_dir: Path, run: int, n_volumes: int) -> bool:
-    """Check if MURFI run is complete."""
-    log_path = get_murfi_dir(subject_dir) / f"run-{run:02d}" / "log" / "log.rtl"
+def check_murfi_run_complete(subject_dir: Path, run: int, n_volumes: int, subject: str | None = None) -> bool:
+    """Check if MURFI run is complete.
+
+    If subject is provided, looks in the correct subdirectory structure.
+    """
+    if subject:
+        log_path = get_murfi_dir(subject_dir) / f"run-{run:02d}" / subject / "log" / "log.rtl"
+    else:
+        # Fallback: try to find log.rtl in any subdirectory
+        murfi_run_dir = get_murfi_dir(subject_dir) / f"run-{run:02d}"
+        log_files = list(murfi_run_dir.glob("*/log/log.rtl"))
+        if not log_files:
+            return False
+        log_path = log_files[0]
+
     if not log_path.exists():
         return False
 
@@ -402,7 +414,7 @@ def get_subject_status(subject_dir: Path, subject: str, n_feedback_runs: int, n_
             for run in range(1, n_feedback_runs + 1)
         ],
         "murfi_runs": [
-            check_murfi_run_complete(subject_dir, run, n_volumes)
+            check_murfi_run_complete(subject_dir, run, n_volumes, subject)
             for run in range(1, n_feedback_runs + 1)
         ],
         "comparisons": [
@@ -1243,7 +1255,7 @@ def run_comparison_for_run(
 
     # Setup and run MURFI
     murfi_log = murfi_run_dir / subject / "log" / "log.rtl"
-    if not check_murfi_run_complete(subject_dir, run, n_volumes):
+    if not check_murfi_run_complete(subject_dir, run, n_volumes, subject):
         setup_murfi_environment(
             subject=subject,
             masks=masks,
