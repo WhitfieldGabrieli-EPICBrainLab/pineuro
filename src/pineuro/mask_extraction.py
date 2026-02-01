@@ -518,13 +518,13 @@ def combine_ica_components(
 ) -> Path:
     """Combine two ICA components into a single thresholded mask.
 
-    Averages the raw (unthresholded) component maps, then applies
-    thresholding to retain the top N voxels. This preserves spatial
-    weighting and ensures consistent voxel count.
+    Z-scores each component map before averaging to ensure equal contribution
+    from both components (regardless of their original value ranges), then
+    applies thresholding to retain the top N voxels.
 
     This is useful when ICA splits a network into two components (e.g.,
-    left/right ContA, frontal/occipital DMN). Averaging then thresholding
-    produces a mask that includes contributions from both components.
+    left/right ContA, frontal/occipital DMN). Z-scoring before averaging
+    ensures both components contribute equally to the final mask.
 
     Parameters
     ----------
@@ -582,12 +582,25 @@ def combine_ica_components(
     comp1_data = components_data[..., component_idx_1]
     comp2_data = components_data[..., component_idx_2]
 
-    # Average the component maps
-    combined = (comp1_data + comp2_data) / 2
+    # Z-score each component before averaging to ensure equal contribution
+    # This prevents one component from dominating if it has a larger range
+    comp1_std = comp1_data.std()
+    comp2_std = comp2_data.std()
+    if comp1_std > 0:
+        comp1_norm = (comp1_data - comp1_data.mean()) / comp1_std
+    else:
+        comp1_norm = comp1_data - comp1_data.mean()
+    if comp2_std > 0:
+        comp2_norm = (comp2_data - comp2_data.mean()) / comp2_std
+    else:
+        comp2_norm = comp2_data - comp2_data.mean()
+
+    # Average the z-scored component maps
+    combined = (comp1_norm + comp2_norm) / 2
 
     logger.info(
         f"Combining ICA components {component_idx_1} and {component_idx_2} "
-        f"(averaging then thresholding to {threshold} voxels)"
+        f"(z-scoring, averaging, then thresholding to {threshold} voxels)"
     )
 
     # Threshold to keep top N voxels
@@ -617,8 +630,9 @@ def combine_ica_components_unthresholded(
 ) -> Path:
     """Combine two ICA components into a single unthresholded map.
 
-    Averages the raw component maps without any thresholding. Used to save
-    an unthresholded version alongside the thresholded mask.
+    Z-scores each component map before averaging to ensure equal contribution
+    from both components (regardless of their original value ranges). Used to
+    save an unthresholded version alongside the thresholded mask.
 
     Parameters
     ----------
@@ -652,15 +666,28 @@ def combine_ica_components_unthresholded(
     components_img = load(components_file)
     components_data = components_img.get_fdata()
 
-    # Extract and average
+    # Extract and z-score each component before averaging
     comp1_data = components_data[..., component_idx_1]
     comp2_data = components_data[..., component_idx_2]
-    combined = (comp1_data + comp2_data) / 2
+
+    # Z-score to ensure equal contribution from each component
+    comp1_std = comp1_data.std()
+    comp2_std = comp2_data.std()
+    if comp1_std > 0:
+        comp1_norm = (comp1_data - comp1_data.mean()) / comp1_std
+    else:
+        comp1_norm = comp1_data - comp1_data.mean()
+    if comp2_std > 0:
+        comp2_norm = (comp2_data - comp2_data.mean()) / comp2_std
+    else:
+        comp2_norm = comp2_data - comp2_data.mean()
+
+    combined = (comp1_norm + comp2_norm) / 2
 
     # Save
     output_file.parent.mkdir(parents=True, exist_ok=True)
     save(Nifti1Image(combined, components_img.affine, components_img.header), output_file)
-    logger.info(f"Saved unthresholded combined map to {output_file}")
+    logger.info(f"Saved unthresholded combined map (z-scored) to {output_file}")
 
     return output_file
 
