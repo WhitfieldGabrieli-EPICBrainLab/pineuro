@@ -830,6 +830,9 @@ def run_murfi(
     murfi_cmd = [
         "apptainer",
         "exec",
+        "--bind", f"{run_dir.absolute()}:{run_dir.absolute()}",
+        "--env", f"MURFI_SUBJECTS_DIR={run_dir.absolute()}",
+        "--env", f"MURFI_SUBJECT_NAME={subject}",
         str(murfi_sif),
         "murfi",
         "-f",
