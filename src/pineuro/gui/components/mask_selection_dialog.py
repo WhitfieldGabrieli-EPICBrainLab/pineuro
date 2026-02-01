@@ -1294,6 +1294,51 @@ class MaskSelectionDialog:
             self.page.update()
             return
 
+        # Regenerate any modified masks before opening fsleyes
+        # This ensures user sees the currently selected masks, not old ones
+        existing = load_mask_selections(self.masks_dir)
+        modified_networks = []
+
+        for name, selection in self._selections.items():
+            if name in existing:
+                old = existing[name]
+                if (
+                    selection.source_type != old.source_type
+                    or selection.component_index != old.component_index
+                    or selection.secondary_component_index != old.secondary_component_index
+                ):
+                    modified_networks.append(name)
+            else:
+                # New selection that differs from auto
+                if selection.selection_reason != "auto":
+                    modified_networks.append(name)
+
+        # Regenerate modified masks
+        for name in modified_networks:
+            selection = self._selections[name]
+            logger.info(f"Regenerating mask for FSLeyes preview: {name}")
+            try:
+                regenerate_mask_from_selection(
+                    participant_id=self.participant_id,
+                    masks_dir=self.masks_dir,
+                    selection=selection,
+                    components_file=self.components_file,
+                    yeo_subject_space=self.yeo_subject_space,
+                    n_yeo=self.n_yeo,
+                    threshold=self.threshold,
+                )
+                if self.on_log:
+                    self.on_log(f"[INFO] Regenerated {name} mask for preview")
+            except Exception as ex:
+                logger.error(f"Failed to regenerate mask for {name}: {ex}")
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text(f"Failed to regenerate {name} mask: {ex}"),
+                    bgcolor=ft.Colors.RED,
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+                return
+
         # Collect all thresholded mask files
         mask_files = sorted(self.masks_dir.glob("*_thr.nii.gz"))
         if not mask_files:
