@@ -631,12 +631,9 @@ def generate_murfi_xml(
     tr: float,
     n_volumes: int,
     n_baseline: int,
+    murfi_input_dir: str,
 ) -> None:
-    """Generate MURFI XML configuration file.
-
-    Uses relative path 'tmp/murfi_input' for DICOM input - this is created
-    in the current working directory when MURFI runs.
-    """
+    """Generate MURFI XML configuration file."""
     xml_content = f'''<?xml version="1.0" encoding="UTF-8"?>
 <study name="rtDMN">
     <option name="softwareDir"> /opt/murfi </option>
@@ -651,7 +648,7 @@ def generate_murfi_xml(
   <option name="receiveImages">  true </option>
   <option name="onlyReadMoCo">  true </option>
   <option name="preHeader">     true </option>
-  <option name="inputDicomDir">   tmp/murfi_input </option>
+  <option name="inputDicomDir">   {murfi_input_dir} </option>
 </scanner>
 
 <infoserver>
@@ -779,10 +776,19 @@ def setup_murfi_environment(
     (murfi_dir / "xml").mkdir(exist_ok=True)
     (murfi_dir / "log").mkdir(exist_ok=True)
 
+    # murfi_input directory for incoming DICOMs (absolute path for apptainer)
+    murfi_input_dir = str((run_dir / "murfi_input").absolute())
+
     print("\nSetting up MURFI environment...")
     copy_and_convert_mask(masks["ContA"], murfi_dir / "mask" / "cen.nii")
     copy_and_convert_mask(masks["DefaultA"], murfi_dir / "mask" / "dmn.nii")
-    generate_murfi_xml(murfi_dir / "xml" / "rtdmn.xml", tr, n_volumes, n_baseline)
+    generate_murfi_xml(
+        murfi_dir / "xml" / "rtdmn.xml",
+        tr,
+        n_volumes,
+        n_baseline,
+        murfi_input_dir,
+    )
 
     return murfi_dir
 
@@ -800,8 +806,8 @@ def run_murfi(
     xml_path = subject_dir / "xml" / "rtdmn.xml"
     log_path = subject_dir / "log" / "log.rtl"
 
-    # Use relative path tmp/murfi_input (matches what's in the XML)
-    murfi_input_dir = Path("tmp/murfi_input")
+    # Use murfi_input inside run_dir (absolute path for apptainer)
+    murfi_input_dir = run_dir / "murfi_input"
     murfi_input_dir.mkdir(parents=True, exist_ok=True)
 
     # Clear any existing files
@@ -825,7 +831,7 @@ def run_murfi(
     print(f"\nStarting MURFI...")
     print(f"  MURFI_SUBJECTS_DIR={env['MURFI_SUBJECTS_DIR']}")
     print(f"  MURFI_SUBJECT_NAME={env['MURFI_SUBJECT_NAME']}")
-    print(f"  Input dir: tmp/murfi_input (relative)")
+    print(f"  Input dir: {murfi_input_dir.absolute()}")
 
     murfi_cmd = [
         "apptainer",
@@ -863,10 +869,12 @@ def run_murfi(
     serve_cmd = [
         "apptainer",
         "exec",
+        "--bind", f"{dicom_copy_dir.absolute()}:{dicom_copy_dir.absolute()}",
+        "--bind", f"{run_dir.absolute()}:{run_dir.absolute()}",
         str(murfi_sif),
         "servedicoms",
         str(dicom_copy_dir.absolute()),
-        "tmp/murfi_input",
+        str(murfi_input_dir.absolute()),
         str(int(tr * 1000)),
     ]
 
@@ -1249,6 +1257,7 @@ def run_comparison_for_run(
         feedback_dir / "collection",
         feedback_dir / "02_feedback_output" / f"nifti_task-feedback_run-{run:02d}",
         murfi_run_dir / "dicom_source",
+        murfi_run_dir / "murfi_input",
     ]
     for cleanup_dir in cleanup_dirs:
         if cleanup_dir.exists():
