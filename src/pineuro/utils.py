@@ -455,10 +455,11 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     Notes
     -----
     Uses high-resolution sampling for accuracy:
-    - Samples at 16 Hz internally, then downsamples to TR
+    - Samples at 16 samples per TR internally, then downsamples to TR
     - Positive gamma: shape=6
     - Negative gamma: shape=16
     - Undershoot ratio: 1/6
+    - Rate parameter: tr * (1/16), matching MURFI's dt = tr * hrfSamplePeriod
     - Normalized to sum to 1.0 for proper convolution scaling
 
     Examples
@@ -475,14 +476,17 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     shape_neg = 16.0  # undershoot shape
     undershoot_ratio = 6.0  # positive-to-negative amplitude ratio
 
+    # Rate parameter depends on TR (matches MURFI: dt = tr * hrfSamplePeriod)
+    rate = tr * hires_dt
+
     # High-resolution time points (in sample units)
     n_hires_samples = int(duration / hires_dt)
     t_hires = np.arange(n_hires_samples, dtype=np.float64)
 
     # Compute high-resolution HRF
     hrf_hires = (
-        _gamma_pdf_rate(t_hires, shape_pos, hires_dt)
-        - _gamma_pdf_rate(t_hires, shape_neg, hires_dt) / undershoot_ratio
+        _gamma_pdf_rate(t_hires, shape_pos, rate)
+        - _gamma_pdf_rate(t_hires, shape_neg, rate) / undershoot_ratio
     )
 
     # Normalize to sum to 1.0
@@ -556,12 +560,15 @@ def compute_boxcar_task_regressor(
     shape_neg = 16.0
     undershoot_ratio = 6.0
 
+    # Rate parameter depends on TR (matches MURFI: dt = tr * hrfSamplePeriod)
+    rate = tr * hires_dt
+
     # Compute high-resolution HRF (16 Hz, 32 seconds = 512 samples)
     n_hrf_samples = int(hrf_duration / hires_dt)
     t_hrf = np.arange(n_hrf_samples, dtype=np.float64)
     hrf_hires = (
-        _gamma_pdf_rate(t_hrf, shape_pos, hires_dt)
-        - _gamma_pdf_rate(t_hrf, shape_neg, hires_dt) / undershoot_ratio
+        _gamma_pdf_rate(t_hrf, shape_pos, rate)
+        - _gamma_pdf_rate(t_hrf, shape_neg, rate) / undershoot_ratio
     )
 
     # Normalize HRF to sum to 1.0
@@ -569,26 +576,25 @@ def compute_boxcar_task_regressor(
     if hrf_sum > 0:
         hrf_hires = hrf_hires / hrf_sum
 
-    # Create high-resolution boxcar at 16 Hz
-    # Stimulus onset at start of n_baseline-th TR (time = n_baseline * tr)
-    total_time = n_volumes * tr
-    n_hires_samples = int(total_time / hires_dt)
-    onset_time = n_baseline * tr
+    # MURFI compatibility: use fixed downsample factor of 16 (1/hrfSamplePeriod)
+    # instead of samples_per_tr, and start boxcar 1 unit earlier
+    murfi_downsample_factor = 16
+
+    # Create high-resolution boxcar
+    # MURFI starts boxcar at (n_baseline - 1) * 16, not n_baseline * samples_per_tr
+    n_hires_samples = n_volumes * murfi_downsample_factor + len(hrf_hires)
+    onset_hires = (n_baseline - 1) * murfi_downsample_factor
 
     boxcar_hires = np.zeros(n_hires_samples, dtype=np.float64)
-    for i in range(n_hires_samples):
-        t_sec = i * hires_dt
-        if t_sec >= onset_time:
-            boxcar_hires[i] = 1.0
+    boxcar_hires[onset_hires:] = 1.0
 
     # Convolve at high resolution
     convolved_hires = np.convolve(boxcar_hires, hrf_hires, mode='full')
 
-    # Downsample to TR resolution by sampling at TR boundaries
+    # Downsample using fixed factor of 16 (MURFI: i / hrfSamplePeriod = i * 16)
     regressor = np.zeros(n_volumes, dtype=np.float64)
     for i in range(n_volumes):
-        t_sec = i * tr
-        hires_idx = int(t_sec / hires_dt)
+        hires_idx = i * murfi_downsample_factor
         if hires_idx < len(convolved_hires):
             regressor[i] = convolved_hires[hires_idx]
 
