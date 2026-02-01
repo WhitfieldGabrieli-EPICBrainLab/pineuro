@@ -319,6 +319,76 @@ def get_alternative_components(
     return [(int(idx), float(corr_values[idx])) for idx in sorted_indices]
 
 
+def compute_mask_network_correlation(
+    mask_file: Union[str, Path],
+    yeo_subject_space: Union[str, Path],
+    network_name: str,
+    n_yeo: int = 17,
+) -> float:
+    """Compute spatial correlation between a mask and a specific Yeo network.
+
+    This is used to compute the correlation for combined ICA component masks,
+    where the individual component correlations don't reflect the combined result.
+
+    Parameters
+    ----------
+    mask_file : str or Path
+        Path to the mask file (binary or continuous values)
+    yeo_subject_space : str or Path
+        Path to Yeo atlas in subject space
+    network_name : str
+        Name of the target network (e.g., "DefaultA")
+    n_yeo : int
+        Yeo parcellation (7 or 17 networks)
+
+    Returns
+    -------
+    float
+        Pearson correlation coefficient between the mask and the network
+    """
+    mask_file = Path(mask_file)
+    yeo_subject_space = Path(yeo_subject_space)
+
+    if not mask_file.exists():
+        raise FileNotFoundError(f"Mask file not found: {mask_file}")
+    if not yeo_subject_space.exists():
+        raise FileNotFoundError(f"Yeo atlas not found: {yeo_subject_space}")
+
+    # Get network label index
+    labels = get_yeo_labels(n_networks=n_yeo)
+    if network_name not in labels:
+        raise ValueError(f"Network '{network_name}' not in Yeo-{n_yeo} labels")
+    network_index = labels.index(network_name) + 1  # 1-based indexing
+
+    # Load mask
+    mask_img = load(mask_file)
+    mask_data = mask_img.get_fdata().ravel()
+
+    # Load and resample Yeo atlas to mask space
+    atlas_img = load(yeo_subject_space)
+    atlas_resampled = resample_to_img(atlas_img, mask_img, interpolation='nearest')
+    atlas_data = atlas_resampled.get_fdata().astype(int).ravel()
+
+    # Create binary network mask
+    network_mask = (atlas_data == network_index).astype(float)
+
+    # Compute Pearson correlation
+    # Demean both vectors
+    mask_dm = mask_data - mask_data.mean()
+    network_dm = network_mask - network_mask.mean()
+
+    # Compute correlation
+    mask_norm = np.sqrt((mask_dm ** 2).sum())
+    network_norm = np.sqrt((network_dm ** 2).sum())
+
+    if mask_norm == 0 or network_norm == 0:
+        return 0.0
+
+    correlation = (mask_dm @ network_dm) / (mask_norm * network_norm)
+
+    return float(correlation)
+
+
 def extract_yeo_mask_for_network(
     yeo_subject_space: Union[str, Path],
     network_name: str,

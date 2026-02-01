@@ -18,6 +18,7 @@ from pineuro.mask_extraction import (
     load_mask_selections,
     save_mask_selections,
     regenerate_mask_from_selection,
+    compute_mask_network_correlation,
 )
 
 logger = logging.getLogger(__name__)
@@ -992,7 +993,7 @@ class MaskSelectionDialog:
             comp_idx_1, comp_idx_2 = selected[0], selected[1]
             info = self.masks_info[network_name]
 
-            # Find correlations for both components
+            # Find correlations for individual components (for reference)
             corr_1, corr_2 = 0.0, 0.0
             for idx, c in info.alternative_components:
                 if idx == comp_idx_1:
@@ -1000,18 +1001,60 @@ class MaskSelectionDialog:
                 elif idx == comp_idx_2:
                     corr_2 = c
 
+            # Generate the combined mask and compute its actual correlation with the Yeo network
+            combined_corr = corr_1  # Fallback to component 1's correlation
+            try:
+                from pineuro.mask_extraction import combine_ica_components
+
+                # Generate combined mask (or use existing temp one from preview)
+                temp_dir = self.mask_extraction_dir / "qc" / "temp"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                temp_mask = temp_dir / f"{self.participant_id}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
+
+                if not temp_mask.exists():
+                    combine_ica_components(
+                        components_file=self.components_file,
+                        component_idx_1=comp_idx_1,
+                        component_idx_2=comp_idx_2,
+                        output_file=temp_mask,
+                        threshold=self.threshold,
+                        overwrite=True,
+                    )
+
+                # Compute actual spatial correlation of combined mask with Yeo network
+                combined_corr = compute_mask_network_correlation(
+                    mask_file=temp_mask,
+                    yeo_subject_space=self.yeo_subject_space,
+                    network_name=network_name,
+                    n_yeo=self.n_yeo,
+                )
+
+                if self.on_log:
+                    self.on_log(
+                        f"[INFO] Combined mask correlation: r={combined_corr:.3f} "
+                        f"(vs IC{comp_idx_1}={corr_1:.3f}, IC{comp_idx_2}={corr_2:.3f})"
+                    )
+
+            except Exception as ex:
+                logger.warning(f"Failed to compute combined mask correlation: {ex}")
+                if self.on_log:
+                    self.on_log(f"[WARNING] Could not compute combined correlation: {ex}")
+
             self._selections[network_name] = MaskSelection(
                 network_name=network_name,
                 source_type="ica_combined",
                 component_index=comp_idx_1,
-                correlation=corr_1,
+                correlation=combined_corr,  # Use actual combined mask correlation
                 selection_reason="manual_combined",
                 secondary_component_index=comp_idx_2,
                 secondary_correlation=corr_2,
             )
 
+            # Update info for display consistency
+            info.current_correlation = combined_corr
+
             if self.on_log:
-                self.on_log(f"[INFO] Selected combined IC {comp_idx_1} + IC {comp_idx_2} for {network_name}")
+                self.on_log(f"[INFO] Selected combined IC {comp_idx_1} + IC {comp_idx_2} for {network_name} (r={combined_corr:.3f})")
 
         else:
             # Single-select mode (original logic)
