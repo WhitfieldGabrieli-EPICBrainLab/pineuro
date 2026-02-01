@@ -31,9 +31,11 @@ pineuro requires the following external tools:
 
 ### Install pineuro
 
+**Note:** PsychoPy requires wxPython, which may need to be installed separately before running `pip install`. See [PsychoPy installation docs](https://www.psychopy.org/download.html) if you encounter issues.
+
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/pineuro.git
+git clone https://github.com/marlvan/pineuro.git
 cd pineuro
 
 # Install in development mode
@@ -270,7 +272,7 @@ If you use pineuro in your research, please cite:
 
 ```
 Vandewouw, M. M. (2026). pineuro: Python Real-Time fMRI Neurofeedback.
-https://github.com/yourusername/pineuro
+https://github.com/marlvan/pineuro
 ```
 
 Key references:
@@ -280,7 +282,7 @@ Key references:
 
 ## License
 
-MIT License - see LICENSE file for details.
+Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
 ## Contact
 

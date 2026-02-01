@@ -55,6 +55,8 @@ Examples
 ... )
 """
 
+__version__ = "0.1.0"
+
 from .feedback import run_feedback_session, get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
 from .preprocessing import preprocessing, collect_volumes, collect_dicoms
 from .mask_extraction import mask_extraction_rest, coregister_2vol
@@ -70,6 +72,7 @@ from .session import (
     TaskConfig,
     VisitConfig,
     ShamConfig,
+    SimulatorSourceMapping,
     # Orchestration functions
     setup_session,
     run_single_task,
@@ -115,6 +118,8 @@ from .script_generator import (
 from . import config
 
 __all__ = [
+    # Version
+    '__version__',
     # Core functions
     'run_feedback_session',
     'get_next_run_number',
@@ -145,6 +150,7 @@ __all__ = [
     'TaskConfig',
     'VisitConfig',
     'ShamConfig',
+    'SimulatorSourceMapping',
     # Sham functionality
     'ShamActivationProvider',
     'ReplayActivationProvider',

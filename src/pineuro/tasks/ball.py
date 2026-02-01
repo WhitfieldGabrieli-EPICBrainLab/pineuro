@@ -909,12 +909,12 @@ class BallTask(BaseTask):
         from psychopy import event
 
         self._running = True
-        self.setup()  # Creates window and initializes task stimuli
-
-        # Use PsychoPy clock for precise timing
-        frame_clock = core.Clock()
 
         try:
+            self.setup()  # Creates window and initializes task stimuli
+
+            # Use PsychoPy clock for precise timing
+            frame_clock = core.Clock()
             # Wait for coordinator to be ready
             self.coordinator.wait_until_ready(timeout=10.0)
 

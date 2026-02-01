@@ -73,6 +73,7 @@ persisting task-level state (hits, scale factors) between runs.
 Session state resets each visit (visits are independent).
 """
 
+import csv
 import json
 import logging
 import re
@@ -83,6 +84,174 @@ from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Simulator Source Mapping
+# =============================================================================
+
+@dataclass
+class SimulatorSourceMapping:
+    """Loads and queries per-subject simulator DICOM source paths.
+
+    This class enables different subjects to use different DICOM source directories
+    for simulation, loaded from a CSV or TSV mapping file.
+
+    Parameters
+    ----------
+    _data : dict[str, dict[str, Path]]
+        Internal mapping: {subject_id: {run_type: dicom_path}}
+
+    Column Name Convention
+    ----------------------
+    The mapping file should have these column names:
+    - subject: Subject/participant identifier (required, first column)
+    - rest1, rest2, ...: Localizer run DICOM sources
+    - 2vol_initial: Initial 2-vol reference DICOM source
+    - 2vol_realtime: Realtime 2-vol reference DICOM source
+    - feedback_run-01, feedback_run-02, ...: Feedback run DICOM sources
+    - transfer_run-01, transfer_run-02, ...: Transfer run DICOM sources
+
+    Examples
+    --------
+    >>> mapping = SimulatorSourceMapping.from_file(Path("sources.tsv"))
+    >>> source = mapping.get_source("sub-001", "feedback_run-01")
+    >>> localizer_sources = mapping.get_localizer_sources("sub-001", n_runs=2)
+    """
+
+    _data: dict
+
+    @classmethod
+    def from_file(cls, path: Path) -> "SimulatorSourceMapping":
+        """Load mapping from CSV or TSV file.
+
+        Parameters
+        ----------
+        path : Path
+            Path to mapping file. Format is auto-detected:
+            - .tsv files use tab delimiter
+            - .csv files use comma delimiter
+            - Other extensions default to tab delimiter
+
+        Returns
+        -------
+        SimulatorSourceMapping
+            Loaded mapping instance
+
+        Raises
+        ------
+        FileNotFoundError
+            If the mapping file does not exist
+        ValueError
+            If the file is missing the 'subject' column
+        """
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Simulator source mapping file not found: {path}")
+
+        # Detect delimiter from extension
+        delimiter = ',' if path.suffix.lower() == '.csv' else '\t'
+
+        data: dict[str, dict[str, Path]] = {}
+        with open(path, 'r', newline='') as f:
+            reader = csv.DictReader(f, delimiter=delimiter)
+
+            # Validate header
+            if reader.fieldnames is None or 'subject' not in reader.fieldnames:
+                raise ValueError(f"Mapping file must have a 'subject' column: {path}")
+
+            for row in reader:
+                subject = row.pop('subject').strip()
+                if not subject:
+                    continue
+
+                # Convert remaining columns to Path objects (skip empty values)
+                subject_paths = {}
+                for run_type, dicom_path in row.items():
+                    if dicom_path and dicom_path.strip():
+                        subject_paths[run_type.strip()] = Path(dicom_path.strip())
+
+                data[subject] = subject_paths
+
+        logger.info(f"Loaded simulator source mapping for {len(data)} subjects from {path}")
+        return cls(_data=data)
+
+    def get_source(self, subject: str, run_type: str) -> Optional[Path]:
+        """Get DICOM source path for a subject and run type.
+
+        Parameters
+        ----------
+        subject : str
+            Subject/participant identifier
+        run_type : str
+            Run type column name (e.g., 'rest1', 'feedback_run-01', '2vol_realtime')
+
+        Returns
+        -------
+        Path or None
+            DICOM source path, or None if not found
+        """
+        subject_data = self._data.get(subject, {})
+        return subject_data.get(run_type)
+
+    def get_localizer_sources(self, subject: str, n_runs: int) -> list[Optional[Path]]:
+        """Get localizer/resting-state DICOM sources for a subject.
+
+        Parameters
+        ----------
+        subject : str
+            Subject/participant identifier
+        n_runs : int
+            Number of localizer runs to retrieve
+
+        Returns
+        -------
+        list[Path or None]
+            List of DICOM source paths for rest1, rest2, ..., restN
+        """
+        return [self.get_source(subject, f"rest{i+1}") for i in range(n_runs)]
+
+    def get_feedback_source(self, subject: str, run: int) -> Optional[Path]:
+        """Get feedback run DICOM source for a subject.
+
+        Parameters
+        ----------
+        subject : str
+            Subject/participant identifier
+        run : int
+            Run number (1-indexed)
+
+        Returns
+        -------
+        Path or None
+            DICOM source path for feedback_run-{run:02d}
+        """
+        return self.get_source(subject, f"feedback_run-{run:02d}")
+
+    def get_transfer_source(self, subject: str, run: int) -> Optional[Path]:
+        """Get transfer run DICOM source for a subject.
+
+        Parameters
+        ----------
+        subject : str
+            Subject/participant identifier
+        run : int
+            Run number (1-indexed)
+
+        Returns
+        -------
+        Path or None
+            DICOM source path for transfer_run-{run:02d}
+        """
+        return self.get_source(subject, f"transfer_run-{run:02d}")
+
+    def has_subject(self, subject: str) -> bool:
+        """Check if a subject exists in the mapping."""
+        return subject in self._data
+
+    def subjects(self) -> list[str]:
+        """Return list of all subjects in the mapping."""
+        return list(self._data.keys())
 
 
 # =============================================================================
@@ -338,6 +507,9 @@ class ScanConfig:
         2vol DICOM source for real-time (day-of) acquisition
     feedback_dicoms : Path, optional
         Source DICOM folder for feedback runs (for simulator)
+    simulator_source_mapping : Path, optional
+        Path to CSV/TSV file mapping subjects to per-run DICOM source paths.
+        When set, this takes priority over individual DICOM source fields.
     collection_speed : float
         Speed multiplier for DICOM collection simulation (localizer/setup runs)
     feedback_simulator_speed : float
@@ -365,6 +537,7 @@ class ScanConfig:
     twovol_initial_dicoms: Optional[Path] = None
     twovol_realtime_dicoms: Optional[Path] = None
     feedback_dicoms: Optional[Path] = None
+    simulator_source_mapping: Optional[Path] = None
     collection_speed: float = 10.0
     feedback_simulator_speed: float = 10.0
 
@@ -416,6 +589,8 @@ class ScanConfig:
             self.twovol_realtime_dicoms = Path(self.twovol_realtime_dicoms)
         if self.feedback_dicoms is not None:
             self.feedback_dicoms = Path(self.feedback_dicoms)
+        if self.simulator_source_mapping is not None:
+            self.simulator_source_mapping = Path(self.simulator_source_mapping)
 
 
 @dataclass
@@ -680,6 +855,80 @@ class SessionConfig:
             errors.append(f"task.max_feedback_runs must be positive, got {self.task.max_feedback_runs}")
 
         return errors
+
+    def resolve_simulator_source(self, run_type: str) -> Optional[Path]:
+        """Resolve simulator DICOM source path for a given run type.
+
+        This method checks the simulator_source_mapping file first (if configured),
+        falling back to the individual DICOM source fields if no mapping is found.
+
+        Parameters
+        ----------
+        run_type : str
+            Run type identifier. Supported values:
+            - 'rest1', 'rest2', ...: Localizer runs
+            - '2vol_initial': Initial 2-vol reference
+            - '2vol_realtime': Realtime 2-vol reference
+            - 'feedback_run-01', 'feedback_run-02', ...: Feedback runs
+            - 'transfer_run-01', 'transfer_run-02', ...: Transfer runs
+
+        Returns
+        -------
+        Path or None
+            Resolved DICOM source path, or None if not configured
+
+        Examples
+        --------
+        >>> config = SessionConfig(paths=PathConfig(participant_id="sub-001"), ...)
+        >>> source = config.resolve_simulator_source("feedback_run-01")
+        """
+        # Try mapping file first
+        if self.scan.simulator_source_mapping is not None:
+            try:
+                mapping = SimulatorSourceMapping.from_file(self.scan.simulator_source_mapping)
+                source = mapping.get_source(self.paths.participant_id, run_type)
+                if source is not None:
+                    logger.debug(f"Resolved {run_type} for {self.paths.participant_id} from mapping: {source}")
+                    return source
+            except (FileNotFoundError, ValueError) as e:
+                logger.warning(f"Failed to load simulator source mapping: {e}")
+
+        # Fall back to individual fields
+        if run_type.startswith("rest"):
+            # Extract run number (1-indexed)
+            try:
+                run_num = int(run_type[4:])
+                if 0 < run_num <= len(self.scan.localizer_source_dicoms):
+                    return self.scan.localizer_source_dicoms[run_num - 1]
+            except (ValueError, IndexError):
+                pass
+        elif run_type == "2vol_initial":
+            return self.scan.twovol_initial_dicoms or self.scan.twovol_dicoms
+        elif run_type == "2vol_realtime":
+            return self.scan.twovol_realtime_dicoms or self.scan.twovol_dicoms
+        elif run_type.startswith("feedback_run-") or run_type.startswith("transfer_run-"):
+            # All feedback/transfer runs fall back to feedback_dicoms
+            return self.scan.feedback_dicoms
+
+        return None
+
+    def resolve_localizer_sources(self) -> list[Path]:
+        """Resolve simulator DICOM sources for all localizer runs.
+
+        This method resolves sources for rest1, rest2, ..., restN based on
+        the configured number of localizer runs.
+
+        Returns
+        -------
+        list[Path]
+            List of resolved DICOM source paths for localizer runs
+        """
+        sources = []
+        for i in range(self.scan.localizer_n_runs):
+            source = self.resolve_simulator_source(f"rest{i+1}")
+            if source is not None:
+                sources.append(source)
+        return sources
 
 
 # =============================================================================
@@ -983,7 +1232,7 @@ def run_dicom_collection(
 
     collection_dir = config.paths.collection_dir
     if source_dirs is None:
-        source_dirs = config.scan.rest_source_dicoms
+        source_dirs = config.resolve_localizer_sources()
     if n_volumes_list is None:
         n_volumes_list = config.scan.rest_n_volumes
 
@@ -1060,7 +1309,7 @@ def run_preprocessing(
     config : SessionConfig
         Session configuration
     rest_dicoms : list[Path], optional
-        Paths to DICOM folders. If None, uses config.scan.rest_source_dicoms
+        Paths to DICOM folders. If None, resolved from config
     overwrite : bool
         If True, rerun preprocessing even if outputs exist
 
@@ -1077,7 +1326,7 @@ def run_preprocessing(
     logger.info("=" * 60)
 
     if rest_dicoms is None:
-        rest_dicoms = config.scan.rest_source_dicoms
+        rest_dicoms = config.resolve_localizer_sources()
 
     return preprocessing(
         participant_id=config.paths.participant_id,
@@ -1171,7 +1420,7 @@ def run_coregistration(
     logger.info("COREGISTER MASKS TO FEEDBACK SPACE")
     logger.info("=" * 60)
 
-    twovol_dir = twovol_dicom_dir or config.scan.twovol_dicoms
+    twovol_dir = twovol_dicom_dir or config.resolve_simulator_source("2vol_realtime")
 
     return coregister_2vol(
         participant_id=config.paths.participant_id,
@@ -1307,15 +1556,16 @@ def setup_session(
         logger.info(f"Visit {config.visit.visit_id}: Reusing masks from {config.visit.mask_source_visit}")
 
         # Only need 2vol collection for mask reuse
+        twovol_source = config.resolve_simulator_source("2vol_realtime")
         if skip_collection:
             logger.info("Skipping 2vol collection (using source DICOMs directly)")
-            twovol_dicoms = config.scan.twovol_realtime_dicoms or config.scan.twovol_dicoms
+            twovol_dicoms = twovol_source
         else:
             twovol_list = run_dicom_collection(
                 config,
                 use_simulator=use_simulator,
                 task_name="2vol",
-                source_dirs=[config.scan.twovol_realtime_dicoms or config.scan.twovol_dicoms],
+                source_dirs=[twovol_source] if twovol_source else [],
                 n_volumes_list=[config.scan.twovol_n_volumes],
                 start_run=1,
                 max_runs=1,
@@ -1329,30 +1579,32 @@ def setup_session(
         logger.info(f"Visit {config.visit.visit_id}: Computing new masks")
 
     # Step 0: Initial 2vol (pre-scan positioning check)
+    initial_twovol_source = config.resolve_simulator_source("2vol_initial")
     if skip_collection:
         logger.info("Skipping initial 2vol collection (using source DICOMs directly)")
-        initial_twovol = [config.scan.twovol_initial_dicoms or config.scan.twovol_dicoms]
+        initial_twovol = [initial_twovol_source]
     else:
         initial_twovol = run_dicom_collection(
             config,
             use_simulator=use_simulator,
             task_name="2vol",
-            source_dirs=[config.scan.twovol_initial_dicoms or config.scan.twovol_dicoms],
+            source_dirs=[initial_twovol_source] if initial_twovol_source else [],
             n_volumes_list=[config.scan.twovol_n_volumes],
             start_run=None,
             max_runs=config.scan.twovol_max_runs,
         )
 
     # Step 1: Resting-state collection
+    localizer_sources = config.resolve_localizer_sources()
     if skip_collection:
         logger.info("Skipping resting-state collection (using source DICOMs directly)")
-        rest_dicoms = config.scan.rest_source_dicoms
+        rest_dicoms = localizer_sources
     else:
         rest_dicoms = run_dicom_collection(
             config,
             use_simulator=use_simulator,
             task_name="rest",
-            source_dirs=config.scan.rest_source_dicoms,
+            source_dirs=localizer_sources,
             n_volumes_list=config.scan.rest_n_volumes,
             start_run=1,
             max_runs=config.scan.rest_max_runs,
@@ -1438,8 +1690,11 @@ def run_single_task(
     # Set up simulator parameters if using simulator
     simulator_kwargs = {}
     if use_simulator:
+        # Resolve source for this specific run type and run number
+        source_run_type = f"{run_type}_run-{task_run_number:02d}"
+        simulator_source = config.resolve_simulator_source(source_run_type)
         simulator_kwargs = {
-            "simulator_source_dir": config.scan.feedback_dicoms,
+            "simulator_source_dir": simulator_source,
             "simulator_speed": config.scan.feedback_simulator_speed,
             "simulator_clear_target": True,
             "simulator_cleanup": False,
@@ -1566,11 +1821,12 @@ def coregister_before_first_transfer(
     if not ref_file.exists():
         raise FileNotFoundError(f"Reference file not found at {ref_file}; run preprocessing before coregistration.")
 
+    twovol_realtime_source = config.resolve_simulator_source("2vol_realtime")
     twovol_dicoms = run_dicom_collection(
         config,
         use_simulator=use_simulator,
         task_name="2vol",
-        source_dirs=[config.scan.twovol_realtime_dicoms or config.scan.twovol_dicoms],
+        source_dirs=[twovol_realtime_source] if twovol_realtime_source else [],
         n_volumes_list=[config.scan.twovol_n_volumes],
         start_run=None,
         max_runs=config.scan.twovol_max_runs,

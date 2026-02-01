@@ -242,9 +242,10 @@ class ThermometerTask(BaseTask):
         from psychopy import core
 
         self._running = True
-        self.setup()
 
         try:
+            self.setup()
+
             while self._running and not self.coordinator.is_complete():
                 # Check for errors
                 self.coordinator.check_error()

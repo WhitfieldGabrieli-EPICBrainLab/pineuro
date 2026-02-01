@@ -139,7 +139,7 @@ References
 import json                 # JSON I/O for selection metadata
 import re                   # Regex for filename parsing
 from dataclasses import dataclass, asdict
-from typing import Union, Any, Dict, List, Optional, Sequence, Tuple
+from typing import Union, Any, Dict, List, Optional, Sequence, Tuple, Callable
 from pathlib import Path
 import logging
 
@@ -1115,7 +1115,7 @@ def mask_extraction_rest(
         overwrite: bool = False,
         qc_enabled: bool = True,
         qc_dir: Optional[Union[str, Path]] = None,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable[[str, str], None]] = None,
         sham_hemisphere_network: Optional[str] = None
 ) -> List[Path]:
     """

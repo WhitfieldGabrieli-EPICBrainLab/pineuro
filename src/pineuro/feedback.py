@@ -651,211 +651,7 @@ class IncrementalGLM:
 
 
 # =============================================================================
-# SECTION 2: HRF AND TASK REGRESSOR COMPUTATION
-# =============================================================================
-# These functions create the task regressors that model expected BOLD responses.
-#
-# The Hemodynamic Response Function (HRF):
-# ----------------------------------------
-# Neural activity doesn't directly cause BOLD signal changes. Instead, neural
-# activity triggers a hemodynamic response that peaks ~5-6 seconds later and
-# takes ~15-20 seconds to return to baseline. The HRF models this delay.
-#
-# Task Regressor Construction:
-# ----------------------------
-# 1. Create a boxcar function (0 during baseline, 1 during task)
-# 2. Convolve with the HRF to model the expected BOLD response
-# 3. The result shows how BOLD signal should evolve given the task timing
-
-
-def _gamma_pdf_rate(t: NDArray, shape: float, rate: float) -> NDArray:
-    """Gamma PDF with rate parameterization.
-
-    Computes: rate^shape / Gamma(shape) * t^(shape-1) * exp(-rate*t)
-
-    Parameters
-    ----------
-    t : ndarray
-        Time points.
-    shape : float
-        Shape parameter (alpha).
-    rate : float
-        Rate parameter (beta = 1/scale).
-
-    Returns
-    -------
-    pdf : ndarray
-        Gamma PDF values.
-    """
-    from scipy.special import gamma as gamma_func
-
-    # Avoid division by zero at t=0
-    t_safe = np.maximum(t, 1e-10)
-
-    pdf = (
-        np.power(rate, shape)
-        / gamma_func(shape)
-        * np.power(t_safe, shape - 1)
-        * np.exp(-rate * t_safe)
-    )
-    # Set t=0 to 0 (limit of t^(a-1) as t->0 for a>1)
-    pdf[t == 0] = 0.0
-
-    return pdf
-
-
-def _compute_hrf(tr: float, duration: float = 32.0) -> NDArray[np.float64]:
-    """Compute canonical double-gamma HRF.
-
-    Parameters
-    ----------
-    tr : float
-        Repetition time in seconds.
-    duration : float, optional
-        Duration of HRF in seconds. Default is 32s.
-
-    Returns
-    -------
-    hrf : ndarray
-        HRF sampled at TR intervals, normalized to sum to 1.0.
-
-    Notes
-    -----
-    Uses high-resolution sampling for accuracy:
-    - Samples at 16 samples per TR internally, then downsamples to TR
-    - Positive gamma: shape=6
-    - Negative gamma: shape=16
-    - Undershoot ratio: 1/6
-    - Rate parameter: tr * (1/16), matching MURFI's dt = tr * hrfSamplePeriod
-    - Normalized to sum to 1.0 for proper convolution scaling
-    """
-    # High-resolution sampling for accuracy
-    hires_dt = 1.0 / 16.0  # 16 Hz sampling
-
-    # Double-gamma parameters
-    shape_pos = 6.0  # positive response shape
-    shape_neg = 16.0  # undershoot shape
-    undershoot_ratio = 6.0  # positive-to-negative amplitude ratio
-
-    # Rate parameter depends on TR (matches MURFI: dt = tr * hrfSamplePeriod)
-    rate = tr * hires_dt
-
-    # High-resolution time points (in sample units)
-    n_hires_samples = int(duration / hires_dt)
-    t_hires = np.arange(n_hires_samples, dtype=np.float64)
-
-    # Compute high-resolution HRF
-    hrf_hires = (
-        _gamma_pdf_rate(t_hires, shape_pos, rate)
-        - _gamma_pdf_rate(t_hires, shape_neg, rate) / undershoot_ratio
-    )
-
-    # Normalize to sum to 1.0
-    hrf_sum = np.sum(hrf_hires)
-    if hrf_sum > 0:
-        hrf_hires = hrf_hires / hrf_sum
-
-    # Downsample to TR resolution
-    samples_per_tr = int(tr / hires_dt)
-    n_tr_samples = int(duration / tr)
-    hrf = np.zeros(n_tr_samples, dtype=np.float64)
-
-    for i in range(n_tr_samples):
-        hires_idx = i * samples_per_tr
-        if hires_idx < len(hrf_hires):
-            hrf[i] = hrf_hires[hires_idx]
-
-    return hrf
-
-
-def _compute_task_regressor(
-    n_baseline: int,
-    n_volumes: int,
-    tr: float,
-    hrf_duration: float = 32.0,
-) -> NDArray[np.float64]:
-    """Compute HRF-convolved boxcar task regressor.
-
-    Creates a task regressor where:
-    - Baseline period (0 to n_baseline-1): task = 0
-    - Feedback period (n_baseline onwards): task = 1 convolved with HRF
-
-    Parameters
-    ----------
-    n_baseline : int
-        Number of baseline volumes (task = 0).
-    n_volumes : int
-        Total number of volumes.
-    tr : float
-        Repetition time in seconds.
-    hrf_duration : float, optional
-        Duration of HRF in seconds. Default is 32s.
-
-    Returns
-    -------
-    regressor : ndarray, shape (n_volumes,)
-        Task regressor values for each volume.
-
-    Notes
-    -----
-    The convolution is performed at high temporal resolution (16 Hz) for
-    accuracy, then downsampled to TR. This produces the characteristic
-    HRF response shape:
-    - Stays at 0 during baseline
-    - Ramps up after baseline onset following HRF shape
-    - Reaches steady state (~1.0) after ~25-30s
-    """
-    # High-resolution parameters: 16 Hz sampling
-    hires_dt = 1.0 / 16.0
-
-    # Double-gamma parameters
-    shape_pos = 6.0
-    shape_neg = 16.0
-    undershoot_ratio = 6.0
-
-    # Rate parameter depends on TR (matches MURFI: dt = tr * hrfSamplePeriod)
-    rate = tr * hires_dt
-
-    # Compute high-resolution HRF (16 Hz, 32 seconds = 512 samples)
-    n_hrf_samples = int(hrf_duration / hires_dt)
-    t_hrf = np.arange(n_hrf_samples, dtype=np.float64)
-    hrf_hires = (
-        _gamma_pdf_rate(t_hrf, shape_pos, rate)
-        - _gamma_pdf_rate(t_hrf, shape_neg, rate) / undershoot_ratio
-    )
-
-    # Normalize HRF to sum to 1.0
-    hrf_sum = np.sum(hrf_hires)
-    if hrf_sum > 0:
-        hrf_hires = hrf_hires / hrf_sum
-
-    # MURFI compatibility: use fixed downsample factor of 16 (1/hrfSamplePeriod)
-    # instead of samples_per_tr, and start boxcar 1 unit earlier
-    murfi_downsample_factor = 16
-
-    # Create high-resolution boxcar
-    # MURFI starts boxcar at (n_baseline - 1) * 16, not n_baseline * samples_per_tr
-    n_hires_samples = n_volumes * murfi_downsample_factor + len(hrf_hires)
-    onset_hires = (n_baseline - 1) * murfi_downsample_factor
-
-    boxcar_hires = np.zeros(n_hires_samples, dtype=np.float64)
-    boxcar_hires[onset_hires:] = 1.0
-
-    # Convolve at high resolution
-    convolved_hires = np.convolve(boxcar_hires, hrf_hires, mode='full')
-
-    # Downsample using fixed factor of 16 (MURFI: i / hrfSamplePeriod = i * 16)
-    regressor = np.zeros(n_volumes, dtype=np.float64)
-    for i in range(n_volumes):
-        hires_idx = i * murfi_downsample_factor
-        if hires_idx < len(convolved_hires):
-            regressor[i] = convolved_hires[hires_idx]
-
-    return regressor
-
-
-# =============================================================================
-# SECTION 3: FEEDBACK ESTIMATOR
+# SECTION 2: FEEDBACK ESTIMATOR
 # =============================================================================
 # The FeedbackEstimator orchestrates real-time BOLD activation estimation.
 # It brings together:
@@ -2596,7 +2392,7 @@ class NeurofeedbackCoordinator:
                 if self._error_callback is not None:
                     try:
                         self._error_callback(e)
-                    except:
+                    except Exception:
                         pass
 
         # Read outlier status (may have been set by callback via report_outlier())
@@ -2669,46 +2465,46 @@ class NeurofeedbackCoordinator:
 
         Blocks until all volumes are processed or KeyboardInterrupt.
         """
-        # Initialize CSV
-        self._init_csv()
-
-        if self._simulator is not None and self._simulator.clear_target:
-            self._simulator._clear_target_directory()
-            self._simulator.clear_target = False
-
-        # Set up watchdog observer
-        event_handler = _DicomEventHandler(self._on_new_file)
-        observer = Observer()
-        observer.schedule(event_handler, str(self.watch_dir), recursive=False)
-        observer.start()
-
-        logger.info(f"Watching {self.watch_dir} for DICOMs...")
-
-        self._ready_event.set()
-        logger.debug("Coordinator ready signal set")
-
-        logger.info("Waiting for trigger...")
-        self._trigger_event.wait()  # Block until trigger received or stop() sets it
-
-        if self._stop_event.is_set():
-            logger.info("Stop requested before trigger; exiting coordinator")
-        else:
-            logger.info("Trigger received - starting acquisition")
-
-        self._start_time = time.monotonic()
-
-        if self._simulator is not None and not self._stop_event.is_set():
-            self._simulator.start_time = self._start_time
-            
-            self._simulator_thread = threading.Thread(
-                target=self._run_simulator,
-                daemon=False,
-                name="SimulatorThread"
-            )
-            self._simulator_thread.start()
-            logger.info("Simulator thread started")
-
+        observer = None
         try:
+            # Initialize CSV
+            self._init_csv()
+
+            if self._simulator is not None and self._simulator.clear_target:
+                self._simulator._clear_target_directory()
+                self._simulator.clear_target = False
+
+            # Set up watchdog observer
+            event_handler = _DicomEventHandler(self._on_new_file)
+            observer = Observer()
+            observer.schedule(event_handler, str(self.watch_dir), recursive=False)
+            observer.start()
+            logger.info(f"Watching {self.watch_dir} for DICOMs...")
+
+            self._ready_event.set()
+            logger.debug("Coordinator ready signal set")
+
+            logger.info("Waiting for trigger...")
+            self._trigger_event.wait()  # Block until trigger received or stop() sets it
+
+            if self._stop_event.is_set():
+                logger.info("Stop requested before trigger; exiting coordinator")
+            else:
+                logger.info("Trigger received - starting acquisition")
+
+            self._start_time = time.monotonic()
+
+            if self._simulator is not None and not self._stop_event.is_set():
+                self._simulator.start_time = self._start_time
+
+                self._simulator_thread = threading.Thread(
+                    target=self._run_simulator,
+                    daemon=False,
+                    name="SimulatorThread"
+                )
+                self._simulator_thread.start()
+                logger.info("Simulator thread started")
+
             while (
                 not self._stop_event.is_set()
                 and self.n_processed < self.n_volumes
@@ -2743,8 +2539,9 @@ class NeurofeedbackCoordinator:
                 if self._simulator_thread.is_alive():
                     logger.warning("Simulator thread did not stop gracefully")
 
-            observer.stop()
-            observer.join()
+            if observer is not None:
+                observer.stop()
+                observer.join()
             self._close_csv()
             self._close_design_matrix()  # Design matrix was written incrementally
 

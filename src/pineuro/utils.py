@@ -117,7 +117,7 @@ import tempfile
 import time
 import json
 import logging
-from typing import Union, List, Optional, Dict, Any, cast
+from typing import Union, List, Optional, Dict, Any, Callable, cast
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -372,7 +372,7 @@ class ProgressEmitter:
 
     def __init__(
         self,
-        callback: Optional[callable] = None,
+        callback: Optional[Callable[[str, str], None]] = None,
         log: Optional[logging.Logger] = None
     ):
         self._callback = callback

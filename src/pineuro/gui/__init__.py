@@ -82,7 +82,6 @@ batch processing or scripted pipelines.
 
 See Also
 --------
-pineuro.cli : Command-line interface for batch processing
 pineuro.preprocessing : Core preprocessing functions
 pineuro.feedback : Real-time feedback estimation
 """

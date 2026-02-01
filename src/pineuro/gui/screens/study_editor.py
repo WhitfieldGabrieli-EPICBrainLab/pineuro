@@ -110,6 +110,7 @@ class StudyEditorScreen:
                 "localizer_source_dicoms": ["", ""],
                 "feedback_source_dicoms": ["", ""],  # Per-run feedback DICOM sources
                 "transfer_source_dicoms": ["", ""],  # Per-run transfer DICOM sources (transfer_1, transfer_2)
+                "simulator_source_mapping": "",  # Path to CSV/TSV mapping subjects to DICOM paths
                 "simulator_enabled": True,
                 "collection_speed": 10.0,  # Speed for localizer/collection
                 "feedback_simulator_speed": 1.0,  # Speed for feedback runs
@@ -492,6 +493,25 @@ class StudyEditorScreen:
             hint_text="Path to MURFI design .mat file for external task/motion design",
         )
 
+        # Simulator source mode toggle
+        # Determine initial mode based on whether mapping file is set
+        has_mapping = bool(config["scan"].get("simulator_source_mapping", "").strip())
+        self.simulator_source_mode_radio = ft.RadioGroup(
+            content=ft.Row([
+                ft.Radio(value="individual", label="Same paths for all participants"),
+                ft.Radio(value="mapping", label="Per-subject mapping file"),
+            ]),
+            value="mapping" if has_mapping else "individual",
+            on_change=self._on_simulator_source_mode_changed,
+        )
+
+        # Simulator source mapping file (for per-subject DICOM paths)
+        self.simulator_source_mapping_field = ft.TextField(
+            label="Mapping File",
+            value=config["scan"].get("simulator_source_mapping", ""),
+            hint_text="CSV/TSV file mapping subjects to DICOM paths",
+        )
+
         # --- Sham/Control tab fields ---
         sham_config = config.get("sham", {})
 
@@ -710,6 +730,21 @@ class StudyEditorScreen:
         # Update simulator paths container visibility
         if hasattr(self, 'simulator_paths_container'):
             self.simulator_paths_container.visible = is_simulator
+
+        self.page.update()
+
+    def _on_simulator_source_mode_changed(self, e):
+        """Handle simulator source mode radio change."""
+        self._update_simulator_source_visibility()
+
+    def _update_simulator_source_visibility(self):
+        """Update visibility of simulator source sections based on selected mode."""
+        mode = self.simulator_source_mode_radio.value
+
+        if hasattr(self, 'simulator_mapping_container'):
+            self.simulator_mapping_container.visible = (mode == "mapping")
+        if hasattr(self, 'simulator_individual_container'):
+            self.simulator_individual_container.visible = (mode == "individual")
 
         self.page.update()
 
@@ -1867,7 +1902,9 @@ class StudyEditorScreen:
             self.feedback_source_rows.append(row)
 
         # Build simulator paths content
-        simulator_content = [
+        is_mapping_mode = self.simulator_source_mode_radio.value == "mapping"
+
+        simulator_header = [
             ft.Divider(),
             ft.Text("Simulator Source Paths", size=16, weight=ft.FontWeight.BOLD),
             ft.Text(
@@ -1876,41 +1913,61 @@ class StudyEditorScreen:
                 color=ft.Colors.GREY_600,
                 italic=True,
             ),
-            # Localizer section
-            ft.Text("Localizer Runs", size=14, weight=ft.FontWeight.W_500),
+            self.simulator_source_mode_radio,
         ]
-        # Add localizer source rows
-        simulator_content.extend(self.localizer_source_rows)
 
-        # Add 2vol section
-        simulator_content.append(ft.Text("2-Volume Coregistration", size=14, weight=ft.FontWeight.W_500))
-        simulator_content.append(self.twovol_initial_row)
-        simulator_content.append(self.twovol_realtime_row)
+        # Per-subject mapping container
+        self.simulator_source_mapping_row = ft.Row([
+            self.simulator_source_mapping_field,
+            self._create_file_browse_button(
+                self.simulator_source_mapping_field,
+                filetypes=[("CSV/TSV Files", "*.csv *.tsv"), ("All Files", "*.*")],
+            ),
+        ])
+        self.simulator_mapping_container = ft.Column(
+            [
+                ft.Text(
+                    "Columns: subject, rest1, rest2, ..., 2vol_realtime, feedback_run-01, ...",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
+                self.simulator_source_mapping_row,
+            ],
+            visible=is_mapping_mode,
+        )
 
-        # Add transfer section header (container for visibility control)
+        # Individual paths container
+        individual_content = []
+
+        # Localizer section
+        individual_content.append(ft.Text("Localizer Runs", size=14, weight=ft.FontWeight.W_500))
+        individual_content.extend(self.localizer_source_rows)
+
+        # 2vol section
+        individual_content.append(ft.Text("2-Volume Coregistration", size=14, weight=ft.FontWeight.W_500))
+        individual_content.append(self.twovol_initial_row)
+        individual_content.append(self.twovol_realtime_row)
+
+        # Transfer section
         self.transfer_section_header = ft.Text(
             "Transfer Runs",
             size=14,
             weight=ft.FontWeight.W_500,
             visible=use_transfer_runs,
         )
-        simulator_content.append(self.transfer_section_header)
-        # Add transfer source rows
-        simulator_content.extend(self.transfer_source_rows)
+        individual_content.append(self.transfer_section_header)
+        individual_content.extend(self.transfer_source_rows)
 
-        # Add feedback section
-        simulator_content.append(ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500))
-        # Add feedback source rows
-        simulator_content.extend(self.feedback_source_rows)
+        # Feedback section
+        individual_content.append(ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500))
+        individual_content.extend(self.feedback_source_rows)
 
-        # Add MURFI design file section
-        simulator_content.append(ft.Divider())
-        simulator_content.append(ft.Text("External Design (optional)", size=14, weight=ft.FontWeight.W_500))
-        simulator_content.append(ft.Text(
-            "Provide a MURFI design file to use pre-computed task regressors and motion parameters",
-            size=11,
-            color=ft.Colors.GREY_600,
-        ))
+        self.simulator_individual_container = ft.Column(
+            individual_content,
+            visible=not is_mapping_mode,
+        )
+
+        # MURFI design file section (always visible in simulator mode)
         self.murfi_design_row = ft.Row([
             self.murfi_design_path_field,
             self._create_file_browse_button(
@@ -1918,10 +1975,19 @@ class StudyEditorScreen:
                 filetypes=[("MURFI Design Files", "*.mat"), ("All Files", "*.*")],
             ),
         ])
-        simulator_content.append(self.murfi_design_row)
+        murfi_section = [
+            ft.Divider(),
+            ft.Text("External Design (optional)", size=14, weight=ft.FontWeight.W_500),
+            ft.Text(
+                "Provide a MURFI design file to use pre-computed task regressors and motion parameters",
+                size=11,
+                color=ft.Colors.GREY_600,
+            ),
+            self.murfi_design_row,
+        ]
 
         self.simulator_paths_container = ft.Column(
-            simulator_content,
+            simulator_header + [self.simulator_mapping_container, self.simulator_individual_container] + murfi_section,
             visible=is_simulator,
         )
 
@@ -2198,6 +2264,11 @@ class StudyEditorScreen:
             config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value)
             config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip()
             config["scan"]["murfi_design_path"] = self.murfi_design_path_field.value.strip()
+            # Only save mapping if in mapping mode
+            if self.simulator_source_mode_radio.value == "mapping":
+                config["scan"]["simulator_source_mapping"] = self.simulator_source_mapping_field.value.strip()
+            else:
+                config["scan"]["simulator_source_mapping"] = ""
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid scanner parameter: {e}")
             raise ValidationError(f"Invalid scanner parameter: {e}")

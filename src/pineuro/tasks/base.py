@@ -574,9 +574,10 @@ class BaseTask(ABC):
         until the session completes, then calls cleanup().
         """
         self._running = True
-        self.setup()
 
         try:
+            self.setup()
+
             while self._running and not self.coordinator.is_complete():
                 frame_start = time.time()
 

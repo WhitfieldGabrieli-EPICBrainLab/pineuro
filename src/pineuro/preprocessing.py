@@ -587,7 +587,7 @@ def preprocessing(
         overwrite: bool = False,
         n_jobs: int = -1,
         qc_enabled: bool = True,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[Callable[[str, str], None]] = None
 ) -> tuple[Path, Path, Path]:
     """
     Run the complete preprocessing pipeline for fMRI data.
