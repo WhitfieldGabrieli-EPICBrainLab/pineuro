@@ -1246,9 +1246,9 @@ def mask_extraction_rest(
     mnireg_dir = root_dir / "02_mnireg"
 
     # Step 2a: Compute transformation from participant space to MNI space
-    # Uses ANTs rigid+affine registration between BOLD reference volumes
+    # Uses ANTs SyN (nonlinear) registration between BOLD reference volumes
     output_prefix = mnireg_dir / Path(f"{ref_file.with_suffix('').stem}_to_MNI_boldref")
-    mni_ref_file, sub2mni_xfm = compute_xfm_to_mni(
+    mni_ref_file, sub2mni_fwd_xfm, sub2mni_inv_xfm = compute_xfm_to_mni(
         input_file=ref_file,
         output_prefix=output_prefix,
         overwrite=overwrite
@@ -1264,15 +1264,15 @@ def mask_extraction_rest(
 
     if not yeo2sub.exists() or overwrite:
         # Step 2c: Transform Yeo atlas from MNI space to participant space
-        # Inverts the participant→MNI transformation computed in Step 2a
+        # Uses pre-computed inverse transforms (MNI → participant)
         # Uses nearest neighbor interpolation to preserve integer network labels
         apply_xfm(
             moving=yeo_mni,
             fixed=ref_file,
-            transform_files=sub2mni_xfm,
+            transform_files=sub2mni_inv_xfm,
             output_file=yeo2sub,
             interpolator='nearestNeighbor',
-            invert=True,  # Apply inverse transform: MNI → participant
+            invert=False,  # Use inverse transforms directly
             overwrite=overwrite
         )
     emit_progress("Step 2/3", "Registration complete")

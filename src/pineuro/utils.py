@@ -1406,7 +1406,7 @@ def compute_xfm(
         Path to warped moving image in fixed space
     transform_files : list[str]
         Transform files (moving → fixed). Use with invert=True in
-        apply_xfm to go fixed → moving.
+        apply_xfm to go fixed → moving (for Rigid/Affine only).
     """
     import ants
 
@@ -1601,11 +1601,14 @@ def compute_xfm_to_mni(
         output_prefix: Union[str, Path],
         type_of_transform: str = 'SyN',
         overwrite: bool = False
-) -> tuple[Path, list[str]]:
+) -> tuple[Path, list[str], list[str]]:
     """
     Compute transformation to MNI space using ANTs.
 
     Registers input to the fMRIPrep BOLD reference template (MNI152NLin2009cAsym).
+    Unlike compute_xfm, this function saves both forward and inverse transforms,
+    which is necessary for SyN (nonlinear) registration where warp fields cannot
+    be inverted on-the-fly.
 
     Parameters
     ----------
@@ -1623,19 +1626,27 @@ def compute_xfm_to_mni(
     -------
     warped_file : Path
         Path to warped image in MNI space
-    transform_files : list[str]
-        Transform files (subject → MNI). Use with invert=True in
-        apply_xfm to go MNI → subject.
+    fwd_transform_files : list[str]
+        Forward transform files (subject → MNI).
+    inv_transform_files : list[str]
+        Inverse transform files (MNI → subject). Use these directly
+        with apply_xfm (invert=False) to go MNI → subject.
     """
+    import ants
+
     sub2mni_file = Path(output_prefix).with_suffix(".nii.gz")
     sub2mni_dir = sub2mni_file.parent
-    existing_xfm = sorted(sub2mni_dir.glob(f"{Path(output_prefix).stem}_*.mat"))
-    if not overwrite and sub2mni_file.exists() and existing_xfm:
+    sub2mni_dir.mkdir(parents=True, exist_ok=True)
+    prefix_stem = Path(output_prefix).stem
+
+    # Check if outputs exist
+    existing_fwd = sorted(sub2mni_dir.glob(f"{prefix_stem}_fwd_*"))
+    existing_inv = sorted(sub2mni_dir.glob(f"{prefix_stem}_inv_*"))
+    if not overwrite and sub2mni_file.exists() and existing_fwd and existing_inv:
         logger.info("Output files exist and overwrite=False. Skipping MNI registration.")
-        return sub2mni_file, [str(p) for p in existing_xfm]
+        return sub2mni_file, [str(p) for p in existing_fwd], [str(p) for p in existing_inv]
 
     # Load MNI152 BOLD reference template from templateflow
-    # type: ignore - templateflow.get() returns str, not Path, but we cast it
     epi_tpl_path = cast(Path, tflow.get(
         "MNI152NLin2009cAsym",
         resolution=2,
@@ -1643,13 +1654,43 @@ def compute_xfm_to_mni(
         suffix="boldref"
     ))  # type: ignore
 
-    return compute_xfm(
-        moving=input_file,
-        fixed=epi_tpl_path,
-        output_prefix=output_prefix,
-        type_of_transform=type_of_transform,
-        overwrite=overwrite
-    )
+    logger.info(f"Computing MNI transformation (ANTs {type_of_transform})...")
+    logger.info(f"Input: {input_file}")
+    logger.info(f"Template: {epi_tpl_path}")
+
+    with Timer(f"ANTs MNI registration ({type_of_transform})", "registration"):
+        fixed_img = ants.image_read(str(epi_tpl_path))
+        moving_img = ants.image_read(str(input_file))
+
+        registration = ants.registration(
+            fixed=fixed_img,
+            moving=moving_img,
+            type_of_transform=type_of_transform,
+            verbose=False
+        )
+
+        ants.image_write(registration['warpedmovout'], str(sub2mni_file))
+        logger.info(f"Output: {sub2mni_file}")
+
+        # Copy forward transform files (subject → MNI)
+        fwd_transform_files: list[str] = []
+        for i, xfm in enumerate(registration['fwdtransforms']):
+            suffix = Path(xfm).suffix
+            new_path = sub2mni_dir / f"{prefix_stem}_fwd_{i}{suffix}"
+            shutil.copy(xfm, new_path)
+            fwd_transform_files.append(str(new_path))
+            logger.info(f"Forward transform: {new_path}")
+
+        # Copy inverse transform files (MNI → subject)
+        inv_transform_files: list[str] = []
+        for i, xfm in enumerate(registration['invtransforms']):
+            suffix = Path(xfm).suffix
+            new_path = sub2mni_dir / f"{prefix_stem}_inv_{i}{suffix}"
+            shutil.copy(xfm, new_path)
+            inv_transform_files.append(str(new_path))
+            logger.info(f"Inverse transform: {new_path}")
+
+    return sub2mni_file, fwd_transform_files, inv_transform_files
 
 def apply_mask(
         input_file: Union[str, Path],
