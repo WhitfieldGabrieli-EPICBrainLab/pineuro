@@ -516,6 +516,9 @@ class MaskSelectionDialog:
         self._stage = 2
         self._current_reject_network = network_name
 
+        # Reset combine mode for each new mask (don't carry over from previous)
+        self._combine_mode = False
+
         # Close stage 1 dialog
         if self._dialog:
             self._dialog.open = False
@@ -846,6 +849,15 @@ class MaskSelectionDialog:
 
         network_name = self._current_reject_network
         comp_idx_1, comp_idx_2 = selected[0], selected[1]
+        info = self.masks_info[network_name]
+
+        # Get individual component correlations for comparison
+        corr_1, corr_2 = 0.0, 0.0
+        for idx, c in info.alternative_components:
+            if idx == comp_idx_1:
+                corr_1 = c
+            elif idx == comp_idx_2:
+                corr_2 = c
 
         if self.on_log:
             self.on_log(f"[INFO] Generating preview of combined IC {comp_idx_1} + IC {comp_idx_2}...")
@@ -869,6 +881,14 @@ class MaskSelectionDialog:
                 overwrite=True,
             )
 
+            # Compute spatial correlation of combined mask with Yeo network
+            combined_corr = compute_mask_network_correlation(
+                mask_file=temp_mask,
+                yeo_subject_space=self.yeo_subject_space,
+                network_name=network_name,
+                n_yeo=self.n_yeo,
+            )
+
             # Generate overlay
             logger.info(f"Generating overlay with ref_file: {self.ref_file}")
             overlay_path = qc.generate_mask_overlay(
@@ -883,12 +903,19 @@ class MaskSelectionDialog:
 
             logger.info(f"Overlay generated: {overlay_path}")
 
+            # Determine correlation quality color
+            if combined_corr >= self.CORR_GOOD:
+                corr_color = ft.Colors.GREEN
+            elif combined_corr >= self.CORR_MODERATE:
+                corr_color = ft.Colors.ORANGE
+            else:
+                corr_color = ft.Colors.RED
+
             # Update the preview container
             if overlay_path and overlay_path.exists():
-                info = self.masks_info[network_name]
                 info.combined_overlay_path = overlay_path
 
-                # Update the preview container content
+                # Update the preview container content with correlation info
                 if self._combine_preview_container:
                     new_content = ft.Column(
                         [
@@ -902,7 +929,19 @@ class MaskSelectionDialog:
                                         size=12,
                                         color=ft.Colors.BLUE,
                                     ),
+                                    ft.Text(
+                                        f"r = {combined_corr:.3f}",
+                                        size=12,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=corr_color,
+                                    ),
                                 ],
+                            ),
+                            ft.Text(
+                                f"(vs IC{comp_idx_1}: r={corr_1:.3f}, IC{comp_idx_2}: r={corr_2:.3f})",
+                                size=11,
+                                color=ft.Colors.GREY_600,
+                                italic=True,
                             ),
                             ft.Container(
                                 content=self._create_image(overlay_path, height=180, width=500),
@@ -916,7 +955,10 @@ class MaskSelectionDialog:
                     self._combine_preview_container.update()
 
                 if self.on_log:
-                    self.on_log(f"[SUCCESS] Combined mask preview generated")
+                    self.on_log(
+                        f"[SUCCESS] Combined mask preview: r={combined_corr:.3f} "
+                        f"(vs IC{comp_idx_1}={corr_1:.3f}, IC{comp_idx_2}={corr_2:.3f})"
+                    )
             else:
                 error_msg = f"Overlay not generated or not found: {overlay_path}"
                 logger.error(error_msg)
