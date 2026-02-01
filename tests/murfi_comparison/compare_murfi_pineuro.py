@@ -306,9 +306,9 @@ def check_collection_complete(subject_dir: Path) -> bool:
     """Check if DICOM collection is complete."""
     collection_dir = get_collection_dir(subject_dir)
     return (
-        (collection_dir / "rest_run-01").exists()
-        and (collection_dir / "rest_run-02").exists()
-        and (collection_dir / "2vol_run-01").exists()
+        (collection_dir / "task-rest_run-01").exists()
+        and (collection_dir / "task-rest_run-02").exists()
+        and (collection_dir / "task-2vol_run-01").exists()
     )
 
 
@@ -403,35 +403,41 @@ def get_subject_status(subject_dir: Path, subject: str, n_feedback_runs: int, n_
 
 
 def copy_dicoms_to_collection(config: SubjectConfig, subject_dir: Path) -> None:
-    """Copy source DICOMs to collection directory."""
+    """Copy source DICOMs to collection directory.
+
+    Uses GUI-compatible naming:
+    - task-rest_run-01, task-rest_run-02
+    - task-2vol_run-01
+    - feedback_acq-01_run-01, feedback_acq-01_run-02, ...
+    """
     collection_dir = get_collection_dir(subject_dir)
     collection_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy rest runs
     for i, rest_path in enumerate(config.rest_runs, 1):
-        dest = collection_dir / f"rest_run-{i:02d}"
+        dest = collection_dir / f"task-rest_run-{i:02d}"
         if not dest.exists():
-            print(f"  Copying {rest_path.name} -> rest_run-{i:02d}")
+            print(f"  Copying {rest_path.name} -> task-rest_run-{i:02d}")
             shutil.copytree(rest_path, dest)
         else:
-            print(f"  rest_run-{i:02d} already exists, skipping")
+            print(f"  task-rest_run-{i:02d} already exists, skipping")
 
     # Copy 2vol
-    dest = collection_dir / "2vol_run-01"
+    dest = collection_dir / "task-2vol_run-01"
     if not dest.exists():
-        print(f"  Copying {config.twovol.name} -> 2vol_run-01")
+        print(f"  Copying {config.twovol.name} -> task-2vol_run-01")
         shutil.copytree(config.twovol, dest)
     else:
-        print(f"  2vol_run-01 already exists, skipping")
+        print(f"  task-2vol_run-01 already exists, skipping")
 
-    # Copy feedback runs
+    # Copy feedback runs (feedback_acq-01_run-XX)
     for i, fb_path in enumerate(config.feedback_runs, 1):
-        dest = collection_dir / f"feedback_run-{i:02d}"
+        dest = collection_dir / f"feedback_acq-01_run-{i:02d}"
         if not dest.exists():
-            print(f"  Copying {fb_path.name} -> feedback_run-{i:02d}")
+            print(f"  Copying {fb_path.name} -> feedback_acq-01_run-{i:02d}")
             shutil.copytree(fb_path, dest)
         else:
-            print(f"  feedback_run-{i:02d} already exists, skipping")
+            print(f"  feedback_acq-01_run-{i:02d} already exists, skipping")
 
 
 def run_preprocessing(
@@ -446,8 +452,8 @@ def run_preprocessing(
     preproc_dir = get_preprocessing_dir(subject_dir)
 
     input_dirs = [
-        collection_dir / "rest_run-01",
-        collection_dir / "rest_run-02",
+        collection_dir / "task-rest_run-01",
+        collection_dir / "task-rest_run-02",
     ]
 
     print(f"\n{'=' * 60}")
@@ -530,7 +536,7 @@ def run_2vol_coregistration(
 
     collection_dir = get_collection_dir(subject_dir)
     feedback_dir = get_feedback_dir(subject_dir)
-    twovol_dir = collection_dir / "2vol_run-01"
+    twovol_dir = collection_dir / "task-2vol_run-01"
 
     print(f"\n{'=' * 60}")
     print("2VOL REALTIME COREGISTRATION")
@@ -1161,7 +1167,7 @@ def run_comparison_for_run(
     murfi_run_dir = get_murfi_dir(subject_dir) / f"run-{run:02d}"
     comparison_run_dir = get_comparison_dir(subject_dir) / f"run-{run:02d}"
 
-    dicom_dir = collection_dir / f"feedback_run-{run:02d}"
+    dicom_dir = collection_dir / f"feedback_acq-01_run-{run:02d}"
 
     # Check if comparison already done
     if skip_existing and check_comparison_complete(subject_dir, run):
