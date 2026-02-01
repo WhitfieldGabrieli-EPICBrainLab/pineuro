@@ -340,11 +340,26 @@ def check_masks_approved(subject_dir: Path) -> bool:
     return (get_mask_extraction_dir(subject_dir) / ".masks_approved").exists()
 
 
-def check_feedback_run_complete(subject_dir: Path, subject: str, run: int) -> bool:
-    """Check if a feedback run is complete."""
+def check_feedback_run_complete(subject_dir: Path, subject: str, run: int, n_volumes: int | None = None) -> bool:
+    """Check if a feedback run is complete.
+
+    If n_volumes is provided, also checks that the feedbacklog has all volumes.
+    """
     feedback_dir = get_feedback_dir(subject_dir) / "02_feedback_output"
     feedbacklog = feedback_dir / f"{subject}_task-feedback_run-{run:02d}_feedbacklog.tsv"
-    return feedbacklog.exists()
+
+    if not feedbacklog.exists():
+        return False
+
+    if n_volumes is None:
+        return True
+
+    # Check if feedbacklog has all volumes
+    try:
+        df = pd.read_csv(feedbacklog, sep="\t")
+        return len(df) >= n_volumes
+    except Exception:
+        return False
 
 
 def check_murfi_run_complete(subject_dir: Path, run: int, n_volumes: int) -> bool:
@@ -383,7 +398,7 @@ def get_subject_status(subject_dir: Path, subject: str, n_feedback_runs: int, n_
         "twovol_coreg_complete": check_2vol_coreg_complete(subject_dir),
         "masks_approved": check_masks_approved(subject_dir),
         "feedback_runs": [
-            check_feedback_run_complete(subject_dir, subject, run)
+            check_feedback_run_complete(subject_dir, subject, run, n_volumes)
             for run in range(1, n_feedback_runs + 1)
         ],
         "murfi_runs": [
@@ -1212,7 +1227,7 @@ def run_comparison_for_run(
 
     # Run pineuro feedback
     pineuro_log = feedback_dir / "02_feedback_output" / f"{subject}_task-feedback_run-{run:02d}_feedbacklog.tsv"
-    if not pineuro_log.exists():
+    if not check_feedback_run_complete(subject_dir, subject, run, n_volumes):
         pineuro_log = run_pineuro_feedback(
             subject=subject,
             run=run,
@@ -1224,7 +1239,7 @@ def run_comparison_for_run(
             n_baseline=n_baseline,
         )
     else:
-        print(f"\npineuro feedback already complete: {pineuro_log}")
+        print(f"\npineuro feedback already complete ({n_volumes} volumes): {pineuro_log}")
 
     # Setup and run MURFI
     murfi_log = murfi_run_dir / subject / "log" / "log.rtl"
@@ -1246,7 +1261,7 @@ def run_comparison_for_run(
             n_volumes=n_volumes,
         )
     else:
-        print(f"\nMURFI already complete: {murfi_log}")
+        print(f"\nMURFI already complete ({n_volumes} volumes): {murfi_log}")
 
     # Compare outputs
     results = compare_outputs(pineuro_log, murfi_log, comparison_run_dir, n_volumes)
