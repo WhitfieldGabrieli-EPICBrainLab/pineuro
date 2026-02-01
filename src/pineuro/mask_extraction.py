@@ -1255,7 +1255,8 @@ def mask_extraction_rest(
     )
 
     emit_progress("Step 2/3", f"Transforming Yeo {n_yeo}-network atlas to participant space...")
-    yeo = datasets.fetch_atlas_yeo_2011()[f"thick_{str(n_yeo)}"]
+    yeo_atlas = datasets.fetch_atlas_yeo_2011(n_networks=n_yeo, resolution_mm=2)
+    yeo = yeo_atlas.maps
     yeo_mni = Path(yeo).with_suffix('').parent / Path(Path(yeo).with_suffix('').stem + '_interp_to_fMRIPrep_boldref.nii.gz')
 
     yeo2sub = mnireg_dir / Path(f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz")
