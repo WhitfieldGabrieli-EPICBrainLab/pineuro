@@ -320,8 +320,16 @@ def check_preprocessing_complete(subject_dir: Path, subject: str) -> bool:
 
 
 def check_mask_extraction_complete(subject_dir: Path) -> bool:
-    """Check if mask extraction is complete."""
-    mask_dir = get_mask_extraction_dir(subject_dir) / "04_2vol"
+    """Check if ICA mask extraction is complete (before 2vol coreg)."""
+    mask_dir = get_mask_extraction_dir(subject_dir) / "03_masks"
+    # Look for thresholded mask files
+    masks = list(mask_dir.glob("*_thr.nii.gz"))
+    return len(masks) >= 2
+
+
+def check_2vol_coreg_complete(subject_dir: Path) -> bool:
+    """Check if 2vol coregistration is complete."""
+    mask_dir = get_feedback_dir(subject_dir) / "01_2vol" / "masks"
     # Look for coregistered mask files
     masks = list(mask_dir.glob("*_thr_to_task-2vol*.nii.gz"))
     return len(masks) >= 2
@@ -372,6 +380,7 @@ def get_subject_status(subject_dir: Path, subject: str, n_feedback_runs: int, n_
         "collection_complete": check_collection_complete(subject_dir),
         "preprocessing_complete": check_preprocessing_complete(subject_dir, subject),
         "mask_extraction_complete": check_mask_extraction_complete(subject_dir),
+        "twovol_coreg_complete": check_2vol_coreg_complete(subject_dir),
         "masks_approved": check_masks_approved(subject_dir),
         "feedback_runs": [
             check_feedback_run_complete(subject_dir, subject, run)
@@ -512,27 +521,31 @@ def run_2vol_coregistration(
     ref_file: Path,
     overwrite: bool = False,
 ) -> dict[str, Path]:
-    """Coregister masks to 2vol scanner position."""
+    """Coregister masks to 2vol_realtime scanner position.
+
+    Output goes to feedback/01_2vol/masks/ (not mask_extraction/04_2vol/)
+    because this is a realtime 2vol collected during the NF session.
+    """
     from pineuro import coregister_2vol
 
     collection_dir = get_collection_dir(subject_dir)
-    mask_dir = get_mask_extraction_dir(subject_dir)
+    feedback_dir = get_feedback_dir(subject_dir)
     twovol_dir = collection_dir / "2vol_run-01"
 
     print(f"\n{'=' * 60}")
-    print("2VOL COREGISTRATION")
+    print("2VOL REALTIME COREGISTRATION")
     print("=" * 60)
     print(f"  2vol: {twovol_dir}")
-    print(f"  Output: {mask_dir}")
+    print(f"  Output: {feedback_dir}/01_2vol/masks/")
 
     coreg_masks = coregister_2vol(
         participant_id=subject,
-        root_dir=str(mask_dir),
+        root_dir=str(feedback_dir),
         input_dicom=twovol_dir,
         network_files=mask_files,
         ref_file=ref_file,
         overwrite=overwrite,
-        output_subdir="04_2vol",
+        output_subdir="01_2vol",
     )
 
     print(f"\nCoregistration complete:")
@@ -1051,8 +1064,11 @@ def compare_outputs(
 
 
 def find_masks(subject_dir: Path) -> dict[str, Path]:
-    """Find coregistered masks for a subject."""
-    mask_dir = get_mask_extraction_dir(subject_dir) / "04_2vol"
+    """Find coregistered masks for a subject.
+
+    Masks are in feedback/01_2vol/masks/ (for 2vol_realtime).
+    """
+    mask_dir = get_feedback_dir(subject_dir) / "01_2vol" / "masks"
     masks = {}
 
     for mask_path in mask_dir.glob("*_thr_to_task-2vol*.nii.gz"):
@@ -1285,15 +1301,17 @@ def cmd_status(args: argparse.Namespace) -> None:
         subject_dir = args.output_dir / subject
         status = get_subject_status(subject_dir, subject, args.n_runs, args.n_volumes)
 
-        setup_done = status["mask_extraction_complete"]
+        setup_done = status["twovol_coreg_complete"]
         approved = status["masks_approved"]
         fb_done = sum(status["feedback_runs"])
         comp_done = sum(status["comparisons"])
         n_runs = len(status["feedback_runs"])
 
         status_str = []
-        if not setup_done:
-            status_str.append("needs setup")
+        if not status["mask_extraction_complete"]:
+            status_str.append("needs mask extraction")
+        elif not setup_done:
+            status_str.append("needs 2vol coreg")
         elif not approved:
             status_str.append("needs approval")
         elif fb_done < n_runs or comp_done < n_runs:
