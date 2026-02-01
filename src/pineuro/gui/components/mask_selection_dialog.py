@@ -933,26 +933,25 @@ class MaskSelectionDialog:
                             ft.Divider(),
                             ft.Row(
                                 [
-                                    ft.Text("Combined Mask Preview:", size=12, weight=ft.FontWeight.W_500),
-                                    ft.Container(expand=True),
+                                    ft.Text("Combined:", size=12, weight=ft.FontWeight.W_500),
                                     ft.Text(
                                         f"IC {comp_idx_1} + IC {comp_idx_2}",
                                         size=12,
                                         color=ft.Colors.BLUE,
                                     ),
                                     ft.Text(
-                                        f"r = {combined_corr:.3f}",
+                                        f"r={combined_corr:.3f}",
                                         size=12,
                                         weight=ft.FontWeight.BOLD,
                                         color=corr_color,
                                     ),
+                                    ft.Text(
+                                        f"(IC{comp_idx_1}={corr_1:.2f}, IC{comp_idx_2}={corr_2:.2f})",
+                                        size=11,
+                                        color=ft.Colors.GREY_600,
+                                    ),
                                 ],
-                            ),
-                            ft.Text(
-                                f"(vs IC{comp_idx_1}: r={corr_1:.3f}, IC{comp_idx_2}: r={corr_2:.3f})",
-                                size=11,
-                                color=ft.Colors.GREY_600,
-                                italic=True,
+                                spacing=8,
                             ),
                             ft.Container(
                                 content=self._create_image(overlay_path, height=180, width=500),
@@ -960,7 +959,7 @@ class MaskSelectionDialog:
                                 border_radius=5,
                             ),
                         ],
-                        spacing=8,
+                        spacing=5,
                     )
                     self._combine_preview_container.content = new_content
                     self._combine_preview_container.update()
