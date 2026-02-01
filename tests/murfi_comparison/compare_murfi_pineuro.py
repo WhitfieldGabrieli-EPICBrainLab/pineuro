@@ -1297,7 +1297,15 @@ def cmd_status(args: argparse.Namespace) -> None:
     print("STATUS")
     print("=" * 60)
 
-    subjects = sorted([d.name for d in args.output_dir.iterdir() if d.is_dir()])
+    # Get subject list from CSV or scan directory
+    if args.csv:
+        configs = load_subjects_csv(args.csv)
+        subjects = [c.subject for c in configs]
+        # Use number of feedback runs from CSV
+        n_runs_map = {c.subject: len(c.feedback_runs) for c in configs}
+    else:
+        subjects = sorted([d.name for d in args.output_dir.iterdir() if d.is_dir()])
+        n_runs_map = {}
 
     if not subjects:
         print("No subjects found.")
@@ -1305,7 +1313,8 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     for subject in subjects:
         subject_dir = args.output_dir / subject
-        status = get_subject_status(subject_dir, subject, args.n_runs, args.n_volumes)
+        n_runs = n_runs_map.get(subject, args.n_runs)
+        status = get_subject_status(subject_dir, subject, n_runs, args.n_volumes)
 
         setup_done = status["twovol_coreg_complete"]
         approved = status["masks_approved"]
@@ -1469,6 +1478,7 @@ def main() -> None:
 
     # Status command
     status_parser = subparsers.add_parser("status", help="Check status of all subjects")
+    status_parser.add_argument("--csv", type=Path, help="Path to subjects CSV (optional, otherwise scans output-dir)")
     status_parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
     status_parser.add_argument("--n-runs", type=int, default=5, help="Number of feedback runs")
     status_parser.add_argument("--n-volumes", type=int, default=150, help="Volumes per run")
