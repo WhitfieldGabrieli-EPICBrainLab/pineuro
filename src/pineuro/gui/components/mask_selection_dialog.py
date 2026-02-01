@@ -511,13 +511,24 @@ class MaskSelectionDialog:
             if yeo_overlay:
                 info.yeo_overlay_path = yeo_overlay
 
-    def _show_stage2(self, network_name: str):
-        """Show Stage 2: Select alternative for a rejected mask."""
+    def _show_stage2(self, network_name: str, reset_combine_mode: bool = True):
+        """Show Stage 2: Select alternative for a rejected mask.
+
+        Parameters
+        ----------
+        network_name : str
+            Name of the network to select alternative for
+        reset_combine_mode : bool
+            If True, reset combine mode to off. Set to False when refreshing
+            the dialog from the combine toggle to preserve the toggle state.
+        """
         self._stage = 2
         self._current_reject_network = network_name
 
         # Reset combine mode for each new mask (don't carry over from previous)
-        self._combine_mode = False
+        # But preserve it when refreshing from the toggle
+        if reset_combine_mode:
+            self._combine_mode = False
 
         # Close stage 1 dialog
         if self._dialog:
@@ -763,11 +774,11 @@ class MaskSelectionDialog:
         # Clear any checkbox selections when toggling
         for checkbox in self._combine_checkboxes.values():
             checkbox.value = False
-        # Refresh the stage 2 dialog
+        # Refresh the stage 2 dialog (preserve combine mode state)
         if self._dialog:
             self._dialog.open = False
             self.page.update()
-        self._show_stage2(network_name)
+        self._show_stage2(network_name, reset_combine_mode=False)
 
     def _on_combine_checkbox_changed(self, e, network_name: str, comp_idx: int):
         """Handle checkbox change in combine mode."""
