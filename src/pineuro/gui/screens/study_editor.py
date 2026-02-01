@@ -119,7 +119,7 @@ class StudyEditorScreen:
             "mask": {
                 "n_yeo": 17,
                 "yeo_targets": ["ContA", "DefaultA"],
-                "n_components": 15,  # Reduced from 20 for faster ICA (~50% speedup)
+                "n_components": 20,
                 "smooth_fwhm": 5.0,
                 "highpass": 0.01,
                 "lowpass": None,
