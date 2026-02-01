@@ -1240,9 +1240,6 @@ def dicom_to_nifti(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Add quiet flag if not verbose
-    quiet_flag = [] if verbose else ['-q']
-
     # Compression flag: -z y for gzip, -z n for uncompressed
     compress_flag = 'y' if compress else 'n'
     ext = '.nii.gz' if compress else '.nii'
@@ -1262,7 +1259,7 @@ def dicom_to_nifti(
 
     try:
         # Build command
-        cmd = ['dcm2niix'] + quiet_flag + ['-z', compress_flag, '-o', str(output_dir), '-f', str(output_name), str(conversion_path)]
+        cmd = ['dcm2niix'] + ['-z', compress_flag, '-o', str(output_dir), '-f', str(output_name), str(conversion_path)]
 
         # Run dcm2niix
         run_command(

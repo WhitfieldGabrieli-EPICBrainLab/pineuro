@@ -1265,12 +1265,15 @@ class FeedbackEstimator:
         ----------
         motion_params : ndarray, shape (6,)
             Raw motion parameters for current volume (absolute values).
+            Translations in mm, rotations in degrees.
             Ignored if external_motion_diff was provided at initialization.
 
         Returns
         -------
         X : ndarray, shape (n_regressors,)
             Design row: [task_cols..., intercept, drift, motion_diff...]
+            Motion parameters are differential (frame-to-frame) with rotations
+            converted to arc length (mm) at 50mm radius to match MURFI.
         """
         # Use external motion diff if available, otherwise compute from absolute motion
         vol_idx = self.n_volumes  # Current volume index (0-based)
@@ -1289,6 +1292,11 @@ class FeedbackEstimator:
             else:
                 prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
                 motion_diff = motion_params - prev
+
+            # Convert rotations from degrees to arc length (mm) at 50mm radius
+            # This matches MURFI's approach: arc_length = radius * angle_radians
+            # = 50 * (angle_degrees * pi/180)
+            motion_diff[3:6] *= 50.0 * np.pi / 180.0
 
         self._prev_motion = motion_params.copy()
 
