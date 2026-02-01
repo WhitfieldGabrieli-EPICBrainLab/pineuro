@@ -1107,7 +1107,7 @@ def mask_extraction_rest(
         ref_file: Union[str, Path],
         n_yeo: int = 17,
         yeo_targets : Union[str, List[str]] = ["DefaultA", "ContA"],
-        n_components: int = 15,  # Reduced from 20 for faster ICA (~50% speedup)
+        n_components: int = 20,
         threshold: int = 2000,
         smooth_fwhm: Optional[float] = None,
         highpass: Optional[float] = None,
