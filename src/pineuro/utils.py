@@ -581,9 +581,9 @@ def compute_boxcar_task_regressor(
     murfi_downsample_factor = 16
 
     # Create high-resolution boxcar
-    # MURFI starts boxcar at (n_baseline - 1) * 16, not n_baseline * samples_per_tr
+    # MURFI starts boxcar at n_baseline * 16 (conditionShift shifts the condition)
     n_hires_samples = n_volumes * murfi_downsample_factor + len(hrf_hires)
-    onset_hires = (n_baseline - 1) * murfi_downsample_factor
+    onset_hires = n_baseline * murfi_downsample_factor
 
     boxcar_hires = np.zeros(n_hires_samples, dtype=np.float64)
     boxcar_hires[onset_hires:] = 1.0
