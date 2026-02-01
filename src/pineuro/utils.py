@@ -1675,8 +1675,9 @@ def compute_xfm_to_mni(
         # Copy forward transform files (subject → MNI)
         fwd_transform_files: list[str] = []
         for i, xfm in enumerate(registration['fwdtransforms']):
-            suffix = Path(xfm).suffix
-            new_path = sub2mni_dir / f"{prefix_stem}_fwd_{i}{suffix}"
+            # Handle .nii.gz (two suffixes) vs .mat (one suffix)
+            suffixes = ''.join(Path(xfm).suffixes)
+            new_path = sub2mni_dir / f"{prefix_stem}_fwd_{i}{suffixes}"
             shutil.copy(xfm, new_path)
             fwd_transform_files.append(str(new_path))
             logger.info(f"Forward transform: {new_path}")
@@ -1684,8 +1685,9 @@ def compute_xfm_to_mni(
         # Copy inverse transform files (MNI → subject)
         inv_transform_files: list[str] = []
         for i, xfm in enumerate(registration['invtransforms']):
-            suffix = Path(xfm).suffix
-            new_path = sub2mni_dir / f"{prefix_stem}_inv_{i}{suffix}"
+            # Handle .nii.gz (two suffixes) vs .mat (one suffix)
+            suffixes = ''.join(Path(xfm).suffixes)
+            new_path = sub2mni_dir / f"{prefix_stem}_inv_{i}{suffixes}"
             shutil.copy(xfm, new_path)
             inv_transform_files.append(str(new_path))
             logger.info(f"Inverse transform: {new_path}")
