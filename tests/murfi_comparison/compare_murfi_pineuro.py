@@ -631,6 +631,7 @@ def generate_murfi_xml(
     tr: float,
     n_volumes: int,
     n_baseline: int,
+    input_dicom_dir: str,
 ) -> None:
     """Generate MURFI XML configuration file."""
     xml_content = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -647,7 +648,7 @@ def generate_murfi_xml(
   <option name="receiveImages">  true </option>
   <option name="onlyReadMoCo">  true </option>
   <option name="preHeader">     true </option>
-  <option name="inputDicomDir">   tmp/murfi_input </option>
+  <option name="inputDicomDir">   {input_dicom_dir} </option>
 </scanner>
 
 <infoserver>
@@ -775,10 +776,13 @@ def setup_murfi_environment(
     (murfi_dir / "xml").mkdir(exist_ok=True)
     (murfi_dir / "log").mkdir(exist_ok=True)
 
+    # Compute absolute path for murfi_input directory
+    murfi_input_dir = str((run_dir / "murfi_input").absolute())
+
     print("\nSetting up MURFI environment...")
     copy_and_convert_mask(masks["ContA"], murfi_dir / "mask" / "cen.nii")
     copy_and_convert_mask(masks["DefaultA"], murfi_dir / "mask" / "dmn.nii")
-    generate_murfi_xml(murfi_dir / "xml" / "rtdmn.xml", tr, n_volumes, n_baseline)
+    generate_murfi_xml(murfi_dir / "xml" / "rtdmn.xml", tr, n_volumes, n_baseline, murfi_input_dir)
 
     return murfi_dir
 
@@ -796,11 +800,14 @@ def run_murfi(
     xml_path = subject_dir / "xml" / "rtdmn.xml"
     log_path = subject_dir / "log" / "log.rtl"
 
-    murfi_input_dir = Path("tmp/murfi_input")
+    # Use absolute path for murfi_input within the run directory
+    murfi_input_dir = run_dir / "murfi_input"
     murfi_input_dir.mkdir(parents=True, exist_ok=True)
 
+    # Clear any existing files
     for f in murfi_input_dir.glob("*"):
-        f.unlink()
+        if f.is_file():
+            f.unlink()
 
     # Copy DICOMs to a path without spaces (apptainer limitation)
     dicom_copy_dir = run_dir / "dicom_source"
@@ -818,6 +825,7 @@ def run_murfi(
     print(f"\nStarting MURFI...")
     print(f"  MURFI_SUBJECTS_DIR={env['MURFI_SUBJECTS_DIR']}")
     print(f"  MURFI_SUBJECT_NAME={env['MURFI_SUBJECT_NAME']}")
+    print(f"  Input dir: {murfi_input_dir.absolute()}")
 
     murfi_cmd = [
         "apptainer",
@@ -828,11 +836,15 @@ def run_murfi(
         str(xml_path.absolute()),
     ]
 
+    # Capture stderr to help debug issues
+    murfi_log = run_dir / "murfi_stderr.log"
+    murfi_log_fh = open(murfi_log, "w")
+
     murfi_proc = subprocess.Popen(
         murfi_cmd,
         env=env,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=murfi_log_fh,
         start_new_session=True,
     )
 
@@ -840,7 +852,10 @@ def run_murfi(
     time.sleep(5)
 
     if murfi_proc.poll() is not None:
-        raise RuntimeError(f"MURFI failed to start (exit code: {murfi_proc.returncode})")
+        murfi_log_fh.close()
+        with open(murfi_log) as f:
+            stderr_content = f.read()
+        raise RuntimeError(f"MURFI failed to start (exit code: {murfi_proc.returncode})\nStderr: {stderr_content}")
 
     serve_cmd = [
         "apptainer",
@@ -848,7 +863,7 @@ def run_murfi(
         str(murfi_sif),
         "servedicoms",
         str(dicom_copy_dir.absolute()),
-        "tmp/murfi_input",
+        str(murfi_input_dir.absolute()),
         str(int(tr * 1000)),
     ]
 
@@ -890,6 +905,9 @@ def run_murfi(
     subprocess.run(["pkill", "-9", "-f", "murfi -f"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "apptainer.*murfi.sif"], capture_output=True)
     time.sleep(0.5)
+
+    # Close the log file handle
+    murfi_log_fh.close()
 
     print(f"MURFI complete: {log_path}")
     return log_path
