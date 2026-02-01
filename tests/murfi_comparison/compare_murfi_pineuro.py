@@ -635,6 +635,8 @@ def generate_murfi_xml(
 ) -> None:
     """Generate MURFI XML configuration file."""
     xml_content = f'''<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
 <study name="rtDMN">
     <option name="softwareDir"> /opt/murfi </option>
 </study>
@@ -752,6 +754,8 @@ def generate_murfi_xml(
   </module>
 
 </processor>
+
+</configuration>
 '''
 
     xml_path.parent.mkdir(parents=True, exist_ok=True)
