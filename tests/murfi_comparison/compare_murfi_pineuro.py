@@ -1157,7 +1157,9 @@ def run_pineuro_feedback(
     n_baseline: int,
 ) -> Path:
     """Run pineuro feedback session."""
-    from pineuro import run_feedback_session, compute_boxcar_task_regressor
+    # Import directly from modules to avoid loading PsychoPy/wx
+    from pineuro.feedback import run_feedback_session
+    from pineuro.utils import compute_boxcar_task_regressor
 
     feedback_dir = output_dir / "02_feedback_output"
     collection_dir = output_dir / "collection"
