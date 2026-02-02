@@ -425,10 +425,12 @@ class IncrementalGLM:
         self,
         j: int,
         aug_row: NDArray[np.float64],
-    ) -> None:
+        weight: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
         """Apply Givens rotation to incorporate new observation at column j.
 
         Updates self._R[j, j:] in place and modifies aug_row to zero out position j.
+        Also updates the weight array following MURFI's Gentleman algorithm.
 
         Parameters
         ----------
@@ -436,13 +438,20 @@ class IncrementalGLM:
             Column index for rotation (0 to n_regressors-1).
         aug_row : ndarray, shape (n_regressors + n_outputs,)
             Augmented row [X, y] being incorporated. Modified in place.
+        weight : ndarray, shape (n_outputs,)
+            Current weight for each output. Modified in place.
+
+        Returns
+        -------
+        weight : ndarray, shape (n_outputs,)
+            Updated weight after this rotation.
         """
         p = self.n_regressors
         r_jj = self._R[j, j]
         x_j = aug_row[j]
 
         if x_j == 0:
-            return
+            return weight
 
         # Compute rotation parameters
         if abs(r_jj) >= abs(x_j):
@@ -454,6 +463,12 @@ class IncrementalGLM:
             s = 1.0 / np.sqrt(1.0 + t * t)
             c = s * t
 
+        # Update weight using MURFI's formula: weight = cbar * weight
+        # where cbar = c^2 (the square of the cosine in Givens rotation)
+        # This is equivalent to: cbar = r_jj^2 / (r_jj^2 + x_j^2)
+        cbar = c * c
+        weight = cbar * weight
+
         # Update R[j, j:]
         self._R[j, j] = c * r_jj + s * x_j
         for k in range(j + 1, p + self.n_outputs):
@@ -461,6 +476,8 @@ class IncrementalGLM:
             x_k = aug_row[k]
             self._R[j, k] = c * r_jk + s * x_k
             aug_row[k] = -s * r_jk + c * x_k
+
+        return weight
 
     def _solve_via_backsubstitution(
         self,
@@ -591,15 +608,17 @@ class IncrementalGLM:
         self.n_obs += 1
 
         # Apply Givens rotations to update R matrix (Gentleman's algorithm)
-        # aug_row will contain the residual in the y positions after all rotations
+        # Track weight as in MURFI: weight starts at 1.0 and is reduced by cbar at each step
         aug_row = np.concatenate([X, y])
+        weight = np.ones(self.n_outputs, dtype=np.float64)
         for j in range(p):
-            self._apply_givens_rotation(j, aug_row)
+            weight = self._apply_givens_rotation(j, aug_row, weight)
 
-        # After all rotations, aug_row[p:] contains the residual for this observation
-        # Update RSS with squared residuals from the full model
-        full_model_residual = aug_row[p:]
-        self._rss += full_model_residual ** 2
+        # After all rotations, aug_row[p:] contains the transformed y values
+        # MURFI computes RSS as: sserr += weight * y * y
+        # This accounts for the variance absorbed by the model
+        transformed_y = aug_row[p:]
+        self._rss += weight * (transformed_y ** 2)
         
         # Update residual MSE (RSS / n_obs) to monitor variance over time
         self._residual_mse = self._rss / self.n_obs
