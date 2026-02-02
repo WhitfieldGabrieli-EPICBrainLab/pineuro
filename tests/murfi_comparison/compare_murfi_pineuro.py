@@ -725,8 +725,7 @@ def generate_murfi_xml(
     <option name="makeavail">true</option>
     <output>display</output>
     <option name="maskRoiID">brain</option>
-    <option name="dumpAlgoVars">true</option>
-    <option name="dumpAlgoVarsFilename">{algo_dump_path}</option>
+    <option name="dumpAlgoVars">false</option>
 
     <design>
       <option name="disabled"> false </option>
@@ -1184,9 +1183,6 @@ def run_pineuro_feedback(
         tr=tr,
     )
 
-    # Dump algo vars for debugging
-    algo_dump_path = feedback_dir / f"{subject}_task-feedback_run-{run:02d}_algo_dump.txt"
-
     result = run_feedback_session(
         mask_paths=[masks["ContA"], masks["DefaultA"]],
         mask_names=["ContA", "DefaultA"],
@@ -1203,7 +1199,6 @@ def run_pineuro_feedback(
         simulator_speed=100.0,
         moco_enabled=True,
         qc_enabled=False,
-        dump_algo_vars_path=algo_dump_path,
     )
 
     coordinator = result["coordinator"]
