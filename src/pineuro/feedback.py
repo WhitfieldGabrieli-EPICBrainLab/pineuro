@@ -425,12 +425,12 @@ class IncrementalGLM:
         self,
         j: int,
         aug_row: NDArray[np.float64],
-        weight: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
+        weight: float,
+    ) -> float:
         """Apply Givens rotation to incorporate new observation at column j.
 
         Updates self._R[j, j:] in place and modifies aug_row to zero out position j.
-        Also updates the weight array following MURFI's Gentleman algorithm.
+        Also updates the weight following MURFI's Gentleman algorithm.
 
         Parameters
         ----------
@@ -438,12 +438,12 @@ class IncrementalGLM:
             Column index for rotation (0 to n_regressors-1).
         aug_row : ndarray, shape (n_regressors + n_outputs,)
             Augmented row [X, y] being incorporated. Modified in place.
-        weight : ndarray, shape (n_outputs,)
-            Current weight for each output. Modified in place.
+        weight : float
+            Current weight (scalar, same for all outputs since X is shared).
 
         Returns
         -------
-        weight : ndarray, shape (n_outputs,)
+        weight : float
             Updated weight after this rotation.
         """
         p = self.n_regressors
@@ -463,13 +463,16 @@ class IncrementalGLM:
             s = 1.0 / np.sqrt(1.0 + t * t)
             c = s * t
 
-        # Update weight using MURFI's exact formula: weight = cbar * weight
+        # Update weight using MURFI's formula: weight = cbar * weight
         # where cbar = d[j] / (d[j] + weight * x_j^2)
-        # In our Givens formulation: d[j] = r_jj^2
+        # Use R[j,j]^2 as approximation of d[j]
         d_j = r_jj * r_jj
-        denom = d_j + weight * (x_j * x_j)
-        # Avoid division by zero (denom can be 0 when r_jj=0 and weight=0)
-        cbar = np.where(denom > 0, d_j / denom, 0.0)
+        x_j_sq = x_j * x_j
+        denom = d_j + weight * x_j_sq
+        if denom > 0:
+            cbar = d_j / denom
+        else:
+            cbar = 0.0
         weight = cbar * weight
 
         # Update R[j, j:]
@@ -612,14 +615,15 @@ class IncrementalGLM:
 
         # Apply Givens rotations to update R matrix (Gentleman's algorithm)
         # Track weight as in MURFI: weight starts at 1.0 and is reduced by cbar at each step
+        # Weight is scalar since it only depends on X and d (same for all voxels)
         aug_row = np.concatenate([X, y])
-        weight = np.ones(self.n_outputs, dtype=np.float64)
+        weight = 1.0
         for j in range(p):
             weight = self._apply_givens_rotation(j, aug_row, weight)
 
         # After all rotations, aug_row[p:] contains the transformed y values
         # MURFI computes RSS as: sserr += weight * y * y
-        # This accounts for the variance absorbed by the model
+        # Weight is scalar, transformed_y is per-voxel
         transformed_y = aug_row[p:]
         self._rss += weight * (transformed_y ** 2)
         
