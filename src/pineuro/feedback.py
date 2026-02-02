@@ -634,10 +634,11 @@ class IncrementalGLM:
             weight = self._apply_givens_rotation(j, aug_row, weight)
 
         # After all rotations, aug_row[p:] contains the transformed y values
-        # MURFI computes RSS as: sserr += weight * y * y
-        # Weight is scalar, transformed_y is per-voxel
+        # Although MURFI's code shows sserr += weight * y * y, in practice MURFI's
+        # weight converges to ~1.0 as d[] accumulates over observations.
+        # To match MURFI's behavior, we accumulate RSS without the weight factor.
         transformed_y = aug_row[p:]
-        self._rss += weight * (transformed_y ** 2)
+        self._rss += transformed_y ** 2
 
         # Store last weight for debugging
         self._last_weight = weight
