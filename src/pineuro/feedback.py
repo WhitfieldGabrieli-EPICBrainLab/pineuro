@@ -412,9 +412,16 @@ class IncrementalGLM:
             (n_regressors, n_regressors + n_outputs), dtype=np.float64
         )
 
+        # Track d[] for debugging (approximated from R[j,j]^2 in normal operation)
+        # This tracks what d[] would be if we computed it properly
+        self._d_debug: NDArray[np.float64] = np.zeros(n_regressors, dtype=np.float64)
+
         # Residual sum of squares and mean squared error for each output
         self._rss: NDArray[np.float64] = np.zeros(n_outputs, dtype=np.float64)
         self._residual_mse: NDArray[np.float64] = np.zeros(n_outputs, dtype=np.float64)
+
+        # Debug: store last weight for comparison
+        self._last_weight: float = 0.0
 
         # Steady-state statistics (frozen after baseline for stable normalization)
         self._steady_state_rss: Optional[NDArray[np.float64]] = None
@@ -473,6 +480,11 @@ class IncrementalGLM:
             cbar = d_j / denom
         else:
             cbar = 0.0
+
+        # Track what proper d[] would be (for debugging)
+        # MURFI: d[j] = d[j] + weight * x_j^2 (before weight update)
+        self._d_debug[j] = self._d_debug[j] + weight * x_j_sq
+
         weight = cbar * weight
 
         # Update R[j, j:]
@@ -626,7 +638,10 @@ class IncrementalGLM:
         # Weight is scalar, transformed_y is per-voxel
         transformed_y = aug_row[p:]
         self._rss += weight * (transformed_y ** 2)
-        
+
+        # Store last weight for debugging
+        self._last_weight = weight
+
         # Update residual MSE (RSS / n_obs) to monitor variance over time
         self._residual_mse = self._rss / self.n_obs
 
@@ -674,6 +689,37 @@ class IncrementalGLM:
             logger.info(
                 f"Steady state frozen at observation {self.n_obs}"
             )
+
+    def dump_algo_vars(self, voxel_indices: Optional[list[int]] = None) -> dict:
+        """Dump algorithm variables for debugging/comparison with MURFI.
+
+        Parameters
+        ----------
+        voxel_indices : list of int, optional
+            Specific voxel indices to dump. If None, dumps first 5 voxels.
+
+        Returns
+        -------
+        dict : Algorithm state variables
+            - n_obs: current observation count
+            - d_approx: R[j,j]^2 values (what we use as d approximation)
+            - d_debug: proper d[] tracking (what MURFI uses)
+            - weight: final weight after all columns
+            - rss: residual sum of squares per voxel
+            - R_diag: diagonal of R matrix
+        """
+        p = self.n_regressors
+        if voxel_indices is None:
+            voxel_indices = list(range(min(5, self.n_outputs)))
+
+        return {
+            "n_obs": self.n_obs,
+            "d_approx": [self._R[j, j] ** 2 for j in range(p)],
+            "d_debug": self._d_debug.tolist(),
+            "weight": self._last_weight,
+            "rss": self._rss[voxel_indices].tolist(),
+            "R_diag": [self._R[j, j] for j in range(p)],
+        }
 
 
 # =============================================================================
@@ -766,6 +812,7 @@ class FeedbackEstimator:
         use_efficiency_weights: bool = True,
         sham_provider: Optional["ShamActivationProvider"] = None,
         external_motion_diff: Optional[NDArray[np.float64]] = None,
+        dump_algo_vars_path: Optional[Path | str] = None,
     ) -> None:
         if len(mask_paths) == 0:
             raise ValueError("At least one mask path required")
@@ -781,6 +828,8 @@ class FeedbackEstimator:
         self._tr = tr
         self.n_volumes = 0
         self.use_efficiency_weights = use_efficiency_weights
+        self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
+        self._algo_dump_fh: Optional[TextIO] = None
 
         # Validate and store task regressors
         if task_regressors is not None:
@@ -1181,6 +1230,33 @@ class FeedbackEstimator:
 
         logger.info("Voxel efficiency weights computed from residual MSE")
 
+    def _dump_algo_vars_to_file(
+        self,
+        X: NDArray[np.float64],
+        y: NDArray[np.float64],
+        activation: Optional[NDArray[np.float64]],
+    ) -> None:
+        """Dump algorithm variables to file for debugging/comparison with MURFI."""
+        if self._algo_dump_fh is None:
+            self._algo_dump_fh = open(self._dump_algo_vars_path, "w")
+            self._algo_dump_fh.write("# pineuro algo dump\n")
+
+        algo_vars = self._glm.dump_algo_vars(list(range(min(10, self._n_voxels))))
+        fh = self._algo_dump_fh
+
+        fh.write(f"\n=== Volume {self.n_volumes} ===\n")
+        fh.write(f"n_obs: {algo_vars['n_obs']}\n")
+        fh.write(f"X: {X.tolist()}\n")
+        fh.write(f"weight (final): {algo_vars['weight']:.10e}\n")
+        fh.write(f"d_approx (R[j,j]^2): {algo_vars['d_approx']}\n")
+        fh.write(f"d_debug (proper): {algo_vars['d_debug']}\n")
+        fh.write(f"R_diag: {algo_vars['R_diag']}\n")
+        fh.write(f"rss (first 10 voxels): {algo_vars['rss']}\n")
+        fh.write(f"y (first 10 voxels): {y[:10].tolist()}\n")
+        if activation is not None:
+            fh.write(f"activation (first 10 voxels): {activation[:10].tolist()}\n")
+        fh.flush()
+
     def process_volume(
         self,
         nifti_path: Path | str,
@@ -1241,6 +1317,10 @@ class FeedbackEstimator:
         self._last_design_row = X
         result = self._glm.update(X, voxel_values)
         self.n_volumes += 1
+
+        # Dump algo vars for debugging (if enabled)
+        if self._dump_algo_vars_path is not None:
+            self._dump_algo_vars_to_file(X, voxel_values, result)
 
         # Handle case where GLM can't compute activation yet (not enough observations)
         if result is None:
@@ -1803,6 +1883,7 @@ class NeurofeedbackCoordinator:
         condition: str = "real",  # Participant condition: "real" or "sham"
         moco_enabled: bool = True,  # Whether Siemens MoCo is enabled on scanner
         external_motion_diff: Optional[NDArray[np.float64]] = None,  # Pre-loaded motion diff (e.g., MURFI)
+        dump_algo_vars_path: Optional[Path | str] = None,  # Path to dump GLM algo vars for debugging
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -1815,6 +1896,9 @@ class NeurofeedbackCoordinator:
         self._tr = tr
         self._qc_enabled = qc_enabled
         self._fd_threshold = fd_threshold
+
+        # Debug: dump algo vars for comparison with MURFI
+        self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
 
         # Motion correction fallback (when Siemens MoCo disabled)
         self._moco_enabled = moco_enabled
@@ -1867,6 +1951,7 @@ class NeurofeedbackCoordinator:
             use_efficiency_weights=use_efficiency_weights,
             sham_provider=sham_provider,
             external_motion_diff=external_motion_diff,
+            dump_algo_vars_path=self._dump_algo_vars_path,
         )
 
         # Processing state
@@ -2807,6 +2892,7 @@ def run_feedback_session(
     condition: str = "real",
     moco_enabled: bool = True,
     murfi_design_path: Optional[Path | str] = None,
+    dump_algo_vars_path: Optional[Path | str] = None,
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -3136,6 +3222,7 @@ def run_feedback_session(
         condition=condition,
         moco_enabled=moco_enabled,
         external_motion_diff=external_motion_diff,
+        dump_algo_vars_path=dump_algo_vars_path,
     )
 
     # Set cleanup flags for simulation mode
