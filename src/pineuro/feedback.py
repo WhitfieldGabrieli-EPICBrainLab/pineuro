@@ -676,6 +676,19 @@ class IncrementalGLM:
             return self._steady_state_residual_mse.copy()
         return self._residual_mse.copy()
 
+    def get_rss(self) -> NDArray[np.float64]:
+        """Get current RSS (residual sum of squares) for each output.
+
+        Always returns the current (not frozen) RSS values.
+        Used for dynamic weighting in ROI averaging to match MURFI behavior.
+
+        Returns
+        -------
+        rss : ndarray, shape (n_outputs,)
+            Current RSS for each output (voxel).
+        """
+        return self._rss.copy()
+
     def freeze_steady_state(self) -> None:
         """Freeze RSS, residual MSE, and timepoint for steady-state.
 
@@ -1332,7 +1345,7 @@ class FeedbackEstimator:
             # If sham mode, still return zeros (consistent behavior)
             return activations
 
-        # Compute efficiency weights when baseline completes
+        # Freeze RSS for stable deviation normalization when baseline completes
         # Note: Freeze at n_baseline - 1 to match MURFI behavior (off-by-one)
         # MURFI uses `if (timepoint < numDataPointsForErrEst)` so at timepoint=25
         # it uses the saved residual from timepoint=24
@@ -1340,18 +1353,27 @@ class FeedbackEstimator:
             # Freeze RSS, MSE, and timepoint for stable normalization
             self._glm.freeze_steady_state()
 
-            # Compute weights using frozen residual MSE
-            if self.use_efficiency_weights:
-                self._compute_weights()
-
         # ===== 4. Compute weighted activations per mask =====
+        # MURFI uses dynamic weights (current RSS at each timepoint)
+        # so we compute weights fresh each volume to match
         real_activations: dict[str, float] = {}
+
+        if self.use_efficiency_weights:
+            # Get current RSS for dynamic weighting (matches MURFI behavior)
+            current_rss = self._glm.get_rss()
+
         for name, idx in self._mask_voxel_idx.items():
             mask_values = result[idx]
 
-            if self.use_efficiency_weights and name in self._weights:
-                # Use efficiency weights if enabled and computed
-                weighted_mean = float(np.sum(self._weights[name] * mask_values))
+            if self.use_efficiency_weights:
+                # Dynamic weights using current RSS (matches MURFI roi-combine)
+                mask_rss = current_rss[idx]
+                mask_rss = np.where(np.isfinite(mask_rss), mask_rss, 0.0)
+                weight_sum = np.sum(mask_rss)
+                if weight_sum > 0:
+                    weighted_mean = float(np.sum(mask_rss * mask_values) / weight_sum)
+                else:
+                    weighted_mean = float(np.mean(mask_values))
             else:
                 # Use simple mean
                 weighted_mean = float(np.mean(mask_values))
