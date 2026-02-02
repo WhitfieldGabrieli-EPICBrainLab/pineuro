@@ -659,6 +659,7 @@ def generate_murfi_xml(
     n_volumes: int,
     n_baseline: int,
     murfi_input_dir: str,
+    algo_dump_path: str,
 ) -> None:
     """Generate MURFI XML configuration file."""
     xml_content = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -725,7 +726,7 @@ def generate_murfi_xml(
     <output>display</output>
     <option name="maskRoiID">brain</option>
     <option name="dumpAlgoVars">true</option>
-    <option name="dumpAlgoVarsFilename">log/incrglmdump.txt</option>
+    <option name="dumpAlgoVarsFilename">{algo_dump_path}</option>
 
     <design>
       <option name="disabled"> false </option>
@@ -808,6 +809,9 @@ def setup_murfi_environment(
     # murfi_input directory for incoming DICOMs (absolute path for apptainer)
     murfi_input_dir = str((run_dir / "murfi_input").absolute())
 
+    # Full path for algo dump (MURFI requires absolute path)
+    algo_dump_path = str((murfi_dir / "log" / "incrglmdump.txt").absolute())
+
     print("\nSetting up MURFI environment...")
     copy_and_convert_mask(masks["ContA"], murfi_dir / "mask" / "cen.nii")
     copy_and_convert_mask(masks["DefaultA"], murfi_dir / "mask" / "dmn.nii")
@@ -817,6 +821,7 @@ def setup_murfi_environment(
         n_volumes,
         n_baseline,
         murfi_input_dir,
+        algo_dump_path,
     )
 
     return murfi_dir
