@@ -725,6 +725,7 @@ def generate_murfi_xml(
     <output>display</output>
     <option name="maskRoiID">brain</option>
     <option name="dumpAlgoVars">true</option>
+    <option name="dumpAlgoVarsFilename">log/incrglmdump.txt</option>
 
     <design>
       <option name="disabled"> false </option>
