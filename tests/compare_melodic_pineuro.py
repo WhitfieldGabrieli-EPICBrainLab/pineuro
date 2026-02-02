@@ -210,6 +210,87 @@ def concatenate_rest_runs(
     return output_file
 
 
+def preprocess_for_ica(
+    input_file: Path,
+    mask_file: Path,
+    output_file: Path,
+    smooth_fwhm: float = 5.0,
+    highpass: float = 0.01,
+    tr: float = 1.2,
+    overwrite: bool = False,
+) -> Path:
+    """Apply smoothing and highpass filtering before ICA.
+
+    Matches pineuro's preprocessing for CanICA to ensure fair comparison.
+
+    Parameters
+    ----------
+    input_file : Path
+        Path to 4D input NIfTI file
+    mask_file : Path
+        Path to brain mask
+    output_file : Path
+        Path to output preprocessed file
+    smooth_fwhm : float
+        Smoothing FWHM in mm (default 5.0 to match pineuro)
+    highpass : float
+        Highpass filter cutoff in Hz (default 0.01 to match pineuro)
+    tr : float
+        TR in seconds (default 1.2)
+    overwrite : bool
+        Whether to overwrite existing output
+
+    Returns
+    -------
+    Path
+        Path to preprocessed file
+    """
+    if output_file.exists() and not overwrite:
+        print(f"  Preprocessed file exists, skipping: {output_file.name}")
+        return output_file
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Step 1: Smoothing
+    # Convert FWHM to sigma: sigma = FWHM / (2 * sqrt(2 * ln(2))) ≈ FWHM / 2.355
+    sigma = smooth_fwhm / 2.355
+
+    smoothed_file = output_file.parent / "temp_smoothed.nii.gz"
+    cmd_smooth = [
+        "fslmaths", str(input_file),
+        "-s", str(sigma),
+        str(smoothed_file)
+    ]
+
+    print(f"  Applying {smooth_fwhm}mm FWHM smoothing...")
+    result = subprocess.run(cmd_smooth, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"fslmaths smoothing failed: {result.stderr}")
+
+    # Step 2: Highpass filtering
+    # hp_sigma = 1 / (2 * TR * cutoff_freq) in volumes
+    hp_sigma = 1.0 / (2.0 * tr * highpass)
+
+    cmd_hp = [
+        "fslmaths", str(smoothed_file),
+        "-bptf", str(hp_sigma), "-1",  # -1 means no lowpass
+        "-mas", str(mask_file),  # Apply mask
+        str(output_file)
+    ]
+
+    print(f"  Applying {highpass}Hz highpass filter (sigma={hp_sigma:.1f} vols)...")
+    result = subprocess.run(cmd_hp, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"fslmaths highpass failed: {result.stderr}")
+
+    # Cleanup temp file
+    if smoothed_file.exists():
+        smoothed_file.unlink()
+
+    print(f"  Created: {output_file.name}")
+    return output_file
+
+
 def run_melodic(
     input_file: Path,
     mask_file: Path,
@@ -698,6 +779,9 @@ def run_setup_for_subject(
     n_components: int = 30,
     threshold: int = 2000,
     targets: list[str] = ["DefaultA", "ContA"],
+    smooth_fwhm: float = 5.0,
+    highpass: float = 0.01,
+    tr: float = 1.2,
     overwrite: bool = False,
 ) -> dict[str, Path]:
     """Run MELODIC setup for a single subject.
@@ -712,6 +796,12 @@ def run_setup_for_subject(
         Number of voxels to keep in masks
     targets : list of str
         Target network names
+    smooth_fwhm : float
+        Smoothing FWHM in mm (default 5.0 to match pineuro)
+    highpass : float
+        Highpass filter cutoff in Hz (default 0.01 to match pineuro)
+    tr : float
+        TR in seconds
     overwrite : bool
         Whether to overwrite existing outputs
 
@@ -736,19 +826,32 @@ def run_setup_for_subject(
     concat_file = input_dir / "rest_runs_concat.nii.gz"
     concatenate_rest_runs(rest_runs, concat_file, overwrite)
 
-    # Step 2: Run MELODIC
-    print("\nStep 2: Running MELODIC...")
+    # Step 2: Preprocess (smooth + highpass)
+    print("\nStep 2: Preprocessing (smoothing + highpass filtering)...")
+    preproc_file = input_dir / "rest_runs_preproc.nii.gz"
+    preprocess_for_ica(
+        concat_file,
+        config.fmriprep_mask,
+        preproc_file,
+        smooth_fwhm=smooth_fwhm,
+        highpass=highpass,
+        tr=tr,
+        overwrite=overwrite,
+    )
+
+    # Step 3: Run MELODIC
+    print("\nStep 3: Running MELODIC...")
     melodic_output_dir = get_melodic_output_dir(melodic_dir)
     melodic_ic = run_melodic(
-        concat_file,
+        preproc_file,
         config.fmriprep_mask,
         melodic_output_dir,
         n_components,
         overwrite,
     )
 
-    # Step 3: Compute Yeo correlation
-    print("\nStep 3: Computing Yeo correlation...")
+    # Step 4: Compute Yeo correlation
+    print("\nStep 4: Computing Yeo correlation...")
     corr_dir = get_melodic_correlation_dir(melodic_dir)
     corr_file = corr_dir / "Yeo_IC_spatial_correlation.csv"
     corr_df = compute_yeo_correlation_mni(
@@ -759,8 +862,8 @@ def run_setup_for_subject(
         overwrite=overwrite,
     )
 
-    # Step 4: Extract network masks
-    print("\nStep 4: Extracting network masks...")
+    # Step 5: Extract network masks
+    print("\nStep 5: Extracting network masks...")
     masks_dir = get_melodic_masks_dir(melodic_dir)
     masks = extract_network_masks(
         melodic_ic,
@@ -874,6 +977,9 @@ def cmd_setup(args: argparse.Namespace) -> None:
                 n_components=args.n_components,
                 threshold=args.threshold,
                 targets=args.targets.split(","),
+                smooth_fwhm=args.smooth_fwhm,
+                highpass=args.highpass,
+                tr=args.tr,
                 overwrite=args.overwrite,
             )
         except Exception as e:
@@ -1015,6 +1121,9 @@ def main() -> None:
     setup_parser.add_argument("--n-components", type=int, default=30, help="Number of ICA components")
     setup_parser.add_argument("--threshold", type=int, default=2000, help="Voxels to keep in masks")
     setup_parser.add_argument("--targets", type=str, default="DefaultA,ContA", help="Target networks (comma-separated)")
+    setup_parser.add_argument("--smooth-fwhm", type=float, default=5.0, help="Smoothing FWHM in mm (default 5.0)")
+    setup_parser.add_argument("--highpass", type=float, default=0.01, help="Highpass filter cutoff in Hz (default 0.01)")
+    setup_parser.add_argument("--tr", type=float, default=1.2, help="TR in seconds (default 1.2)")
     setup_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
 
     # Status command

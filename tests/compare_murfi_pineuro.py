@@ -536,6 +536,7 @@ def run_mask_extraction(
         n_components=30,
         threshold=2000,
         smooth_fwhm=5.0,
+        highpass=0.01,
         overwrite=overwrite,
         qc_enabled=True,
     )
