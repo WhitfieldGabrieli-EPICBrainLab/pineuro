@@ -624,12 +624,9 @@ def run_setup_for_subject(
         config.subject, subject_dir, preproc_file, mask_file, ref_file, overwrite
     )
 
-    # Step 4: 2vol coregistration
-    masks = run_2vol_coregistration(
-        config.subject, subject_dir, mask_files, ref_file, overwrite
-    )
-
-    return masks
+    # NOTE: 2vol coregistration is done in compare stage, AFTER mask approval
+    # This allows GUI modifications (e.g., combining masks) to be reflected
+    return mask_files
 
 
 # =============================================================================
@@ -1382,8 +1379,8 @@ def cmd_status(args: argparse.Namespace) -> None:
         n_runs = n_runs_map.get(subject, args.n_runs)
         status = get_subject_status(subject_dir, subject, n_runs, args.n_volumes)
 
-        setup_done = status["twovol_coreg_complete"]
         approved = status["masks_approved"]
+        twovol_done = status["twovol_coreg_complete"]
         fb_done = sum(status["feedback_runs"])
         comp_done = sum(status["comparisons"])
         n_runs = len(status["feedback_runs"])
@@ -1391,10 +1388,10 @@ def cmd_status(args: argparse.Namespace) -> None:
         status_str = []
         if not status["mask_extraction_complete"]:
             status_str.append("needs mask extraction")
-        elif not setup_done:
-            status_str.append("needs 2vol coreg")
         elif not approved:
             status_str.append("needs approval")
+        elif not twovol_done:
+            status_str.append("ready for compare (2vol coreg pending)")
         elif fb_done < n_runs or comp_done < n_runs:
             status_str.append(f"compare: {comp_done}/{n_runs}")
         else:
@@ -1430,6 +1427,17 @@ def cmd_compare(args: argparse.Namespace) -> None:
         print(f"\n{'#' * 60}")
         print(f"# COMPARE: {config.subject}")
         print(f"{'#' * 60}")
+
+        # Run 2vol coregistration (after mask approval, so GUI changes are reflected)
+        if not check_2vol_coreg_complete(subject_dir):
+            print("\nRunning 2vol coregistration...")
+            mask_dir = get_mask_extraction_dir(subject_dir) / "03_masks"
+            mask_files = sorted(mask_dir.glob("*_thr.nii.gz"))
+            preproc_dir = get_preprocessing_dir(subject_dir)
+            ref_file = preproc_dir / f"{config.subject}_task-rest_boldref.nii.gz"
+            run_2vol_coregistration(
+                config.subject, subject_dir, mask_files, ref_file, overwrite=False
+            )
 
         # Run comparison for each feedback run
         for run in range(1, len(config.feedback_runs) + 1):
