@@ -463,10 +463,13 @@ class IncrementalGLM:
             s = 1.0 / np.sqrt(1.0 + t * t)
             c = s * t
 
-        # Update weight using MURFI's formula: weight = cbar * weight
-        # where cbar = c^2 (the square of the cosine in Givens rotation)
-        # This is equivalent to: cbar = r_jj^2 / (r_jj^2 + x_j^2)
-        cbar = c * c
+        # Update weight using MURFI's exact formula: weight = cbar * weight
+        # where cbar = d[j] / (d[j] + weight * x_j^2)
+        # In our Givens formulation: d[j] = r_jj^2
+        d_j = r_jj * r_jj
+        denom = d_j + weight * (x_j * x_j)
+        # Avoid division by zero (denom can be 0 when r_jj=0 and weight=0)
+        cbar = np.where(denom > 0, d_j / denom, 0.0)
         weight = cbar * weight
 
         # Update R[j, j:]
