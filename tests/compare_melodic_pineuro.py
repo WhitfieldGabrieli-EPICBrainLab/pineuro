@@ -399,7 +399,7 @@ def compute_yeo_correlation_mni(
     # Resample Yeo to match MELODIC resolution
     print("  Resampling Yeo atlas to MELODIC space...")
     yeo_resampled = resample_to_img(yeo_img, ic_img, interpolation='nearest')
-    yeo_data = get_data(yeo_resampled).astype(int)
+    yeo_data = np.squeeze(get_data(yeo_resampled)).astype(int)
 
     # Get network labels
     labels = get_yeo_labels(n_yeo)
