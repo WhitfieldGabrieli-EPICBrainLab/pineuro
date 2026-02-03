@@ -559,8 +559,10 @@ def transform_melodic_masks_to_subject(
     if not affine_files or not warp_files:
         raise FileNotFoundError(f"Inverse transform files not found in {mnireg_dir}")
 
-    # ANTs applies transforms in reverse order
-    transform_list = [str(warp_files[0]), str(affine_files[0])]
+    # ANTs applies transforms in reverse order (last in list = applied first)
+    # For MNI→subject: need inverse_warp first, then inverse_affine
+    # So list should be [affine, warp] → ANTs applies warp first, then affine
+    transform_list = [str(affine_files[0]), str(warp_files[0])]
 
     # Load subject space reference
     subject_ref = ants.image_read(str(subject_ref_file))
