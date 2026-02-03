@@ -86,6 +86,16 @@ class SubjectConfig:
         """Get pineuro MNI registration directory."""
         return self.pineuro_dir / "mask_extraction" / "02_mnireg"
 
+    @property
+    def pineuro_boldref(self) -> Path:
+        """Get pineuro boldref file (subject space reference)."""
+        preproc_dir = self.pineuro_dir / "preproc"
+        pattern = f"{self.subject}_task-rest_boldref.nii.gz"
+        boldref = preproc_dir / pattern
+        if not boldref.exists():
+            raise FileNotFoundError(f"Boldref not found: {boldref}")
+        return boldref
+
 
 # =============================================================================
 # CSV Loading
@@ -511,23 +521,23 @@ def extract_network_masks(
     return masks
 
 
-def transform_pineuro_masks_to_mni(
-    pineuro_masks: dict[str, Path],
+def transform_melodic_masks_to_subject(
+    melodic_masks: dict[str, Path],
     mnireg_dir: Path,
-    mni_ref_file: Path,
+    subject_ref_file: Path,
     output_dir: Path,
     overwrite: bool = False,
 ) -> dict[str, Path]:
-    """Transform pineuro masks from subject space to MNI space.
+    """Transform MELODIC masks from MNI space to subject space.
 
     Parameters
     ----------
-    pineuro_masks : dict
-        Mapping of network name to mask path (in subject space)
+    melodic_masks : dict
+        Mapping of network name to mask path (in MNI space)
     mnireg_dir : Path
         Path to pineuro's 02_mnireg directory containing transforms
-    mni_ref_file : Path
-        Path to MNI reference file (from fMRIPrep)
+    subject_ref_file : Path
+        Path to subject space reference file (pineuro boldref)
     output_dir : Path
         Path to output directory
     overwrite : bool
@@ -542,35 +552,35 @@ def transform_pineuro_masks_to_mni(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find transform files (pineuro naming: *_fwd_0.nii.gz = warp, *_fwd_1.mat = affine)
-    warp_files = list(mnireg_dir.glob("*_fwd_0.nii.gz"))
-    affine_files = list(mnireg_dir.glob("*_fwd_1.mat"))
+    # Find inverse transform files (pineuro naming: *_inv_0.mat = affine, *_inv_1.nii.gz = warp)
+    affine_files = list(mnireg_dir.glob("*_inv_0.mat"))
+    warp_files = list(mnireg_dir.glob("*_inv_1.nii.gz"))
 
     if not affine_files or not warp_files:
-        raise FileNotFoundError(f"Transform files not found in {mnireg_dir}")
+        raise FileNotFoundError(f"Inverse transform files not found in {mnireg_dir}")
 
-    # ANTs applies transforms in reverse order (affine first, then warp)
+    # ANTs applies transforms in reverse order
     transform_list = [str(warp_files[0]), str(affine_files[0])]
 
-    # Load MNI reference
-    mni_ref = ants.image_read(str(mni_ref_file))
+    # Load subject space reference
+    subject_ref = ants.image_read(str(subject_ref_file))
 
     transformed_masks = {}
 
-    for network, mask_path in pineuro_masks.items():
-        output_file = output_dir / f"pineuro_{network}_mni.nii.gz"
+    for network, mask_path in melodic_masks.items():
+        output_file = output_dir / f"melodic_{network}_subject.nii.gz"
 
         if output_file.exists() and not overwrite:
             print(f"  Transformed mask exists, skipping: {output_file.name}")
             transformed_masks[network] = output_file
             continue
 
-        print(f"  Transforming {network} to MNI space...")
+        print(f"  Transforming {network} to subject space...")
         mask_ants = ants.image_read(str(mask_path))
 
-        # Apply transforms
+        # Apply inverse transforms (MNI → subject)
         transformed = ants.apply_transforms(
-            fixed=mni_ref,
+            fixed=subject_ref,
             moving=mask_ants,
             transformlist=transform_list,
             interpolator='nearestNeighbor',
@@ -580,11 +590,6 @@ def transform_pineuro_masks_to_mni(
         transformed_data = transformed.numpy()
         transformed_data = (transformed_data > 0.5).astype(np.uint8)
 
-        # Save
-        transformed_img = nib.Nifti1Image(
-            transformed_data,
-            np.eye(4),  # Will be set by ANTs header
-        )
         # Use ANTs to save with correct header
         transformed_ants = ants.from_numpy(
             transformed_data,
@@ -593,7 +598,7 @@ def transform_pineuro_masks_to_mni(
             direction=transformed.direction,
         )
         ants.image_write(transformed_ants, str(output_file))
-        print(f"  Saved: {output_file.name}")
+        print(f"  Saved: {output_file.name} ({transformed_data.sum()} voxels)")
 
         transformed_masks[network] = output_file
 
@@ -615,19 +620,25 @@ def compute_jaccard(mask1: np.ndarray, mask2: np.ndarray) -> float:
 
 def compare_masks(
     melodic_masks: dict[str, Path],
-    pineuro_masks_mni: dict[str, Path],
+    pineuro_masks: dict[str, Path],
     output_dir: Path,
+    melodic_yeo_corr: dict[str, float] = None,
+    pineuro_yeo_corr: dict[str, float] = None,
 ) -> dict:
     """Compare MELODIC and pineuro masks using Dice and Jaccard.
 
     Parameters
     ----------
     melodic_masks : dict
-        Mapping of network name to MELODIC mask path
-    pineuro_masks_mni : dict
-        Mapping of network name to pineuro mask path (in MNI space)
+        Mapping of network name to MELODIC mask path (in subject space)
+    pineuro_masks : dict
+        Mapping of network name to pineuro mask path (in subject space)
     output_dir : Path
         Path to output directory
+    melodic_yeo_corr : dict, optional
+        Mapping of network name to MELODIC's Yeo correlation
+    pineuro_yeo_corr : dict, optional
+        Mapping of network name to pineuro's Yeo correlation
 
     Returns
     -------
@@ -636,27 +647,35 @@ def compare_masks(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     results = {}
+    melodic_yeo_corr = melodic_yeo_corr or {}
+    pineuro_yeo_corr = pineuro_yeo_corr or {}
 
     print("\n" + "=" * 60)
-    print("COMPARISON RESULTS")
+    print("COMPARISON RESULTS (subject space)")
     print("=" * 60)
 
     for network in melodic_masks.keys():
-        if network not in pineuro_masks_mni:
+        if network not in pineuro_masks:
             print(f"\n{network}: pineuro mask not found, skipping")
             continue
 
         # Load masks
         melodic_data = get_data(load_img(melodic_masks[network])) > 0
-        pineuro_data = get_data(load_img(pineuro_masks_mni[network])) > 0
+        pineuro_data = get_data(load_img(pineuro_masks[network])) > 0
 
         # Compute metrics
         dice = compute_dice(melodic_data, pineuro_data)
         jaccard = compute_jaccard(melodic_data, pineuro_data)
 
+        # Get Yeo correlations
+        melodic_r = melodic_yeo_corr.get(network)
+        pineuro_r = pineuro_yeo_corr.get(network)
+
         results[network] = {
             "dice": dice,
             "jaccard": jaccard,
+            "melodic_yeo_corr": melodic_r,
+            "pineuro_yeo_corr": pineuro_r,
             "melodic_voxels": int(melodic_data.sum()),
             "pineuro_voxels": int(pineuro_data.sum()),
             "overlap_voxels": int((melodic_data & pineuro_data).sum()),
@@ -668,6 +687,10 @@ def compare_masks(
         print(f"  MELODIC voxels:   {melodic_data.sum()}")
         print(f"  pineuro voxels:   {pineuro_data.sum()}")
         print(f"  Overlap voxels:   {(melodic_data & pineuro_data).sum()}")
+        if melodic_r is not None:
+            print(f"  MELODIC Yeo corr: {melodic_r:.4f}")
+        if pineuro_r is not None:
+            print(f"  pineuro Yeo corr: {pineuro_r:.4f}")
 
     # Save report
     report_path = output_dir / "comparison_report.txt"
@@ -678,7 +701,9 @@ def compare_masks(
         for network, metrics in results.items():
             f.write(f"{network}:\n")
             for key, value in metrics.items():
-                if isinstance(value, float):
+                if value is None:
+                    f.write(f"  {key}: N/A\n")
+                elif isinstance(value, float):
                     f.write(f"  {key}: {value:.4f}\n")
                 else:
                     f.write(f"  {key}: {value}\n")
@@ -687,18 +712,18 @@ def compare_masks(
     print(f"\nReport saved: {report_path}")
 
     # Create comparison plot
-    create_comparison_plot(melodic_masks, pineuro_masks_mni, results, output_dir)
+    create_comparison_plot(melodic_masks, pineuro_masks, results, output_dir)
 
     return results
 
 
 def create_comparison_plot(
     melodic_masks: dict[str, Path],
-    pineuro_masks_mni: dict[str, Path],
+    pineuro_masks: dict[str, Path],
     results: dict,
     output_dir: Path,
 ) -> None:
-    """Create visualization comparing masks."""
+    """Create visualization comparing masks (both in subject space)."""
     n_networks = len(melodic_masks)
 
     fig, axes = plt.subplots(n_networks, 3, figsize=(15, 5 * n_networks))
@@ -706,12 +731,12 @@ def create_comparison_plot(
         axes = axes.reshape(1, -1)
 
     for i, network in enumerate(melodic_masks.keys()):
-        if network not in pineuro_masks_mni:
+        if network not in pineuro_masks:
             continue
 
         # Load masks
         melodic_data = get_data(load_img(melodic_masks[network])) > 0
-        pineuro_data = get_data(load_img(pineuro_masks_mni[network])) > 0
+        pineuro_data = get_data(load_img(pineuro_masks[network])) > 0
 
         # Get middle slices
         z_mid = melodic_data.shape[2] // 2
@@ -929,25 +954,42 @@ def run_compare_for_subject(
         else:
             print(f"  Warning: pineuro mask not found: {mask_path}")
 
-    # Transform pineuro masks to MNI
-    print("\nTransforming pineuro masks to MNI space...")
+    # Load Yeo correlation CSVs
+    melodic_corr_file = get_melodic_correlation_dir(melodic_dir) / "Yeo_IC_spatial_correlation.csv"
+    pineuro_corr_file = config.pineuro_mask_dir / "Yeo_IC_spatial_correlation.csv"
+
+    melodic_corr_df = pd.read_csv(melodic_corr_file) if melodic_corr_file.exists() else None
+    pineuro_corr_df = pd.read_csv(pineuro_corr_file) if pineuro_corr_file.exists() else None
+
+    # Get best correlation for each target network
+    melodic_yeo_corr = {}
+    pineuro_yeo_corr = {}
+    for target in targets:
+        if melodic_corr_df is not None and target in melodic_corr_df.columns:
+            melodic_yeo_corr[target] = melodic_corr_df[target].max()
+        if pineuro_corr_df is not None and target in pineuro_corr_df.columns:
+            pineuro_yeo_corr[target] = pineuro_corr_df[target].max()
+
+    # Transform MELODIC masks to subject space
+    print("\nTransforming MELODIC masks to subject space...")
     comparison_dir = get_comparison_dir(melodic_dir)
 
-    # Use first MELODIC mask as MNI reference
-    mni_ref = list(melodic_masks.values())[0] if melodic_masks else None
-    if mni_ref is None:
-        raise FileNotFoundError("No MELODIC masks found")
-
-    pineuro_masks_mni = transform_pineuro_masks_to_mni(
-        pineuro_masks,
+    melodic_masks_subject = transform_melodic_masks_to_subject(
+        melodic_masks,
         config.pineuro_mnireg_dir,
-        mni_ref,
+        config.pineuro_boldref,
         comparison_dir,
         overwrite,
     )
 
-    # Compare masks
-    results = compare_masks(melodic_masks, pineuro_masks_mni, comparison_dir)
+    # Compare masks (both now in subject space)
+    results = compare_masks(
+        melodic_masks_subject,
+        pineuro_masks,
+        comparison_dir,
+        melodic_yeo_corr=melodic_yeo_corr,
+        pineuro_yeo_corr=pineuro_yeo_corr,
+    )
 
     return results
 
@@ -1069,17 +1111,29 @@ def print_summary(all_results: list[dict]) -> None:
     # Collect metrics by network
     dice_by_network: dict[str, list[float]] = {}
     jaccard_by_network: dict[str, list[float]] = {}
+    melodic_corr_by_network: dict[str, list[float]] = {}
+    pineuro_corr_by_network: dict[str, list[float]] = {}
 
     for r in all_results:
         print(f"\n{r['subject']}:")
         for network, metrics in r["results"].items():
-            print(f"  {network}: Dice={metrics['dice']:.4f}, Jaccard={metrics['jaccard']:.4f}")
+            melodic_r = metrics.get('melodic_yeo_corr')
+            pineuro_r = metrics.get('pineuro_yeo_corr')
+            melodic_str = f", MELODIC r={melodic_r:.3f}" if melodic_r else ""
+            pineuro_str = f", pineuro r={pineuro_r:.3f}" if pineuro_r else ""
+            print(f"  {network}: Dice={metrics['dice']:.4f}, Jaccard={metrics['jaccard']:.4f}{melodic_str}{pineuro_str}")
 
             if network not in dice_by_network:
                 dice_by_network[network] = []
                 jaccard_by_network[network] = []
+                melodic_corr_by_network[network] = []
+                pineuro_corr_by_network[network] = []
             dice_by_network[network].append(metrics["dice"])
             jaccard_by_network[network].append(metrics["jaccard"])
+            if melodic_r is not None:
+                melodic_corr_by_network[network].append(melodic_r)
+            if pineuro_r is not None:
+                pineuro_corr_by_network[network].append(pineuro_r)
 
     # Print statistics
     print("\n" + "-" * 60)
@@ -1095,6 +1149,13 @@ def print_summary(all_results: list[dict]) -> None:
               f"min={dice_arr.min():.4f}, max={dice_arr.max():.4f}")
         print(f"  Jaccard: mean={jaccard_arr.mean():.4f}, std={jaccard_arr.std():.4f}, "
               f"min={jaccard_arr.min():.4f}, max={jaccard_arr.max():.4f}")
+
+        if melodic_corr_by_network[network]:
+            melodic_arr = np.array(melodic_corr_by_network[network])
+            print(f"  MELODIC Yeo corr: mean={melodic_arr.mean():.4f}, std={melodic_arr.std():.4f}")
+        if pineuro_corr_by_network[network]:
+            pineuro_arr = np.array(pineuro_corr_by_network[network])
+            print(f"  pineuro Yeo corr: mean={pineuro_arr.mean():.4f}, std={pineuro_arr.std():.4f}")
 
 
 # =============================================================================
