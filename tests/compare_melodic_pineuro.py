@@ -89,7 +89,7 @@ class SubjectConfig:
     @property
     def pineuro_boldref(self) -> Path:
         """Get pineuro boldref file (subject space reference)."""
-        preproc_dir = self.pineuro_dir / "preproc"
+        preproc_dir = self.pineuro_dir / "preprocessing"
         pattern = f"{self.subject}_task-rest_boldref.nii.gz"
         boldref = preproc_dir / pattern
         if not boldref.exists():
