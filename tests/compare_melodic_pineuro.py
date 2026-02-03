@@ -526,20 +526,27 @@ def transform_melodic_masks_to_subject(
     mnireg_dir: Path,
     subject_ref_file: Path,
     output_dir: Path,
+    threshold: int = 2000,
     overwrite: bool = False,
 ) -> dict[str, Path]:
     """Transform MELODIC masks from MNI space to subject space.
 
+    Transforms the unthresholded component map, then thresholds to ensure
+    the same number of voxels as pineuro masks.
+
     Parameters
     ----------
     melodic_masks : dict
-        Mapping of network name to mask path (in MNI space)
+        Mapping of network name to THRESHOLDED mask path (in MNI space)
+        Note: We derive unthresholded path by removing '_thr' suffix
     mnireg_dir : Path
         Path to pineuro's 02_mnireg directory containing transforms
     subject_ref_file : Path
         Path to subject space reference file (pineuro boldref)
     output_dir : Path
         Path to output directory
+    threshold : int
+        Number of voxels to keep after thresholding (default 2000)
     overwrite : bool
         Whether to overwrite existing output
 
@@ -569,7 +576,7 @@ def transform_melodic_masks_to_subject(
 
     transformed_masks = {}
 
-    for network, mask_path in melodic_masks.items():
+    for network, thr_mask_path in melodic_masks.items():
         output_file = output_dir / f"melodic_{network}_subject.nii.gz"
 
         if output_file.exists() and not overwrite:
@@ -577,30 +584,41 @@ def transform_melodic_masks_to_subject(
             transformed_masks[network] = output_file
             continue
 
-        print(f"  Transforming {network} to subject space...")
-        mask_ants = ants.image_read(str(mask_path))
+        # Get unthresholded component path (remove _thr suffix)
+        unthr_mask_path = thr_mask_path.parent / thr_mask_path.name.replace("_thr.nii.gz", ".nii.gz")
+        if not unthr_mask_path.exists():
+            print(f"  Warning: Unthresholded component not found: {unthr_mask_path}")
+            print(f"  Falling back to thresholded mask")
+            unthr_mask_path = thr_mask_path
 
-        # Apply inverse transforms (MNI → subject)
+        print(f"  Transforming {network} to subject space...")
+        component_ants = ants.image_read(str(unthr_mask_path))
+
+        # Apply inverse transforms (MNI → subject) with linear interpolation for continuous data
         transformed = ants.apply_transforms(
             fixed=subject_ref,
-            moving=mask_ants,
+            moving=component_ants,
             transformlist=transform_list,
-            interpolator='nearestNeighbor',
+            interpolator='linear',
         )
 
-        # Binarize (in case of interpolation artifacts)
+        # Threshold to top N voxels in subject space
         transformed_data = transformed.numpy()
-        transformed_data = (transformed_data > 0.5).astype(np.uint8)
+        flat = transformed_data.ravel()
+        mask = np.zeros(flat.shape, dtype=bool)
+        mask[np.argpartition(flat, -threshold)[-threshold:]] = True
+        mask = mask.reshape(transformed_data.shape)
+        thresholded = ((transformed_data * mask) > 0).astype(np.uint8)
 
         # Use ANTs to save with correct header
         transformed_ants = ants.from_numpy(
-            transformed_data,
+            thresholded,
             origin=transformed.origin,
             spacing=transformed.spacing,
             direction=transformed.direction,
         )
         ants.image_write(transformed_ants, str(output_file))
-        print(f"  Saved: {output_file.name} ({transformed_data.sum()} voxels)")
+        print(f"  Saved: {output_file.name} ({thresholded.sum()} voxels)")
 
         transformed_masks[network] = output_file
 
