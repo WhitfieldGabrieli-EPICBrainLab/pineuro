@@ -542,15 +542,14 @@ def transform_pineuro_masks_to_mni(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find transform files
-    xfm_dir = mnireg_dir / "xfm"
-    affine_files = list(xfm_dir.glob("*_0GenericAffine.mat"))
-    warp_files = list(xfm_dir.glob("*_1Warp.nii.gz"))
+    # Find transform files (pineuro naming: *_fwd_0.nii.gz = warp, *_fwd_1.mat = affine)
+    warp_files = list(mnireg_dir.glob("*_fwd_0.nii.gz"))
+    affine_files = list(mnireg_dir.glob("*_fwd_1.mat"))
 
     if not affine_files or not warp_files:
-        raise FileNotFoundError(f"Transform files not found in {xfm_dir}")
+        raise FileNotFoundError(f"Transform files not found in {mnireg_dir}")
 
-    # ANTs applies transforms in reverse order
+    # ANTs applies transforms in reverse order (affine first, then warp)
     transform_list = [str(warp_files[0]), str(affine_files[0])]
 
     # Load MNI reference
