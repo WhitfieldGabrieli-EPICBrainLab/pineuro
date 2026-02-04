@@ -597,8 +597,7 @@ def transform_melodic_masks_to_subject(
     print(f"    BOLD→T1w: {boldref_to_t1w.name} (will invert)")
     print(f"    T1w ref: {t1w_ref.name}")
 
-    # Load references
-    t1w_ants = ants.image_read(str(t1w_ref))
+    # Load subject reference for thresholding
     subject_ref = ants.image_read(str(subject_ref_file))
 
     transformed_masks = {}
