@@ -600,6 +600,12 @@ def transform_melodic_masks_to_subject(
     # Load subject reference for thresholding
     subject_ref = ants.image_read(str(subject_ref_file))
 
+    # Read and invert the BOLD→T1w transform (same for all networks)
+    boldref_to_t1w_xfm = ants.read_transform(str(boldref_to_t1w))
+    t1w_to_boldref_xfm = boldref_to_t1w_xfm.invert()
+    t1w_to_boldref_file = output_dir / "t1w_to_boldref.mat"
+    ants.write_transform(t1w_to_boldref_xfm, str(t1w_to_boldref_file))
+
     transformed_masks = {}
 
     for network, thr_mask_path in melodic_masks.items():
@@ -618,25 +624,15 @@ def transform_melodic_masks_to_subject(
             unthr_mask_path = thr_mask_path
 
         print(f"  Transforming {network} to subject space...")
+        component_ants = ants.image_read(str(unthr_mask_path))
 
-        # Use antsApplyTransforms CLI with -i flag for inversion
-        temp_output = output_dir / f"temp_{network}_transformed.nii.gz"
-        cmd = [
-            "antsApplyTransforms",
-            "-d", "3",
-            "-i", str(unthr_mask_path),
-            "-r", str(subject_ref_file),
-            "-o", str(temp_output),
-            "-n", "Linear",
-            "-t", f"[{boldref_to_t1w},1]",  # 1 = invert
-            "-t", str(mni_to_t1w),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"antsApplyTransforms failed: {result.stderr}")
-
-        # Load result
-        transformed = ants.image_read(str(temp_output))
+        # Apply both transforms
+        transformed = ants.apply_transforms(
+            fixed=subject_ref,
+            moving=component_ants,
+            transformlist=[str(t1w_to_boldref_file), str(mni_to_t1w)],
+            interpolator='linear',
+        )
 
         # Threshold to top N voxels in subject space (by absolute value)
         transformed_data = transformed.numpy()
@@ -656,9 +652,6 @@ def transform_melodic_masks_to_subject(
         )
         ants.image_write(transformed_thr, str(output_file))
         print(f"  Saved: {output_file.name} ({thresholded.sum()} voxels)")
-
-        # Cleanup temp file
-        temp_output.unlink()
 
         transformed_masks[network] = output_file
 
