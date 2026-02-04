@@ -592,13 +592,34 @@ def transform_melodic_masks_to_subject(
         raise FileNotFoundError(f"Preprocessed T1w not found in {fmriprep_anat_dir}")
     t1w_ref = t1w_files[0]
 
+    # Find fMRIPrep's boldref for alignment to pineuro boldref
+    fmriprep_boldref_files = list(fmriprep_func_dir.glob("*_task-rest_run-01_desc-coreg_boldref.nii.gz"))
+    if not fmriprep_boldref_files:
+        fmriprep_boldref_files = list(fmriprep_func_dir.glob("*_task-rest_*_desc-coreg_boldref.nii.gz"))
+    if not fmriprep_boldref_files:
+        raise FileNotFoundError(f"fMRIPrep boldref not found in {fmriprep_func_dir}")
+    fmriprep_boldref = fmriprep_boldref_files[0]
+
     print(f"  Using transforms:")
     print(f"    MNI→T1w: {mni_to_t1w.name}")
     print(f"    BOLD→T1w: {boldref_to_t1w.name} (will invert)")
     print(f"    T1w ref: {t1w_ref.name}")
+    print(f"    fMRIPrep boldref: {fmriprep_boldref.name}")
 
-    # Load subject reference for thresholding
+    # Load references
     subject_ref = ants.image_read(str(subject_ref_file))
+    fmriprep_boldref_ants = ants.image_read(str(fmriprep_boldref))
+
+    # Compute rigid registration: fMRIPrep boldref → pineuro boldref
+    print("  Computing rigid alignment between fMRIPrep and pineuro boldrefs...")
+    boldref_alignment = ants.registration(
+        fixed=subject_ref,
+        moving=fmriprep_boldref_ants,
+        type_of_transform='Rigid',
+        verbose=False,
+    )
+    fmriprep_to_pineuro_boldref = boldref_alignment['fwdtransforms'][0]
+    print(f"    Alignment transform: {Path(fmriprep_to_pineuro_boldref).name}")
 
     # Read and invert the BOLD→T1w transform (same for all networks)
     boldref_to_t1w_xfm = ants.read_transform(str(boldref_to_t1w))
@@ -631,11 +652,11 @@ def transform_melodic_masks_to_subject(
         print(f"  Transforming {network} to subject space...")
         component_ants = ants.image_read(str(unthr_mask_path))
 
-        # Apply both transforms
+        # Apply all transforms: MNI → T1w → fMRIPrep BOLD → pineuro BOLD
         transformed = ants.apply_transforms(
             fixed=subject_ref,
             moving=component_ants,
-            transformlist=[str(t1w_to_boldref_file), str(mni_to_t1w)],
+            transformlist=[fmriprep_to_pineuro_boldref, str(t1w_to_boldref_file), str(mni_to_t1w)],
             interpolator='linear',
         )
 
