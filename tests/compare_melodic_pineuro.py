@@ -619,18 +619,25 @@ def transform_melodic_masks_to_subject(
             unthr_mask_path = thr_mask_path
 
         print(f"  Transforming {network} to subject space...")
-        component_ants = ants.image_read(str(unthr_mask_path))
 
-        # Apply both transforms in one call
-        # ANTs applies transforms in reverse order, so list is [T1w→BOLD, MNI→T1w]
-        # The boldref_to_t1w is BOLD→T1w, so we invert it with whichtoinvert=[0]
-        transformed = ants.apply_transforms(
-            fixed=subject_ref,
-            moving=component_ants,
-            transformlist=[str(boldref_to_t1w), str(mni_to_t1w)],
-            whichtoinvert=[True, False],
-            interpolator='linear',
-        )
+        # Use antsApplyTransforms CLI with -i flag for inversion
+        temp_output = output_dir / f"temp_{network}_transformed.nii.gz"
+        cmd = [
+            "antsApplyTransforms",
+            "-d", "3",
+            "-i", str(unthr_mask_path),
+            "-r", str(subject_ref_file),
+            "-o", str(temp_output),
+            "-n", "Linear",
+            "-t", f"[{boldref_to_t1w},1]",  # 1 = invert
+            "-t", str(mni_to_t1w),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"antsApplyTransforms failed: {result.stderr}")
+
+        # Load result
+        transformed = ants.image_read(str(temp_output))
 
         # Threshold to top N voxels in subject space (by absolute value)
         transformed_data = transformed.numpy()
@@ -650,6 +657,9 @@ def transform_melodic_masks_to_subject(
         )
         ants.image_write(transformed_thr, str(output_file))
         print(f"  Saved: {output_file.name} ({thresholded.sum()} voxels)")
+
+        # Cleanup temp file
+        temp_output.unlink()
 
         transformed_masks[network] = output_file
 
