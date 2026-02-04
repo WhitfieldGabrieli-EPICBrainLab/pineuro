@@ -826,13 +826,94 @@ def compare_masks(
         if pineuro_r is not None:
             print(f"  pineuro Yeo corr: {pineuro_r:.4f}")
 
+    # Cross-network comparisons (to show that different networks have low overlap)
+    networks = list(melodic_masks.keys())
+    cross_network_results = {}
+
+    if len(networks) >= 2:
+        print("\n" + "-" * 60)
+        print("CROSS-NETWORK COMPARISONS (baseline - should be LOW)")
+        print("-" * 60)
+
+        # Generate all cross-network pairs
+        cross_pairs = []
+        for i, net1 in enumerate(networks):
+            for net2 in networks[i+1:]:
+                # Within-method cross-network
+                cross_pairs.append(('melodic', net1, 'melodic', net2))
+                cross_pairs.append(('pineuro', net1, 'pineuro', net2))
+                # Cross-method cross-network
+                cross_pairs.append(('melodic', net1, 'pineuro', net2))
+                cross_pairs.append(('melodic', net2, 'pineuro', net1))
+
+        for method1, net1, method2, net2 in cross_pairs:
+            pair_key = f"{method1}_{net1}_vs_{method2}_{net2}"
+
+            # Get mask paths
+            if method1 == 'melodic':
+                mask1_dict = melodic_masks.get(net1)
+            else:
+                mask1_dict = pineuro_masks.get(net1)
+
+            if method2 == 'melodic':
+                mask2_dict = melodic_masks.get(net2)
+            else:
+                mask2_dict = pineuro_masks.get(net2)
+
+            if not mask1_dict or not mask2_dict:
+                continue
+
+            # Load thresholded masks
+            mask1_thr = get_data(load_img(mask1_dict['thresholded'])) > 0
+            mask2_thr = get_data(load_img(mask2_dict['thresholded'])) > 0
+
+            # Compute metrics
+            dice = compute_dice(mask1_thr, mask2_thr)
+            jaccard = compute_jaccard(mask1_thr, mask2_thr)
+
+            cross_network_results[pair_key] = {
+                "dice": dice,
+                "jaccard": jaccard,
+                "method1": method1,
+                "network1": net1,
+                "method2": method2,
+                "network2": net2,
+            }
+
+            # Spatial correlation if continuous maps available
+            cont1_path = mask1_dict.get('continuous')
+            cont2_path = mask2_dict.get('continuous')
+
+            if cont1_path and cont2_path and Path(cont1_path).exists() and Path(cont2_path).exists():
+                cont1 = get_data(load_img(cont1_path))
+                cont2 = get_data(load_img(cont2_path))
+
+                brain_mask = (np.abs(cont1) > 0.01) | (np.abs(cont2) > 0.01)
+                if brain_mask.sum() > 100:
+                    flat1 = cont1[brain_mask]
+                    flat2 = cont2[brain_mask]
+                    spatial_corr, _ = pearsonr(flat1, flat2)
+                    cross_network_results[pair_key]["spatial_correlation"] = spatial_corr
+
+            # Print result
+            spatial_str = ""
+            if "spatial_correlation" in cross_network_results[pair_key]:
+                spatial_str = f", spatial_corr={cross_network_results[pair_key]['spatial_correlation']:.4f}"
+            print(f"  {method1} {net1} vs {method2} {net2}: Dice={dice:.4f}, Jaccard={jaccard:.4f}{spatial_str}")
+
+    results["_cross_network"] = cross_network_results
+
     # Save report
     report_path = output_dir / "comparison_report.txt"
     with open(report_path, "w") as f:
         f.write("MELODIC vs pineuro Mask Comparison Report\n")
         f.write("=" * 60 + "\n\n")
 
+        f.write("WITHIN-NETWORK COMPARISONS (MELODIC vs pineuro)\n")
+        f.write("-" * 60 + "\n\n")
         for network, metrics in results.items():
+            if network.startswith("_"):
+                continue
             f.write(f"{network}:\n")
             for key, value in metrics.items():
                 if value is None:
@@ -842,6 +923,17 @@ def compare_masks(
                 else:
                     f.write(f"  {key}: {value}\n")
             f.write("\n")
+
+        if cross_network_results:
+            f.write("\nCROSS-NETWORK COMPARISONS (baseline - should be LOW)\n")
+            f.write("-" * 60 + "\n\n")
+            for pair_key, metrics in cross_network_results.items():
+                f.write(f"{metrics['method1']} {metrics['network1']} vs {metrics['method2']} {metrics['network2']}:\n")
+                f.write(f"  dice: {metrics['dice']:.4f}\n")
+                f.write(f"  jaccard: {metrics['jaccard']:.4f}\n")
+                if "spatial_correlation" in metrics:
+                    f.write(f"  spatial_correlation: {metrics['spatial_correlation']:.4f}\n")
+                f.write("\n")
 
     print(f"\nReport saved: {report_path}")
 
@@ -1255,9 +1347,16 @@ def print_summary(all_results: list[dict]) -> None:
     melodic_corr_by_network: dict[str, list[float]] = {}
     pineuro_corr_by_network: dict[str, list[float]] = {}
 
+    # Collect cross-network metrics
+    cross_network_dice: dict[str, list[float]] = {}
+    cross_network_jaccard: dict[str, list[float]] = {}
+    cross_network_spatial: dict[str, list[float]] = {}
+
     for r in all_results:
         print(f"\n{r['subject']}:")
         for network, metrics in r["results"].items():
+            if network.startswith("_"):
+                continue
             melodic_r = metrics.get('melodic_yeo_corr')
             pineuro_r = metrics.get('pineuro_yeo_corr')
             spatial_r = metrics.get('spatial_correlation')
@@ -1291,9 +1390,22 @@ def print_summary(all_results: list[dict]) -> None:
             if pineuro_r is not None:
                 pineuro_corr_by_network[network].append(pineuro_r)
 
-    # Print statistics
+        # Collect cross-network results
+        cross_results = r["results"].get("_cross_network", {})
+        for pair_key, metrics in cross_results.items():
+            if pair_key not in cross_network_dice:
+                cross_network_dice[pair_key] = []
+                cross_network_jaccard[pair_key] = []
+                cross_network_spatial[pair_key] = []
+
+            cross_network_dice[pair_key].append(metrics["dice"])
+            cross_network_jaccard[pair_key].append(metrics["jaccard"])
+            if "spatial_correlation" in metrics:
+                cross_network_spatial[pair_key].append(metrics["spatial_correlation"])
+
+    # Print within-network statistics
     print("\n" + "-" * 60)
-    print("STATISTICS")
+    print("WITHIN-NETWORK STATISTICS (MELODIC vs pineuro - same network)")
     print("-" * 60)
 
     for network in dice_by_network.keys():
@@ -1323,6 +1435,28 @@ def print_summary(all_results: list[dict]) -> None:
         if pineuro_corr_by_network[network]:
             pineuro_arr = np.array(pineuro_corr_by_network[network])
             print(f"  pineuro Yeo corr: mean={pineuro_arr.mean():.4f}, std={pineuro_arr.std():.4f}")
+
+    # Print cross-network statistics
+    if cross_network_dice:
+        print("\n" + "-" * 60)
+        print("CROSS-NETWORK STATISTICS (baseline - should be LOW)")
+        print("-" * 60)
+
+        for pair_key in cross_network_dice.keys():
+            dice_arr = np.array(cross_network_dice[pair_key])
+            jaccard_arr = np.array(cross_network_jaccard[pair_key])
+
+            # Parse pair key for display
+            parts = pair_key.split("_vs_")
+            label = f"{parts[0].replace('_', ' ')} vs {parts[1].replace('_', ' ')}"
+
+            print(f"\n{label} (n={len(dice_arr)}):")
+            print(f"  Dice:    mean={dice_arr.mean():.4f}, std={dice_arr.std():.4f}")
+            print(f"  Jaccard: mean={jaccard_arr.mean():.4f}, std={jaccard_arr.std():.4f}")
+
+            if cross_network_spatial[pair_key]:
+                spatial_arr = np.array(cross_network_spatial[pair_key])
+                print(f"  Spatial corr: mean={spatial_arr.mean():.4f}, std={spatial_arr.std():.4f}")
 
 
 # =============================================================================
