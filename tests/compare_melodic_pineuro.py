@@ -540,9 +540,9 @@ def transform_melodic_masks_to_subject(
 ) -> dict[str, Path]:
     """Transform MELODIC masks from fMRIPrep MNI space to subject BOLD space.
 
-    Uses fMRIPrep's transforms:
-    1. MNI152NLin2009cAsym → T1w (ANTs .h5 file, applied with ANTs)
-    2. T1w → BOLD native (FSL .txt file inverted, applied with FSL flirt)
+    Uses fMRIPrep's transforms (both ITK/ANTs format):
+    1. MNI152NLin2009cAsym → T1w (.h5 file)
+    2. T1w → BOLD native (inverse of boldref→T1w .txt file)
 
     Parameters
     ----------
@@ -571,14 +571,14 @@ def transform_melodic_masks_to_subject(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find fMRIPrep transforms
-    # 1. MNI → T1w transform (.h5 file in anat/) - ANTs format
+    # Find fMRIPrep transforms (both are ITK/ANTs format)
+    # 1. MNI → T1w transform (.h5 file in anat/)
     mni_to_t1w_files = list(fmriprep_anat_dir.glob("*_from-MNI152NLin2009cAsym_to-T1w_mode-image_xfm.h5"))
     if not mni_to_t1w_files:
         raise FileNotFoundError(f"MNI-to-T1w transform not found in {fmriprep_anat_dir}")
     mni_to_t1w = mni_to_t1w_files[0]
 
-    # 2. BOLD → T1w transform (.txt file in func/) - FSL format, need to invert
+    # 2. BOLD → T1w transform (.txt file in func/) - ITK format, need to invert
     boldref_to_t1w_files = list(fmriprep_func_dir.glob("*_task-rest_run-01_from-boldref_to-T1w_mode-image_desc-coreg_xfm.txt"))
     if not boldref_to_t1w_files:
         boldref_to_t1w_files = list(fmriprep_func_dir.glob("*_task-rest_*_from-boldref_to-T1w_mode-image_desc-coreg_xfm.txt"))
@@ -593,16 +593,13 @@ def transform_melodic_masks_to_subject(
     t1w_ref = t1w_files[0]
 
     print(f"  Using transforms:")
-    print(f"    MNI→T1w: {mni_to_t1w.name} (ANTs)")
-    print(f"    BOLD→T1w: {boldref_to_t1w.name} (FSL, will invert)")
+    print(f"    MNI→T1w: {mni_to_t1w.name}")
+    print(f"    BOLD→T1w: {boldref_to_t1w.name} (will invert)")
     print(f"    T1w ref: {t1w_ref.name}")
 
-    # Invert FSL matrix: T1w → BOLD
-    t1w_to_boldref = output_dir / "t1w_to_boldref.mat"
-    _invert_fsl_affine(boldref_to_t1w, t1w_to_boldref)
-
-    # Load T1w reference for ANTs
+    # Load references
     t1w_ants = ants.image_read(str(t1w_ref))
+    subject_ref = ants.image_read(str(subject_ref_file))
 
     transformed_masks = {}
 
@@ -622,25 +619,21 @@ def transform_melodic_masks_to_subject(
             unthr_mask_path = thr_mask_path
 
         print(f"  Transforming {network} to subject space...")
-
-        # Step 1: MNI → T1w using ANTs (.h5 transform)
         component_ants = ants.image_read(str(unthr_mask_path))
-        t1w_file = output_dir / f"temp_{network}_t1w.nii.gz"
 
-        transformed_t1w = ants.apply_transforms(
-            fixed=t1w_ants,
+        # Apply both transforms in one call
+        # ANTs applies transforms in reverse order, so list is [T1w→BOLD, MNI→T1w]
+        # The boldref_to_t1w is BOLD→T1w, so we invert it with whichtoinvert=[0]
+        transformed = ants.apply_transforms(
+            fixed=subject_ref,
             moving=component_ants,
-            transformlist=[str(mni_to_t1w)],
+            transformlist=[str(boldref_to_t1w), str(mni_to_t1w)],
+            whichtoinvert=[True, False],
             interpolator='linear',
         )
-        ants.image_write(transformed_t1w, str(t1w_file))
 
-        # Step 2: T1w → BOLD using FSL flirt with inverted matrix
-        bold_file = output_dir / f"temp_{network}_bold.nii.gz"
-        _apply_fsl_affine(t1w_file, subject_ref_file, t1w_to_boldref, bold_file)
-
-        # Load result and threshold to top N voxels
-        transformed_data = get_data(load_img(bold_file))
+        # Threshold to top N voxels in subject space (by absolute value)
+        transformed_data = transformed.numpy()
         abs_data = np.abs(transformed_data)
         flat = abs_data.ravel()
         mask = np.zeros(flat.shape, dtype=bool)
@@ -648,48 +641,19 @@ def transform_melodic_masks_to_subject(
         mask = mask.reshape(transformed_data.shape)
         thresholded = mask.astype(np.uint8)
 
-        # Save thresholded mask with correct header
-        ref_img = load_img(subject_ref_file)
-        thr_img = nib.Nifti1Image(thresholded, ref_img.affine, ref_img.header)
-        nib.save(thr_img, output_file)
+        # Save thresholded mask
+        transformed_thr = ants.from_numpy(
+            thresholded,
+            origin=transformed.origin,
+            spacing=transformed.spacing,
+            direction=transformed.direction,
+        )
+        ants.image_write(transformed_thr, str(output_file))
         print(f"  Saved: {output_file.name} ({thresholded.sum()} voxels)")
-
-        # Cleanup temp files
-        t1w_file.unlink()
-        bold_file.unlink()
 
         transformed_masks[network] = output_file
 
     return transformed_masks
-
-
-def _invert_fsl_affine(input_file: Path, output_file: Path) -> None:
-    """Invert an FSL affine matrix using convert_xfm."""
-    cmd = ["convert_xfm", "-omat", str(output_file), "-inverse", str(input_file)]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"convert_xfm failed: {result.stderr}")
-
-
-def _apply_fsl_affine(
-    input_file: Path,
-    ref_file: Path,
-    matrix_file: Path,
-    output_file: Path,
-) -> None:
-    """Apply an FSL affine transform using flirt -applyxfm."""
-    cmd = [
-        "flirt",
-        "-in", str(input_file),
-        "-ref", str(ref_file),
-        "-applyxfm",
-        "-init", str(matrix_file),
-        "-out", str(output_file),
-        "-interp", "trilinear",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"flirt failed: {result.stderr}")
 
 
 def compute_dice(mask1: np.ndarray, mask2: np.ndarray) -> float:
