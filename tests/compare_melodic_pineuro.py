@@ -59,21 +59,29 @@ class SubjectConfig:
     pineuro_dir: Path   # Base pineuro analysis directory for subject
 
     @property
+    def fmriprep_func_dir(self) -> Path:
+        """Get fMRIPrep func directory."""
+        return self.fmriprep_dir / "ses-loc" / "func"
+
+    @property
+    def fmriprep_anat_dir(self) -> Path:
+        """Get fMRIPrep anat directory."""
+        return self.fmriprep_dir / "ses-loc" / "anat"
+
+    @property
     def fmriprep_rest_runs(self) -> list[Path]:
         """Get fMRIPrep rest run paths (MNI space)."""
-        func_dir = self.fmriprep_dir / "ses-loc" / "func"
         pattern = "*_task-rest_run-*_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz"
-        runs = sorted(func_dir.glob(pattern))
+        runs = sorted(self.fmriprep_func_dir.glob(pattern))
         return runs
 
     @property
     def fmriprep_mask(self) -> Path:
         """Get fMRIPrep brain mask (MNI space)."""
-        func_dir = self.fmriprep_dir / "ses-loc" / "func"
         pattern = "*_task-rest_run-01_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz"
-        masks = list(func_dir.glob(pattern))
+        masks = list(self.fmriprep_func_dir.glob(pattern))
         if not masks:
-            raise FileNotFoundError(f"No brain mask found in {func_dir}")
+            raise FileNotFoundError(f"No brain mask found in {self.fmriprep_func_dir}")
         return masks[0]
 
     @property
@@ -523,24 +531,28 @@ def extract_network_masks(
 
 def transform_melodic_masks_to_subject(
     melodic_masks: dict[str, Path],
-    mnireg_dir: Path,
+    fmriprep_anat_dir: Path,
+    fmriprep_func_dir: Path,
     subject_ref_file: Path,
     output_dir: Path,
     threshold: int = 2000,
     overwrite: bool = False,
 ) -> dict[str, Path]:
-    """Transform MELODIC masks from MNI space to subject space.
+    """Transform MELODIC masks from fMRIPrep MNI space to subject BOLD space.
 
-    Transforms the unthresholded component map, then thresholds to ensure
-    the same number of voxels as pineuro masks.
+    Uses fMRIPrep's transforms:
+    1. MNI152NLin2009cAsym → T1w (ANTs .h5 file, applied with ANTs)
+    2. T1w → BOLD native (FSL .txt file inverted, applied with FSL flirt)
 
     Parameters
     ----------
     melodic_masks : dict
         Mapping of network name to THRESHOLDED mask path (in MNI space)
         Note: We derive unthresholded path by removing '_thr' suffix
-    mnireg_dir : Path
-        Path to pineuro's 02_mnireg directory containing transforms
+    fmriprep_anat_dir : Path
+        Path to fMRIPrep anat directory containing MNI-to-T1w transform
+    fmriprep_func_dir : Path
+        Path to fMRIPrep func directory containing boldref-to-T1w transform
     subject_ref_file : Path
         Path to subject space reference file (pineuro boldref)
     output_dir : Path
@@ -559,20 +571,38 @@ def transform_melodic_masks_to_subject(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find inverse transform files (pineuro naming: *_inv_0.mat = affine, *_inv_1.nii.gz = warp)
-    affine_files = list(mnireg_dir.glob("*_inv_0.mat"))
-    warp_files = list(mnireg_dir.glob("*_inv_1.nii.gz"))
+    # Find fMRIPrep transforms
+    # 1. MNI → T1w transform (.h5 file in anat/) - ANTs format
+    mni_to_t1w_files = list(fmriprep_anat_dir.glob("*_from-MNI152NLin2009cAsym_to-T1w_mode-image_xfm.h5"))
+    if not mni_to_t1w_files:
+        raise FileNotFoundError(f"MNI-to-T1w transform not found in {fmriprep_anat_dir}")
+    mni_to_t1w = mni_to_t1w_files[0]
 
-    if not affine_files or not warp_files:
-        raise FileNotFoundError(f"Inverse transform files not found in {mnireg_dir}")
+    # 2. BOLD → T1w transform (.txt file in func/) - FSL format, need to invert
+    boldref_to_t1w_files = list(fmriprep_func_dir.glob("*_task-rest_run-01_from-boldref_to-T1w_mode-image_desc-coreg_xfm.txt"))
+    if not boldref_to_t1w_files:
+        boldref_to_t1w_files = list(fmriprep_func_dir.glob("*_task-rest_*_from-boldref_to-T1w_mode-image_desc-coreg_xfm.txt"))
+    if not boldref_to_t1w_files:
+        raise FileNotFoundError(f"boldref-to-T1w transform not found in {fmriprep_func_dir}")
+    boldref_to_t1w = boldref_to_t1w_files[0]
 
-    # ANTs applies transforms in reverse order (last in list = applied first)
-    # For MNI→subject: need inverse_warp first, then inverse_affine
-    # So list should be [affine, warp] → ANTs applies warp first, then affine
-    transform_list = [str(affine_files[0]), str(warp_files[0])]
+    # Get T1w reference for intermediate step
+    t1w_files = list(fmriprep_anat_dir.glob("*_desc-preproc_T1w.nii.gz"))
+    if not t1w_files:
+        raise FileNotFoundError(f"Preprocessed T1w not found in {fmriprep_anat_dir}")
+    t1w_ref = t1w_files[0]
 
-    # Load subject space reference
-    subject_ref = ants.image_read(str(subject_ref_file))
+    print(f"  Using transforms:")
+    print(f"    MNI→T1w: {mni_to_t1w.name} (ANTs)")
+    print(f"    BOLD→T1w: {boldref_to_t1w.name} (FSL, will invert)")
+    print(f"    T1w ref: {t1w_ref.name}")
+
+    # Invert FSL matrix: T1w → BOLD
+    t1w_to_boldref = output_dir / "t1w_to_boldref.mat"
+    _invert_fsl_affine(boldref_to_t1w, t1w_to_boldref)
+
+    # Load T1w reference for ANTs
+    t1w_ants = ants.image_read(str(t1w_ref))
 
     transformed_masks = {}
 
@@ -592,19 +622,25 @@ def transform_melodic_masks_to_subject(
             unthr_mask_path = thr_mask_path
 
         print(f"  Transforming {network} to subject space...")
-        component_ants = ants.image_read(str(unthr_mask_path))
 
-        # Apply inverse transforms (MNI → subject) with linear interpolation for continuous data
-        transformed = ants.apply_transforms(
-            fixed=subject_ref,
+        # Step 1: MNI → T1w using ANTs (.h5 transform)
+        component_ants = ants.image_read(str(unthr_mask_path))
+        t1w_file = output_dir / f"temp_{network}_t1w.nii.gz"
+
+        transformed_t1w = ants.apply_transforms(
+            fixed=t1w_ants,
             moving=component_ants,
-            transformlist=transform_list,
+            transformlist=[str(mni_to_t1w)],
             interpolator='linear',
         )
+        ants.image_write(transformed_t1w, str(t1w_file))
 
-        # Threshold to top N voxels in subject space (by absolute value)
-        # ICA components can be positive or negative, so use abs for thresholding
-        transformed_data = transformed.numpy()
+        # Step 2: T1w → BOLD using FSL flirt with inverted matrix
+        bold_file = output_dir / f"temp_{network}_bold.nii.gz"
+        _apply_fsl_affine(t1w_file, subject_ref_file, t1w_to_boldref, bold_file)
+
+        # Load result and threshold to top N voxels
+        transformed_data = get_data(load_img(bold_file))
         abs_data = np.abs(transformed_data)
         flat = abs_data.ravel()
         mask = np.zeros(flat.shape, dtype=bool)
@@ -612,19 +648,48 @@ def transform_melodic_masks_to_subject(
         mask = mask.reshape(transformed_data.shape)
         thresholded = mask.astype(np.uint8)
 
-        # Use ANTs to save with correct header
-        transformed_ants = ants.from_numpy(
-            thresholded,
-            origin=transformed.origin,
-            spacing=transformed.spacing,
-            direction=transformed.direction,
-        )
-        ants.image_write(transformed_ants, str(output_file))
+        # Save thresholded mask with correct header
+        ref_img = load_img(subject_ref_file)
+        thr_img = nib.Nifti1Image(thresholded, ref_img.affine, ref_img.header)
+        nib.save(thr_img, output_file)
         print(f"  Saved: {output_file.name} ({thresholded.sum()} voxels)")
+
+        # Cleanup temp files
+        t1w_file.unlink()
+        bold_file.unlink()
 
         transformed_masks[network] = output_file
 
     return transformed_masks
+
+
+def _invert_fsl_affine(input_file: Path, output_file: Path) -> None:
+    """Invert an FSL affine matrix using convert_xfm."""
+    cmd = ["convert_xfm", "-omat", str(output_file), "-inverse", str(input_file)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"convert_xfm failed: {result.stderr}")
+
+
+def _apply_fsl_affine(
+    input_file: Path,
+    ref_file: Path,
+    matrix_file: Path,
+    output_file: Path,
+) -> None:
+    """Apply an FSL affine transform using flirt -applyxfm."""
+    cmd = [
+        "flirt",
+        "-in", str(input_file),
+        "-ref", str(ref_file),
+        "-applyxfm",
+        "-init", str(matrix_file),
+        "-out", str(output_file),
+        "-interp", "trilinear",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"flirt failed: {result.stderr}")
 
 
 def compute_dice(mask1: np.ndarray, mask2: np.ndarray) -> float:
@@ -992,16 +1057,17 @@ def run_compare_for_subject(
         if pineuro_corr_df is not None and target in pineuro_corr_df.columns:
             pineuro_yeo_corr[target] = pineuro_corr_df[target].max()
 
-    # Transform MELODIC masks to subject space
+    # Transform MELODIC masks to subject space using fMRIPrep transforms
     print("\nTransforming MELODIC masks to subject space...")
     comparison_dir = get_comparison_dir(melodic_dir)
 
     melodic_masks_subject = transform_melodic_masks_to_subject(
         melodic_masks,
-        config.pineuro_mnireg_dir,
+        config.fmriprep_anat_dir,
+        config.fmriprep_func_dir,
         config.pineuro_boldref,
         comparison_dir,
-        overwrite,
+        overwrite=overwrite,
     )
 
     # Compare masks (both now in subject space)
