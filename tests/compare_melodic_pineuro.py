@@ -611,9 +611,14 @@ def transform_melodic_masks_to_subject(
     for network, thr_mask_path in melodic_masks.items():
         output_file = output_dir / f"melodic_{network}_subject.nii.gz"
 
+        continuous_file = output_dir / f"melodic_{network}_subject_continuous.nii.gz"
+
         if output_file.exists() and not overwrite:
             print(f"  Transformed mask exists, skipping: {output_file.name}")
-            transformed_masks[network] = output_file
+            transformed_masks[network] = {
+                'thresholded': output_file,
+                'continuous': continuous_file if continuous_file.exists() else None,
+            }
             continue
 
         # Get unthresholded component path (remove _thr suffix)
@@ -634,6 +639,9 @@ def transform_melodic_masks_to_subject(
             interpolator='linear',
         )
 
+        # Save continuous (unthresholded) map for correlation analysis
+        ants.image_write(transformed, str(continuous_file))
+
         # Threshold to top N voxels in subject space (by absolute value)
         transformed_data = transformed.numpy()
         abs_data = np.abs(transformed_data)
@@ -653,7 +661,10 @@ def transform_melodic_masks_to_subject(
         ants.image_write(transformed_thr, str(output_file))
         print(f"  Saved: {output_file.name} ({thresholded.sum()} voxels)")
 
-        transformed_masks[network] = output_file
+        transformed_masks[network] = {
+            'thresholded': output_file,
+            'continuous': continuous_file,
+        }
 
     return transformed_masks
 
@@ -672,20 +683,20 @@ def compute_jaccard(mask1: np.ndarray, mask2: np.ndarray) -> float:
 
 
 def compare_masks(
-    melodic_masks: dict[str, Path],
-    pineuro_masks: dict[str, Path],
+    melodic_masks: dict[str, dict],
+    pineuro_masks: dict[str, dict],
     output_dir: Path,
     melodic_yeo_corr: dict[str, float] = None,
     pineuro_yeo_corr: dict[str, float] = None,
 ) -> dict:
-    """Compare MELODIC and pineuro masks using Dice and Jaccard.
+    """Compare MELODIC and pineuro masks using Dice, Jaccard, and spatial correlation.
 
     Parameters
     ----------
     melodic_masks : dict
-        Mapping of network name to MELODIC mask path (in subject space)
+        Mapping of network name to dict with 'thresholded' and 'continuous' paths
     pineuro_masks : dict
-        Mapping of network name to pineuro mask path (in subject space)
+        Mapping of network name to dict with 'thresholded' and 'continuous' paths
     output_dir : Path
         Path to output directory
     melodic_yeo_corr : dict, optional
@@ -698,10 +709,15 @@ def compare_masks(
     dict
         Comparison results for each network
     """
+    from scipy.stats import pearsonr
+
     output_dir.mkdir(parents=True, exist_ok=True)
     results = {}
     melodic_yeo_corr = melodic_yeo_corr or {}
     pineuro_yeo_corr = pineuro_yeo_corr or {}
+
+    # Tiered thresholds for analysis
+    thresholds = [500, 1000, 1500, 2000]
 
     print("\n" + "=" * 60)
     print("COMPARISON RESULTS (subject space)")
@@ -712,13 +728,13 @@ def compare_masks(
             print(f"\n{network}: pineuro mask not found, skipping")
             continue
 
-        # Load masks
-        melodic_data = get_data(load_img(melodic_masks[network])) > 0
-        pineuro_data = get_data(load_img(pineuro_masks[network])) > 0
+        # Load thresholded masks
+        melodic_thr = get_data(load_img(melodic_masks[network]['thresholded'])) > 0
+        pineuro_thr = get_data(load_img(pineuro_masks[network]['thresholded'])) > 0
 
-        # Compute metrics
-        dice = compute_dice(melodic_data, pineuro_data)
-        jaccard = compute_jaccard(melodic_data, pineuro_data)
+        # Compute basic metrics on thresholded masks
+        dice = compute_dice(melodic_thr, pineuro_thr)
+        jaccard = compute_jaccard(melodic_thr, pineuro_thr)
 
         # Get Yeo correlations
         melodic_r = melodic_yeo_corr.get(network)
@@ -729,17 +745,61 @@ def compare_masks(
             "jaccard": jaccard,
             "melodic_yeo_corr": melodic_r,
             "pineuro_yeo_corr": pineuro_r,
-            "melodic_voxels": int(melodic_data.sum()),
-            "pineuro_voxels": int(pineuro_data.sum()),
-            "overlap_voxels": int((melodic_data & pineuro_data).sum()),
+            "melodic_voxels": int(melodic_thr.sum()),
+            "pineuro_voxels": int(pineuro_thr.sum()),
+            "overlap_voxels": int((melodic_thr & pineuro_thr).sum()),
         }
+
+        # Spatial correlation of continuous maps
+        melodic_cont_path = melodic_masks[network].get('continuous')
+        pineuro_cont_path = pineuro_masks[network].get('continuous')
+
+        if melodic_cont_path and pineuro_cont_path and Path(melodic_cont_path).exists() and Path(pineuro_cont_path).exists():
+            melodic_cont = get_data(load_img(melodic_cont_path))
+            pineuro_cont = get_data(load_img(pineuro_cont_path))
+
+            # Create brain mask from union of both thresholded masks (expanded)
+            # Use voxels where either map has non-trivial values
+            brain_mask = (np.abs(melodic_cont) > 0.01) | (np.abs(pineuro_cont) > 0.01)
+
+            if brain_mask.sum() > 100:
+                melodic_flat = melodic_cont[brain_mask]
+                pineuro_flat = pineuro_cont[brain_mask]
+                spatial_corr, _ = pearsonr(melodic_flat, pineuro_flat)
+                results[network]["spatial_correlation"] = spatial_corr
+
+                # Tiered threshold analysis
+                tiered_dice = {}
+                for thr in thresholds:
+                    # Threshold melodic
+                    mel_abs = np.abs(melodic_cont)
+                    mel_flat = mel_abs.ravel()
+                    mel_mask = np.zeros(mel_flat.shape, dtype=bool)
+                    mel_mask[np.argpartition(mel_flat, -thr)[-thr:]] = True
+                    mel_mask = mel_mask.reshape(melodic_cont.shape)
+
+                    # Threshold pineuro
+                    pin_abs = np.abs(pineuro_cont)
+                    pin_flat = pin_abs.ravel()
+                    pin_mask = np.zeros(pin_flat.shape, dtype=bool)
+                    pin_mask[np.argpartition(pin_flat, -thr)[-thr:]] = True
+                    pin_mask = pin_mask.reshape(pineuro_cont.shape)
+
+                    tiered_dice[thr] = compute_dice(mel_mask, pin_mask)
+
+                results[network]["tiered_dice"] = tiered_dice
 
         print(f"\n{network}:")
         print(f"  Dice coefficient: {dice:.4f}")
         print(f"  Jaccard index:    {jaccard:.4f}")
-        print(f"  MELODIC voxels:   {melodic_data.sum()}")
-        print(f"  pineuro voxels:   {pineuro_data.sum()}")
-        print(f"  Overlap voxels:   {(melodic_data & pineuro_data).sum()}")
+        if "spatial_correlation" in results[network]:
+            print(f"  Spatial correlation: {results[network]['spatial_correlation']:.4f}")
+        if "tiered_dice" in results[network]:
+            print(f"  Tiered Dice: ", end="")
+            print(", ".join(f"{k}={v:.4f}" for k, v in results[network]["tiered_dice"].items()))
+        print(f"  MELODIC voxels:   {melodic_thr.sum()}")
+        print(f"  pineuro voxels:   {pineuro_thr.sum()}")
+        print(f"  Overlap voxels:   {(melodic_thr & pineuro_thr).sum()}")
         if melodic_r is not None:
             print(f"  MELODIC Yeo corr: {melodic_r:.4f}")
         if pineuro_r is not None:
@@ -771,8 +831,8 @@ def compare_masks(
 
 
 def create_comparison_plot(
-    melodic_masks: dict[str, Path],
-    pineuro_masks: dict[str, Path],
+    melodic_masks: dict[str, dict],
+    pineuro_masks: dict[str, dict],
     results: dict,
     output_dir: Path,
 ) -> None:
@@ -788,8 +848,8 @@ def create_comparison_plot(
             continue
 
         # Load masks
-        melodic_data = get_data(load_img(melodic_masks[network])) > 0
-        pineuro_data = get_data(load_img(pineuro_masks[network])) > 0
+        melodic_data = get_data(load_img(melodic_masks[network]['thresholded'])) > 0
+        pineuro_data = get_data(load_img(pineuro_masks[network]['thresholded'])) > 0
 
         # Get middle slices
         z_mid = melodic_data.shape[2] // 2
@@ -998,14 +1058,18 @@ def run_compare_for_subject(
         else:
             print(f"  Warning: MELODIC mask not found: {mask_path}")
 
-    # Find pineuro masks
+    # Find pineuro masks (thresholded and continuous)
     pineuro_masks = {}
     for target in targets:
-        mask_path = config.pineuro_mask_dir / f"{config.subject}_{target}_thr.nii.gz"
-        if mask_path.exists():
-            pineuro_masks[target] = mask_path
+        thr_path = config.pineuro_mask_dir / f"{config.subject}_{target}_thr.nii.gz"
+        cont_path = config.pineuro_mask_dir / f"{config.subject}_{target}.nii.gz"
+        if thr_path.exists():
+            pineuro_masks[target] = {
+                'thresholded': thr_path,
+                'continuous': cont_path if cont_path.exists() else None,
+            }
         else:
-            print(f"  Warning: pineuro mask not found: {mask_path}")
+            print(f"  Warning: pineuro mask not found: {thr_path}")
 
     # Load Yeo correlation CSVs
     melodic_corr_file = get_melodic_correlation_dir(melodic_dir) / "Yeo_IC_spatial_correlation.csv"
@@ -1165,6 +1229,8 @@ def print_summary(all_results: list[dict]) -> None:
     # Collect metrics by network
     dice_by_network: dict[str, list[float]] = {}
     jaccard_by_network: dict[str, list[float]] = {}
+    spatial_corr_by_network: dict[str, list[float]] = {}
+    tiered_dice_by_network: dict[str, dict[int, list[float]]] = {}
     melodic_corr_by_network: dict[str, list[float]] = {}
     pineuro_corr_by_network: dict[str, list[float]] = {}
 
@@ -1173,17 +1239,32 @@ def print_summary(all_results: list[dict]) -> None:
         for network, metrics in r["results"].items():
             melodic_r = metrics.get('melodic_yeo_corr')
             pineuro_r = metrics.get('pineuro_yeo_corr')
+            spatial_r = metrics.get('spatial_correlation')
             melodic_str = f", MELODIC r={melodic_r:.3f}" if melodic_r else ""
             pineuro_str = f", pineuro r={pineuro_r:.3f}" if pineuro_r else ""
-            print(f"  {network}: Dice={metrics['dice']:.4f}, Jaccard={metrics['jaccard']:.4f}{melodic_str}{pineuro_str}")
+            spatial_str = f", spatial_corr={spatial_r:.3f}" if spatial_r else ""
+            print(f"  {network}: Dice={metrics['dice']:.4f}, Jaccard={metrics['jaccard']:.4f}{spatial_str}{melodic_str}{pineuro_str}")
 
             if network not in dice_by_network:
                 dice_by_network[network] = []
                 jaccard_by_network[network] = []
+                spatial_corr_by_network[network] = []
+                tiered_dice_by_network[network] = {}
                 melodic_corr_by_network[network] = []
                 pineuro_corr_by_network[network] = []
+
             dice_by_network[network].append(metrics["dice"])
             jaccard_by_network[network].append(metrics["jaccard"])
+
+            if spatial_r is not None:
+                spatial_corr_by_network[network].append(spatial_r)
+
+            if "tiered_dice" in metrics:
+                for thr, d in metrics["tiered_dice"].items():
+                    if thr not in tiered_dice_by_network[network]:
+                        tiered_dice_by_network[network][thr] = []
+                    tiered_dice_by_network[network][thr].append(d)
+
             if melodic_r is not None:
                 melodic_corr_by_network[network].append(melodic_r)
             if pineuro_r is not None:
@@ -1203,6 +1284,17 @@ def print_summary(all_results: list[dict]) -> None:
               f"min={dice_arr.min():.4f}, max={dice_arr.max():.4f}")
         print(f"  Jaccard: mean={jaccard_arr.mean():.4f}, std={jaccard_arr.std():.4f}, "
               f"min={jaccard_arr.min():.4f}, max={jaccard_arr.max():.4f}")
+
+        if spatial_corr_by_network[network]:
+            spatial_arr = np.array(spatial_corr_by_network[network])
+            print(f"  Spatial corr: mean={spatial_arr.mean():.4f}, std={spatial_arr.std():.4f}")
+
+        if tiered_dice_by_network[network]:
+            print("  Tiered Dice (mean):", end="")
+            for thr in sorted(tiered_dice_by_network[network].keys()):
+                arr = np.array(tiered_dice_by_network[network][thr])
+                print(f" {thr}={arr.mean():.4f}", end="")
+            print()
 
         if melodic_corr_by_network[network]:
             melodic_arr = np.array(melodic_corr_by_network[network])
