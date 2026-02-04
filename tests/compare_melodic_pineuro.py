@@ -602,13 +602,15 @@ def transform_melodic_masks_to_subject(
             interpolator='linear',
         )
 
-        # Threshold to top N voxels in subject space
+        # Threshold to top N voxels in subject space (by absolute value)
+        # ICA components can be positive or negative, so use abs for thresholding
         transformed_data = transformed.numpy()
-        flat = transformed_data.ravel()
+        abs_data = np.abs(transformed_data)
+        flat = abs_data.ravel()
         mask = np.zeros(flat.shape, dtype=bool)
         mask[np.argpartition(flat, -threshold)[-threshold:]] = True
         mask = mask.reshape(transformed_data.shape)
-        thresholded = ((transformed_data * mask) > 0).astype(np.uint8)
+        thresholded = mask.astype(np.uint8)
 
         # Use ANTs to save with correct header
         transformed_ants = ants.from_numpy(
