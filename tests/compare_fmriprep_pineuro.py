@@ -36,7 +36,7 @@ from scipy import stats
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from pineuro.feedback import compute_hrf, compute_boxcar_task_regressor
+from pineuro.utils import compute_hrf, compute_boxcar_task_regressor
 
 
 # =============================================================================
