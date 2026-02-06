@@ -1,30 +1,24 @@
 #!/usr/bin/env python3
-"""Compare MURFI and pineuro feedback outputs - GUI-compatible workflow.
+"""Compare MURFI and pineuro feedback outputs.
 
-This script automates the pineuro GUI workflow for MURFI validation:
-1. Setup stage: Copy DICOMs, preprocess, extract masks
-2. (Manual) Validate masks in GUI
-3. Compare stage: Run feedback sessions, run MURFI, compare outputs
+Runs pineuro and MURFI on the same DICOMs and compares activation timeseries.
+Requires setup_validation.py to have been run first (preprocessing + mask extraction).
 
 Usage:
-    # Stage 1: Setup (preprocessing + mask extraction)
-    python compare_murfi_pineuro.py setup \\
-        --csv tests/remind_test_data.csv \\
-        --output-dir /data/murfi_validation
+    # First: run shared setup
+    python setup_validation.py setup --csv remind_test_data.csv --output-dir /data/output
+
+    # Then: run comparison (after GUI mask approval)
+    python compare_murfi_pineuro.py compare \
+        --csv tests/remind_test_data.csv \
+        --output-dir /data/output \
+        --murfi-sif /path/to/murfi.sif
 
     # Check status
-    python compare_murfi_pineuro.py status --output-dir /data/murfi_validation
-
-    # Stage 2: Compare (after GUI mask approval)
-    python compare_murfi_pineuro.py compare \\
-        --csv tests/remind_test_data.csv \\
-        --output-dir /data/murfi_validation \\
-        --murfi-sif /path/to/murfi.sif
+    python compare_murfi_pineuro.py status --output-dir /data/output
 """
 
 import argparse
-import csv
-import gzip
 import os
 import re
 import shutil
@@ -32,7 +26,6 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -41,260 +34,20 @@ import numpy as np
 import pandas as pd
 
 # Add pineuro to path if running from repo
-REPO_ROOT = Path(__file__).parent.parent.parent
+REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-
-# =============================================================================
-# Data Classes
-# =============================================================================
-
-
-@dataclass
-class SubjectConfig:
-    """Configuration for a single subject from the CSV.
-
-    Note: The 2vol in the CSV is the realtime 2vol collected during the NF session
-    (used for mask coregistration), not an initial positioning 2vol.
-    """
-
-    subject: str
-    rest1: Path
-    rest2: Path
-    twovol: Path  # This is 2vol_realtime (collected during NF session)
-    feedback_runs: list[Path] = field(default_factory=list)
-
-    @property
-    def rest_runs(self) -> list[Path]:
-        return [self.rest1, self.rest2]
-
-
-# =============================================================================
-# CSV Loading
-# =============================================================================
-
-
-def load_subjects_csv(csv_path: Path) -> list[SubjectConfig]:
-    """Load subject configurations from CSV file.
-
-    CSV format:
-        subject,rest1,rest2,2vol_realtime,feedback_run-01,feedback_run-02,...
-
-    Supports "2vol_realtime" or "2vol_initial" column names.
-    """
-    configs = []
-
-    with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-
-        for row in reader:
-            subject = row["subject"].strip()
-            if not subject:
-                continue
-
-            # Get rest and 2vol paths
-            rest1 = Path(row["rest1"].strip())
-            rest2 = Path(row["rest2"].strip())
-            # Support "2vol_realtime" or "2vol_initial" column names
-            if "2vol_realtime" in row:
-                twovol = Path(row["2vol_realtime"].strip())
-            elif "2vol_initial" in row:
-                twovol = Path(row["2vol_initial"].strip())
-            else:
-                raise KeyError(f"CSV must have '2vol_realtime' or '2vol_initial' column")
-
-            # Get all feedback runs (feedback_run-01, feedback_run-02, etc.)
-            feedback_runs = []
-            for key, value in row.items():
-                if key.startswith("feedback_run-") and value and value.strip():
-                    feedback_runs.append(Path(value.strip()))
-
-            configs.append(
-                SubjectConfig(
-                    subject=subject,
-                    rest1=rest1,
-                    rest2=rest2,
-                    twovol=twovol,
-                    feedback_runs=feedback_runs,
-                )
-            )
-
-    return configs
-
-
-# =============================================================================
-# Study Config Generation
-# =============================================================================
-
-
-def generate_study_config(
-    study_name: str,
-    output_dir: Path,
-    csv_path: Path,
-    tr: float = 1.2,
-    n_volumes: int = 150,
-    n_baseline: int = 25,
-) -> Path:
-    """Generate a GUI-compatible study config YAML.
-
-    Creates the config in both:
-    - {output_dir}/murfi_validation.yaml (for reference)
-    - ~/.pineuro/studies/{study_name}.yaml (for GUI access)
-
-    Args:
-        study_name: Name for the study
-        output_dir: Output directory (becomes base_dir)
-        csv_path: Path to the subjects CSV file
-        tr: TR in seconds
-        n_volumes: Number of feedback volumes
-        n_baseline: Number of baseline volumes
-
-    Returns:
-        Path to the saved study config in ~/.pineuro/studies/
-    """
-    from datetime import datetime
-
-    import yaml
-
-    # Create the study config dict
-    config = {
-        "_metadata": {
-            "name": study_name,
-            "description": "MURFI validation study - auto-generated by compare_murfi_pineuro.py",
-            "created": datetime.now().isoformat(),
-            "modified": datetime.now().isoformat(),
-        },
-        "paths": {
-            "participant_id": "",
-            "base_dir": str(output_dir),
-            "example_participant_id": "sub-remind3005",
-        },
-        "scan": {
-            # Localizer parameters
-            "localizer_tr": tr,
-            "localizer_n_volumes": 200,
-            "localizer_n_runs": 2,
-            "localizer_task_type": "rest",
-            # Feedback parameters
-            "feedback_tr": tr,
-            "feedback_n_volumes": n_volumes,
-            # 2vol parameters - only realtime (no initial for this data)
-            "twovol_initial_enabled": False,
-            "twovol_initial_n_volumes": 2,
-            "twovol_realtime_enabled": True,
-            "twovol_realtime_n_volumes": 2,
-            "twovol_initial_dicoms": "",
-            "twovol_realtime_dicoms": "",
-            # Simulator settings - use CSV mapping
-            "localizer_source_dicoms": ["", ""],
-            "feedback_source_dicoms": ["", "", "", "", ""],
-            "transfer_source_dicoms": ["", ""],
-            "simulator_source_mapping": str(csv_path),
-            "simulator_enabled": True,
-            "collection_speed": 10.0,
-            "feedback_simulator_speed": 100.0,
-            "scanner_dicom_dir": "/BOLD_DICOM",
-            "murfi_design_path": "",
-        },
-        "mask": {
-            "n_yeo": 17,
-            "yeo_targets": ["DefaultA", "ContA"],
-            "n_components": 20,
-            "smooth_fwhm": 5.0,
-            "highpass": 0.01,
-            "lowpass": None,
-            "mask_names": ["DefaultA", "ContA"],
-        },
-        "feedback": {
-            "n_baseline": n_baseline,
-            "n_volumes": n_volumes,
-            "use_efficiency_weights": True,
-            "fd_threshold": 0.5,
-            "moco_enabled": True,
-        },
-        "localizer_task": {
-            "ball": {
-                "use_transfer_runs": False,
-                "initial_scale_factor": 10.0,
-                "fullscreen": True,
-                "trigger_keys": ["t", "+", "5", "equal"],
-            },
-        },
-        "task": {
-            "task_type": "ball",
-            "max_feedback_runs": 5,
-            "ball": {
-                "use_transfer_runs": False,
-                "initial_scale_factor": 10.0,
-                "fullscreen": True,
-                "trigger_keys": ["t", "+", "5", "equal"],
-            },
-        },
-        "sham": {
-            "enabled": False,
-        },
-    }
-
-    # Save to output directory
-    output_config_path = output_dir / "murfi_validation.yaml"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with open(output_config_path, "w") as f:
-        yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
-    print(f"  Study config saved to: {output_config_path}")
-
-    # Save to ~/.pineuro/studies/
-    studies_dir = Path.home() / ".pineuro" / "studies"
-    studies_dir.mkdir(parents=True, exist_ok=True)
-
-    # Sanitize study name for filename
-    safe_name = study_name.replace(" ", "_").replace("/", "_")
-    gui_config_path = studies_dir / f"{safe_name}.yaml"
-
-    with open(gui_config_path, "w") as f:
-        yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
-    print(f"  Study config saved to: {gui_config_path}")
-
-    return gui_config_path
-
-
-# =============================================================================
-# Directory Structure Helpers
-# =============================================================================
-
-
-def get_subject_dir(output_dir: Path, subject: str) -> Path:
-    """Get subject directory path."""
-    return output_dir / subject
-
-
-def get_collection_dir(subject_dir: Path) -> Path:
-    """Get collection directory path."""
-    return subject_dir / "collection"
-
-
-def get_preprocessing_dir(subject_dir: Path) -> Path:
-    """Get preprocessing directory path."""
-    return subject_dir / "preprocessing"
-
-
-def get_mask_extraction_dir(subject_dir: Path) -> Path:
-    """Get mask extraction directory path."""
-    return subject_dir / "mask_extraction"
-
-
-def get_feedback_dir(subject_dir: Path) -> Path:
-    """Get feedback directory path."""
-    return subject_dir / "feedback"
-
-
-def get_murfi_dir(subject_dir: Path) -> Path:
-    """Get MURFI output directory path."""
-    return subject_dir / "murfi"
-
-
-def get_comparison_dir(subject_dir: Path) -> Path:
-    """Get comparison results directory path."""
-    return subject_dir / "comparison"
+from setup_validation import (
+    SubjectConfig,
+    check_mask_extraction_complete,
+    check_masks_approved,
+    get_collection_dir,
+    get_feedback_dir,
+    get_mask_extraction_dir,
+    get_preprocessing_dir,
+    get_subject_dir,
+    load_subjects_csv,
+)
 
 
 # =============================================================================
@@ -302,49 +55,15 @@ def get_comparison_dir(subject_dir: Path) -> Path:
 # =============================================================================
 
 
-def check_collection_complete(subject_dir: Path) -> bool:
-    """Check if DICOM collection is complete."""
-    collection_dir = get_collection_dir(subject_dir)
-    return (
-        (collection_dir / "task-rest_run-01").exists()
-        and (collection_dir / "task-rest_run-02").exists()
-        and (collection_dir / "task-2vol_run-01").exists()
-    )
-
-
-def check_preprocessing_complete(subject_dir: Path, subject: str) -> bool:
-    """Check if preprocessing is complete."""
-    preproc_dir = get_preprocessing_dir(subject_dir)
-    preproc_file = preproc_dir / f"{subject}_task-rest_preproc.nii.gz"
-    return preproc_file.exists()
-
-
-def check_mask_extraction_complete(subject_dir: Path) -> bool:
-    """Check if ICA mask extraction is complete (before 2vol coreg)."""
-    mask_dir = get_mask_extraction_dir(subject_dir) / "03_masks"
-    # Look for thresholded mask files
-    masks = list(mask_dir.glob("*_thr.nii.gz"))
-    return len(masks) >= 2
-
-
 def check_2vol_coreg_complete(subject_dir: Path) -> bool:
     """Check if 2vol coregistration is complete."""
     mask_dir = get_feedback_dir(subject_dir) / "01_2vol" / "masks"
-    # Look for coregistered mask files
     masks = list(mask_dir.glob("*_thr_to_task-2vol*.nii.gz"))
     return len(masks) >= 2
 
 
-def check_masks_approved(subject_dir: Path) -> bool:
-    """Check if masks have been approved via GUI."""
-    return (get_mask_extraction_dir(subject_dir) / ".masks_approved").exists()
-
-
 def check_feedback_run_complete(subject_dir: Path, subject: str, run: int, n_volumes: int | None = None) -> bool:
-    """Check if a feedback run is complete.
-
-    If n_volumes is provided, also checks that the feedbacklog has all volumes.
-    """
+    """Check if a pineuro feedback run is complete."""
     feedback_dir = get_feedback_dir(subject_dir) / "02_feedback_output"
     feedbacklog = feedback_dir / f"{subject}_task-feedback_run-{run:02d}_feedbacklog.tsv"
 
@@ -354,7 +73,6 @@ def check_feedback_run_complete(subject_dir: Path, subject: str, run: int, n_vol
     if n_volumes is None:
         return True
 
-    # Check if feedbacklog has all volumes
     try:
         df = pd.read_csv(feedbacklog, sep="\t")
         return len(df) >= n_volumes
@@ -362,25 +80,14 @@ def check_feedback_run_complete(subject_dir: Path, subject: str, run: int, n_vol
         return False
 
 
-def check_murfi_run_complete(subject_dir: Path, run: int, n_volumes: int, subject: str | None = None) -> bool:
-    """Check if MURFI run is complete.
-
-    If subject is provided, looks in the correct subdirectory structure.
-    """
-    if subject:
-        log_path = get_murfi_dir(subject_dir) / f"run-{run:02d}" / subject / "log" / "log.rtl"
-    else:
-        # Fallback: try to find log.rtl in any subdirectory
-        murfi_run_dir = get_murfi_dir(subject_dir) / f"run-{run:02d}"
-        log_files = list(murfi_run_dir.glob("*/log/log.rtl"))
-        if not log_files:
-            return False
-        log_path = log_files[0]
+def check_murfi_run_complete(subject_dir: Path, run: int, n_volumes: int, subject: str) -> bool:
+    """Check if MURFI run is complete."""
+    murfi_dir = subject_dir / "murfi"
+    log_path = murfi_dir / f"run-{run:02d}" / subject / "log" / "log.rtl"
 
     if not log_path.exists():
         return False
 
-    # Check if log has enough volumes
     pattern = r"RtRoiCombine: (dmn|cen) at tr (\d+) result is:"
     max_tr = 0
     try:
@@ -397,155 +104,13 @@ def check_murfi_run_complete(subject_dir: Path, run: int, n_volumes: int, subjec
 
 def check_comparison_complete(subject_dir: Path, run: int) -> bool:
     """Check if comparison is complete for a run."""
-    report = get_comparison_dir(subject_dir) / f"run-{run:02d}" / "comparison_report.txt"
+    report = subject_dir / "murfi" / f"run-{run:02d}" / "comparison_report.txt"
     return report.exists()
 
 
-def get_subject_status(subject_dir: Path, subject: str, n_feedback_runs: int, n_volumes: int) -> dict:
-    """Get comprehensive status for a subject."""
-    return {
-        "collection_complete": check_collection_complete(subject_dir),
-        "preprocessing_complete": check_preprocessing_complete(subject_dir, subject),
-        "mask_extraction_complete": check_mask_extraction_complete(subject_dir),
-        "twovol_coreg_complete": check_2vol_coreg_complete(subject_dir),
-        "masks_approved": check_masks_approved(subject_dir),
-        "feedback_runs": [
-            check_feedback_run_complete(subject_dir, subject, run, n_volumes)
-            for run in range(1, n_feedback_runs + 1)
-        ],
-        "murfi_runs": [
-            check_murfi_run_complete(subject_dir, run, n_volumes, subject)
-            for run in range(1, n_feedback_runs + 1)
-        ],
-        "comparisons": [
-            check_comparison_complete(subject_dir, run)
-            for run in range(1, n_feedback_runs + 1)
-        ],
-    }
-
-
 # =============================================================================
-# Setup Stage Functions
+# 2vol Coregistration
 # =============================================================================
-
-
-def copy_dicoms_to_collection(config: SubjectConfig, subject_dir: Path) -> None:
-    """Copy source DICOMs to collection directory.
-
-    Uses GUI-compatible naming:
-    - task-rest_run-01, task-rest_run-02
-    - task-2vol_run-01
-    - feedback_acq-01_run-01, feedback_acq-01_run-02, ...
-    """
-    collection_dir = get_collection_dir(subject_dir)
-    collection_dir.mkdir(parents=True, exist_ok=True)
-
-    # Copy rest runs
-    for i, rest_path in enumerate(config.rest_runs, 1):
-        dest = collection_dir / f"task-rest_run-{i:02d}"
-        if not dest.exists():
-            print(f"  Copying {rest_path.name} -> task-rest_run-{i:02d}")
-            shutil.copytree(rest_path, dest)
-        else:
-            print(f"  task-rest_run-{i:02d} already exists, skipping")
-
-    # Copy 2vol
-    dest = collection_dir / "task-2vol_run-01"
-    if not dest.exists():
-        print(f"  Copying {config.twovol.name} -> task-2vol_run-01")
-        shutil.copytree(config.twovol, dest)
-    else:
-        print(f"  task-2vol_run-01 already exists, skipping")
-
-    # Copy feedback runs (feedback_acq-01_run-XX)
-    for i, fb_path in enumerate(config.feedback_runs, 1):
-        dest = collection_dir / f"feedback_acq-01_run-{i:02d}"
-        if not dest.exists():
-            print(f"  Copying {fb_path.name} -> feedback_acq-01_run-{i:02d}")
-            shutil.copytree(fb_path, dest)
-        else:
-            print(f"  feedback_acq-01_run-{i:02d} already exists, skipping")
-
-
-def run_preprocessing(
-    subject: str,
-    subject_dir: Path,
-    overwrite: bool = False,
-) -> tuple[Path, Path, Path]:
-    """Run preprocessing on resting-state data."""
-    from pineuro import preprocessing
-
-    collection_dir = get_collection_dir(subject_dir)
-    preproc_dir = get_preprocessing_dir(subject_dir)
-
-    input_dirs = [
-        collection_dir / "task-rest_run-01",
-        collection_dir / "task-rest_run-02",
-    ]
-
-    print(f"\n{'=' * 60}")
-    print("PREPROCESSING")
-    print("=" * 60)
-    print(f"  Input: {input_dirs}")
-    print(f"  Output: {preproc_dir}")
-
-    preproc_file, mask_file, ref_file = preprocessing(
-        participant_id=subject,
-        task="rest",
-        root_dir=preproc_dir,
-        input_dicoms=input_dirs,
-        overwrite=overwrite,
-        qc_enabled=True,
-    )
-
-    print(f"\nPreprocessing complete:")
-    print(f"  Preprocessed: {preproc_file}")
-    print(f"  Mask: {mask_file}")
-    print(f"  Reference: {ref_file}")
-
-    return preproc_file, mask_file, ref_file
-
-
-def run_mask_extraction(
-    subject: str,
-    subject_dir: Path,
-    preproc_file: Path,
-    mask_file: Path,
-    ref_file: Path,
-    overwrite: bool = False,
-) -> list[Path]:
-    """Run ICA-based mask extraction."""
-    from pineuro import mask_extraction_rest
-
-    mask_dir = get_mask_extraction_dir(subject_dir)
-
-    print(f"\n{'=' * 60}")
-    print("MASK EXTRACTION")
-    print("=" * 60)
-    print(f"  Input: {preproc_file}")
-    print(f"  Output: {mask_dir}")
-
-    mask_files = mask_extraction_rest(
-        participant_id=subject,
-        root_dir=mask_dir,
-        input_file=preproc_file,
-        mask_file=mask_file,
-        ref_file=ref_file,
-        n_yeo=17,
-        yeo_targets=["DefaultA", "ContA"],
-        n_components=30,
-        threshold=2000,
-        smooth_fwhm=5.0,
-        highpass=0.01,
-        overwrite=overwrite,
-        qc_enabled=True,
-    )
-
-    print(f"\nMask extraction complete:")
-    for mf in mask_files:
-        print(f"  {mf}")
-
-    return mask_files
 
 
 def run_2vol_coregistration(
@@ -555,11 +120,7 @@ def run_2vol_coregistration(
     ref_file: Path,
     overwrite: bool = False,
 ) -> dict[str, Path]:
-    """Coregister masks to 2vol_realtime scanner position.
-
-    Output goes to feedback/01_2vol/masks/ (not mask_extraction/04_2vol/)
-    because this is a realtime 2vol collected during the NF session.
-    """
+    """Coregister masks to 2vol_realtime scanner position."""
     from pineuro import coregister_2vol
 
     collection_dir = get_collection_dir(subject_dir)
@@ -569,8 +130,6 @@ def run_2vol_coregistration(
     print(f"\n{'=' * 60}")
     print("2VOL REALTIME COREGISTRATION")
     print("=" * 60)
-    print(f"  2vol: {twovol_dir}")
-    print(f"  Output: {feedback_dir}/01_2vol/masks/")
 
     coreg_masks = coregister_2vol(
         participant_id=subject,
@@ -586,7 +145,6 @@ def run_2vol_coregistration(
     for mf in coreg_masks:
         print(f"  {mf}")
 
-    # Build dict mapping network name to path
     masks = {}
     for mask_path in coreg_masks:
         name = mask_path.name
@@ -598,39 +156,8 @@ def run_2vol_coregistration(
     return masks
 
 
-def run_setup_for_subject(
-    config: SubjectConfig,
-    output_dir: Path,
-    overwrite: bool = False,
-) -> dict[str, Path]:
-    """Run complete setup for a subject."""
-    subject_dir = get_subject_dir(output_dir, config.subject)
-
-    print(f"\n{'#' * 60}")
-    print(f"# SETUP: {config.subject}")
-    print(f"{'#' * 60}")
-
-    # Step 1: Copy DICOMs to collection
-    print("\nStep 1: Copying DICOMs to collection...")
-    copy_dicoms_to_collection(config, subject_dir)
-
-    # Step 2: Preprocessing
-    preproc_file, mask_file, ref_file = run_preprocessing(
-        config.subject, subject_dir, overwrite
-    )
-
-    # Step 3: Mask extraction
-    mask_files = run_mask_extraction(
-        config.subject, subject_dir, preproc_file, mask_file, ref_file, overwrite
-    )
-
-    # NOTE: 2vol coregistration is done in compare stage, AFTER mask approval
-    # This allows GUI modifications (e.g., combining masks) to be reflected
-    return mask_files
-
-
 # =============================================================================
-# MURFI Functions (preserved from old implementation)
+# MURFI Functions
 # =============================================================================
 
 
@@ -641,12 +168,9 @@ def copy_and_convert_mask(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
 
     img = nib.load(src)
-    data = img.get_fdata()
-    data_int16 = data.astype(np.int16)
-
-    new_img = nib.Nifti1Image(data_int16, img.affine, img.header)
+    data = img.get_fdata().astype(np.int16)
+    new_img = nib.Nifti1Image(data, img.affine, img.header)
     new_img.header.set_data_dtype(np.int16)
-
     nib.save(new_img, dst)
     print(f"  Converted mask: {src.name} -> {dst.name} (int16)")
 
@@ -784,7 +308,6 @@ def generate_murfi_xml(
     xml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(xml_path, "w") as f:
         f.write(xml_content)
-
     print(f"  Generated MURFI XML: {xml_path}")
 
 
@@ -803,10 +326,7 @@ def setup_murfi_environment(
     (murfi_dir / "xml").mkdir(exist_ok=True)
     (murfi_dir / "log").mkdir(exist_ok=True)
 
-    # murfi_input directory for incoming DICOMs (absolute path for apptainer)
     murfi_input_dir = str((run_dir / "murfi_input").absolute())
-
-    # Full path for algo dump (MURFI requires absolute path)
     algo_dump_path = str((murfi_dir / "log" / "incrglmdump.txt").absolute())
 
     print("\nSetting up MURFI environment...")
@@ -837,7 +357,6 @@ def run_murfi(
     xml_path = subject_dir / "xml" / "rtdmn.xml"
     log_path = subject_dir / "log" / "log.rtl"
 
-    # Use murfi_input inside run_dir (absolute path for apptainer)
     murfi_input_dir = run_dir / "murfi_input"
     murfi_input_dir.mkdir(parents=True, exist_ok=True)
 
@@ -876,7 +395,6 @@ def run_murfi(
         str(xml_path.absolute()),
     ]
 
-    # Capture stderr to help debug issues
     murfi_log = run_dir / "murfi_stderr.log"
     murfi_log_fh = open(murfi_log, "w")
 
@@ -948,7 +466,6 @@ def run_murfi(
     subprocess.run(["pkill", "-9", "-f", "apptainer.*murfi.sif"], capture_output=True)
     time.sleep(0.5)
 
-    # Close the log file handle
     murfi_log_fh.close()
 
     print(f"MURFI complete: {log_path}")
@@ -1007,8 +524,87 @@ def parse_murfi_log(log_path: Path, n_volumes: int) -> pd.DataFrame:
 
 
 # =============================================================================
-# Comparison Functions
+# Feedback & Comparison
 # =============================================================================
+
+
+def find_masks(subject_dir: Path) -> dict[str, Path]:
+    """Find coregistered masks in feedback/01_2vol/masks/."""
+    mask_dir = get_feedback_dir(subject_dir) / "01_2vol" / "masks"
+    masks = {}
+
+    for mask_path in mask_dir.glob("*_thr_to_task-2vol*.nii.gz"):
+        name = mask_path.name
+        if "_ContA_" in name:
+            masks["ContA"] = mask_path
+        elif "_DefaultA_" in name:
+            masks["DefaultA"] = mask_path
+
+    if len(masks) != 2:
+        raise FileNotFoundError(f"Could not find both masks in {mask_dir}")
+
+    return masks
+
+
+def run_pineuro_feedback(
+    subject: str,
+    run: int,
+    dicom_dir: Path,
+    masks: dict[str, Path],
+    output_dir: Path,
+    tr: float,
+    n_volumes: int,
+    n_baseline: int,
+) -> Path:
+    """Run pineuro feedback session in simulator mode."""
+    from pineuro.feedback import run_feedback_session
+    from pineuro.utils import compute_boxcar_task_regressor
+
+    feedback_dir = output_dir / "02_feedback_output"
+    collection_dir = output_dir / "collection"
+
+    feedback_dir.mkdir(parents=True, exist_ok=True)
+    collection_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\nRunning pineuro feedback run-{run:02d}...")
+    print(f"  DICOM source: {dicom_dir}")
+
+    task_regressor = compute_boxcar_task_regressor(
+        n_baseline=n_baseline,
+        n_volumes=n_volumes,
+        tr=tr,
+    )
+
+    result = run_feedback_session(
+        mask_paths=[masks["ContA"], masks["DefaultA"]],
+        mask_names=["ContA", "DefaultA"],
+        subject=subject,
+        task="feedback",
+        run=run,
+        output_dir=feedback_dir,
+        collection_dir=collection_dir,
+        n_baseline=n_baseline,
+        n_volumes=n_volumes,
+        tr=tr,
+        task_regressors=task_regressor.reshape(-1, 1),
+        simulator_source_dir=dicom_dir,
+        simulator_speed=100.0,
+        moco_enabled=True,
+        qc_enabled=False,
+    )
+
+    coordinator = result["coordinator"]
+    coordinator.wait_until_ready(timeout=10)
+    print("  Sending trigger...")
+    coordinator.send_trigger()
+
+    thread = result["thread"]
+    thread.join()
+
+    feedbacklog = feedback_dir / f"{subject}_task-feedback_run-{run:02d}_feedbacklog.tsv"
+    print(f"pineuro complete: {feedbacklog}")
+
+    return feedbacklog
 
 
 def compare_outputs(
@@ -1017,7 +613,7 @@ def compare_outputs(
     output_dir: Path,
     n_volumes: int,
 ) -> dict:
-    """Load both outputs and compute comparison metrics."""
+    """Compare pineuro and MURFI activation timeseries."""
     pineuro_df = pd.read_csv(pineuro_log, sep="\t")
     murfi_df = parse_murfi_log(murfi_log, n_volumes)
 
@@ -1055,9 +651,8 @@ def compare_outputs(
         print(f"  Slope:       {slope:.6f}")
         print(f"  Intercept:   {intercept:.6f}")
         print(f"  RMSE:        {rmse:.6f}")
-        print(f"  N values:    {len(pn_valid)}")
 
-    # Compute difference correlation
+    # Difference correlation
     pn_diff = pineuro_df["ContA"].values - pineuro_df["DefaultA"].values
     mu_diff = murfi_df["cen"].values - murfi_df["dmn"].values
 
@@ -1124,95 +719,6 @@ def compare_outputs(
     return results
 
 
-# =============================================================================
-# Feedback Stage Functions
-# =============================================================================
-
-
-def find_masks(subject_dir: Path) -> dict[str, Path]:
-    """Find coregistered masks for a subject.
-
-    Masks are in feedback/01_2vol/masks/ (for 2vol_realtime).
-    """
-    mask_dir = get_feedback_dir(subject_dir) / "01_2vol" / "masks"
-    masks = {}
-
-    for mask_path in mask_dir.glob("*_thr_to_task-2vol*.nii.gz"):
-        name = mask_path.name
-        if "_ContA_" in name:
-            masks["ContA"] = mask_path
-        elif "_DefaultA_" in name:
-            masks["DefaultA"] = mask_path
-
-    if len(masks) != 2:
-        raise FileNotFoundError(f"Could not find both masks in {mask_dir}")
-
-    return masks
-
-
-def run_pineuro_feedback(
-    subject: str,
-    run: int,
-    dicom_dir: Path,
-    masks: dict[str, Path],
-    output_dir: Path,
-    tr: float,
-    n_volumes: int,
-    n_baseline: int,
-) -> Path:
-    """Run pineuro feedback session."""
-    # Import directly from modules to avoid loading PsychoPy/wx
-    from pineuro.feedback import run_feedback_session
-    from pineuro.utils import compute_boxcar_task_regressor
-
-    feedback_dir = output_dir / "02_feedback_output"
-    collection_dir = output_dir / "collection"
-
-    feedback_dir.mkdir(parents=True, exist_ok=True)
-    collection_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"\nRunning pineuro feedback run-{run:02d}...")
-    print(f"  DICOM source: {dicom_dir}")
-    print(f"  Output: {feedback_dir}")
-
-    task_regressor = compute_boxcar_task_regressor(
-        n_baseline=n_baseline,
-        n_volumes=n_volumes,
-        tr=tr,
-    )
-
-    result = run_feedback_session(
-        mask_paths=[masks["ContA"], masks["DefaultA"]],
-        mask_names=["ContA", "DefaultA"],
-        subject=subject,
-        task="feedback",
-        run=run,
-        output_dir=feedback_dir,
-        collection_dir=collection_dir,
-        n_baseline=n_baseline,
-        n_volumes=n_volumes,
-        tr=tr,
-        task_regressors=task_regressor.reshape(-1, 1),
-        simulator_source_dir=dicom_dir,
-        simulator_speed=100.0,
-        moco_enabled=True,
-        qc_enabled=False,
-    )
-
-    coordinator = result["coordinator"]
-    coordinator.wait_until_ready(timeout=10)
-    print("  Sending trigger...")
-    coordinator.send_trigger()
-
-    thread = result["thread"]
-    thread.join()
-
-    feedbacklog = feedback_dir / f"{subject}_task-feedback_run-{run:02d}_feedbacklog.tsv"
-    print(f"pineuro complete: {feedbacklog}")
-
-    return feedbacklog
-
-
 def run_comparison_for_run(
     subject: str,
     run: int,
@@ -1226,17 +732,15 @@ def run_comparison_for_run(
     """Run comparison for a single feedback run."""
     collection_dir = get_collection_dir(subject_dir)
     feedback_dir = get_feedback_dir(subject_dir)
-    murfi_run_dir = get_murfi_dir(subject_dir) / f"run-{run:02d}"
-    comparison_run_dir = get_comparison_dir(subject_dir) / f"run-{run:02d}"
+    murfi_run_dir = subject_dir / "murfi" / f"run-{run:02d}"
+    comparison_run_dir = murfi_run_dir  # comparison outputs alongside MURFI outputs
 
     dicom_dir = collection_dir / f"feedback_acq-01_run-{run:02d}"
 
-    # Check if comparison already done
     if skip_existing and check_comparison_complete(subject_dir, run):
         print(f"\n  Run {run:02d}: Comparison already complete, skipping")
         return None
 
-    # Find masks
     masks = find_masks(subject_dir)
 
     print(f"\n{'=' * 60}")
@@ -1257,7 +761,7 @@ def run_comparison_for_run(
             n_baseline=n_baseline,
         )
     else:
-        print(f"\npineuro feedback already complete ({n_volumes} volumes): {pineuro_log}")
+        print(f"\npineuro feedback already complete: {pineuro_log}")
 
     # Setup and run MURFI
     murfi_log = murfi_run_dir / subject / "log" / "log.rtl"
@@ -1279,7 +783,7 @@ def run_comparison_for_run(
             n_volumes=n_volumes,
         )
     else:
-        print(f"\nMURFI already complete ({n_volumes} volumes): {murfi_log}")
+        print(f"\nMURFI already complete: {murfi_log}")
 
     # Compare outputs
     results = compare_outputs(pineuro_log, murfi_log, comparison_run_dir, n_volumes)
@@ -1301,111 +805,40 @@ def run_comparison_for_run(
 
 
 # =============================================================================
+# Group Results TSV
+# =============================================================================
+
+
+def save_group_results(all_results: list[dict], output_dir: Path) -> None:
+    """Save structured TSV with one row per subject/run/network."""
+    rows = []
+    for r in all_results:
+        for network, metrics in r["results"].items():
+            rows.append({
+                "subject": r["subject"],
+                "run": r["run"],
+                "network": network,
+                **{k: v for k, v in metrics.items()},
+            })
+
+    if rows:
+        df = pd.DataFrame(rows)
+        tsv_path = output_dir / "group_results_murfi.tsv"
+        df.to_csv(tsv_path, sep="\t", index=False)
+        print(f"\nGroup results saved: {tsv_path}")
+
+
+# =============================================================================
 # CLI Commands
 # =============================================================================
 
 
-def cmd_setup(args: argparse.Namespace) -> None:
-    """Run setup stage for all subjects."""
-    configs = load_subjects_csv(args.csv)
-
-    print("=" * 60)
-    print("SETUP STAGE")
-    print("=" * 60)
-    print(f"CSV:        {args.csv}")
-    print(f"Output:     {args.output_dir}")
-    print(f"Study:      {args.study_name}")
-    print(f"Subjects:   {len(configs)}")
-    print()
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Generate study config for GUI
-    print("Generating study config...")
-    gui_config_path = generate_study_config(
-        study_name=args.study_name,
-        output_dir=args.output_dir,
-        csv_path=args.csv,
-        tr=getattr(args, "tr", 1.2),
-        n_volumes=getattr(args, "n_volumes", 150),
-        n_baseline=getattr(args, "n_baseline", 25),
-    )
-    print()
-
-    for config in configs:
-        try:
-            run_setup_for_subject(config, args.output_dir, args.overwrite)
-        except Exception as e:
-            print(f"\nERROR processing {config.subject}: {e}")
-            continue
-
-    print("\n" + "=" * 60)
-    print("SETUP COMPLETE")
-    print("=" * 60)
-    print("\nNext steps:")
-    print(f"1. Open pineuro-gui")
-    print(f"2. Select study: '{args.study_name}'")
-    print("3. Review mask extraction QC reports for each participant")
-    print("4. Approve masks (creates .masks_approved flag)")
-    print("5. Run: python compare_murfi_pineuro.py compare ...")
-
-
-def cmd_status(args: argparse.Namespace) -> None:
-    """Check status of all subjects."""
-    if not args.output_dir.exists():
-        print(f"Output directory not found: {args.output_dir}")
-        return
-
-    print("=" * 60)
-    print("STATUS")
-    print("=" * 60)
-
-    # Get subject list from CSV or scan directory
-    if args.csv:
-        configs = load_subjects_csv(args.csv)
-        subjects = [c.subject for c in configs]
-        # Use number of feedback runs from CSV
-        n_runs_map = {c.subject: len(c.feedback_runs) for c in configs}
-    else:
-        subjects = sorted([d.name for d in args.output_dir.iterdir() if d.is_dir()])
-        n_runs_map = {}
-
-    if not subjects:
-        print("No subjects found.")
-        return
-
-    for subject in subjects:
-        subject_dir = args.output_dir / subject
-        n_runs = n_runs_map.get(subject, args.n_runs)
-        status = get_subject_status(subject_dir, subject, n_runs, args.n_volumes)
-
-        approved = status["masks_approved"]
-        twovol_done = status["twovol_coreg_complete"]
-        fb_done = sum(status["feedback_runs"])
-        comp_done = sum(status["comparisons"])
-        n_runs = len(status["feedback_runs"])
-
-        status_str = []
-        if not status["mask_extraction_complete"]:
-            status_str.append("needs mask extraction")
-        elif not approved:
-            status_str.append("needs approval")
-        elif not twovol_done:
-            status_str.append("ready for compare (2vol coreg pending)")
-        elif fb_done < n_runs or comp_done < n_runs:
-            status_str.append(f"compare: {comp_done}/{n_runs}")
-        else:
-            status_str.append("complete")
-
-        print(f"{subject}: {', '.join(status_str)}")
-
-
 def cmd_compare(args: argparse.Namespace) -> None:
-    """Run comparison stage for all subjects."""
+    """Run comparison for all subjects."""
     configs = load_subjects_csv(args.csv)
 
     print("=" * 60)
-    print("COMPARE STAGE")
+    print("MURFI vs PINEURO COMPARISON")
     print("=" * 60)
     print(f"CSV:        {args.csv}")
     print(f"Output:     {args.output_dir}")
@@ -1418,7 +851,11 @@ def cmd_compare(args: argparse.Namespace) -> None:
     for config in configs:
         subject_dir = get_subject_dir(args.output_dir, config.subject)
 
-        # Check if masks are approved
+        # Check prerequisites
+        if not check_mask_extraction_complete(subject_dir):
+            print(f"\n{config.subject}: Mask extraction not complete, run setup_validation.py first")
+            continue
+
         if not args.skip_approval_check and not check_masks_approved(subject_dir):
             print(f"\n{config.subject}: Masks not approved, skipping")
             print("  Run GUI to approve masks, or use --skip-approval-check")
@@ -1428,7 +865,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
         print(f"# COMPARE: {config.subject}")
         print(f"{'#' * 60}")
 
-        # Run 2vol coregistration (after mask approval, so GUI changes are reflected)
+        # Run 2vol coregistration if needed
         if not check_2vol_coreg_complete(subject_dir):
             print("\nRunning 2vol coregistration...")
             mask_dir = get_mask_extraction_dir(subject_dir) / "03_masks"
@@ -1457,29 +894,52 @@ def cmd_compare(args: argparse.Namespace) -> None:
                 print(f"\nERROR in {config.subject} run-{run:02d}: {e}")
                 continue
 
+    # Save structured results
+    save_group_results(all_results, args.output_dir)
+
     # Print summary
     print_summary(all_results)
 
 
-def cmd_full(args: argparse.Namespace) -> None:
-    """Run full pipeline (setup + compare)."""
-    # Run setup
-    print("\n" + "=" * 60)
-    print("RUNNING FULL PIPELINE")
+def cmd_status(args: argparse.Namespace) -> None:
+    """Check comparison status for all subjects."""
+    if not args.output_dir.exists():
+        print(f"Output directory not found: {args.output_dir}")
+        return
+
+    print("=" * 60)
+    print("MURFI COMPARISON STATUS")
     print("=" * 60)
 
-    cmd_setup(args)
+    if args.csv:
+        configs = load_subjects_csv(args.csv)
+        subjects = [(c.subject, len(c.feedback_runs)) for c in configs]
+    else:
+        subjects = [(d.name, args.n_runs) for d in sorted(args.output_dir.iterdir()) if d.is_dir()]
 
-    # Auto-approve masks if requested
-    if args.skip_approval_check:
-        print("\n--skip-approval-check: Proceeding without mask approval")
+    for subject, n_runs in subjects:
+        subject_dir = args.output_dir / subject
 
-    # Run compare
-    cmd_compare(args)
+        approved = check_masks_approved(subject_dir)
+        twovol_done = check_2vol_coreg_complete(subject_dir)
+        comp_done = sum(check_comparison_complete(subject_dir, r) for r in range(1, n_runs + 1))
+
+        if not check_mask_extraction_complete(subject_dir):
+            status = "needs setup"
+        elif not approved:
+            status = "needs approval"
+        elif not twovol_done:
+            status = "ready for compare"
+        elif comp_done < n_runs:
+            status = f"compare: {comp_done}/{n_runs}"
+        else:
+            status = "complete"
+
+        print(f"  {subject}: {status}")
 
 
 def print_summary(all_results: list[dict]) -> None:
-    """Print final summary of comparison results."""
+    """Print final summary."""
     print("\n" + "=" * 60)
     print("FINAL SUMMARY")
     print("=" * 60)
@@ -1504,14 +964,14 @@ def print_summary(all_results: list[dict]) -> None:
     else:
         print("Some correlations < 0.98 - investigate differences")
 
-    # Compute statistics
+    # Statistics
     print("\n" + "-" * 60)
     print("CORRELATION STATISTICS")
     print("-" * 60)
 
     corr_by_network: dict[str, list[float]] = {"ContA": [], "DefaultA": [], "Difference": []}
     for r in all_results:
-        for network in corr_by_network.keys():
+        for network in corr_by_network:
             if network in r["results"]:
                 corr_by_network[network].append(r["results"][network]["correlation"])
 
@@ -1521,7 +981,6 @@ def print_summary(all_results: list[dict]) -> None:
         arr = np.array(corrs)
         print(f"\n{network} (n={len(arr)}):")
         print(f"  Mean:   {arr.mean():.6f}")
-        print(f"  Median: {np.median(arr):.6f}")
         print(f"  Std:    {arr.std():.6f}")
         print(f"  Min:    {arr.min():.6f}")
         print(f"  Max:    {arr.max():.6f}")
@@ -1534,33 +993,16 @@ def print_summary(all_results: list[dict]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Compare MURFI and pineuro feedback outputs (GUI-compatible workflow)",
+        description="Compare MURFI and pineuro feedback outputs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Setup command
-    setup_parser = subparsers.add_parser(
-        "setup",
-        help="Run setup stage (copy DICOMs, preprocess, extract masks)",
-    )
-    setup_parser.add_argument("--csv", type=Path, required=True, help="Path to subjects CSV")
-    setup_parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
-    setup_parser.add_argument("--study-name", default="MURFI Validation", help="Study name for GUI")
-    setup_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
-
-    # Status command
-    status_parser = subparsers.add_parser("status", help="Check status of all subjects")
-    status_parser.add_argument("--csv", type=Path, help="Path to subjects CSV (optional, otherwise scans output-dir)")
-    status_parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
-    status_parser.add_argument("--n-runs", type=int, default=5, help="Number of feedback runs")
-    status_parser.add_argument("--n-volumes", type=int, default=150, help="Volumes per run")
-
     # Compare command
     compare_parser = subparsers.add_parser(
         "compare",
-        help="Run comparison stage (feedback + MURFI + compare)",
+        help="Run pineuro + MURFI feedback and compare outputs",
     )
     compare_parser.add_argument("--csv", type=Path, required=True, help="Path to subjects CSV")
     compare_parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
@@ -1568,31 +1010,17 @@ def main() -> None:
     compare_parser.add_argument("--tr", type=float, default=1.2, help="TR in seconds")
     compare_parser.add_argument("--n-volumes", type=int, default=150, help="Volumes per run")
     compare_parser.add_argument("--n-baseline", type=int, default=25, help="Baseline volumes")
-    compare_parser.add_argument(
-        "--skip-approval-check",
-        action="store_true",
-        help="Skip mask approval check",
-    )
+    compare_parser.add_argument("--skip-approval-check", action="store_true", help="Skip mask approval check")
 
-    # Full command
-    full_parser = subparsers.add_parser("full", help="Run full pipeline (setup + compare)")
-    full_parser.add_argument("--csv", type=Path, required=True, help="Path to subjects CSV")
-    full_parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
-    full_parser.add_argument("--murfi-sif", type=Path, required=True, help="MURFI apptainer image")
-    full_parser.add_argument("--study-name", default="MURFI Validation", help="Study name for GUI")
-    full_parser.add_argument("--tr", type=float, default=1.2, help="TR in seconds")
-    full_parser.add_argument("--n-volumes", type=int, default=150, help="Volumes per run")
-    full_parser.add_argument("--n-baseline", type=int, default=25, help="Baseline volumes")
-    full_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
-    full_parser.add_argument(
-        "--skip-approval-check",
-        action="store_true",
-        help="Skip mask approval check",
-    )
+    # Status command
+    status_parser = subparsers.add_parser("status", help="Check comparison status")
+    status_parser.add_argument("--csv", type=Path, help="Path to subjects CSV (optional)")
+    status_parser.add_argument("--output-dir", type=Path, required=True, help="Output directory")
+    status_parser.add_argument("--n-runs", type=int, default=5, help="Number of feedback runs (if no CSV)")
+    status_parser.add_argument("--n-volumes", type=int, default=150, help="Volumes per run")
 
     args = parser.parse_args()
 
-    # Resolve paths
     if hasattr(args, "csv") and args.csv:
         args.csv = args.csv.resolve()
     if hasattr(args, "output_dir"):
@@ -1600,15 +1028,10 @@ def main() -> None:
     if hasattr(args, "murfi_sif") and args.murfi_sif:
         args.murfi_sif = args.murfi_sif.resolve()
 
-    # Run command
-    if args.command == "setup":
-        cmd_setup(args)
+    if args.command == "compare":
+        cmd_compare(args)
     elif args.command == "status":
         cmd_status(args)
-    elif args.command == "compare":
-        cmd_compare(args)
-    elif args.command == "full":
-        cmd_full(args)
 
 
 if __name__ == "__main__":
