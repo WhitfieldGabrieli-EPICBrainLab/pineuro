@@ -9,3 +9,5 @@ __pycache__/
 examples/
 data/
 temp/
+drafts/
+tests/benchmark*

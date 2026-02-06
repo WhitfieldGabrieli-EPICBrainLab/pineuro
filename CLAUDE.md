@@ -9,13 +9,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Dependencies
 
 **External Tools:**
-- **FSL** (FMRIB Software Library) - Preprocessing (mcflirt, bet, fslmaths, fslmerge)
 - **dcm2niix** - DICOM to NIfTI conversion
 
 **Python (3.11+):**
-- **antspyx** - Registration (multi-run coreg, MNI alignment, 2vol coreg)
+- **antspyx** - Registration (multi-run coreg, MNI alignment, 2vol coreg), motion correction, brain extraction (get_mask)
 - **nibabel** - NIfTI I/O
-- **nilearn** - ICA decomposition (CanICA)
+- **nilearn** - ICA decomposition (CanICA), MNI resampling
 - **psychopy** - Task display
 - **flet** - GUI framework
 - **templateflow** - MNI152 templates
@@ -50,7 +49,7 @@ src/pineuro/
 │   ├── session.py           # Multi-run orchestration, multi-visit support
 │   └── sham.py              # Sham/control condition delivery
 ├── Support
-│   ├── utils.py             # FSL/ANTs wrappers, DICOM utilities
+│   ├── utils.py             # ANTs wrappers, DICOM utilities
 │   ├── qc.py                # QC visualization and HTML reports
 │   ├── config.py            # Global configuration
 │   ├── display.py           # Monitor detection
@@ -80,8 +79,8 @@ The library uses numbered output directories (01_, 02_, etc.) for easy tracing:
 **2. Preprocessing** (`preprocessing.py`)
 - `preprocessing()` - Main 4-step pipeline:
   - 01_nifti: DICOM → NIfTI (dcm2niix)
-  - 02_motion_correction: Motion correction (FSL mcflirt)
-  - 03_brain_extraction: Brain extraction (FSL bet)
+  - 02_motion_correction: Motion correction (ANTsPy rigid registration)
+  - 03_brain_extraction: Brain extraction (ANTsPy get_mask)
   - 04_coregistered: Multi-run alignment (ANTs)
 - Output: `{participant}_task-{task}_preproc.nii.gz`, `_mask.nii.gz`, `_boldref.nii.gz`
 
@@ -161,12 +160,12 @@ Flet-based application (`pineuro-gui` command):
 ## Key Patterns
 
 ### Command Execution
-All external commands (FSL, dcm2niix) route through `run_command()`:
+External commands (dcm2niix) route through `run_command()`:
 ```python
 run_command(
-    cmd_name='mcflirt',
-    cmd=['mcflirt', '-in', str(input), '-out', str(output)],
-    description='Motion correction',
+    cmd_name='dcm2niix',
+    cmd=['dcm2niix', '-z', 'y', '-o', str(output_dir), str(input)],
+    description='DICOM to NIfTI conversion',
     inputs=input,
     outputs=output,
     overwrite=False  # Skip if output exists

@@ -64,9 +64,11 @@ Centralizing command execution in run_command() provides several benefits:
 Dependencies
 ------------
 External:
-    - FSL : mcflirt, bet, fslmaths, etc.
     - dcm2niix : DICOM to NIfTI conversion
-    - ANTsPy : Python bindings for ANTs registration
+
+Python:
+    - ANTsPy : Registration, motion correction, and brain extraction
+    - nilearn : MNI resampling (resample_to_img)
 
 Python:
     - numpy : Array operations
@@ -266,20 +268,8 @@ def check_platform_requirements() -> list[str]:
     warnings = []
     platform = config.get_platform()
 
-    # Check FSL availability (required for preprocessing)
-    fsl_commands = ['mcflirt', 'bet', 'fslmaths']
-    fsl_missing = [cmd for cmd in fsl_commands if shutil.which(cmd) is None]
-    if fsl_missing:
-        if platform == 'windows':
-            warnings.append(
-                f"FSL not available on native Windows. Use WSL2 for preprocessing. "
-                f"Missing: {', '.join(fsl_missing)}"
-            )
-        else:
-            warnings.append(
-                f"FSL commands not found in PATH: {', '.join(fsl_missing)}. "
-                f"Preprocessing requires FSL. See: https://fsl.fmrib.ox.ac.uk/fsl/"
-            )
+    # FSL is no longer required. Motion correction, brain extraction, and
+    # MNI alignment are all handled by ANTsPy and nilearn.
 
     # Check dcm2niix availability (required for DICOM conversion)
     if shutil.which('dcm2niix') is None:
@@ -1527,11 +1517,11 @@ def apply_xfm_sform_to_mni(
         overwrite: bool = False
 ) -> None:
     """
-    Apply transformation to MNI space using sform/qform matrices from NIfTI headers
+    Resample image to MNI space using sform/qform matrices from NIfTI headers.
 
-    This function applies the transformation encoded in the sform/qform matrices
-    to transform the input file to MNI152 space using the templateflow BOLD reference.
-    No explicit transformation matrix file is required.
+    Uses the affine transforms stored in the NIfTI headers to resample the
+    input image onto the MNI152NLin2009cAsym BOLD reference grid from
+    templateflow. No explicit transformation matrix file is required.
 
     Parameters
     ----------
@@ -1540,61 +1530,55 @@ def apply_xfm_sform_to_mni(
     output_file : str or Path
         Path for output file in MNI space
     interp : str, default='nearestneighbour'
-        Interpolation method (per FSL, e.g., trilinear, nearestneighbour)
+        Interpolation method. Accepts FSL-style names for backwards
+        compatibility: 'nearestneighbour'/'nn' -> 'nearest',
+        'trilinear' -> 'linear', 'sinc'/'spline' -> 'linear'.
     overwrite : bool, default=False
-        If True, always run command and overwrite existing outputs.
-        If False, skip command if all output files already exist.
-
-    Raises
-    ------
-    ValueError
-        If interp parameter is invalid
-
-    Notes
-    -----
-    This function uses FLIRT's -applyxfm -usesqform flags to apply the
-    transformation encoded in the NIfTI headers rather than using an
-    external transformation matrix file. The reference template is the
-    MNI152NLin2009cAsym BOLD reference from templateflow.
-
+        If True, always run and overwrite existing outputs.
+        If False, skip if output file already exists.
     """
+    from nilearn.image import resample_to_img
 
-    # Validate interp
-    valid_interps = ['nearestneighbour', 'trilinear', 'sinc', 'spline', 'nn']
-    if interp not in valid_interps:
+    output_file = Path(output_file)
+
+    if not overwrite and output_file.exists():
+        logger.info(f"Skipping sform-to-MNI resampling (output exists): {output_file.name}")
+        return
+
+    # Map FSL interpolation names to nilearn equivalents
+    interp_map = {
+        'nearestneighbour': 'nearest',
+        'nn': 'nearest',
+        'trilinear': 'linear',
+        'sinc': 'linear',
+        'spline': 'linear',
+    }
+    nilearn_interp = interp_map.get(interp)
+    if nilearn_interp is None:
         raise ValueError(
             f"Invalid interpolation: {interp}. "
-            f"Valid options are: {', '.join(valid_interps)}"
+            f"Valid options are: {', '.join(interp_map.keys())}"
         )
 
     # Load MNI152 BOLD reference template from templateflow
-    # type: ignore - templateflow.get() returns str, not Path, but we cast it
     epi_tpl_path = cast(Path, tflow.get(
         "MNI152NLin2009cAsym",
-        resolution=2,          # 2 mm resolution
-        desc="fMRIPrep",       # fMRIPrep-style boldref
+        resolution=2,
+        desc="fMRIPrep",
         suffix="boldref"
-    )) # type: ignore
+    ))  # type: ignore
 
-    # Build flirt command
-    cmd = [
-        'flirt',
-        '-in', str(input_file),
-        '-ref', str(epi_tpl_path),
-        '-out', str(output_file),
-        '-applyxfm',
-        '-usesqform',
-        '-interp', interp
-    ]
+    logger.info(f"Resampling to MNI space: {Path(input_file).name}")
+    source_img = nib.load(str(input_file))
+    target_img = nib.load(str(epi_tpl_path))
 
-    run_command(
-        cmd_name='flirt',
-        cmd=cmd,
-        description='Applying sform/qform transformation to MNI',
-        inputs=input_file,
-        outputs=output_file,
-        overwrite=overwrite
+    resampled = resample_to_img(
+        source_img, target_img, interpolation=nilearn_interp,
+        force_resample=True, copy_header=True
     )
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    nib.save(resampled, str(output_file))
 
 def compute_xfm_to_mni(
         input_file: Union[str, Path],
