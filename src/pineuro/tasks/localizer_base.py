@@ -74,6 +74,7 @@ class BaseLocalizerTask(ABC):
         output_dir: Union[str, Path],
         participant_id: str,
         run: int = 1,
+        acq: Optional[int] = None,
         trigger_keys: Optional[List[str]] = None,
         fullscreen: bool = True,
         monitor_position: str = "right",
@@ -84,6 +85,7 @@ class BaseLocalizerTask(ABC):
         self.output_dir = Path(output_dir)
         self.participant_id = participant_id
         self.run_number = run
+        self.acq_number = acq
         self.trigger_keys = trigger_keys or ["t", "+", "5", "equal"]
         self.fullscreen = fullscreen
         self.monitor_position = monitor_position
@@ -495,8 +497,12 @@ class BaseLocalizerTask(ABC):
 
         if path is None:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            path = (self.output_dir /
-                    f"{self.participant_id}_task-{self.task_id}_run-{self.run_number:02d}_events.tsv")
+            if self.acq_number is not None:
+                path = (self.output_dir /
+                        f"{self.participant_id}_task-{self.task_id}_acq-{self.acq_number:02d}_run-{self.run_number:02d}_events.tsv")
+            else:
+                path = (self.output_dir /
+                        f"{self.participant_id}_task-{self.task_id}_run-{self.run_number:02d}_events.tsv")
 
         if not self._events:
             logger.warning("No events recorded, saving empty events file")

@@ -737,6 +737,27 @@ def _path_to_str(obj):
 
 
 @dataclass
+class SelectedAcquisitions:
+    """Store user-selected run/acq combinations for reproducibility.
+
+    This allows manual selection of which acquisition attempt to use for each run
+    when multiple attempts exist (e.g., after interruptions/retries).
+    """
+    localizer: dict[int, int] = None  # run_num -> acq_num for localizer runs
+    twovol: dict[int, int] = None     # run_num -> acq_num for 2vol scans
+    feedback: dict[str, dict] = None  # step_id -> {run, acq} for feedback runs
+
+    def __post_init__(self):
+        """Initialize empty dicts if None."""
+        if self.localizer is None:
+            self.localizer = {}
+        if self.twovol is None:
+            self.twovol = {}
+        if self.feedback is None:
+            self.feedback = {}
+
+
+@dataclass
 class SessionConfig:
     """Top-level configuration combining all session settings.
 
@@ -1040,6 +1061,168 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
     return max_run + 1
 
 
+def get_localizer_run_info(
+    collection_dir: Path,
+    task: str,
+    run: int,
+    expected_volumes: int
+) -> dict:
+    """Get run info for localizer/2vol with retry detection using acq entity.
+
+    Scans for existing {task}_acq-*_run-{run:02d} folders and determines
+    next acq number. A collection folder is considered interrupted if it
+    exists with fewer than expected_volumes files.
+
+    Parameters
+    ----------
+    collection_dir : Path
+        Collection directory to scan
+    task : str
+        Task name (e.g., 'rest', '2vol', 'self_other')
+    run : int
+        Run number
+    expected_volumes : int
+        Expected number of volume files for a complete collection
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - 'run': int - The run number (same as input)
+        - 'acq': int - The acquisition number for this attempt (1, 2, 3, ...)
+        - 'run_acq_string': str - Combined string like 'acq-01_run-01'
+        - 'existing_acqs': list - List of existing acquisition numbers for this run
+        - 'interrupted': bool - True if most recent acq is incomplete
+
+    Examples
+    --------
+    >>> info = get_localizer_run_info(collection_dir, 'rest', 1, 200)
+    >>> info
+    {'run': 1, 'acq': 1, 'run_acq_string': 'acq-01_run-01', 'existing_acqs': [], 'interrupted': False}
+    >>> # After one interrupted collection:
+    >>> info = get_localizer_run_info(collection_dir, 'rest', 1, 200)
+    >>> info
+    {'run': 1, 'acq': 2, 'run_acq_string': 'acq-02_run-01', 'existing_acqs': [1], 'interrupted': True}
+    """
+    if not collection_dir.exists():
+        return {
+            "run": run,
+            "acq": 1,
+            "run_acq_string": f"acq-01_run-{run:02d}",
+            "existing_acqs": [],
+            "interrupted": False,
+        }
+
+    # Scan for existing collection folders for this run
+    # Pattern: {task}_acq-*_run-{run:02d}/
+    pattern = f"{task}_acq-*_run-{run:02d}"
+
+    existing_acqs: list[int] = []
+    acq_volumes: dict[int, int] = {}  # acq -> volume count
+
+    # Check main collection directory
+    for folder in collection_dir.glob(pattern):
+        if folder.is_dir():
+            match = re.search(r'acq-(\d+)_run-', folder.name)
+            if match:
+                acq_num = int(match.group(1))
+                existing_acqs.append(acq_num)
+                # Count files in folder (supports extensionless DICOMs)
+                n_files = len([f for f in folder.iterdir() if f.is_file()])
+                acq_volumes[acq_num] = n_files
+
+    # Also check archived directories
+    for archive_dir in collection_dir.glob("interrupted_*"):
+        if archive_dir.is_dir():
+            for folder in archive_dir.glob(pattern):
+                if folder.is_dir():
+                    match = re.search(r'acq-(\d+)_run-', folder.name)
+                    if match:
+                        acq_num = int(match.group(1))
+                        if acq_num not in existing_acqs:
+                            existing_acqs.append(acq_num)
+                        # Track volumes from archived folders too
+                        if acq_num not in acq_volumes:
+                            n_files = len([f for f in folder.iterdir() if f.is_file()])
+                            acq_volumes[acq_num] = n_files
+
+    # Remove duplicates and sort
+    existing_acqs = sorted(set(existing_acqs))
+
+    # Check if most recent acq is incomplete
+    interrupted = False
+    if existing_acqs:
+        most_recent_acq = max(existing_acqs)
+        if most_recent_acq in acq_volumes:
+            interrupted = acq_volumes[most_recent_acq] < expected_volumes
+
+    # Determine next acq number
+    if not existing_acqs:
+        acq = 1
+    else:
+        acq = max(existing_acqs) + 1
+
+    return {
+        "run": run,
+        "acq": acq,
+        "run_acq_string": f"acq-{acq:02d}_run-{run:02d}",
+        "existing_acqs": existing_acqs,
+        "interrupted": interrupted,
+    }
+
+
+def archive_incomplete_collection(
+    collection_dir: Path,
+    task: str,
+    acq: int,
+    run: int
+) -> Optional[Path]:
+    """Move incomplete collection folder to archive with timestamp.
+
+    Creates: collection_dir/interrupted_YYYYMMDD_HHMMSS/
+    Moves: {task}_acq-{acq}_run-{run}/ folder
+
+    Parameters
+    ----------
+    collection_dir : Path
+        Collection directory containing the folder to archive
+    task : str
+        Task name (e.g., 'rest', '2vol', 'self_other')
+    acq : int
+        Acquisition number
+    run : int
+        Run number
+
+    Returns
+    -------
+    Path or None
+        Path to the created archive directory, or None if folder doesn't exist
+    """
+    from datetime import datetime
+
+    run_str = f"{run:02d}"
+    acq_str = f"{acq:02d}"
+    folder_name = f"{task}_acq-{acq_str}_run-{run_str}"
+    source_folder = collection_dir / folder_name
+
+    if not source_folder.exists():
+        logger.warning(f"Collection folder not found for archival: {source_folder}")
+        return None
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_dir = collection_dir / f"interrupted_{timestamp}"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    dest_folder = archive_dir / folder_name
+
+    # Move the folder
+    import shutil
+    shutil.move(str(source_folder), str(dest_folder))
+
+    logger.info(f"Archived incomplete collection: {source_folder} -> {dest_folder}")
+    return archive_dir
+
+
 # =============================================================================
 # Multi-Visit Support Functions
 # =============================================================================
@@ -1296,9 +1479,32 @@ def run_dicom_collection(
             logger.info(f"Stopping {task_name} collection at run {run_num}: exceeds max_runs={max_runs}")
             break
 
-        logger.info(f"Collecting {task_name} run {run_num}...")
+        # Get run info with retry detection
+        run_info = get_localizer_run_info(
+            collection_dir=collection_dir,
+            task=task_name,
+            run=run_num,
+            expected_volumes=n_volumes
+        )
+        acq = run_info["acq"]
+        interrupted = run_info["interrupted"]
 
-        output_dir = collection_dir / f"{task_name}_run-{run_num:02d}"
+        logger.info(f"Collecting {task_name} run {run_num} (acq-{acq:02d})...")
+
+        if interrupted:
+            logger.warning(
+                f"Detected incomplete collection for run {run_num}, acq-{acq-1:02d}. "
+                f"Archiving and starting fresh with acq-{acq:02d}"
+            )
+            # Archive the most recent incomplete attempt
+            archive_incomplete_collection(
+                collection_dir=collection_dir,
+                task=task_name,
+                acq=acq - 1,
+                run=run_num
+            )
+
+        output_dir = collection_dir / f"{task_name}_acq-{acq:02d}_run-{run_num:02d}"
 
         # Skip if simulator outputs already present
         if use_simulator and output_dir.exists():

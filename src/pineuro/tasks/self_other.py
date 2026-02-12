@@ -194,7 +194,7 @@ class SelfOtherTask(BaseLocalizerTask):
         self._voice_blocks: List[List[dict]] = []
         self._voice_block_types: List[str] = []  # "self" or "other" per voice block
         self._questions: List[str] = []
-        self._preloaded_sounds: dict = {}  # Pre-loaded pygame Sound objects
+        self._preloaded_sounds: dict = {}  # Pre-loaded PsychoPy Sound objects
 
     def _resolve_stim_file(self) -> Path:
         """Find the stimulus file for this participant and run.

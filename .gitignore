@@ -4,6 +4,7 @@ __pycache__/
 *.DS_Store
 .claude/
 .venv/
+.venv-win/
 .vscode/
 *.ipynb_checkpoints
 examples/

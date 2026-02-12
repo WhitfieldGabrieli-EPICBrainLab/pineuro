@@ -36,6 +36,7 @@ from ..components.csv_poller import FeedbackMonitor
 from ..components.qc_viewer import QCReportManager
 from ..components.collection_progress import CollectionProgressPanel
 from ..components.run_selection_dialog import RunSelectionDialog, RunInfo
+from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, scan_collection_acqs
 from ..components.mask_selection_dialog import MaskSelectionDialog, MaskReviewInfo
 from pineuro.feedback import get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
 from pineuro.tasks.session import SessionState
@@ -192,6 +193,8 @@ class ParticipantWorkflowScreen:
 
         # Selected rest runs for preprocessing (None = use all available)
         self._selected_rest_runs: Optional[List[int]] = None
+        # Selected acquisitions per run for preprocessing (None = auto-select best)
+        self._selected_acqs: Optional[Dict[int, int]] = None
 
     def _check_qc_approval(self, approval_type: str) -> bool:
         """Check if masks have been approved.
@@ -466,15 +469,55 @@ class ParticipantWorkflowScreen:
         else:
             return StepStatus.PENDING
 
+    def _check_acq_collection_status(
+        self, collection_dir: Path, task: str, run: int, expected_volumes: int
+    ) -> StepStatus:
+        """Check collection status across all acq attempts for a task+run.
+
+        Scans for task-{task}_acq-*_run-{run:02d} folders and returns COMPLETE
+        if any acq has enough volumes.
+
+        Args:
+            collection_dir: Parent collection directory
+            task: Task prefix (e.g., 'task-rest', 'task-2vol')
+            run: Run number
+            expected_volumes: Expected number of volumes
+
+        Returns:
+            StepStatus based on best available acquisition
+        """
+        collections = PipelineRunner.find_available_collections(
+            collection_dir=collection_dir,
+            task=task,
+            run=run,
+            expected_volumes=expected_volumes,
+        )
+
+        if not collections:
+            return StepStatus.PENDING
+
+        # If any acq is complete, the step is complete
+        if any(c["is_complete"] for c in collections):
+            return StepStatus.COMPLETE
+
+        # Has data but none complete
+        return StepStatus.INTERRUPTED
+
     def _get_rest_run_info(self) -> List[RunInfo]:
         """Get information about available localizer runs (rest or task-based).
+
+        Scans for acq-based folder names (task-{name}_acq-XX_run-XX).
+        Reports the best acquisition per run (highest complete, or highest overall).
 
         Returns:
             List of RunInfo objects for all configured localizer runs
         """
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
         n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
         runs = []
 
@@ -490,18 +533,33 @@ class ParticipantWorkflowScreen:
 
         # Build run info for each configured localizer run
         for run_num in range(1, n_localizer_runs + 1):
-            run_dir = base_dir / "collection" / f"task-rest_run-{run_num:02d}"
-            actual_vols = len(get_dicom_files(run_dir)) if run_dir.exists() else 0
+            # Find best acq folder for this run
+            best_dir = None
+            actual_vols = 0
+
+            collections = PipelineRunner.find_available_collections(
+                collection_dir=collection_dir,
+                task=f"task-{task_name}",
+                run=run_num,
+                expected_volumes=expected_vols,
+            )
+
+            if collections:
+                # Use highest complete, or highest overall
+                complete = [c for c in collections if c["is_complete"]]
+                best = complete[0] if complete else collections[0]
+                best_dir = best["path"]
+                actual_vols = best["n_volumes"]
 
             runs.append(
                 RunInfo(
                     run_id=run_num,
                     run_name=f"Localizer Run {run_num}",
-                    directory=run_dir,
+                    directory=best_dir or (collection_dir / f"task-{task_name}_acq-01_run-{run_num:02d}"),
                     expected_volumes=expected_vols,
                     actual_volumes=actual_vols,
                     is_complete=actual_vols >= expected_vols,
-                    selected=actual_vols > 0,  # Pre-select if has data
+                    selected=actual_vols > 0,
                 )
             )
 
@@ -549,6 +607,102 @@ class ParticipantWorkflowScreen:
         dialog = RunSelectionDialog(
             page=self.page,
             runs=runs,
+            on_confirm=on_confirm,
+            on_cancel=on_cancel,
+        )
+        dialog.show()
+
+    def _needs_acq_selection(self, selected_runs: Optional[List[int]] = None) -> bool:
+        """Check if acquisition selection dialog should be shown.
+
+        Returns True if any selected run has multiple acquisition attempts.
+
+        Args:
+            selected_runs: Run IDs to check (None = all configured runs)
+        """
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
+        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+
+        expected_vols = config["scan"].get("localizer_n_volumes")
+        if expected_vols is None:
+            rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
+            expected_vols = (
+                rest_n_volumes[0]
+                if isinstance(rest_n_volumes, list)
+                else rest_n_volumes
+            )
+
+        runs_to_check = selected_runs or list(range(1, n_localizer_runs + 1))
+
+        for run_num in runs_to_check:
+            acqs = scan_collection_acqs(
+                collection_dir=collection_dir,
+                task=f"task-{task_name}",
+                run=run_num,
+                expected_volumes=expected_vols,
+            )
+            if len(acqs) > 1:
+                return True
+
+        return False
+
+    def _show_acq_selection_dialog(self, on_selected, selected_runs: Optional[List[int]] = None):
+        """Show the acquisition selection dialog.
+
+        Args:
+            on_selected: Callback with dict {run_id: selected_acq_num}
+            selected_runs: Run IDs to show (None = all configured runs)
+        """
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
+        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+
+        expected_vols = config["scan"].get("localizer_n_volumes")
+        if expected_vols is None:
+            rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
+            expected_vols = (
+                rest_n_volumes[0]
+                if isinstance(rest_n_volumes, list)
+                else rest_n_volumes
+            )
+
+        runs_to_check = selected_runs or list(range(1, n_localizer_runs + 1))
+
+        run_acq_infos = []
+        for run_num in runs_to_check:
+            acqs = scan_collection_acqs(
+                collection_dir=collection_dir,
+                task=f"task-{task_name}",
+                run=run_num,
+                expected_volumes=expected_vols,
+            )
+            if acqs:
+                run_acq_infos.append(
+                    RunAcqInfo(
+                        run_id=run_num,
+                        run_name=f"Localizer Run {run_num}",
+                        acquisitions=acqs,
+                    )
+                )
+
+        def on_confirm(selected_acqs: Dict[int, int]):
+            self._selected_acqs = selected_acqs
+            self._add_log(f"Selected acquisitions: {selected_acqs}")
+            on_selected(selected_acqs)
+
+        def on_cancel():
+            self._on_preview_cancel()
+
+        dialog = AcqSelectionDialog(
+            page=self.page,
+            runs=run_acq_infos,
             on_confirm=on_confirm,
             on_cancel=on_cancel,
         )
@@ -710,10 +864,10 @@ class ParticipantWorkflowScreen:
         # Only check localizer/preprocessing/mask extraction steps if NOT in mask reuse mode
         if not is_mask_reuse:
             # Check 2vol initial collection (only if enabled)
+            collection_dir = base_dir / "collection"
             if twovol_initial_enabled:
-                twovol_initial_dir = base_dir / "collection" / "task-2vol_run-01"
                 n_vols = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
-                status = self._check_collection_status(twovol_initial_dir, n_vols)
+                status = self._check_acq_collection_status(collection_dir, "task-2vol", 1, n_vols)
                 self.step_statuses["2vol_initial"] = status
 
             # Check localizer run collections dynamically
@@ -722,10 +876,14 @@ class ParticipantWorkflowScreen:
                 rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
                 expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
+            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+            loc_task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+
             for run_num in range(1, n_localizer_runs + 1):
                 step_id = f"rest_run_{run_num}"
-                run_dir = base_dir / "collection" / f"task-rest_run-{run_num:02d}"
-                status = self._check_collection_status(run_dir, expected_vols)
+                status = self._check_acq_collection_status(
+                    collection_dir, f"task-{loc_task_name}", run_num, expected_vols
+                )
                 self.step_statuses[step_id] = status
 
             # Check preprocessing outputs
@@ -763,13 +921,13 @@ class ParticipantWorkflowScreen:
             mask_extraction_dir = base_dir / "mask_extraction"  # Still needed for path references
 
         # Check 2vol realtime collection (only if enabled)
+        collection_dir = base_dir / "collection"
         if twovol_realtime_enabled:
             # In mask reuse mode, 2vol is run-01 (no initial 2vol)
             # In standard mode, 2vol is run-02 (after initial 2vol)
             realtime_2vol_run = 1 if is_mask_reuse else 2
-            twovol_realtime_dir = base_dir / "collection" / f"task-2vol_run-{realtime_2vol_run:02d}"
             n_vols = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
-            status = self._check_collection_status(twovol_realtime_dir, n_vols)
+            status = self._check_acq_collection_status(collection_dir, "task-2vol", realtime_2vol_run, n_vols)
             self.step_statuses["2vol_realtime"] = status
 
             # Check coregistration_realtime outputs - realtime is in feedback/01_2vol
@@ -2236,7 +2394,8 @@ class ParticipantWorkflowScreen:
                 "label": "Collect Real-time 2vol (Disabled)",
                 "description": "Real-time 2vol collection is disabled. Feedback will use masks from subject boldref space.",
                 "parameters": {"Status": "Disabled - using boldref masks"},
-                "output_path": base_dir / "collection" / f"task-2vol_run-{run_num:02d}",
+                "output_path": base_dir / "collection",
+                "output_pattern": f"task-2vol_acq-*_run-{run_num:02d}",
             }
 
         return {
@@ -2246,10 +2405,11 @@ class ParticipantWorkflowScreen:
                 "Task": f"2vol (run-{run_num:02d})",
                 "Volumes": config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2)),
                 "Source": config["scan"]["twovol_realtime_dicoms"],
-                "Output": base_dir / "collection" / f"task-2vol_run-{run_num:02d}",
+                "Output": base_dir / "collection" / f"task-2vol_acq-*_run-{run_num:02d}",
                 "Enabled": "Yes",
             },
-            "output_path": base_dir / "collection" / f"task-2vol_run-{run_num:02d}",
+            "output_path": base_dir / "collection",
+            "output_pattern": f"task-2vol_acq-*_run-{run_num:02d}",
         }
 
     def _get_step_info(self, step_id: str, config: dict, base_dir: Path, participant_id: str) -> dict:
@@ -2324,16 +2484,17 @@ class ParticipantWorkflowScreen:
                     "Task": "2vol (run-01)",
                     "Volumes": config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2)),
                     "Source": config["scan"]["twovol_initial_dicoms"],
-                    "Output": base_dir / "collection" / "task-2vol_run-01",
+                    "Output": base_dir / "collection" / "task-2vol_acq-*_run-01",
                     "Enabled": "Yes" if config["scan"].get("twovol_initial_enabled", True) else "No",
                 } if config["scan"].get("twovol_initial_enabled", True) else {"Status": "Disabled"},
-                "output_path": base_dir / "collection" / "task-2vol_run-01",
+                "output_path": base_dir / "collection",
+                "output_pattern": "task-2vol_acq-*_run-01",
             },
             "preprocessing": {
                 "label": "Run Preprocessing",
                 "description": "Motion correction, brain extraction, and coregistration of localizer runs.",
                 "parameters": {
-                    "Input": base_dir / "collection" / "task-rest_*",
+                    "Input": base_dir / "collection" / "task-*_acq-*_run-*",
                     "Output": base_dir / "preprocessing",
                     "Expected Outputs": "preproc.nii.gz, mask.nii.gz, boldref.nii.gz",
                 },
@@ -2392,17 +2553,20 @@ class ParticipantWorkflowScreen:
             localizer_dicoms = config["scan"].get("localizer_source_dicoms") or config["scan"].get("rest_source_dicoms", [])
             source_dicom = localizer_dicoms[run_idx] if run_idx < len(localizer_dicoms) else ""
 
+            loc_task = config['scan'].get('localizer_task_type', 'rest')
+            loc_name = loc_task if loc_task != 'rest' else 'rest'
             info = {
                 "label": f"Collect Localizer Run {run_num}",
                 "description": f"Collect localizer fMRI data (run {run_num}) for network mask extraction.",
                 "parameters": {
-                    "Task": f"{config['scan'].get('localizer_task_type', 'rest')} (run-{run_num:02d})",
+                    "Task": f"{loc_task} (run-{run_num:02d})",
                     "Volumes": config["scan"].get("localizer_n_volumes") or 200,
                     "Source": source_dicom,
-                    "Output": base_dir / "collection" / f"task-rest_run-{run_num:02d}",
+                    "Output": base_dir / "collection" / f"task-{loc_name}_acq-*_run-{run_num:02d}",
                     "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 10.0))}x",
                 },
-                "output_path": base_dir / "collection" / f"task-rest_run-{run_num:02d}",
+                "output_path": base_dir / "collection",
+                "output_pattern": f"task-{loc_name}_acq-*_run-{run_num:02d}",
             }
         # Handle dynamic feedback_N steps
         elif step_id.startswith("feedback_"):
@@ -2503,21 +2667,41 @@ class ParticipantWorkflowScreen:
         Args:
             step_id: Step identifier to execute
         """
-        # For preprocessing, check if run selection is needed
-        if step_id == "preprocessing" and self._needs_run_selection():
-            # Show run selection dialog first
-            def on_runs_selected(selected_runs: List[int]):
-                self._add_log(f"Selected runs for preprocessing: {selected_runs}")
-                self._start_step(step_id)
+        # For preprocessing, handle run selection and acq selection dialogs
+        if step_id == "preprocessing":
+            if self._needs_run_selection():
+                # Show run selection dialog first, then acq selection
+                def on_runs_selected(selected_runs: List[int]):
+                    self._add_log(f"Selected runs for preprocessing: {selected_runs}")
+                    self._maybe_show_acq_dialog(step_id, selected_runs)
 
-            self._show_run_selection_dialog(on_runs_selected)
-            return
+                self._show_run_selection_dialog(on_runs_selected)
+                return
+            else:
+                # No run selection needed, but check for acq selection
+                self._maybe_show_acq_dialog(step_id)
+                return
 
         # Clear any previous selection for non-preprocessing steps
-        if step_id != "preprocessing":
-            self._selected_rest_runs = None
-
+        self._selected_rest_runs = None
+        self._selected_acqs = None
         self._start_step(step_id)
+
+    def _maybe_show_acq_dialog(self, step_id: str, selected_runs: Optional[List[int]] = None):
+        """Show acq selection dialog if multiple acqs exist, otherwise start step.
+
+        Args:
+            step_id: Step identifier to execute
+            selected_runs: Run IDs to check (None = all configured runs)
+        """
+        if self._needs_acq_selection(selected_runs):
+            def on_acqs_selected(selected_acqs: Dict[int, int]):
+                self._start_step(step_id)
+
+            self._show_acq_selection_dialog(on_acqs_selected, selected_runs)
+        else:
+            self._selected_acqs = None
+            self._start_step(step_id)
 
     def _start_step(self, step_id: str):
         """Actually start executing a pipeline step.
@@ -2546,11 +2730,13 @@ class ParticipantWorkflowScreen:
                 on_collection_progress=self._on_collection_progress,
             )
 
-        # Pass selected runs to runner for preprocessing step
+        # Pass selected runs and acqs to runner for preprocessing step
         if step_id == "preprocessing":
             self.pipeline_runner.set_selected_rest_runs(self._selected_rest_runs)
+            self.pipeline_runner.set_selected_acqs(self._selected_acqs)
         else:
             self.pipeline_runner.set_selected_rest_runs(None)
+            self.pipeline_runner.set_selected_acqs(None)
 
         # Show monitoring panel (creates task_mirror for feedback steps)
         self._show_monitoring_panel(step_id)

@@ -7,11 +7,12 @@ allowing the GUI to remain responsive during long-running operations.
 import logging
 import threading
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List
 
 from pineuro.preprocessing import collect_dicoms, preprocessing
 from pineuro.mask_extraction import mask_extraction_rest, coregister_2vol, generate_2vol_qc_overlays
 from pineuro.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
+from pineuro.session import get_localizer_run_info, archive_incomplete_collection
 from pineuro.tasks import get_task_metadata
 from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
 from pineuro.tasks.session import SessionState
@@ -61,6 +62,15 @@ class PipelineRunner:
         self._current_localizer_task = None  # Track localizer task for stop support
         self._task_mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
         self._selected_rest_runs: Optional[list] = None  # Selected runs for preprocessing
+        self._selected_acqs: Optional[Dict[int, int]] = None  # {run_id: acq_num} for preprocessing
+
+    def set_selected_acqs(self, acqs: Optional[Dict[int, int]]) -> None:
+        """Set which acquisition to use for each run.
+
+        Args:
+            acqs: Dict {run_id: acq_num}, or None to auto-select highest complete
+        """
+        self._selected_acqs = acqs
 
     def set_selected_rest_runs(self, runs: Optional[list]) -> None:
         """Set which rest runs to use for preprocessing.
@@ -84,6 +94,64 @@ class PipelineRunner:
             Function that receives visual state dict from task.get_mirror_state()
         """
         self._task_mirror_callback = callback
+
+    @staticmethod
+    def find_available_collections(
+        collection_dir: Path,
+        task: str,
+        run: int,
+        expected_volumes: int
+    ) -> list[dict]:
+        """Find all complete collection folders for a run.
+
+        Parameters
+        ----------
+        collection_dir : Path
+            Collection directory to scan
+        task : str
+            Task name (e.g., 'task-rest', 'task-2vol')
+        run : int
+            Run number
+        expected_volumes : int
+            Expected number of volumes for a complete collection
+
+        Returns
+        -------
+        list[dict]
+            List of dicts with keys:
+            - acq: int - Acquisition number
+            - path: Path - Folder path
+            - n_volumes: int - Number of volumes present
+            - is_complete: bool - True if >= expected_volumes
+
+            Sorted by acq number (highest first)
+        """
+        import re
+
+        if not collection_dir.exists():
+            return []
+
+        pattern = f"{task}_acq-*_run-{run:02d}"
+        collections = []
+
+        for folder in collection_dir.glob(pattern):
+            if folder.is_dir():
+                match = re.search(r'acq-(\d+)_run-', folder.name)
+                if match:
+                    acq_num = int(match.group(1))
+                    n_files = len([f for f in folder.iterdir() if f.is_file()])
+                    is_complete = n_files >= expected_volumes
+
+                    collections.append({
+                        "acq": acq_num,
+                        "path": folder,
+                        "n_volumes": n_files,
+                        "is_complete": is_complete,
+                    })
+
+        # Sort by acq number (highest first)
+        collections.sort(key=lambda x: x["acq"], reverse=True)
+        return collections
 
     def run_step(self, step_id: str) -> None:
         """Execute a pipeline step in background thread.
@@ -194,13 +262,37 @@ class PipelineRunner:
             self._emit_progress("2vol initial collection is disabled, skipping...")
             return
 
-        self._emit_progress("Collecting initial 2vol DICOMs...")
-
         base_dir = Path(config["paths"]["base_dir"])
-        output_dir = base_dir / "collection" / "task-2vol_run-01"
+        collection_dir = base_dir / "collection"
 
         # Get number of volumes (use new field, fall back to legacy)
         n_volumes = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+
+        # Get run info with retry detection
+        run_info = get_localizer_run_info(
+            collection_dir=collection_dir,
+            task="task-2vol",
+            run=1,
+            expected_volumes=n_volumes
+        )
+        acq = run_info["acq"]
+        interrupted = run_info["interrupted"]
+
+        self._emit_progress(f"Collecting initial 2vol DICOMs (acq-{acq:02d})...")
+
+        if interrupted:
+            self._emit_progress(
+                f"Detected incomplete 2vol collection, acq-{acq-1:02d}. "
+                f"Archiving and starting fresh with acq-{acq:02d}"
+            )
+            archive_incomplete_collection(
+                collection_dir=collection_dir,
+                task="task-2vol",
+                acq=acq - 1,
+                run=1
+            )
+
+        output_dir = collection_dir / f"task-2vol_acq-{acq:02d}_run-01"
 
         # Determine simulator vs real-time mode
         simulator_enabled = config["scan"].get("simulator_enabled", True)
@@ -246,10 +338,8 @@ class PipelineRunner:
         localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
         task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
-        self._emit_progress(f"Collecting {task_name} run {run_num} DICOMs...")
-
         base_dir = Path(config["paths"]["base_dir"])
-        output_dir = base_dir / "collection" / f"task-{task_name}_run-{run_num:02d}"
+        collection_dir = base_dir / "collection"
 
         # Get expected volumes (use new localizer fields, fall back to legacy)
         n_volumes = config["scan"].get("localizer_n_volumes")
@@ -262,6 +352,33 @@ class PipelineRunner:
                     n_volumes = rest_volumes[0] if rest_volumes else 200
             else:
                 n_volumes = rest_volumes
+
+        # Get run info with retry detection
+        run_info = get_localizer_run_info(
+            collection_dir=collection_dir,
+            task=f"task-{task_name}",
+            run=run_num,
+            expected_volumes=n_volumes
+        )
+        acq = run_info["acq"]
+        interrupted = run_info["interrupted"]
+
+        self._emit_progress(f"Collecting {task_name} run {run_num} (acq-{acq:02d}) DICOMs...")
+
+        if interrupted:
+            self._emit_progress(
+                f"Detected incomplete collection for run {run_num}, acq-{acq-1:02d}. "
+                f"Archiving and starting fresh with acq-{acq:02d}"
+            )
+            # Archive the most recent incomplete attempt
+            archive_incomplete_collection(
+                collection_dir=collection_dir,
+                task=f"task-{task_name}",
+                acq=acq - 1,
+                run=run_num
+            )
+
+        output_dir = collection_dir / f"task-{task_name}_acq-{acq:02d}_run-{run_num:02d}"
 
         # Determine simulator vs real-time mode
         simulator_enabled = config["scan"].get("simulator_enabled", True)
@@ -314,7 +431,7 @@ class PipelineRunner:
 
         # Always launch a localizer task - it controls simulator start timing
         localizer_thread = self._launch_localizer_task(
-            run_num, actual_task_id, watch_dir, simulator=simulator
+            run_num, actual_task_id, watch_dir, acq=acq, simulator=simulator
         )
 
         # collect_dicoms just watches the directory - no simulator
@@ -339,7 +456,7 @@ class PipelineRunner:
             localizer_thread.join(timeout=60)
             self._current_localizer_task = None
 
-    def _launch_localizer_task(self, run_num: int, task_id: str, watch_dir: Path, simulator=None) -> threading.Thread:
+    def _launch_localizer_task(self, run_num: int, task_id: str, watch_dir: Path, acq: int = 1, simulator=None) -> threading.Thread:
         """Launch a localizer PsychoPy task in a separate thread.
 
         The task runs concurrently with DICOM collection, presenting stimuli
@@ -349,6 +466,7 @@ class PipelineRunner:
             run_num: Run number (1-based)
             task_id: Task identifier (e.g., "fixation", "self_other")
             watch_dir: Directory to watch for first DICOM arrival (auto-trigger)
+            acq: Acquisition number (for retry handling)
             simulator: VolumeSimulator instance (optional, for offline testing)
 
         Returns:
@@ -383,6 +501,7 @@ class PipelineRunner:
             participant_id=self.participant_id,
             config=localizer_params,
             run=run_num,
+            acq=acq,  # Pass acq for events file naming
             watch_dir=str(watch_dir),  # Pass watch_dir for auto-trigger on first DICOM
             simulator=simulator,  # Pass simulator for task-controlled start timing
         )
@@ -410,35 +529,119 @@ class PipelineRunner:
         logger.info(f"Launched localizer task '{task_id}' in thread")
         return thread
 
+    def _resolve_acq_paths(
+        self,
+        task_name: str,
+        runs_to_process: List[int],
+        rest_volumes: List[int]
+    ) -> List[Path]:
+        """Resolve collection folder paths using selected acqs.
+
+        Uses self._selected_acqs if set (from GUI dialog), otherwise
+        auto-selects highest complete acq for each run.
+
+        Parameters
+        ----------
+        task_name : str
+            Task name (e.g., 'rest', 'self_other')
+        runs_to_process : list[int]
+            List of run numbers to process
+        rest_volumes : list[int]
+            Expected volumes per run
+
+        Returns
+        -------
+        list[Path]
+            Selected DICOM folder paths
+        """
+        config = self.config
+        base_dir = Path(config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
+
+        selected_paths = []
+        for run_num in runs_to_process:
+            expected_vols = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
+
+            # If user selected a specific acq, use that directly
+            if self._selected_acqs and run_num in self._selected_acqs:
+                acq_num = self._selected_acqs[run_num]
+                acq_path = collection_dir / f"task-{task_name}_acq-{acq_num:02d}_run-{run_num:02d}"
+                if acq_path.exists():
+                    self._emit_progress(f"Run {run_num}: Using selected acq-{acq_num:02d}")
+                    selected_paths.append(acq_path)
+                    continue
+                else:
+                    logger.warning(f"Selected acq-{acq_num:02d} for run {run_num} not found, falling back")
+
+            # Auto-select: find highest complete acq
+            collections = self.find_available_collections(
+                collection_dir=collection_dir,
+                task=f"task-{task_name}",
+                run=run_num,
+                expected_volumes=expected_vols
+            )
+
+            if not collections:
+                logger.warning(f"No collections found for run {run_num}")
+                continue
+
+            complete = [c for c in collections if c["is_complete"]]
+            selected = complete[0] if complete else collections[0]
+            self._emit_progress(
+                f"Run {run_num}: Using acq-{selected['acq']:02d} "
+                f"({selected['n_volumes']} volumes)"
+            )
+            selected_paths.append(selected["path"])
+
+        return selected_paths
+
     def _run_preprocessing(self) -> None:
         """Run preprocessing on collected rest runs."""
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
         preprocessing_dir = base_dir / "preprocessing"
 
-        # Input DICOM directories
-        rest_run_1_dir = base_dir / "collection" / "task-rest_run-01"
-        rest_run_2_dir = base_dir / "collection" / "task-rest_run-02"
+        # Determine task name for localizer
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
-        # Use selected runs if specified, otherwise use all available
-        input_dicoms = []
+        # Get expected volumes for finding complete collections
+        rest_volumes = config["scan"].get("rest_n_volumes", [200, 200])
+        if not isinstance(rest_volumes, list):
+            rest_volumes = [rest_volumes]
+
+        # Determine which runs to process
         if self._selected_rest_runs is not None:
-            # Use explicitly selected runs
-            if 1 in self._selected_rest_runs and rest_run_1_dir.exists():
-                input_dicoms.append(rest_run_1_dir)
-            if 2 in self._selected_rest_runs and rest_run_2_dir.exists():
-                input_dicoms.append(rest_run_2_dir)
-
-            self._emit_progress(f"Using selected runs: {self._selected_rest_runs}")
+            runs_to_process = self._selected_rest_runs
+            self._emit_progress(f"Using selected runs: {runs_to_process}")
         else:
-            # Default behavior: use all available runs
-            if rest_run_1_dir.exists():
-                input_dicoms.append(rest_run_1_dir)
-            if rest_run_2_dir.exists():
-                input_dicoms.append(rest_run_2_dir)
+            # Auto-detect available runs (up to 2)
+            runs_to_process = []
+            for run_num in [1, 2]:
+                expected_vols = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
+                collections = self.find_available_collections(
+                    collection_dir=collection_dir,
+                    task=f"task-{task_name}",
+                    run=run_num,
+                    expected_volumes=expected_vols
+                )
+                if collections:
+                    runs_to_process.append(run_num)
+
+        # Select acquisitions (uses GUI selections if set, else auto-selects)
+        input_dicoms = self._resolve_acq_paths(
+            task_name=task_name,
+            runs_to_process=runs_to_process,
+            rest_volumes=rest_volumes
+        )
 
         if not input_dicoms:
-            raise ValueError("No resting-state run directories found for preprocessing")
+            raise ValueError(f"No {task_name} collection directories selected for preprocessing")
+
+        # Log selected acquisitions
+        for path in input_dicoms:
+            self._emit_progress(f"Using: {path.name}")
 
         # Set up progress callback for preprocessing to show in GUI log console
         def progress_callback(step: str, detail: str = ""):
@@ -494,7 +697,19 @@ class PipelineRunner:
                 f"*_task-{localizer_task_type}_*_events.tsv"
             ))
             if events_glob:
-                events_file = str(events_glob[0])
+                # If acqs were selected, prefer events file matching selected acq
+                events_file = None
+                if self._selected_acqs:
+                    for run_num, acq_num in self._selected_acqs.items():
+                        acq_pattern = f"acq-{acq_num:02d}_run-{run_num:02d}"
+                        for ef in events_glob:
+                            if acq_pattern in ef.name:
+                                events_file = str(ef)
+                                break
+                        if events_file:
+                            break
+                if events_file is None:
+                    events_file = str(events_glob[-1])  # Default: latest
                 self._emit_progress(f"Found events file: {Path(events_file).name}")
             else:
                 raise FileNotFoundError(
@@ -639,7 +854,26 @@ class PipelineRunner:
             if not masks_dir.exists():
                 masks_dir = mask_extraction_dir / "02_masks"
 
-        twovol_dicom = base_dir / "collection" / f"task-2vol_{run_str}"
+        # Find the most recent complete 2vol collection for this run
+        n_volumes = config["scan"].get("twovol_n_volumes", 2)
+        collections = self.find_available_collections(
+            collection_dir=base_dir / "collection",
+            task="task-2vol",
+            run=actual_2vol_run,
+            expected_volumes=n_volumes
+        )
+        if not collections:
+            raise ValueError(f"No 2vol collection found for run {actual_2vol_run}")
+
+        # Use highest complete acq (or highest incomplete if none complete)
+        complete = [c for c in collections if c["is_complete"]]
+        selected = complete[0] if complete else collections[0]
+        twovol_dicom = selected["path"]
+
+        if not selected["is_complete"]:
+            logger.warning(
+                f"Using incomplete 2vol collection: {selected['n_volumes']}/{n_volumes} volumes"
+            )
 
         # Get network mask files (thresholded only)
         network_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
@@ -720,19 +954,43 @@ class PipelineRunner:
             self._emit_progress("2vol realtime collection is disabled, skipping...")
             return
 
-        self._emit_progress("Collecting real-time 2vol DICOMs...")
-
         base_dir = Path(config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
 
         # In mask reuse mode, realtime 2vol is run-01 (no initial 2vol)
         # In standard mode, realtime 2vol is run-02 (after initial 2vol)
         visit_config = config.get("visit", {})
         is_mask_reuse = visit_config.get("mask_source") == "reuse"
         run_id = 1 if is_mask_reuse else 2
-        output_dir = base_dir / "collection" / f"task-2vol_run-{run_id:02d}"
 
         # Get number of volumes (use new field, fall back to legacy)
         n_volumes = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+
+        # Get run info with retry detection
+        run_info = get_localizer_run_info(
+            collection_dir=collection_dir,
+            task="task-2vol",
+            run=run_id,
+            expected_volumes=n_volumes
+        )
+        acq = run_info["acq"]
+        interrupted = run_info["interrupted"]
+
+        self._emit_progress(f"Collecting real-time 2vol DICOMs (acq-{acq:02d}, run-{run_id:02d})...")
+
+        if interrupted:
+            self._emit_progress(
+                f"Detected incomplete 2vol collection, acq-{acq-1:02d}. "
+                f"Archiving and starting fresh with acq-{acq:02d}"
+            )
+            archive_incomplete_collection(
+                collection_dir=collection_dir,
+                task="task-2vol",
+                acq=acq - 1,
+                run=run_id
+            )
+
+        output_dir = collection_dir / f"task-2vol_acq-{acq:02d}_run-{run_id:02d}"
 
         # Determine simulator vs real-time mode
         simulator_enabled = config["scan"].get("simulator_enabled", True)

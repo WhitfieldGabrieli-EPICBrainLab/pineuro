@@ -25,6 +25,7 @@ src/pineuro/gui/config_manager.py
 src/pineuro/gui/models.py
 src/pineuro/gui/utils.py
 src/pineuro/gui/components/__init__.py
+src/pineuro/gui/components/acq_selection_dialog.py
 src/pineuro/gui/components/activation_plot.py
 src/pineuro/gui/components/collection_progress.py
 src/pineuro/gui/components/csv_poller.py
@@ -45,6 +46,7 @@ src/pineuro/tasks/ball.py
 src/pineuro/tasks/base.py
 src/pineuro/tasks/designs.py
 src/pineuro/tasks/factory.py
+src/pineuro/tasks/fixation.py
 src/pineuro/tasks/localizer_base.py
 src/pineuro/tasks/self_other.py
 src/pineuro/tasks/session.py
