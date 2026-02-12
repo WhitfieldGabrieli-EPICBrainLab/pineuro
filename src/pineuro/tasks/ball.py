@@ -1172,6 +1172,7 @@ BALL_TASK_METADATA = TaskMetadata(
             condition="last_feedback_only",
         ),
     ],
+    design_type="block",
 )
 
 # Auto-register on import

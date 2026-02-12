@@ -127,6 +127,63 @@ def create_task(
     )
 
 
+def create_localizer_task(
+    task_id: str,
+    output_dir,
+    participant_id: str,
+    config: Dict[str, Any],
+    **kwargs,
+):
+    """Create a localizer task instance (no coordinator needed).
+
+    Parameters
+    ----------
+    task_id : str
+        Registered localizer task identifier (e.g., 'self_other')
+    output_dir : str or Path
+        Directory for events TSV output
+    participant_id : str
+        Participant identifier (e.g., 'sub-01')
+    config : dict
+        Task configuration parameters (validated against metadata)
+    **kwargs
+        Additional keyword arguments passed to the task constructor
+        (e.g., run, trigger_keys, fullscreen, monitor_position)
+
+    Returns
+    -------
+    BaseLocalizerTask
+        Configured localizer task instance
+
+    Raises
+    ------
+    ValueError
+        If task_id is not registered or config validation fails
+    """
+    metadata = get_task_metadata(task_id)
+    metadata.validate_config(config)
+
+    if task_id not in _TASK_CLASSES:
+        raise ValueError(
+            f"Task class not registered for '{task_id}'. "
+            f"Ensure the task module is imported."
+        )
+
+    task_class = _TASK_CLASSES[task_id]
+
+    # Filter config to metadata-defined parameters only
+    filtered = {p.key: config.get(p.key, p.default) for p in metadata.parameters}
+
+    logger.info(f"Creating localizer task '{task_id}' for {participant_id}")
+
+    return task_class(
+        output_dir=output_dir,
+        participant_id=participant_id,
+        **filtered,
+        **kwargs,
+    )
+
+
 def get_registered_task_ids() -> list[str]:
     """Get list of task IDs that have both metadata and class registered.
 

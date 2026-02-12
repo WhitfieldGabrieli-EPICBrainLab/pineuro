@@ -1391,7 +1391,8 @@ def collect_volumes(
     # The loop combines filesystem events (fast) with periodic scanning (reliable)
     # to ensure we never miss files.
 
-    start_time = time.time()
+    start_time = None  # Will be set when first volume arrives
+    initial_wait_start = time.time()  # Track timeout from beginning
 
     try:
         while collected_count < n_volumes:
@@ -1404,10 +1405,11 @@ def collect_volumes(
 
             # --- Check Timeout ---
             # Prevent infinite waiting if scanner stops sending files
-            elapsed = time.time() - start_time
-            if elapsed > timeout:
+            # Use initial_wait_start for timeout (starts from beginning, not first volume)
+            elapsed_since_start = time.time() - initial_wait_start
+            if elapsed_since_start > timeout:
                 raise TimeoutError(
-                    f"Timeout after {elapsed:.1f}s: collected {collected_count}/{n_volumes} volumes"
+                    f"Timeout after {elapsed_since_start:.1f}s: collected {collected_count}/{n_volumes} volumes"
                 )
 
             # --- Periodic Backup Scan ---
@@ -1436,10 +1438,16 @@ def collect_volumes(
 
                 collected_count += 1
 
+                # --- Set Start Time on First Volume ---
+                # Timer starts when first DICOM arrives, not when we start waiting
+                if start_time is None:
+                    start_time = time.time()
+
                 # --- Progress Callback ---
                 # Notify external code (GUI) of progress
                 if progress_callback is not None:
-                    elapsed = time.time() - start_time
+                    # Calculate elapsed time since first volume (0 if no volumes yet)
+                    elapsed = time.time() - start_time if start_time is not None else 0.0
                     try:
                         progress_callback(collected_count, n_volumes, elapsed, dest_path)
                     except Exception as e:
@@ -1482,7 +1490,8 @@ def collect_volumes(
                     f.unlink()
             logger.debug(f"Cleaned up watch directory: {watch_dir}")
 
-    elapsed = time.time() - start_time
+    # Calculate total elapsed time (from first volume if any were collected)
+    elapsed = time.time() - start_time if start_time is not None else 0.0
     logger.info(f"Collection complete: {collected_count} volumes in {elapsed:.1f}s")
 
     return output_dir

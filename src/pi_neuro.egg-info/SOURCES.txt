@@ -45,6 +45,10 @@ src/pineuro/tasks/ball.py
 src/pineuro/tasks/base.py
 src/pineuro/tasks/designs.py
 src/pineuro/tasks/factory.py
+src/pineuro/tasks/localizer_base.py
+src/pineuro/tasks/self_other.py
 src/pineuro/tasks/session.py
 src/pineuro/tasks/task_registry.py
+src/pineuro/tasks/thermometer.py
+src/pineuro/tasks/ui_helpers.py
 src/pineuro/tasks/utils.py

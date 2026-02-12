@@ -9,8 +9,8 @@ single participant:
 - QC report viewing
 
 The workflow is divided into four main sections:
-1. Localizer Session: Initial 2vol collection and resting-state collection
-2. Mask Extraction: Preprocessing, ICA-based network mask extraction, and coregistration to 2vol
+1. Localizer Session: Initial 2vol collection and localizer task/rest collection
+2. Mask Extraction: Preprocessing, network mask extraction (ICA or GLM), and coregistration to 2vol
 3. Feedback Session: Real-time 2vol collection and feedback runs
 4. Quality Control: View QC reports for each phase
 
@@ -467,7 +467,7 @@ class ParticipantWorkflowScreen:
             return StepStatus.PENDING
 
     def _get_rest_run_info(self) -> List[RunInfo]:
-        """Get information about available resting-state runs.
+        """Get information about available localizer runs (rest or task-based).
 
         Returns:
             List of RunInfo objects for all configured localizer runs
@@ -967,7 +967,22 @@ class ParticipantWorkflowScreen:
 
         # Add localizer/rest runs dynamically based on localizer_n_runs
         n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
-        controls.append(ft.Text("Resting State", size=14, weight=ft.FontWeight.W_500))
+
+        # Dynamic label based on localizer type
+        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+        if localizer_type == "task":
+            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "unknown")
+            # Try to get display name from task metadata
+            try:
+                from pineuro.tasks import get_task_metadata
+                task_meta = get_task_metadata(localizer_task_type)
+                localizer_label = task_meta.display_name
+            except (ValueError, ImportError):
+                localizer_label = f"Localizer Task ({localizer_task_type})"
+        else:
+            localizer_label = "Resting State"
+
+        controls.append(ft.Text(localizer_label, size=14, weight=ft.FontWeight.W_500))
 
         for run_num in range(1, n_localizer_runs + 1):
             step_id = f"rest_run_{run_num}"
@@ -2124,20 +2139,35 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step information
         """
-        all_networks = self._get_all_network_targets(config)
+        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
 
-        return {
-            "label": "Extract Network Masks",
-            "description": f"ICA-based extraction of {len(all_networks)} network masks using {config['mask']['n_yeo']}-network Yeo atlas.",
-            "parameters": {
-                "Networks": ", ".join(all_networks),
-                "Yeo Atlas": f"{config['mask']['n_yeo']} networks",
-                "Smoothing": f"{config['mask']['smooth_fwhm']} mm FWHM",
-                "Highpass": f"{config['mask']['highpass']} Hz",
-                "Output": base_dir / "mask_extraction",
-            },
-            "output_path": base_dir / "mask_extraction" / "03_masks",
-        }
+        if localizer_type == "task":
+            contrasts = config.get("mask", {}).get("contrasts", {})
+            return {
+                "label": "Extract Network Masks (GLM)",
+                "description": f"GLM contrast-based extraction of {len(contrasts)} masks from task localizer.",
+                "parameters": {
+                    "Contrasts": ", ".join(f"{k}: {v}" for k, v in contrasts.items()),
+                    "Threshold": f"{config['mask'].get('threshold', 2000)} voxels",
+                    "Smoothing": f"{config['mask'].get('smooth_fwhm', 5.0)} mm FWHM",
+                    "Output": base_dir / "mask_extraction",
+                },
+                "output_path": base_dir / "mask_extraction" / "02_masks",
+            }
+        else:
+            all_networks = self._get_all_network_targets(config)
+            return {
+                "label": "Extract Network Masks (ICA)",
+                "description": f"ICA-based extraction of {len(all_networks)} network masks using {config['mask']['n_yeo']}-network Yeo atlas.",
+                "parameters": {
+                    "Networks": ", ".join(all_networks),
+                    "Yeo Atlas": f"{config['mask']['n_yeo']} networks",
+                    "Smoothing": f"{config['mask']['smooth_fwhm']} mm FWHM",
+                    "Highpass": f"{config['mask']['highpass']} Hz",
+                    "Output": base_dir / "mask_extraction",
+                },
+                "output_path": base_dir / "mask_extraction" / "03_masks",
+            }
 
     def _get_coregistration_realtime_step_info(self, config: dict, base_dir: Path) -> dict:
         """Get step info for realtime coregistration, handling mask reuse mode.
@@ -2161,11 +2191,13 @@ class ParticipantWorkflowScreen:
             # Mask reuse mode: masks come from source visit
             study_base_dir = base_dir.parent.parent  # Go up from participant/visit to study
             source_visit_dir = study_base_dir / self.participant_id / mask_source_visit
-            input_masks_path = source_visit_dir / "mask_extraction" / "03_masks"
+            me_dir = source_visit_dir / "mask_extraction"
+            input_masks_path = me_dir / "03_masks" if (me_dir / "03_masks").exists() else me_dir / "02_masks"
             description = f"Register network masks from {mask_source_visit} to real-time 2vol space for feedback runs."
         else:
             # Standard mode: masks come from current visit
-            input_masks_path = base_dir / "mask_extraction" / "03_masks"
+            me_dir = base_dir / "mask_extraction"
+            input_masks_path = me_dir / "03_masks" if (me_dir / "03_masks").exists() else me_dir / "02_masks"
             description = "Register network masks to real-time 2vol space for feedback runs."
 
         return {
@@ -2299,7 +2331,7 @@ class ParticipantWorkflowScreen:
             },
             "preprocessing": {
                 "label": "Run Preprocessing",
-                "description": "Motion correction, brain extraction, and coregistration of resting-state runs.",
+                "description": "Motion correction, brain extraction, and coregistration of localizer runs.",
                 "parameters": {
                     "Input": base_dir / "collection" / "task-rest_*",
                     "Output": base_dir / "preprocessing",
@@ -2523,9 +2555,16 @@ class ParticipantWorkflowScreen:
         # Show monitoring panel (creates task_mirror for feedback steps)
         self._show_monitoring_panel(step_id)
 
-        # Connect task mirror callback for feedback/transfer steps
+        # Connect task mirror callback for feedback/transfer steps AND task-based localizers
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-        if is_feedback_transfer:
+        is_task_localizer = False
+        if step_id.startswith("rest_run_"):
+            config = self.study_config.session_config
+            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+            is_task_localizer = (localizer_type == "task" and localizer_task_type != "rest")
+
+        if is_feedback_transfer or is_task_localizer:
             self.pipeline_runner.set_task_mirror_callback(self._on_task_mirror_update)
         else:
             self.pipeline_runner.set_task_mirror_callback(None)
@@ -2936,13 +2975,100 @@ class ParticipantWorkflowScreen:
             self._start_feedback_monitoring(step_id)
 
         else:
-            # Check if this is a collection step (including dynamic rest_run_* steps)
-            is_collection_step = (
-                step_id in ["2vol_initial", "2vol_realtime"] or
-                step_id.startswith("rest_run_")
-            )
+            # Check if this is a rest_run step with a task-based localizer
+            is_rest_run_step = step_id.startswith("rest_run_")
+            if is_rest_run_step:
+                localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+                is_task_localizer = (localizer_type == "task" and localizer_task_type != "rest")
+            else:
+                is_task_localizer = False
 
-            if is_collection_step:
+            if is_task_localizer:
+                # Task-based localizer: Show TaskMirror (no activation/FD plots)
+                # Get n_volumes for progress tracking
+                n_volumes = config["scan"].get("localizer_n_volumes")
+                if n_volumes is None:
+                    rest_volumes = config["scan"].get("rest_n_volumes", [200])
+                    if isinstance(rest_volumes, list):
+                        # Extract run number from step_id (e.g., "rest_run_1" -> 1)
+                        run_num = int(step_id.split("_")[-1])
+                        n_volumes = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
+                    else:
+                        n_volumes = rest_volumes
+
+                # Create task mirror
+                self.task_mirror = TaskMirror(width=640, height=480)
+
+                # Create progress UI elements
+                self._progress_bar = ft.ProgressBar(value=0, width=400)
+                self._progress_text = ft.Text("0 / 0 volumes", size=14)
+                self._status_text = ft.Text("Waiting for task...", size=14, color=ft.Colors.GREY_600)
+
+                # Build monitoring panel with task mirror
+                monitoring_panel = ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                self._get_step_label(step_id),
+                                size=18,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            ft.Divider(),
+
+                            # Task mirror (centered)
+                            ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.Text("Task Display", size=14, weight=ft.FontWeight.W_500),
+                                        self.task_mirror.build(),
+                                    ],
+                                    spacing=5,
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                ),
+                            ),
+
+                            # Progress section
+                            ft.Container(height=10),
+                            ft.Row(
+                                [
+                                    ft.Text("Progress:", size=14, weight=ft.FontWeight.W_500),
+                                    self._progress_bar,
+                                    self._progress_text,
+                                ],
+                                spacing=10,
+                                alignment=ft.MainAxisAlignment.START,
+                            ),
+                            ft.Row(
+                                [
+                                    ft.Text("Status:", size=14, weight=ft.FontWeight.W_500),
+                                    self._status_text,
+                                ],
+                                spacing=10,
+                            ),
+
+                            # Stop button
+                            ft.Container(height=10),
+                            ft.Row(
+                                [
+                                    ft.FilledButton(
+                                        "Stop",
+                                        icon=ft.Icons.STOP,
+                                        on_click=lambda e: self._on_stop_clicked(),
+                                        bgcolor=ft.Colors.RED,
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.END,
+                            ),
+                        ],
+                        spacing=10,
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                    padding=20,
+                    expand=True,
+                )
+
+            elif step_id in ["2vol_initial", "2vol_realtime"] or is_rest_run_step:
                 # Collection progress panel with DICOM preview
                 n_volumes = self._get_collection_n_volumes(step_id)
                 tr = config["scan"].get("tr")
@@ -3038,7 +3164,20 @@ class ParticipantWorkflowScreen:
         # Handle dynamic rest_run_* steps
         if step_id.startswith("rest_run_"):
             run_num = step_id.split("_")[-1]
-            return f"Collect Rest Run {run_num}"
+            # Dynamic label based on localizer type
+            config = self.study_config.session_config
+            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+            if localizer_type == "task":
+                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "localizer")
+                try:
+                    from pineuro.tasks import get_task_metadata
+                    task_meta = get_task_metadata(localizer_task_type)
+                    task_name = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
+                except (ValueError, ImportError):
+                    task_name = localizer_task_type.title()
+                return f"Collect {task_name} Run {run_num}"
+            else:
+                return f"Collect Rest Run {run_num}"
 
         labels = {
             "2vol_initial": "Collect Initial 2vol",
@@ -3108,6 +3247,13 @@ class ParticipantWorkflowScreen:
         async def update_ui():
             if hasattr(self, 'collection_progress') and self.collection_progress is not None:
                 self.collection_progress.update(volumes_collected, elapsed_time, dicom_path)
+                self.page.update()
+            elif hasattr(self, '_progress_bar') and self._progress_bar is not None:
+                # Task-based localizer progress (using separate progress bar)
+                self._progress_bar.value = volumes_collected / n_volumes if n_volumes > 0 else 0
+                self._progress_text.value = f"{volumes_collected} / {n_volumes} volumes"
+                if hasattr(self, '_status_text') and self._status_text is not None:
+                    self._status_text.value = f"Collecting DICOMs... ({elapsed_time:.1f}s)"
                 self.page.update()
 
         try:
@@ -3367,7 +3513,8 @@ class ParticipantWorkflowScreen:
 
             # Add localizer runs dynamically
             for run_num in range(1, n_localizer_runs + 1):
-                workflow.append((f"rest_run_{run_num}", f"Collect Rest Run {run_num}"))
+                step_id = f"rest_run_{run_num}"
+                workflow.append((step_id, self._get_step_label(step_id)))
 
             # Add mask extraction steps
             workflow.extend([

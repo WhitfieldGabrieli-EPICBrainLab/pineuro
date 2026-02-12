@@ -144,10 +144,20 @@ class TaskMetadata:
             between parameters (e.g., "min_hits < max_hits")
         n_networks: Number of brain networks (masks) required by this task.
             Default is 1. Ball task requires 2 (top/bottom networks).
+        roles: Set of roles this task can fulfill. Valid roles are "feedback"
+            (real-time neurofeedback display) and "localizer" (task localizer
+            for mask extraction). Default is {"feedback"}.
+        default_contrasts: Default GLM contrasts for localizer tasks. Maps
+            mask name to contrast expression (e.g., {"STG_self": "self - other"}).
+            Used to pre-populate the GUI; users can still edit them.
         session_state_fields: List of fields to persist across runs.
             These are stored in session_state.json and available to the task.
         post_run_questions: List of slider questions to display after each run.
             Questions can be conditional on run type or position.
+        design_type: GLM design type for the pipeline runner. Determines how
+            task regressors are computed. Options:
+            - "block": HRF-convolved boxcar (baseline → active). Default.
+            - "nuisance_only": No task regressors (nuisance-only model).
     """
     task_id: str
     display_name: str
@@ -155,8 +165,11 @@ class TaskMetadata:
     parameters: List[TaskParameter]
     cross_parameter_validator: Optional[Callable[[Dict[str, Any]], None]] = None
     n_networks: int = 1
+    roles: set[str] = field(default_factory=lambda: {"feedback"})
+    default_contrasts: Dict[str, str] = field(default_factory=dict)
     session_state_fields: List[SessionStateField] = field(default_factory=list)
     post_run_questions: List[PostRunQuestion] = field(default_factory=list)
+    design_type: str = "block"
 
     def validate_config(self, config: Dict[str, Any]) -> None:
         """Validate a complete task configuration.
@@ -203,13 +216,23 @@ def get_task_metadata(task_id: str) -> TaskMetadata:
     return _TASK_REGISTRY[task_id]
 
 
-def list_available_tasks() -> Dict[str, TaskMetadata]:
-    """List all registered tasks.
+def list_available_tasks(role: Optional[str] = None) -> Dict[str, TaskMetadata]:
+    """List registered tasks, optionally filtered by role.
+
+    Args:
+        role: If specified, only return tasks that have this role
+            (e.g., "feedback" or "localizer"). If None, returns all tasks.
 
     Returns:
         Dictionary mapping task_id to TaskMetadata
     """
-    return _TASK_REGISTRY.copy()
+    if role is None:
+        return _TASK_REGISTRY.copy()
+    return {
+        task_id: metadata
+        for task_id, metadata in _TASK_REGISTRY.items()
+        if role in metadata.roles
+    }
 
 
 def pineuro_task(metadata: TaskMetadata):

@@ -55,6 +55,7 @@ Examples
 >>> Path('reproduce_masks.py').write_text(script)
 """
 
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -462,6 +463,183 @@ def _generate_selection_code(
 '''
 
 
+def generate_task_mask_extraction_script(
+    participant_id: str,
+    mask_extraction_dir: Union[str, Path],
+    input_file: Union[str, Path],
+    mask_file: Union[str, Path],
+    events_file: Union[str, Path],
+    contrasts: Dict[str, str],
+    tr: float,
+    threshold: int = 2000,
+    stat_type: str = "t",
+    smoothing_fwhm: Optional[float] = 5.0,
+    high_pass: float = 0.01,
+    drift_model: str = "cosine",
+    hrf_model: str = "spm",
+) -> str:
+    """Generate a Python script that reproduces task-based mask extraction.
+
+    Parameters
+    ----------
+    participant_id : str
+        Participant ID
+    mask_extraction_dir : str or Path
+        Root directory for mask extraction outputs
+    input_file : str or Path
+        Path to preprocessed fMRI data
+    mask_file : str or Path
+        Path to brain mask
+    events_file : str or Path
+        Path to BIDS events .tsv file
+    contrasts : dict[str, str]
+        Mapping of mask name to contrast expression
+    tr : float
+        Repetition time in seconds
+    threshold : int
+        Number of voxels per mask
+    stat_type : str
+        Statistical map type ("t" or "z")
+    smoothing_fwhm : float or None
+        Spatial smoothing FWHM in mm
+    high_pass : float
+        High-pass filter cutoff in Hz
+    drift_model : str
+        Drift model ("cosine", "polynomial", or "none")
+    hrf_model : str
+        HRF model ("spm", "spm + derivative", "glover")
+
+    Returns
+    -------
+    str
+        Python script content as a string
+    """
+    mask_extraction_dir = Path(mask_extraction_dir)
+    input_file = Path(input_file)
+    mask_file = Path(mask_file)
+    events_file = Path(events_file)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    script = f'''#!/usr/bin/env python3
+"""
+Task-Based Mask Extraction Script for {participant_id}
+Generated: {timestamp}
+
+This script reproduces the GLM-based mask extraction pipeline.
+Modify parameters below and re-run to regenerate masks.
+
+Usage:
+    python reproduce_task_masks.py
+"""
+
+import shutil
+import sys
+from pathlib import Path
+
+from pineuro import mask_extraction_task
+from pineuro import qc
+
+
+def clean_stale_outputs(root_dir: Path):
+    """Remove stale outputs from previous runs."""
+    for dirname in ["04_2vol", "qc"]:
+        dir_path = root_dir / dirname
+        if dir_path.exists():
+            print(f"  Removing stale directory: {{dirname}}/")
+            shutil.rmtree(dir_path)
+    approval_marker = root_dir / ".masks_approved"
+    if approval_marker.exists():
+        approval_marker.unlink()
+
+
+# =============================================================================
+# INPUT FILES
+# =============================================================================
+participant_id = "{participant_id}"
+root_dir = Path("{mask_extraction_dir}")
+input_file = Path("{input_file}")
+mask_file = Path("{mask_file}")
+events_file = Path("{events_file}")
+
+
+# =============================================================================
+# GLM PARAMETERS
+# =============================================================================
+tr = {tr}
+stat_type = "{stat_type}"
+smoothing_fwhm = {repr(smoothing_fwhm)}
+high_pass = {high_pass}
+drift_model = "{drift_model}"
+hrf_model = "{hrf_model}"
+
+
+# =============================================================================
+# CONTRAST DEFINITIONS
+# Each entry maps a mask name to a contrast expression.
+# =============================================================================
+contrasts = {repr(contrasts)}
+
+
+# =============================================================================
+# MASK PARAMETERS
+# =============================================================================
+threshold = {threshold}
+
+
+# =============================================================================
+# MAIN SCRIPT
+# =============================================================================
+def main():
+    print("=" * 60)
+    print("Cleaning up stale outputs")
+    print("=" * 60)
+    clean_stale_outputs(root_dir)
+    print()
+
+    print("=" * 60)
+    print("Running task-based mask extraction")
+    print("=" * 60)
+    print(f"  Participant: {{participant_id}}")
+    print(f"  Input file: {{input_file}}")
+    print(f"  Events file: {{events_file}}")
+    print(f"  Contrasts: {{contrasts}}")
+    print(f"  Threshold: {{threshold}} voxels")
+    print()
+
+    mask_files = mask_extraction_task(
+        participant_id=participant_id,
+        root_dir=root_dir,
+        input_file=input_file,
+        mask_file=mask_file,
+        events=events_file,
+        contrasts=contrasts,
+        tr=tr,
+        threshold=threshold,
+        stat_type=stat_type,
+        smoothing_fwhm=smoothing_fwhm,
+        high_pass=high_pass,
+        drift_model=drift_model,
+        hrf_model=hrf_model,
+        overwrite=True,
+        qc_enabled=True,
+    )
+
+    print(f"  Created {{len(mask_files)}} mask files")
+    print()
+    print("=" * 60)
+    print("COMPLETE")
+    print("=" * 60)
+    print(f"  Masks saved to: {{root_dir / '02_masks'}}")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+    return script
+
+
 def save_script(
     script_content: str,
     output_path: Union[str, Path],
@@ -483,6 +661,7 @@ def save_script(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(script_content)
-    # Make executable on Unix
-    output_path.chmod(0o755)
+    # Make executable on Unix (Windows doesn't support chmod)
+    if sys.platform != 'win32':
+        output_path.chmod(0o755)
     return output_path

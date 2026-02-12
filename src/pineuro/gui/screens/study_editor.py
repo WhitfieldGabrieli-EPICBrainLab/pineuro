@@ -191,12 +191,14 @@ class StudyEditorScreen:
 
         # Metadata fields
         self.name_field = ft.TextField(
+            width=600,
             label="Study Name",
             value=self.study_config.metadata.name,
             on_change=self._on_name_change,
         )
 
         self.description_field = ft.TextField(
+            width=600,
             label="Description",
             value=self.study_config.metadata.description,
             multiline=True,
@@ -205,6 +207,7 @@ class StudyEditorScreen:
         )
 
         self.example_participant_id_field = ft.TextField(
+            width=600,
             label="Example Participant ID",
             value=config["paths"].get("example_participant_id", "sub-001"),
             hint_text="Shown as hint when starting a session (e.g., sub-001, sub-mindbpd001)",
@@ -224,6 +227,7 @@ class StudyEditorScreen:
         )
 
         self.collection_speed_field = ft.TextField(
+            width=290,
             label="Localizer speed (× realtime)",
             value=str(config["scan"].get("collection_speed", config["scan"].get("simulator_speed", 10.0))),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -231,6 +235,7 @@ class StudyEditorScreen:
         )
 
         self.feedback_simulator_speed_field = ft.TextField(
+            width=290,
             label="Feedback speed (× realtime)",
             value=str(config["scan"].get("feedback_simulator_speed", config["scan"].get("simulator_speed", 10.0))),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -239,6 +244,7 @@ class StudyEditorScreen:
 
         # Scanner DICOM directory for real-time mode
         self.scanner_dicom_dir_field = ft.TextField(
+            width=540,
             label="Scanner DICOM Directory",
             value=config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM"),
             hint_text="Directory where scanner exports DICOMs (e.g., /BOLD_DICOM)",
@@ -253,13 +259,15 @@ class StudyEditorScreen:
             for task_id, metadata in available_tasks.items()
         ])
         self.localizer_task_type_dropdown = ft.Dropdown(
+            width=600,
             label="Localizer Type",
             options=localizer_task_options,
             value=config["scan"].get("localizer_task_type", "rest"),
+            on_select=self._on_localizer_task_type_changed,
         )
-        self.localizer_task_type_dropdown.on_change = self._on_localizer_task_type_changed
 
         self.localizer_tr_field = ft.TextField(
+            width=600,
             label="TR (seconds)",
             value=str(config["scan"].get("localizer_tr", 1.2)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -267,6 +275,7 @@ class StudyEditorScreen:
         )
 
         self.localizer_n_volumes_field = ft.TextField(
+            width=600,
             label="Volumes per localizer run",
             value=str(config["scan"].get("localizer_n_volumes", 200)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -274,6 +283,7 @@ class StudyEditorScreen:
         )
 
         self.localizer_n_runs_field = ft.TextField(
+            width=600,
             label="Number of localizer runs",
             value=str(config["scan"].get("localizer_n_runs", 2)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -282,14 +292,14 @@ class StudyEditorScreen:
 
         # 2vol Initial settings (for Localizer tab)
         self.twovol_initial_enabled_checkbox = ft.Checkbox(
-            label="Enable Initial 2vol Collection",
+            label="Enable Initial Reference Scan",
             value=config["scan"].get("twovol_initial_enabled", True),
             on_change=self._on_twovol_initial_enabled_changed,
         )
 
         # 2vol Realtime settings (for Feedback tab)
         self.twovol_realtime_enabled_checkbox = ft.Checkbox(
-            label="Enable Realtime 2vol Collection",
+            label="Enable Real-Time Reference Scan",
             value=config["scan"].get("twovol_realtime_enabled", True),
             on_change=self._on_twovol_realtime_enabled_changed,
         )
@@ -299,6 +309,7 @@ class StudyEditorScreen:
 
         # --- Feedback tab fields ---
         self.feedback_tr_field = ft.TextField(
+            width=600,
             label="TR (seconds)",
             value=str(config["scan"].get("feedback_tr", 1.2)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -306,6 +317,7 @@ class StudyEditorScreen:
         )
 
         self.feedback_n_volumes_field = ft.TextField(
+            width=600,
             label="Volumes per feedback run",
             value=str(config["scan"].get("feedback_n_volumes", 150)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -330,30 +342,35 @@ class StudyEditorScreen:
         second_network = yeo_targets[1] if len(yeo_targets) > 1 else None
 
         self.first_network_dropdown = ft.Dropdown(
+            width=290,
             label="First Network",
             options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
             value=first_network,
         )
 
         self.second_network_dropdown = ft.Dropdown(
+            width=290,
             label="Second Network",
             options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
             value=second_network,
         )
 
         self.smooth_fwhm_field = ft.TextField(
+            width=600,
             label="Spatial smoothing (mm FWHM)",
             value=str(config["mask"]["smooth_fwhm"]),
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
         self.highpass_field = ft.TextField(
+            width=600,
             label="Highpass filter (Hz)",
             value=str(config["mask"]["highpass"]),
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
         self.n_components_field = ft.TextField(
+            width=600,
             label="ICA components",
             value=str(config["mask"].get("n_components", 20)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -362,6 +379,7 @@ class StudyEditorScreen:
 
         # Feedback task type selection (populated from registry)
         self.task_type_dropdown = ft.Dropdown(
+            width=600,
             label="Feedback Task Type",
             options=[
                 ft.dropdown.Option(
@@ -371,10 +389,11 @@ class StudyEditorScreen:
                 for task_id, metadata in available_tasks.items()
             ],
             value=config["task"].get("task_type", "ball"),
+            on_select=self._on_task_type_changed,
         )
-        self.task_type_dropdown.on_change = self._on_task_type_changed
 
         self.max_feedback_runs_field = ft.TextField(
+            width=600,
             label="Number of feedback runs",
             value=str(config["task"]["max_feedback_runs"]),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -388,6 +407,7 @@ class StudyEditorScreen:
         n_baseline_default = config["task"].get(task_type, {}).get("n_baseline",
                              config.get("feedback", {}).get("n_baseline", 25))
         self.n_baseline_field = ft.TextField(
+            width=600,
             label="Baseline volumes",
             value=str(n_baseline_default),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -397,10 +417,11 @@ class StudyEditorScreen:
 
         # FD threshold for motion monitoring
         self.fd_threshold_field = ft.TextField(
+            width=600,
             label="FD threshold (mm)",
             value=str(config.get("feedback", {}).get("fd_threshold", 0.5)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            hint_text="Frames exceeding this will be flagged in real-time",
+            hint_text="Frames exceeding this will be flagged in real time",
             on_change=lambda _: self._validate_field("fd_threshold", self.fd_threshold_field, validate_positive_number),
         )
 
@@ -416,6 +437,7 @@ class StudyEditorScreen:
 
         # Paths fields
         self.base_dir_field = ft.TextField(
+            width=540,
             label="Base data directory",
             value=config["paths"]["base_dir"],
         )
@@ -430,6 +452,7 @@ class StudyEditorScreen:
         self.localizer_source_fields = []
         for i in range(10):
             field = ft.TextField(
+                width=540,
                 label=f"Localizer run {i+1} source DICOMs",
                 value=localizer_dicoms[i] if i < len(localizer_dicoms) else "",
                 hint_text="Path to DICOM directory for simulator (optional)",
@@ -437,13 +460,15 @@ class StudyEditorScreen:
             self.localizer_source_fields.append(field)
 
         self.twovol_initial_field = ft.TextField(
-            label="Initial 2vol source DICOMs",
+            width=540,
+            label="Initial Reference Scan source DICOMs",
             value=config["scan"].get("twovol_initial_dicoms", ""),
             hint_text="Path to DICOM directory for simulator (optional)",
         )
 
         self.twovol_realtime_field = ft.TextField(
-            label="Real-time 2vol source DICOMs",
+            width=540,
+            label="Real-Time Reference Scan source DICOMs",
             value=config["scan"].get("twovol_realtime_dicoms", ""),
             hint_text="Path to DICOM directory for simulator (optional)",
         )
@@ -461,6 +486,7 @@ class StudyEditorScreen:
         self.feedback_source_fields = []
         for i in range(10):
             field = ft.TextField(
+                width=540,
                 label=f"Feedback run {i+1} source DICOMs",
                 value=feedback_dicoms[i] if i < len(feedback_dicoms) else "",
                 hint_text="Path to DICOM directory for simulator (optional)",
@@ -480,6 +506,7 @@ class StudyEditorScreen:
         self.transfer_source_fields = []
         for i in range(2):
             field = ft.TextField(
+                width=540,
                 label=f"Transfer run {i+1} source DICOMs",
                 value=transfer_dicoms[i] if i < len(transfer_dicoms) else "",
                 hint_text="Path to DICOM directory for simulator (optional)",
@@ -488,6 +515,7 @@ class StudyEditorScreen:
 
         # MURFI design file path (for external design matrix in simulator mode)
         self.murfi_design_path_field = ft.TextField(
+            width=540,
             label="MURFI Design File (optional)",
             value=config["scan"].get("murfi_design_path", ""),
             hint_text="Path to MURFI design .mat file for external task/motion design",
@@ -507,6 +535,7 @@ class StudyEditorScreen:
 
         # Simulator source mapping file (for per-subject DICOM paths)
         self.simulator_source_mapping_field = ft.TextField(
+            width=540,
             label="Mapping File",
             value=config["scan"].get("simulator_source_mapping", ""),
             hint_text="CSV/TSV file mapping subjects to DICOM paths",
@@ -522,7 +551,7 @@ class StudyEditorScreen:
         )
 
         self.blind_mode_checkbox = ft.Checkbox(
-            label="Enable Blind Mode (show Target/Non-Target instead of network names)",
+            label="Enable Blind Mode",
             value=sham_config.get("blind_mode", False),
         )
 
@@ -547,6 +576,7 @@ class StudyEditorScreen:
 
         # Hemisphere split controls
         self.sham_hemisphere_network_dropdown = ft.Dropdown(
+            width=600,
             label="Network to Split",
             options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
             value=sham_config.get("hemisphere_network", "SomMotA"),
@@ -565,17 +595,20 @@ class StudyEditorScreen:
         sham_second = sham_targets[1] if len(sham_targets) > 1 else None
 
         self.sham_first_network_dropdown = ft.Dropdown(
+            width=290,
             label="First Sham Network",
             options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
             value=sham_first,
         )
         self.sham_second_network_dropdown = ft.Dropdown(
+            width=290,
             label="Second Sham Network",
             options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
             value=sham_second,
         )
 
         self.sham_randomization_file_field = ft.TextField(
+            width=540,
             label="Randomization File",
             value=sham_config.get("randomization_file", ""),
             hint_text="TSV file with subject_id, condition, matched_participant columns",
@@ -584,6 +617,7 @@ class StudyEditorScreen:
         # --- Display settings ---
         display_config = config.get("display", {})
         self.control_monitor_dropdown = ft.Dropdown(
+            width=290,
             label="Control Monitor (GUI)",
             options=[
                 ft.dropdown.Option(key="left", text="Left"),
@@ -592,6 +626,7 @@ class StudyEditorScreen:
             value=display_config.get("control_monitor", "left"),
         )
         self.presenter_monitor_dropdown = ft.Dropdown(
+            width=290,
             label="Presenter Monitor (Task)",
             options=[
                 ft.dropdown.Option(key="left", text="Left"),
@@ -684,7 +719,8 @@ class StudyEditorScreen:
             valid_keys = [opt.key for opt in new_options]
             if old_value not in valid_keys:
                 dropdown.value = None
-            dropdown.update()
+
+        self.page.update()
 
     def _validate_field(self, field_name: str, field: ft.TextField, validator):
         """Validate a form field and update UI.
@@ -847,6 +883,7 @@ class StudyEditorScreen:
 
         elif param.type in ["float", "int"]:
             return ft.TextField(
+                width=600,
                 label=param.label,
                 value=str(current_value),
                 keyboard_type=ft.KeyboardType.NUMBER,
@@ -855,6 +892,7 @@ class StudyEditorScreen:
 
         elif param.type == "str":
             return ft.TextField(
+                width=600,
                 label=param.label,
                 value=current_value,
                 hint_text=param.hint,
@@ -864,6 +902,7 @@ class StudyEditorScreen:
             # Convert list to comma-separated string
             value_str = ", ".join(current_value) if isinstance(current_value, list) else current_value
             return ft.TextField(
+                width=600,
                 label=param.label,
                 value=value_str,
                 hint_text=f"{param.hint} (comma-separated)" if param.hint else "Comma-separated values",
@@ -892,12 +931,22 @@ class StudyEditorScreen:
         # Update network dropdown visibility in Localizer tab
         if hasattr(self, 'second_network_dropdown'):
             self.second_network_dropdown.visible = (n_networks >= 2)
-            self.second_network_dropdown.update()
 
         # Update target networks label in Localizer tab
         if hasattr(self, 'target_networks_label'):
             self.target_networks_label.value = f"Target Networks (select {n_networks})"
-            self.target_networks_label.update()
+
+        # Rebuild network dropdowns row based on n_networks
+        if hasattr(self, 'network_dropdowns_row'):
+            network_dropdowns = [self.first_network_dropdown]
+            if n_networks >= 2:
+                network_dropdowns.append(self.second_network_dropdown)
+            self.network_dropdowns_row.controls.clear()
+            self.network_dropdowns_row.controls.extend(network_dropdowns)
+            try:
+                self.network_dropdowns_row.update()
+            except Exception:
+                pass  # Row not on page yet
 
         # Recreate task parameter fields for new task type
         self._create_task_parameter_fields()
@@ -909,11 +958,10 @@ class StudyEditorScreen:
             # Update visibility based on whether task has parameters
             has_parameters = task_metadata and len(task_metadata.parameters) > 0
             self.task_specific_section.visible = has_parameters
-            self.task_specific_section.update()
 
         # Show snackbar feedback
         if task_metadata:
-            msg = f"Task: {task_metadata.display_name} (requires {n_networks} network(s))"
+            msg = f"Task: {task_metadata.display_name} (requires {n_networks} {'network' if n_networks == 1 else 'networks'})"
         else:
             msg = f"Task changed to {task_type}"
 
@@ -936,10 +984,23 @@ class StudyEditorScreen:
         is_rest = localizer_task_type == "rest"
         if hasattr(self, 'networks_section'):
             self.networks_section.visible = is_rest
-            self.networks_section.update()
+            try:
+                self.networks_section.update()
+            except Exception:
+                pass  # Section not on page yet
 
         # Recreate localizer task parameter fields
         self._create_localizer_task_parameter_fields()
+
+        # Update localizer task parameters section
+        if hasattr(self, 'localizer_task_params_section'):
+            task_params = self._build_localizer_task_specific_params()
+            self.localizer_task_params_section.controls.clear()
+            self.localizer_task_params_section.controls.extend(task_params)
+            try:
+                self.localizer_task_params_section.update()
+            except Exception:
+                pass  # Section not on page yet
 
         # Show snackbar feedback
         msg = "Localizer: Rest (ICA-based network extraction)" if is_rest else f"Localizer: {localizer_task_type} (GLM-based coming soon)"
@@ -1347,7 +1408,7 @@ class StudyEditorScreen:
         task_type = self.task_type_dropdown.value
         try:
             task_metadata = get_task_metadata(task_type)
-            task_info = f"Requires {task_metadata.n_networks} network(s)"
+            task_info = f"Requires {task_metadata.n_networks} {'network' if task_metadata.n_networks == 1 else 'networks'}"
         except ValueError:
             task_info = ""
 
@@ -1360,6 +1421,15 @@ class StudyEditorScreen:
                     self.example_participant_id_field,
                     ft.Divider(),
                     ft.Text("Experiment Design", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text("Localizer Task", size=14, weight=ft.FontWeight.BOLD),
+                    self.localizer_task_type_dropdown,
+                    ft.Text(
+                        "Rest uses ICA for network extraction. Task-based localizers use GLM contrasts.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    ft.Text("Feedback Task", size=14, weight=ft.FontWeight.BOLD),
                     self.task_type_dropdown,
                     ft.Text(
                         task_info,
@@ -1367,6 +1437,7 @@ class StudyEditorScreen:
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
+                    ft.Divider(),
                     self.multi_visit_enabled_checkbox,
                     ft.Text(
                         "When enabled, participants can have multiple visits (ses-01, ses-02, etc.). "
@@ -1443,6 +1514,13 @@ class StudyEditorScreen:
         # Set second network dropdown visibility based on n_networks
         self.second_network_dropdown.visible = (n_networks >= 2)
 
+        # Build network dropdowns row dynamically based on n_networks
+        network_dropdowns = [self.first_network_dropdown]
+        if n_networks >= 2:
+            network_dropdowns.append(self.second_network_dropdown)
+
+        self.network_dropdowns_row = ft.Row(network_dropdowns)
+
         # Network Configuration section (only visible when localizer is rest)
         self.networks_section = ft.Container(
             content=ft.Column([
@@ -1458,10 +1536,7 @@ class StudyEditorScreen:
                 self.n_yeo_radio,
                 ft.Divider(),
                 self.target_networks_label,
-                ft.Row([
-                    self.first_network_dropdown,
-                    self.second_network_dropdown,
-                ]),
+                self.network_dropdowns_row,
                 ft.Divider(),
                 ft.Text("ICA Settings", size=14, weight=ft.FontWeight.BOLD),
                 self.n_components_field,
@@ -1472,34 +1547,31 @@ class StudyEditorScreen:
             visible=is_rest_localizer,
         )
 
+        # Task-specific parameters section (wrapped in container for dynamic updates)
+        self.localizer_task_params_section = ft.Column(
+            localizer_task_params,
+        )
+
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Localizer Type", size=16, weight=ft.FontWeight.BOLD),
-                    self.localizer_task_type_dropdown,
-                    ft.Text(
-                        "Rest uses ICA for network mask extraction. Task-based localizers will use GLM contrasts (coming soon).",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
-                    ft.Divider(),
                     ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
                     self.localizer_tr_field,
                     self.localizer_n_volumes_field,
                     self.localizer_n_runs_field,
                     ft.Divider(),
                     self.networks_section,
-                    ft.Text("2vol Initial Reference", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text("Initial Reference Scan", size=16, weight=ft.FontWeight.BOLD),
                     self.twovol_initial_enabled_checkbox,
                     ft.Text(
-                        "Collects a 2-volume scan before localizer runs for positioning verification.",
+                        "Collects a quick reference scan before localizer runs for positioning verification.",
                         size=11,
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
                     ft.Divider(),
-                ] + localizer_task_params,
+                    self.localizer_task_params_section,
+                ],
                 scroll=ft.ScrollMode.AUTO,
             ),
             padding=20,
@@ -1533,14 +1605,11 @@ class StudyEditorScreen:
                 size=16,
                 weight=ft.FontWeight.BOLD,
             ),
-            ft.Container(
-                content=ft.Text(
-                    "Note: GLM-based mask extraction from task localizers is coming soon.",
-                    size=12,
-                ),
-                bgcolor=ft.Colors.AMBER_100,
-                padding=10,
-                border_radius=5,
+            ft.Text(
+                "Task-specific parameters for the localizer. Configure stimulus paths and task settings.",
+                size=11,
+                color=ft.Colors.GREY_600,
+                italic=True,
             ),
             ft.Divider(),
         ]
@@ -1602,8 +1671,8 @@ class StudyEditorScreen:
                 self.fd_threshold_field,
                 self.moco_enabled_checkbox,
                 ft.Text(
-                    "Note: Transfer runs are optional (configure in task-specific parameters below)",
-                    size=12,
+                    "Transfer runs are optional (configure in task-specific parameters below)",
+                    size=11,
                     color=ft.Colors.GREY_600,
                     italic=True,
                 ),
@@ -1626,11 +1695,11 @@ class StudyEditorScreen:
         )
 
         twovol_section = [
-            ft.Text("2vol Realtime Reference", size=16, weight=ft.FontWeight.BOLD),
+            ft.Text("Real-Time Reference Scan", size=16, weight=ft.FontWeight.BOLD),
             self.twovol_realtime_enabled_checkbox,
             self.twovol_realtime_note,
             ft.Text(
-                "Collects a 2-volume scan before feedback runs for day-of registration.",
+                "Collects a quick reference scan before feedback runs for day-of registration.",
                 size=11,
                 color=ft.Colors.GREY_600,
                 italic=True,
@@ -1694,7 +1763,7 @@ class StudyEditorScreen:
                     self.sham_second_network_dropdown,
                 ]),
                 ft.Text(
-                    "Use two distinct networks for sham (e.g., motor networks instead of DMN)",
+                    "Use two distinct networks for sham (e.g., motor networks instead of default mode)",
                     size=11,
                     color=ft.Colors.GREY_600,
                     italic=True,
@@ -1721,8 +1790,9 @@ class StudyEditorScreen:
                 ft.Text(
                     "Replay mode uses the matched_participant column from the randomization file "
                     "to find feedbacklog.tsv files in the study's base data directory.",
-                    size=12,
-                    color=ft.Colors.GREY_700,
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
                 ),
                 ft.Text(
                     "Ensure the matched participant's feedback session has completed before "
@@ -1775,11 +1845,18 @@ class StudyEditorScreen:
                 ft.Text(
                     "Configure real/sham neurofeedback for controlled studies. "
                     "All masks are extracted for all participants to maintain blinding.",
-                    size=12,
+                    size=11,
                     color=ft.Colors.GREY_600,
+                    italic=True,
                 ),
                 self.sham_enabled_checkbox,
                 self.blind_mode_checkbox,
+                ft.Text(
+                    "Shows Target/Non-Target instead of network names in the task display.",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
                 self.sham_config_container,
                 self.sham_alternative_section,
                 self.sham_replay_section,
@@ -1909,7 +1986,7 @@ class StudyEditorScreen:
             ft.Text("Simulator Source Paths", size=16, weight=ft.FontWeight.BOLD),
             ft.Text(
                 "Configure DICOM source directories for offline testing with the simulator",
-                size=12,
+                size=11,
                 color=ft.Colors.GREY_600,
                 italic=True,
             ),
@@ -1921,7 +1998,7 @@ class StudyEditorScreen:
             self.simulator_source_mapping_field,
             self._create_file_browse_button(
                 self.simulator_source_mapping_field,
-                filetypes=[("CSV/TSV Files", "*.csv *.tsv"), ("All Files", "*.*")],
+                filetypes=[("CSV/TSV files", "*.csv *.tsv"), ("All files", "*.*")],
             ),
         ])
         self.simulator_mapping_container = ft.Column(
@@ -1940,11 +2017,11 @@ class StudyEditorScreen:
         individual_content = []
 
         # Localizer section
-        individual_content.append(ft.Text("Localizer Runs", size=14, weight=ft.FontWeight.W_500))
+        individual_content.append(ft.Text("Localizer Runs", size=14, weight=ft.FontWeight.BOLD))
         individual_content.extend(self.localizer_source_rows)
 
         # 2vol section
-        individual_content.append(ft.Text("2-Volume Coregistration", size=14, weight=ft.FontWeight.W_500))
+        individual_content.append(ft.Text("Reference Scans", size=14, weight=ft.FontWeight.BOLD))
         individual_content.append(self.twovol_initial_row)
         individual_content.append(self.twovol_realtime_row)
 
@@ -1952,14 +2029,14 @@ class StudyEditorScreen:
         self.transfer_section_header = ft.Text(
             "Transfer Runs",
             size=14,
-            weight=ft.FontWeight.W_500,
+            weight=ft.FontWeight.BOLD,
             visible=use_transfer_runs,
         )
         individual_content.append(self.transfer_section_header)
         individual_content.extend(self.transfer_source_rows)
 
         # Feedback section
-        individual_content.append(ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500))
+        individual_content.append(ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.BOLD))
         individual_content.extend(self.feedback_source_rows)
 
         self.simulator_individual_container = ft.Column(

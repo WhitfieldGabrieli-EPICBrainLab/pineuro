@@ -1738,6 +1738,242 @@ def generate_mask_extraction_report(
     return html_report
 
 
+def generate_task_mask_extraction_report(
+        mask_extraction_dir: Path,
+        participant_id: str,
+        mask_names: Sequence[str],
+        contrasts: dict[str, str],
+        stat_type: str = "t",
+        output_dir: Path | None = None,
+        overwrite: bool = False,
+        open_browser: bool = False
+) -> Path:
+    """
+    Generate QC report for task-based (GLM) mask extraction outputs.
+
+    Creates an HTML report with design matrix visualization, contrast stat maps,
+    thresholded mask overlays, and mask summary statistics.
+
+    Parameters
+    ----------
+    mask_extraction_dir : Path
+        Root mask extraction directory (contains 01_glm/, 02_masks/)
+    participant_id : str
+        Participant identifier
+    mask_names : sequence of str
+        Names of extracted masks (e.g., ['CEN', 'DMN'])
+    contrasts : dict[str, str]
+        Mapping of mask name to contrast expression
+    stat_type : str
+        Statistical map type ("t" or "z")
+    output_dir : Path, optional
+        QC output directory. Defaults to mask_extraction_dir.parent / 'qc'
+    overwrite : bool, default=False
+        Regenerate all plots even if they exist
+    open_browser : bool, default=False
+        Automatically open the HTML report in the default web browser
+
+    Returns
+    -------
+    Path
+        Path to generated HTML report
+    """
+    import logging
+    from glob import glob
+
+    logger = logging.getLogger(__name__)
+
+    mask_extraction_dir = Path(mask_extraction_dir)
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Generating task-based mask extraction QC report for {participant_id}")
+
+    glm_dir = mask_extraction_dir / "01_glm"
+    masks_dir = mask_extraction_dir / "02_masks"
+
+    # Find BOLD reference for overlays
+    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+    if preprocessing_dir.exists():
+        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+    else:
+        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+    ref_file = Path(ref_files[0]) if ref_files else None
+
+    # Find GLM metadata
+    glm_info_file = glm_dir / f"{participant_id}_glm_info.json"
+    glm_info = None
+    if glm_info_file.exists():
+        import json
+        with open(glm_info_file, 'r') as f:
+            glm_info = json.load(f)
+
+    # Find network masks
+    network_masks = {}
+    for mask_name in mask_names:
+        mask_file = masks_dir / f"{participant_id}_{mask_name}_thr.nii.gz"
+        if mask_file.exists():
+            network_masks[mask_name] = mask_file
+
+    # Build QC sections
+    sections = []
+
+    # Summary box
+    summary_data = {
+        'Participant': participant_id,
+        'Extraction method': 'GLM contrast (task localizer)',
+        'Stat type': stat_type,
+        'Masks extracted': f"{len(network_masks)} / {len(mask_names)}",
+    }
+    if glm_info:
+        summary_data['Conditions'] = ', '.join(glm_info.get('conditions', []))
+        summary_data['N volumes'] = str(glm_info.get('n_volumes', '?'))
+        summary_data['HRF model'] = glm_info.get('hrf_model', '?')
+    sections.append({'type': 'summary', 'content': summary_data})
+
+    # Contrast definitions
+    sections.append({'type': 'heading', 'content': 'Contrast Definitions'})
+    contrast_rows = [[name, expr] for name, expr in contrasts.items()]
+    sections.append({
+        'type': 'table',
+        'headers': ['Mask Name', 'Contrast Expression'],
+        'rows': contrast_rows
+    })
+
+    # Design matrix visualization
+    design_file = glm_dir / f"{participant_id}_design_matrix.tsv"
+    if design_file.exists():
+        sections.append({'type': 'heading', 'content': 'Design Matrix'})
+
+        design_png = output_dir / "design_matrix.png"
+        if overwrite or not design_png.exists():
+            logger.info("Generating design matrix plot")
+            _plot_task_design_matrix(design_file, design_png)
+
+        sections.append({
+            'type': 'single_image',
+            'path': design_png.relative_to(output_dir).as_posix(),
+            'alt': 'GLM design matrix'
+        })
+
+    # Contrast stat map overlays
+    if ref_file and ref_file.exists():
+        subject_overlay_dir = output_dir / "overlays" / "subject"
+        subject_overlay_dir.mkdir(parents=True, exist_ok=True)
+
+        for mask_name in mask_names:
+            stat_map_path = glm_dir / f"{participant_id}_{mask_name}_{stat_type}map.nii.gz"
+            mask_path = network_masks.get(mask_name)
+
+            if mask_path and mask_path.exists():
+                overlay_png = subject_overlay_dir / f"{participant_id}_{mask_name}_overlay.png"
+                if overwrite or not overlay_png.exists():
+                    logger.info(f"Generating {mask_name} mask overlay")
+
+                    summary = summarize_mask(mask_path, name=mask_name)
+
+                    # Use mask itself for slice selection (no atlas needed)
+                    atlas_slices = select_slices_from_atlas(
+                        atlas_path=ref_file,
+                        labels=[],
+                        target_label="",
+                        top_n_per_plane=1,
+                        mask_path=mask_path
+                    )
+
+                    plot_mask_overlay_tripanel(
+                        mask_path=mask_path,
+                        ref_path=ref_file,
+                        out_path=overlay_png,
+                        slices=atlas_slices,
+                        title=f"{mask_name}: {contrasts.get(mask_name, '')} ({summary.voxels} voxels)"
+                    )
+
+    # Display overlays
+    subject_overlay_dir = output_dir / "overlays" / "subject"
+    if subject_overlay_dir.exists():
+        overlays = sorted(glob(str(subject_overlay_dir / f"{participant_id}_*_overlay.png")))
+        if overlays:
+            sections.append({'type': 'heading', 'content': 'Mask Overlays (BOLD reference)'})
+            grid_items = []
+            for overlay_path in overlays:
+                overlay_file = Path(overlay_path)
+                mask_name = overlay_file.stem.replace(f"{participant_id}_", "").replace("_overlay", "")
+                grid_items.append({
+                    'title': mask_name,
+                    'path': overlay_file.relative_to(output_dir).as_posix(),
+                    'alt': f'{mask_name} overlay'
+                })
+            sections.append({'type': 'grid', 'content': grid_items})
+
+    # Mask summary table
+    if network_masks:
+        sections.append({'type': 'heading', 'content': 'Mask Summary'})
+        table_rows = []
+        for mask_name, mask_path in network_masks.items():
+            summary = summarize_mask(mask_path, name=mask_name)
+            table_rows.append([
+                summary.name,
+                contrasts.get(mask_name, ''),
+                str(summary.voxels),
+                f"{summary.volume_ml:.2f}",
+                str(summary.centroid_ijk),
+            ])
+
+        sections.append({
+            'type': 'table',
+            'headers': ['Name', 'Contrast', 'Voxels', 'Volume (mL)', 'Centroid (i,j,k)'],
+            'rows': table_rows
+        })
+
+    # Generate HTML report
+    html_report = output_dir / f"{participant_id}_mask_extraction_qc.html"
+    html = _generate_html_template(
+        title=f"Task Mask Extraction QC - {participant_id}",
+        participant_id=participant_id,
+        stage="Mask Extraction (GLM)",
+        sections=sections
+    )
+    html_report.write_text(html)
+
+    logger.info(f"Task mask extraction QC report saved to: {html_report}")
+
+    if open_browser:
+        _open_html_in_browser(html_report)
+
+    return html_report
+
+
+def _plot_task_design_matrix(design_file: Path, out_path: Path) -> None:
+    """Plot GLM design matrix heatmap for QC report.
+
+    Parameters
+    ----------
+    design_file : Path
+        Path to design matrix TSV file
+    out_path : Path
+        Output path for the PNG plot
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    design_df = pd.read_csv(design_file, sep='\t', index_col=0)
+
+    fig, ax = plt.subplots(figsize=(max(6, len(design_df.columns) * 0.8), 8))
+    im = ax.imshow(design_df.values, aspect='auto', cmap='RdBu_r', interpolation='nearest')
+    ax.set_xlabel('Regressors')
+    ax.set_ylabel('Volume')
+    ax.set_xticks(range(len(design_df.columns)))
+    ax.set_xticklabels(design_df.columns, rotation=45, ha='right', fontsize=8)
+    ax.set_title('GLM Design Matrix')
+    fig.colorbar(im, ax=ax, shrink=0.6)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 def generate_alternative_overlays(
         mask_extraction_dir: Path,
         participant_id: str,

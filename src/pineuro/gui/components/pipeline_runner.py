@@ -12,7 +12,8 @@ from typing import Optional, Callable, Dict, Any
 from pineuro.preprocessing import collect_dicoms, preprocessing
 from pineuro.mask_extraction import mask_extraction_rest, coregister_2vol, generate_2vol_qc_overlays
 from pineuro.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
-from pineuro.tasks.ball import compute_boxcar_task_regressor
+from pineuro.tasks import get_task_metadata
+from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
 from pineuro.tasks.session import SessionState
 from pineuro.sham import (
     load_randomization,
@@ -57,6 +58,7 @@ class PipelineRunner:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._current_coordinator = None  # Track coordinator for feedback tasks
+        self._current_localizer_task = None  # Track localizer task for stop support
         self._task_mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
         self._selected_rest_runs: Optional[list] = None  # Selected runs for preprocessing
 
@@ -123,6 +125,10 @@ class PipelineRunner:
             if self._current_coordinator is not None:
                 logger.info("Stopping feedback coordinator")
                 self._current_coordinator.stop(show_questions=show_questions)
+            # If a localizer task is running, stop it
+            if self._current_localizer_task is not None:
+                logger.info("Stopping localizer task")
+                self._current_localizer_task.stop()
 
     def _run_step_impl(self, step_id: str) -> None:
         """Implementation of step execution (runs in background thread).
@@ -226,16 +232,24 @@ class PipelineRunner:
         self._emit_progress(f"Collected {n_volumes} volumes to {output_dir}")
 
     def _run_rest_run(self, run_num: int) -> None:
-        """Collect resting-state run.
+        """Collect resting-state or localizer task run.
+
+        For rest localizers, this just collects DICOMs.
+        For task localizers, this also launches the localizer PsychoPy task
+        concurrently with DICOM collection.
 
         Args:
             run_num: Run number (1-based)
         """
-        self._emit_progress(f"Collecting rest run {run_num} DICOMs...")
-
         config = self.config
+        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+
+        self._emit_progress(f"Collecting {task_name} run {run_num} DICOMs...")
+
         base_dir = Path(config["paths"]["base_dir"])
-        output_dir = base_dir / "collection" / f"task-rest_run-{run_num:02d}"
+        output_dir = base_dir / "collection" / f"task-{task_name}_run-{run_num:02d}"
 
         # Get expected volumes (use new localizer fields, fall back to legacy)
         n_volumes = config["scan"].get("localizer_n_volumes")
@@ -269,7 +283,7 @@ class PipelineRunner:
             else:
                 source_dir = localizer_sources
 
-            watch_dir = base_dir / "tmp" / f"incoming_rest_run{run_num}"
+            watch_dir = base_dir / "tmp" / f"incoming_{task_name}_run{run_num}"
             watch_dir.mkdir(parents=True, exist_ok=True)
             simulator_speed = config["scan"].get("collection_speed", 10.0)
         else:
@@ -278,19 +292,123 @@ class PipelineRunner:
             watch_dir = Path(config["scan"]["scanner_dicom_dir"])
             simulator_speed = 1.0
 
+        # Create simulator if in simulator mode
+        simulator = None
+        if simulator_enabled and source_dir:
+            from pineuro.simulator import VolumeSimulator
+            simulator = VolumeSimulator(
+                source_dir=source_dir,
+                target_dir=watch_dir,
+                tr=config["scan"].get("localizer_tr", 1.2),  # Use configured TR from study
+                speed=simulator_speed,
+                clear_target=True,
+            )
+
+        # Determine which localizer task to use
+        if localizer_type == "task" and localizer_task_type != "rest":
+            # Task-based localizer (e.g., self/other)
+            actual_task_id = localizer_task_type
+        else:
+            # Rest localizer - use fixation task
+            actual_task_id = "fixation"
+
+        # Always launch a localizer task - it controls simulator start timing
+        localizer_thread = self._launch_localizer_task(
+            run_num, actual_task_id, watch_dir, simulator=simulator
+        )
+
+        # collect_dicoms just watches the directory - no simulator
+        # (simulator is controlled by the task for synchronization)
         collect_dicoms(
             watch_dir=watch_dir,
             output_dir=output_dir,
             n_volumes=n_volumes,
-            simulator_source_dir=source_dir,
+            simulator_source_dir=None,  # No simulator - task controls it
             simulator_speed=simulator_speed,
-            clear_watch_dir=simulator_enabled,  # Only clear in simulator mode
+            clear_watch_dir=False,  # Task's simulator handles clearing
             clear_output_dir=False,
             progress_callback=self.on_collection_progress,
             stop_event=self._stop_event,
         )
 
         self._emit_progress(f"Collected {n_volumes} volumes to {output_dir}")
+
+        # Wait for localizer task to finish (if running)
+        if localizer_thread is not None and localizer_thread.is_alive():
+            self._emit_progress("Waiting for localizer task to complete...")
+            localizer_thread.join(timeout=60)
+            self._current_localizer_task = None
+
+    def _launch_localizer_task(self, run_num: int, task_id: str, watch_dir: Path, simulator=None) -> threading.Thread:
+        """Launch a localizer PsychoPy task in a separate thread.
+
+        The task runs concurrently with DICOM collection, presenting stimuli
+        while the scanner acquires volumes.
+
+        Args:
+            run_num: Run number (1-based)
+            task_id: Task identifier (e.g., "fixation", "self_other")
+            watch_dir: Directory to watch for first DICOM arrival (auto-trigger)
+            simulator: VolumeSimulator instance (optional, for offline testing)
+
+        Returns:
+            Thread running the localizer task
+        """
+        from pineuro.tasks.factory import create_localizer_task
+
+        config = self.config
+        base_dir = Path(config["paths"]["base_dir"])
+
+        # Get task-specific parameters from config
+        if task_id == "fixation":
+            # For fixation task, use scan parameters
+            localizer_params = {
+                "duration": config["scan"].get("localizer_n_volumes", 200) * config["scan"].get("localizer_tr", 2.0)
+            }
+        else:
+            # For other tasks, get from localizer_task config section
+            localizer_params = config.get("localizer_task", {}).get(task_id, {})
+
+        # Debug: log the parameters being passed
+        logger.debug(f"Localizer task ID: {task_id}")
+        logger.debug(f"Localizer params: {localizer_params}")
+
+        # Output events to the collection directory
+        events_dir = base_dir / "collection"
+        events_dir.mkdir(parents=True, exist_ok=True)
+
+        task = create_localizer_task(
+            task_id=task_id,
+            output_dir=events_dir,
+            participant_id=self.participant_id,
+            config=localizer_params,
+            run=run_num,
+            watch_dir=str(watch_dir),  # Pass watch_dir for auto-trigger on first DICOM
+            simulator=simulator,  # Pass simulator for task-controlled start timing
+        )
+
+        # Set mirror callback if available
+        if self._task_mirror_callback is not None:
+            task.set_mirror_callback(self._task_mirror_callback)
+
+        self._current_localizer_task = task
+
+        def run_localizer():
+            try:
+                self._emit_progress(f"Localizer task '{task_id}' started (run {run_num})")
+                events_path = task.run()
+                if events_path:
+                    self._emit_progress(f"Localizer events saved to {events_path}")
+            except Exception as e:
+                logger.error(f"Localizer task error: {e}", exc_info=True)
+                self._emit_progress(f"Localizer task error: {e}")
+
+        thread = threading.Thread(
+            target=run_localizer, daemon=False, name=f"LocalizerTask-{task_id}-run{run_num}"
+        )
+        thread.start()
+        logger.info(f"Launched localizer task '{task_id}' in thread")
+        return thread
 
     def _run_preprocessing(self) -> None:
         """Run preprocessing on collected rest runs."""
@@ -340,44 +458,20 @@ class PipelineRunner:
         )
 
     def _run_mask_extraction(self) -> None:
-        """Extract network masks using ICA."""
+        """Extract network masks using ICA (rest) or GLM contrasts (task)."""
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         preprocessing_dir = base_dir / "preprocessing"
         mask_extraction_dir = base_dir / "mask_extraction"
 
+        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+
         # Input files from preprocessing
-        preproc_file = preprocessing_dir / f"{self.participant_id}_task-rest_preproc.nii.gz"
-        mask_file = preprocessing_dir / f"{self.participant_id}_task-rest_preproc_mask.nii.gz"
-        ref_file = preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
-
-        # Mask extraction parameters
-        n_yeo = config["mask"]["n_yeo"]
-        yeo_targets = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
-        n_components = config["mask"].get("n_components", 30)
-        smooth_fwhm = config["mask"]["smooth_fwhm"]
-        highpass = config["mask"]["highpass"]
-        lowpass = config["mask"].get("lowpass")
-
-        # If sham is enabled with alternative masks, include those networks too
-        sham_config = config.get("sham", {})
-        sham_hemisphere_network = None
-        if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-            mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
-            if mask_mode == "hemisphere_split":
-                # For hemisphere split, we need to include the network to split
-                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                if hemisphere_network and hemisphere_network not in yeo_targets:
-                    yeo_targets.append(hemisphere_network)
-                    self._emit_progress(f"Including sham hemisphere network: {hemisphere_network}")
-                sham_hemisphere_network = hemisphere_network
-            else:
-                # For two_networks mode, include both alternative targets
-                alternative_targets = sham_config.get("alternative_mask_targets", [])
-                for target in alternative_targets:
-                    if target and target not in yeo_targets:
-                        yeo_targets.append(target)
-                        self._emit_progress(f"Including sham alternative network: {target}")
+        preproc_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc.nii.gz"
+        mask_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc_mask.nii.gz"
+        ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
 
         # Set up progress callback for mask extraction to show in GUI log console
         def progress_callback(step: str, detail: str = ""):
@@ -386,23 +480,92 @@ class PipelineRunner:
             else:
                 self._emit_progress(step)
 
-        mask_files = mask_extraction_rest(
-            participant_id=self.participant_id,
-            root_dir=mask_extraction_dir,
-            input_file=preproc_file,
-            mask_file=mask_file,
-            ref_file=ref_file,
-            n_yeo=n_yeo,
-            yeo_targets=yeo_targets,
-            n_components=n_components,
-            smooth_fwhm=smooth_fwhm,
-            highpass=highpass,
-            lowpass=lowpass,
-            overwrite=True,
-            qc_enabled=True,
-            progress_callback=progress_callback,
-            sham_hemisphere_network=sham_hemisphere_network,
-        )
+        if localizer_type == "task":
+            from pineuro.mask_extraction import mask_extraction_task
+
+            self._emit_progress("Using task-based (GLM) mask extraction")
+
+            contrasts = config.get("mask", {}).get("contrasts", {})
+
+            # Auto-resolve events file from localizer task output
+            localizer_task_type = config["scan"].get("localizer_task_type", "")
+            events_dir = base_dir / "collection"
+            events_glob = sorted(events_dir.glob(
+                f"*_task-{localizer_task_type}_*_events.tsv"
+            ))
+            if events_glob:
+                events_file = str(events_glob[0])
+                self._emit_progress(f"Found events file: {Path(events_file).name}")
+            else:
+                raise FileNotFoundError(
+                    f"No events file found in {events_dir} for task '{localizer_task_type}'. "
+                    f"Run the localizer task first to generate the events TSV."
+                )
+
+            tr = config["scan"].get("localizer_tr", 1.2)
+            threshold = config.get("mask", {}).get("threshold", 2000)
+            smooth_fwhm = config["mask"].get("smooth_fwhm", 5.0)
+            highpass = config["mask"].get("highpass", 0.01)
+
+            mask_files = mask_extraction_task(
+                participant_id=self.participant_id,
+                root_dir=mask_extraction_dir,
+                input_file=preproc_file,
+                mask_file=mask_file,
+                events=events_file,
+                contrasts=contrasts,
+                tr=tr,
+                threshold=threshold,
+                smoothing_fwhm=smooth_fwhm,
+                high_pass=highpass,
+                overwrite=True,
+                qc_enabled=True,
+                progress_callback=progress_callback,
+            )
+        else:
+            # ICA-based extraction (existing behavior)
+            n_yeo = config["mask"]["n_yeo"]
+            yeo_targets = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
+            n_components = config["mask"].get("n_components", 30)
+            smooth_fwhm = config["mask"]["smooth_fwhm"]
+            highpass = config["mask"]["highpass"]
+            lowpass = config["mask"].get("lowpass")
+
+            # If sham is enabled with alternative masks, include those networks too
+            sham_config = config.get("sham", {})
+            sham_hemisphere_network = None
+            if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
+                mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+                if mask_mode == "hemisphere_split":
+                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                    if hemisphere_network and hemisphere_network not in yeo_targets:
+                        yeo_targets.append(hemisphere_network)
+                        self._emit_progress(f"Including sham hemisphere network: {hemisphere_network}")
+                    sham_hemisphere_network = hemisphere_network
+                else:
+                    alternative_targets = sham_config.get("alternative_mask_targets", [])
+                    for target in alternative_targets:
+                        if target and target not in yeo_targets:
+                            yeo_targets.append(target)
+                            self._emit_progress(f"Including sham alternative network: {target}")
+
+            mask_files = mask_extraction_rest(
+                participant_id=self.participant_id,
+                root_dir=mask_extraction_dir,
+                input_file=preproc_file,
+                mask_file=mask_file,
+                ref_file=ref_file,
+                n_yeo=n_yeo,
+                yeo_targets=yeo_targets,
+                n_components=n_components,
+                smooth_fwhm=smooth_fwhm,
+                highpass=highpass,
+                lowpass=lowpass,
+                overwrite=True,
+                qc_enabled=True,
+                progress_callback=progress_callback,
+                sham_hemisphere_network=sham_hemisphere_network,
+            )
 
     def _run_coregistration(self, run_id: int = 1) -> None:
         """Coregister masks to 2vol feedback space.
@@ -457,14 +620,24 @@ class PipelineRunner:
             source_preprocessing_dir = source_visit_dir / "preprocessing"
             source_mask_extraction_dir = source_visit_dir / "mask_extraction"
 
-            ref_file = source_preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
+            localizer_task = config.get("scan", {}).get("localizer_task_type", "rest")
+            task_name = localizer_task if localizer_task != "rest" else "rest"
+            ref_file = source_preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+            # Check both ICA-based (03_masks) and task-based (02_masks) directories
             masks_dir = source_mask_extraction_dir / "03_masks"
+            if not masks_dir.exists():
+                masks_dir = source_mask_extraction_dir / "02_masks"
 
             self._emit_progress(f"Using masks from source visit: {mask_source_visit}")
         else:
             # Standard mode: get masks and ref_file from current visit
-            ref_file = preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
+            localizer_task = config.get("scan", {}).get("localizer_task_type", "rest")
+            task_name = localizer_task if localizer_task != "rest" else "rest"
+            ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+            # Check both ICA-based (03_masks) and task-based (02_masks) directories
             masks_dir = mask_extraction_dir / "03_masks"
+            if not masks_dir.exists():
+                masks_dir = mask_extraction_dir / "02_masks"
 
         twovol_dicom = base_dir / "collection" / f"task-2vol_{run_str}"
 
@@ -663,6 +836,8 @@ class PipelineRunner:
         else:
             # Use boldref space masks from mask extraction
             masks_dir = mask_extraction_dir / "03_masks"
+            if not masks_dir.exists():
+                masks_dir = mask_extraction_dir / "02_masks"
             pattern_template = "*_{mask_name}_thr.nii.gz"
             mask_space = "subject boldref"
 
@@ -735,12 +910,19 @@ class PipelineRunner:
 
         self._emit_progress(f"Preparing {task_type} run (feedback={'ON' if feedback_mode else 'OFF'})...")
 
-        # Compute task regressor (HRF-convolved boxcar for ball task)
+        # Compute task regressor from task metadata design type
         n_baseline = config["feedback"]["n_baseline"]
         n_volumes = config["feedback"]["n_volumes"]
         # Use new feedback_tr field, fall back to legacy tr
         tr = config["scan"].get("feedback_tr") or config["scan"].get("tr", 1.2)
-        task_regressor = compute_boxcar_task_regressor(n_baseline, n_volumes, tr)
+
+        feedback_task_type = config.get("task", {}).get("task_type", "ball")
+        metadata = get_task_metadata(feedback_task_type)
+        if metadata.design_type == "nuisance_only":
+            design = NuisanceOnlyDesign()
+        else:  # "block" (default)
+            design = BlockDesign(n_baseline)
+        task_regressor = design.compute_regressors(n_volumes, tr)
 
         # Determine sham condition and build complete mask list
         # New approach: compute ALL masks (real + sham alternatives), let BallTask decide

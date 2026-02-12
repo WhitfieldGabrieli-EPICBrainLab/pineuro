@@ -31,6 +31,7 @@ dependencies = [
     "numpy>=2.0.0",
     "pandas>=2.0.0",
     "psychopy>=2025.2.0",
+    "pygame>=2.6.0",  # Cross-platform audio backend for WSL compatibility
     "pydicom",
     "pyyaml",
     "scipy>=1.14.0",

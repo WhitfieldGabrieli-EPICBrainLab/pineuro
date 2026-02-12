@@ -600,24 +600,59 @@ class MaskConfig:
     Parameters
     ----------
     n_yeo : int
-        Number of Yeo networks (7 or 17)
+        Number of Yeo networks (7 or 17). Used for ICA-based extraction.
     yeo_targets : list[str]
-        Target network names to extract
+        Target network names to extract. Used for ICA-based extraction.
     smooth_fwhm : float
         Spatial smoothing FWHM in mm
     highpass : float
         High-pass filter cutoff in Hz
     lowpass : float, optional
-        Low-pass filter cutoff in Hz
+        Low-pass filter cutoff in Hz. Used for ICA-based extraction.
     mask_names : list[str]
         Names for masks in feedback output
+    localizer_type : str
+        "rest" for ICA-based extraction, "task" for GLM-based extraction.
+    contrasts : dict[str, str]
+        For task-based extraction: mapping of mask name to contrast expression.
+        Example: {"CEN": "nback - rest", "DMN": "rest - nback"}.
+        Ignored when localizer_type="rest".
+    events_file : Path, optional
+        For task-based extraction: path to BIDS events .tsv file.
+        Ignored when localizer_type="rest".
+    stat_type : str
+        Statistical map type for task-based extraction: "t" or "z".
+    hrf_model : str
+        HRF model for task-based extraction: "spm", "spm + derivative", "glover".
+    drift_model : str
+        Drift model for task-based extraction: "cosine", "polynomial", or "none".
+    threshold : int
+        Number of voxels per mask.
     """
+    # ICA-based extraction fields
     n_yeo: int = 17
     yeo_targets: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
     smooth_fwhm: float = 5.0
     highpass: float = 0.01
     lowpass: Optional[float] = None
     mask_names: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
+
+    # Task-based extraction fields
+    localizer_type: str = "rest"
+    contrasts: dict[str, str] = field(default_factory=dict)
+    events_file: Optional[Path] = None
+    stat_type: str = "t"
+    hrf_model: str = "spm"
+    drift_model: str = "cosine"
+    threshold: int = 2000
+
+    def __post_init__(self):
+        if self.localizer_type not in ("rest", "task"):
+            raise ValueError(f"localizer_type must be 'rest' or 'task', got '{self.localizer_type}'")
+        if self.localizer_type == "task" and not self.contrasts:
+            raise ValueError("contrasts must be provided when localizer_type='task'")
+        if self.events_file is not None:
+            self.events_file = Path(self.events_file)
 
 
 @dataclass
@@ -1029,17 +1064,24 @@ def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
     """
     if config.visit is None or config.visit.mask_source == "compute":
         # Masks computed in this visit
+        # Check both ICA-based (03_masks) and task-based (02_masks) directories
         mask_dir = config.paths.mask_extraction_dir / "03_masks"
+        if not mask_dir.exists():
+            mask_dir = config.paths.mask_extraction_dir / "02_masks"
         mask_files = sorted(mask_dir.glob("*_thr.nii.gz")) if mask_dir.exists() else []
         ref = ref_file_path(config)
         return (mask_files, ref)
     elif config.visit.mask_source == "reuse":
         # Masks from another visit
         source_visit = config.visit.mask_source_visit
-        source_mask_dir = (
+        source_base = (
             config.paths.base_dir / config.paths.participant_id /
-            source_visit / "mask_extraction" / "03_masks"
+            source_visit / "mask_extraction"
         )
+        # Check both ICA-based (03_masks) and task-based (02_masks) directories
+        source_mask_dir = source_base / "03_masks"
+        if not source_mask_dir.exists():
+            source_mask_dir = source_base / "02_masks"
         mask_files = sorted(source_mask_dir.glob("*_thr.nii.gz")) if source_mask_dir.exists() else []
         ref = ref_file_path(config, source_visit=source_visit)
         return (mask_files, ref)
@@ -1100,21 +1142,23 @@ def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict]:
     # Look for ses-* directories (multi-visit)
     for entry in sorted(participant_dir.iterdir()):
         if entry.is_dir() and entry.name.startswith("ses-"):
+            me_dir = entry / "mask_extraction"
             visit_info = {
                 "visit_id": entry.name,
-                "has_masks": (entry / "mask_extraction" / "03_masks").exists(),
+                "has_masks": (me_dir / "03_masks").exists() or (me_dir / "02_masks").exists(),
                 "has_feedback": (entry / "feedback" / "session_state.json").exists(),
-                "masks_approved": (entry / "mask_extraction" / ".masks_approved").exists(),
+                "masks_approved": (me_dir / ".masks_approved").exists(),
             }
             visits.append(visit_info)
 
     # Also check for single-visit mode (no ses-* directory)
     if is_single_visit_data(participant_dir):
+        me_dir = participant_dir / "mask_extraction"
         visits.insert(0, {
             "visit_id": None,  # Single-visit mode
-            "has_masks": (participant_dir / "mask_extraction" / "03_masks").exists(),
+            "has_masks": (me_dir / "03_masks").exists() or (me_dir / "02_masks").exists(),
             "has_feedback": (participant_dir / "feedback" / "session_state.json").exists(),
-            "masks_approved": (participant_dir / "mask_extraction" / ".masks_approved").exists(),
+            "masks_approved": (me_dir / ".masks_approved").exists(),
         })
 
     return visits
@@ -1344,7 +1388,7 @@ def run_mask_extraction(
     ref_file: Path,
     overwrite: bool = False
 ) -> list[Path]:
-    """Run ICA-based mask extraction.
+    """Run mask extraction (ICA-based or GLM-based depending on config).
 
     Parameters
     ----------
@@ -1364,26 +1408,50 @@ def run_mask_extraction(
     list[Path]
         Paths to thresholded network mask files
     """
-    from .mask_extraction import mask_extraction_rest
-
     logger.info("")
     logger.info("=" * 60)
     logger.info("MASK EXTRACTION")
     logger.info("=" * 60)
 
-    return mask_extraction_rest(
-        participant_id=config.paths.participant_id,
-        root_dir=str(config.paths.mask_extraction_dir),
-        input_file=preproc_file,
-        mask_file=mask_file,
-        ref_file=ref_file,
-        n_yeo=config.mask.n_yeo,
-        yeo_targets=config.mask.yeo_targets,
-        smooth_fwhm=config.mask.smooth_fwhm,
-        highpass=config.mask.highpass,
-        lowpass=config.mask.lowpass,
-        overwrite=overwrite
-    )
+    localizer_type = config.mask.localizer_type
+
+    if localizer_type == "task":
+        from .mask_extraction import mask_extraction_task
+
+        logger.info("Using task-based (GLM) mask extraction")
+        return mask_extraction_task(
+            participant_id=config.paths.participant_id,
+            root_dir=str(config.paths.mask_extraction_dir),
+            input_file=preproc_file,
+            mask_file=mask_file,
+            events=config.mask.events_file,
+            contrasts=config.mask.contrasts,
+            tr=config.scan.localizer_tr,
+            threshold=config.mask.threshold,
+            stat_type=config.mask.stat_type,
+            smoothing_fwhm=config.mask.smooth_fwhm,
+            high_pass=config.mask.highpass,
+            drift_model=config.mask.drift_model,
+            hrf_model=config.mask.hrf_model,
+            overwrite=overwrite,
+        )
+    else:
+        from .mask_extraction import mask_extraction_rest
+
+        logger.info("Using ICA-based (resting-state) mask extraction")
+        return mask_extraction_rest(
+            participant_id=config.paths.participant_id,
+            root_dir=str(config.paths.mask_extraction_dir),
+            input_file=preproc_file,
+            mask_file=mask_file,
+            ref_file=ref_file,
+            n_yeo=config.mask.n_yeo,
+            yeo_targets=config.mask.yeo_targets,
+            smooth_fwhm=config.mask.smooth_fwhm,
+            highpass=config.mask.highpass,
+            lowpass=config.mask.lowpass,
+            overwrite=overwrite,
+        )
 
 
 def run_coregistration(
@@ -1475,9 +1543,10 @@ def setup_visit_with_reused_masks(
     source_masks, source_ref = resolve_mask_source(config)
 
     if not source_masks:
+        source_base = config.paths.base_dir / config.paths.participant_id / source_visit / 'mask_extraction'
         raise FileNotFoundError(
             f"No masks found in source visit {source_visit}. "
-            f"Expected masks in: {config.paths.base_dir / config.paths.participant_id / source_visit / 'mask_extraction' / '03_masks'}"
+            f"Expected masks in: {source_base / '03_masks'} or {source_base / '02_masks'}"
         )
 
     if not source_ref.exists():

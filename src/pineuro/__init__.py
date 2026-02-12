@@ -10,6 +10,7 @@ preprocessing : DICOM conversion, motion correction, brain extraction
 collect_volumes : Watch for and collect incoming scanner volumes (DICOM or NIfTI)
 collect_dicoms : Alias for collect_volumes (backward compatibility)
 mask_extraction_rest : Extract network masks using ICA and Yeo atlas
+mask_extraction_task : Extract network masks using GLM contrasts from task localizer
 coregister_2vol : Coregister masks to real-time scanner position
 
 Task Framework
@@ -59,7 +60,7 @@ __version__ = "0.1.0"
 
 from .feedback import run_feedback_session, get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
 from .preprocessing import preprocessing, collect_volumes, collect_dicoms
-from .mask_extraction import mask_extraction_rest, coregister_2vol
+from .mask_extraction import mask_extraction_rest, mask_extraction_task, coregister_2vol
 from .tasks import BaseTask, BallTask, ActivationSmoother, ActivationNormalizer
 from .tasks.session import SessionState, RunInfo
 from .session import (
@@ -113,6 +114,7 @@ from .utils import (
 )
 from .script_generator import (
     generate_mask_extraction_script,
+    generate_task_mask_extraction_script,
     save_script,
 )
 from . import config
@@ -129,6 +131,7 @@ __all__ = [
     'collect_volumes',
     'collect_dicoms',  # Backward compatibility alias for collect_volumes
     'mask_extraction_rest',
+    'mask_extraction_task',
     'coregister_2vol',
     # Task classes
     'BaseTask',
@@ -184,6 +187,7 @@ __all__ = [
     'ProgressEmitter',
     # Script generation
     'generate_mask_extraction_script',
+    'generate_task_mask_extraction_script',
     'save_script',
     # Configuration
     'config',

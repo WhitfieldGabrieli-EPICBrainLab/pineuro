@@ -2,19 +2,24 @@
 Functional network mask extraction pipeline for real-time fMRI neurofeedback.
 
 This module extracts participant-specific functional network masks from
-resting-state fMRI data. These masks define the brain regions used for
-computing neurofeedback signals during subsequent task sessions.
+fMRI data. These masks define the brain regions used for computing
+neurofeedback signals during subsequent task sessions.
 
-The extraction pipeline uses Independent Component Analysis (ICA) to identify
-spatially independent networks in the participant's resting-state data, then
-matches these components to canonical networks from the Yeo atlas. This
-data-driven approach produces masks tailored to each participant's brain
-organization, rather than using a fixed atlas.
+Two extraction approaches are provided:
+
+1. **ICA-based (resting-state)**: ``mask_extraction_rest()`` runs ICA on
+   resting-state data and matches components to Yeo atlas networks.
+
+2. **GLM-based (task localizer)**: ``mask_extraction_task()`` fits a GLM to
+   task localizer data and thresholds contrast maps directly into masks.
 
 Key Components
 --------------
-mask_extraction_rest : Main pipeline function
+mask_extraction_rest : ICA pipeline function
     End-to-end workflow for mask extraction from resting-state data.
+
+mask_extraction_task : GLM pipeline function
+    End-to-end workflow for mask extraction from task localizer data.
 
 run_ica : ICA decomposition
     Runs CanICA (nilearn) on preprocessed fMRI data to extract
@@ -1497,6 +1502,433 @@ def mask_extraction_rest(
             n_yeo=n_yeo,
             overwrite=overwrite,
             open_browser=False
+        )
+        emit_progress("QC report", f"Saved to {report_path.name}")
+
+    return network_thr_files
+
+
+# =============================================================================
+# SECTION 3B: TASK-BASED MASK EXTRACTION (GLM CONTRASTS)
+# =============================================================================
+# Alternative to ICA-based extraction: uses a task localizer and GLM contrasts
+# to identify network-specific voxels. Each contrast map (e.g., "nback - rest")
+# is directly thresholded into a binary mask, without Yeo atlas matching.
+#
+# This approach is more targeted when a suitable task localizer is available,
+# since it directly measures task-evoked activation rather than inferring
+# networks from resting-state correlations.
+
+
+@dataclass
+class TaskMaskSelection:
+    """Tracks the selection state for a single task-based GLM mask.
+
+    Attributes
+    ----------
+    mask_name : str
+        User-assigned name for this mask (e.g., "CEN", "DMN")
+    source_type : str
+        Always "glm_contrast" for task-based masks
+    contrast_definition : str
+        The contrast expression (e.g., "nback - rest")
+    stat_type : str
+        "t" or "z" - the type of statistical map used
+    peak_stat : float
+        Peak statistic value in the unthresholded map
+    n_voxels_above_zero : int
+        Number of positive voxels before thresholding
+    n_voxels_thresholded : int
+        Number of voxels in the final mask
+    threshold_method : str
+        How the mask was thresholded (e.g., "top_n")
+    selection_reason : str
+        Always "auto" for task-based (no manual selection needed)
+    """
+    mask_name: str
+    source_type: str = "glm_contrast"
+    contrast_definition: str = ""
+    stat_type: str = "t"
+    peak_stat: float = 0.0
+    n_voxels_above_zero: int = 0
+    n_voxels_thresholded: int = 0
+    threshold_method: str = "top_n"
+    selection_reason: str = "auto"
+
+
+def save_task_mask_selections(
+    masks_dir: Union[str, Path],
+    selections: Dict[str, TaskMaskSelection]
+) -> Path:
+    """Save task-based mask selections to JSON file.
+
+    Parameters
+    ----------
+    masks_dir : str or Path
+        Directory containing the masks (typically 02_masks/)
+    selections : dict
+        Dictionary mapping mask names to TaskMaskSelection objects
+
+    Returns
+    -------
+    Path
+        Path to the saved JSON file
+    """
+    masks_dir = Path(masks_dir)
+    output_file = masks_dir / "mask_selections.json"
+
+    data = {
+        "type": "task",
+        "selections": {name: asdict(sel) for name, sel in selections.items()}
+    }
+
+    with open(output_file, 'w') as f:
+        json.dump(data, f, indent=2)
+
+    logger.info(f"Saved task mask selections to {output_file}")
+    return output_file
+
+
+def mask_extraction_task(
+        participant_id: str,
+        root_dir: Union[str, Path],
+        input_file: Union[str, Path],
+        mask_file: Union[str, Path],
+        events: Union[str, Path, pd.DataFrame],
+        contrasts: Dict[str, str],
+        tr: float,
+        threshold: int = 2000,
+        stat_type: str = "t",
+        smoothing_fwhm: Optional[float] = 5.0,
+        high_pass: float = 0.01,
+        drift_model: str = "cosine",
+        hrf_model: str = "spm",
+        overwrite: bool = False,
+        qc_enabled: bool = True,
+        qc_dir: Optional[Union[str, Path]] = None,
+        progress_callback: Optional[Callable[[str, str], None]] = None,
+) -> List[Path]:
+    """
+    Run the mask extraction pipeline for task-based fMRI data using GLM contrasts.
+
+    This function extracts participant-specific functional masks from task localizer
+    data. A whole-brain GLM is fit using nilearn's FirstLevelModel, and user-specified
+    contrasts are computed to produce statistical maps. Each contrast map is thresholded
+    to retain the top N voxels, producing binary masks suitable for neurofeedback.
+
+    Unlike the ICA-based approach (mask_extraction_rest), this method:
+    - Uses task-evoked activation rather than resting-state correlations
+    - Does not require MNI registration or Yeo atlas matching
+    - Directly maps each contrast to a mask (user specifies the mapping)
+
+    Parameters
+    ----------
+    participant_id : str
+        Participant ID (e.g., "sub-01")
+    root_dir : str or Path
+        Path to the root directory for all outputs
+    input_file : str or Path
+        Path to preprocessed 4D NIfTI file (output of preprocessing())
+    mask_file : str or Path
+        Path to brain mask NIfTI file (output of preprocessing())
+    events : str, Path, or pd.DataFrame
+        BIDS-style events with columns: onset (seconds), duration (seconds),
+        trial_type (condition name). If a path, reads as tab-separated file.
+    contrasts : dict[str, str]
+        Mapping of mask name to contrast expression string.
+        Example: {"CEN": "nback - rest", "DMN": "rest - nback"}.
+        Expressions are parsed by nilearn and support arithmetic
+        (e.g., "2*nback - rest - fixation").
+    tr : float
+        Repetition time in seconds
+    threshold : int
+        Number of voxels to retain per mask (default: 2000)
+    stat_type : str
+        Type of statistical map: "t" or "z" (default: "t")
+    smoothing_fwhm : float or None
+        Spatial smoothing FWHM in mm (default: 5.0). None disables smoothing.
+    high_pass : float
+        High-pass filter cutoff in Hz (default: 0.01)
+    drift_model : str
+        Drift model for nuisance regression: "cosine", "polynomial", or None
+        (default: "cosine")
+    hrf_model : str
+        HRF model: "spm", "spm + derivative", "glover", etc. (default: "spm")
+    overwrite : bool
+        If True, rerun even if outputs exist (default: False)
+    qc_enabled : bool
+        If True, generate QC report (default: True)
+    qc_dir : str, Path, or None
+        Custom QC output directory. If None, uses {root_dir}/../qc/
+    progress_callback : callable or None
+        Function(step: str, detail: str) for progress updates
+
+    Returns
+    -------
+    list[Path]
+        Paths to thresholded binary mask files ({participant}_{mask_name}_thr.nii.gz)
+
+    Raises
+    ------
+    ValueError
+        If events is empty, missing required columns, or contrast references
+        unknown conditions
+    FileNotFoundError
+        If input_file, mask_file, or events path does not exist
+
+    Examples
+    --------
+    >>> mask_files = mask_extraction_task(
+    ...     participant_id='sub-01',
+    ...     root_dir='/data/sub-01/mask_extraction',
+    ...     input_file='/data/sub-01/preprocessing/sub-01_task-nback_preproc.nii.gz',
+    ...     mask_file='/data/sub-01/preprocessing/sub-01_task-nback_preproc_mask.nii.gz',
+    ...     events=pd.DataFrame({
+    ...         'onset': [0, 30, 60, 90],
+    ...         'duration': [30, 30, 30, 30],
+    ...         'trial_type': ['rest', 'nback', 'rest', 'nback']
+    ...     }),
+    ...     contrasts={"CEN": "nback - rest", "DMN": "rest - nback"},
+    ...     tr=1.2,
+    ... )
+
+    See Also
+    --------
+    mask_extraction_rest : ICA-based extraction from resting-state data
+    coregister_2vol : Align masks to feedback scanner position
+    """
+    from nilearn.glm.first_level import FirstLevelModel
+
+    # --- Setup ---
+    root_dir = Path(root_dir)
+    input_file = Path(input_file)
+    mask_file = Path(mask_file)
+
+    def emit_progress(step: str, detail: str = ""):
+        if progress_callback:
+            progress_callback(step, detail)
+        if detail:
+            logger.info(f"{step}: {detail}")
+        else:
+            logger.info(step)
+
+    emit_progress("Task-based mask extraction", f"Participant: {participant_id}")
+
+    # --- Validate inputs ---
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    if not mask_file.exists():
+        raise FileNotFoundError(f"Mask file not found: {mask_file}")
+    if not contrasts:
+        raise ValueError("contrasts must be a non-empty dict (e.g., {'CEN': 'nback - rest'})")
+
+    # Load events
+    if isinstance(events, (str, Path)):
+        events_path = Path(events)
+        if not events_path.exists():
+            raise FileNotFoundError(f"Events file not found: {events_path}")
+        events_df = pd.read_csv(events_path, sep='\t')
+    elif isinstance(events, pd.DataFrame):
+        events_df = events.copy()
+    else:
+        raise TypeError(f"events must be a path or DataFrame, got {type(events)}")
+
+    # Validate events columns
+    required_cols = {'onset', 'duration', 'trial_type'}
+    missing_cols = required_cols - set(events_df.columns)
+    if missing_cols:
+        raise ValueError(
+            f"Events missing required columns: {missing_cols}. "
+            f"Expected BIDS format with columns: onset, duration, trial_type"
+        )
+    if len(events_df) == 0:
+        raise ValueError("Events DataFrame is empty")
+
+    available_conditions = sorted(events_df['trial_type'].unique())
+    emit_progress("Events loaded", f"{len(events_df)} events, conditions: {available_conditions}")
+
+    # =========================================================================
+    # Step 1/2: GLM Fit
+    # =========================================================================
+    glm_dir = root_dir / "01_glm"
+    glm_dir.mkdir(parents=True, exist_ok=True)
+
+    emit_progress("Step 1/2: Fitting GLM", f"{len(contrasts)} contrasts to compute")
+
+    # Check if all outputs already exist
+    stat_map_paths = {}
+    all_exist = True
+    for mask_name in contrasts:
+        stat_path = glm_dir / f"{participant_id}_{mask_name}_{stat_type}map.nii.gz"
+        stat_map_paths[mask_name] = stat_path
+        if not stat_path.exists():
+            all_exist = False
+
+    if all_exist and not overwrite:
+        logger.info("All GLM stat maps exist and overwrite=False. Skipping GLM fit.")
+        emit_progress("Step 1/2", "Skipped (outputs exist)")
+    else:
+        with Timer("glm_fit", "mask_extraction_task"):
+            model = FirstLevelModel(
+                t_r=tr,
+                mask_img=str(mask_file),
+                smoothing_fwhm=smoothing_fwhm,
+                high_pass=high_pass,
+                drift_model=drift_model,
+                hrf_model=hrf_model,
+                noise_model='ar1',
+                minimize_memory=False,
+                n_jobs=1,
+            )
+
+            emit_progress("Step 1/2", "Fitting model...")
+            model.fit(str(input_file), events=events_df)
+
+            # Save design matrix for QC and reproducibility
+            design_matrix = model.design_matrices_[0]
+            design_file = glm_dir / f"{participant_id}_design_matrix.tsv"
+            design_matrix.to_csv(design_file, sep='\t', index=True)
+
+            # Compute and save each contrast
+            for mask_name, contrast_expr in contrasts.items():
+                emit_progress("Step 1/2", f"Computing contrast: {mask_name} = {contrast_expr}")
+
+                stat_map = model.compute_contrast(
+                    contrast_expr,
+                    stat_type=stat_type,
+                    output_type='stat',
+                )
+                nib.save(stat_map, str(stat_map_paths[mask_name]))
+
+            # Save GLM metadata
+            glm_info = {
+                "participant_id": participant_id,
+                "input_file": str(input_file),
+                "tr": tr,
+                "n_volumes": design_matrix.shape[0],
+                "conditions": available_conditions,
+                "contrasts": contrasts,
+                "stat_type": stat_type,
+                "hrf_model": hrf_model,
+                "drift_model": drift_model,
+                "high_pass": high_pass,
+                "smoothing_fwhm": smoothing_fwhm,
+                "design_matrix_columns": list(design_matrix.columns),
+            }
+            info_file = glm_dir / f"{participant_id}_glm_info.json"
+            with open(info_file, 'w') as f:
+                json.dump(glm_info, f, indent=2)
+
+        emit_progress("Step 1/2", "GLM fit complete")
+
+    # =========================================================================
+    # Step 2/2: Threshold to Binary Masks
+    # =========================================================================
+    masks_dir = root_dir / "02_masks"
+    masks_dir.mkdir(parents=True, exist_ok=True)
+
+    emit_progress("Step 2/2: Thresholding masks", f"{threshold} voxels per mask")
+
+    network_thr_files = []
+    selections: Dict[str, TaskMaskSelection] = {}
+
+    for mask_name, contrast_expr in contrasts.items():
+        stat_map_path = stat_map_paths[mask_name]
+
+        # Save unthresholded map to masks dir
+        unthr_file = masks_dir / f"{participant_id}_{mask_name}.nii.gz"
+        thr_file = masks_dir / f"{participant_id}_{mask_name}_thr.nii.gz"
+
+        if thr_file.exists() and not overwrite:
+            logger.info(f"Thresholded mask exists and overwrite=False: {thr_file.name}")
+            network_thr_files.append(thr_file)
+
+            # Still record selection metadata from existing file
+            img: SpatialImage = load(thr_file)  # type: ignore
+            n_voxels = int(img.get_fdata().sum())
+            stat_img: SpatialImage = load(stat_map_path)  # type: ignore
+            stat_data = stat_img.get_fdata()
+            selections[mask_name] = TaskMaskSelection(
+                mask_name=mask_name,
+                contrast_definition=contrast_expr,
+                stat_type=stat_type,
+                peak_stat=float(np.nanmax(stat_data)),
+                n_voxels_above_zero=int(np.sum(stat_data > 0)),
+                n_voxels_thresholded=n_voxels,
+            )
+            continue
+
+        emit_progress("Step 2/2", f"Thresholding {mask_name}...")
+
+        # Load stat map
+        stat_img: SpatialImage = load(stat_map_path)  # type: ignore
+        stat_data = stat_img.get_fdata()
+
+        # Copy unthresholded map
+        save(Nifti1Image(stat_data, stat_img.affine, stat_img.header), unthr_file)  # type: ignore
+
+        # Threshold: keep only positive voxels, select top N
+        positive_mask = stat_data > 0
+        n_positive = int(positive_mask.sum())
+        peak_stat = float(np.nanmax(stat_data)) if n_positive > 0 else 0.0
+
+        if n_positive == 0:
+            logger.warning(
+                f"No positive voxels in contrast '{mask_name}' ({contrast_expr}). "
+                f"Saving empty mask."
+            )
+            binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
+            n_kept = 0
+        elif n_positive <= threshold:
+            logger.warning(
+                f"Contrast '{mask_name}' has only {n_positive} positive voxels "
+                f"(requested {threshold}). Keeping all positive voxels."
+            )
+            binary_mask = positive_mask.astype(np.uint8)
+            n_kept = n_positive
+        else:
+            # Standard case: threshold to top N voxels
+            flat = stat_data.ravel()
+            mask = np.zeros(flat.shape, dtype=bool)
+            mask[np.argpartition(flat, -threshold)[-threshold:]] = True
+            mask = mask.reshape(stat_data.shape)
+            # Intersect with positive voxels only
+            binary_mask = (mask & positive_mask).astype(np.uint8)
+            n_kept = int(binary_mask.sum())
+
+        save(Nifti1Image(binary_mask, stat_img.affine, stat_img.header), thr_file)  # type: ignore
+        network_thr_files.append(thr_file)
+
+        selections[mask_name] = TaskMaskSelection(
+            mask_name=mask_name,
+            contrast_definition=contrast_expr,
+            stat_type=stat_type,
+            peak_stat=peak_stat,
+            n_voxels_above_zero=n_positive,
+            n_voxels_thresholded=n_kept,
+        )
+
+        emit_progress("Step 2/2", f"{mask_name}: {n_kept} voxels (peak {stat_type}={peak_stat:.2f})")
+
+    # Save selection metadata
+    save_task_mask_selections(masks_dir, selections)
+
+    emit_progress("Step 2/2", f"Complete ({len(network_thr_files)} masks extracted)")
+
+    # Generate QC report
+    if qc_enabled:
+        emit_progress("Generating QC report...")
+        qc_output_dir = Path(qc_dir) if qc_dir is not None else root_dir.parent / "qc"
+        mask_names = list(contrasts.keys())
+        report_path = qc.generate_task_mask_extraction_report(
+            mask_extraction_dir=root_dir,
+            participant_id=participant_id,
+            mask_names=mask_names,
+            contrasts=contrasts,
+            stat_type=stat_type,
+            output_dir=qc_output_dir,
+            overwrite=overwrite,
+            open_browser=False,
         )
         emit_progress("QC report", f"Saved to {report_path.name}")
 

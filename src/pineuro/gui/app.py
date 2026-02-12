@@ -500,6 +500,18 @@ class PyrtnfApp:
 
 def main():
     """Main entry point for the Flet app."""
+    import logging
+    import os
+    from pathlib import Path
+
+    # On WSL, force SDL to use PulseAudio for proper audio routing
+    # Set these env vars BEFORE any pygame imports so they affect all threads
+    wsl_pulse_server = Path('/mnt/wslg/PulseServer')
+    if wsl_pulse_server.exists() and 'SDL_AUDIODRIVER' not in os.environ:
+        os.environ['SDL_AUDIODRIVER'] = 'pulseaudio'
+        os.environ['PULSE_SERVER'] = str(wsl_pulse_server)
+        logging.getLogger('pineuro').info("WSL detected: SDL audio env vars set for all threads")
+
     def create_app(page: ft.Page):
         PyrtnfApp(page)
 

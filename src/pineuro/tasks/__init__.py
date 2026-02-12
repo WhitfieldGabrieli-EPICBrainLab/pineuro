@@ -70,9 +70,11 @@ from .task_registry import (
 )
 from .factory import (
     create_task,
+    create_localizer_task,
     register_task_class,
     get_registered_task_ids,
 )
+from .localizer_base import BaseLocalizerTask
 from .ui_helpers import (
     create_fixation_cross,
     create_progress_bar,
@@ -176,12 +178,17 @@ def discover_tasks(plugin_dirs: Optional[List[Path]] = None) -> List[str]:
 # Task modules register themselves via register_task() at import time
 from .ball import BallTask  # Registers "ball" task
 from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
+from .self_other import SelfOtherTask  # Registers "self_other" localizer task
+from .fixation import FixationTask  # Registers "fixation" localizer task
 
 __all__ = [
     # Base classes
     'BaseTask',
+    'BaseLocalizerTask',
     'BallTask',
     'ThermometerTask',
+    'SelfOtherTask',
+    'FixationTask',
     'SessionState',
     'ActivationSmoother',
     'ActivationNormalizer',
@@ -202,6 +209,7 @@ __all__ = [
     'discover_tasks',
     # Task factory
     'create_task',
+    'create_localizer_task',
     'register_task_class',
     'get_registered_task_ids',
     # UI helpers
