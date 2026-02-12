@@ -2141,29 +2141,40 @@ class ParticipantWorkflowScreen:
         outputs_exist = step_info.get("outputs_exist", False)
         overwrite_warning = None
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
+        is_collection = step_id.startswith("rest_run_") or step_id in ("2vol_initial", "2vol_realtime")
         if outputs_exist:
-            # For feedback steps, data is archived not overwritten
-            if is_feedback_transfer:
+            if is_collection:
+                # Collection steps use acq numbering - never overwrite
+                warning_text = "Previous collection exists. A new acquisition (acq) will be created."
+                warning_icon = ft.icons.Icons.INFO
+                warning_color = ft.Colors.BLUE_700
+                warning_bg = ft.Colors.BLUE_50
+            elif is_feedback_transfer:
+                # Feedback steps archive previous data
                 warning_text = "Previous run data exists and will be archived before starting fresh."
                 warning_icon = ft.icons.Icons.ARCHIVE
+                warning_color = ft.Colors.ORANGE_700
+                warning_bg = ft.Colors.ORANGE_50
             else:
                 warning_text = "Output files already exist. Running this step will overwrite them."
                 warning_icon = ft.icons.Icons.WARNING
+                warning_color = ft.Colors.ORANGE_700
+                warning_bg = ft.Colors.ORANGE_50
 
             overwrite_warning = ft.Container(
                 content=ft.Row(
                     [
-                        ft.Icon(warning_icon, color=ft.Colors.ORANGE_700, size=20),
+                        ft.Icon(warning_icon, color=warning_color, size=20),
                         ft.Text(
                             warning_text,
                             size=12,
-                            color=ft.Colors.ORANGE_700,
+                            color=warning_color,
                         ),
                     ],
                     spacing=10,
                 ),
                 padding=10,
-                bgcolor=ft.Colors.ORANGE_50,
+                bgcolor=warning_bg,
                 border_radius=5,
             )
 
