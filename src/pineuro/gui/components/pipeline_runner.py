@@ -12,7 +12,7 @@ from typing import Optional, Callable, Dict, Any, List
 from pineuro.preprocessing import collect_dicoms, preprocessing
 from pineuro.mask_extraction import mask_extraction_rest, coregister_2vol, generate_2vol_qc_overlays
 from pineuro.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
-from pineuro.session import get_localizer_run_info, archive_incomplete_collection
+from pineuro.session import get_localizer_run_info
 from pineuro.tasks import get_task_metadata
 from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
 from pineuro.tasks.session import SessionState
@@ -276,20 +276,11 @@ class PipelineRunner:
             expected_volumes=n_volumes
         )
         acq = run_info["acq"]
-        interrupted = run_info["interrupted"]
 
         self._emit_progress(f"Collecting initial 2vol DICOMs (acq-{acq:02d})...")
-
-        if interrupted:
+        if run_info["existing_acqs"]:
             self._emit_progress(
-                f"Detected incomplete 2vol collection, acq-{acq-1:02d}. "
-                f"Archiving and starting fresh with acq-{acq:02d}"
-            )
-            archive_incomplete_collection(
-                collection_dir=collection_dir,
-                task="task-2vol",
-                acq=acq - 1,
-                run=1
+                f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}"
             )
 
         output_dir = collection_dir / f"task-2vol_acq-{acq:02d}_run-01"
@@ -361,21 +352,11 @@ class PipelineRunner:
             expected_volumes=n_volumes
         )
         acq = run_info["acq"]
-        interrupted = run_info["interrupted"]
 
         self._emit_progress(f"Collecting {task_name} run {run_num} (acq-{acq:02d}) DICOMs...")
-
-        if interrupted:
+        if run_info["existing_acqs"]:
             self._emit_progress(
-                f"Detected incomplete collection for run {run_num}, acq-{acq-1:02d}. "
-                f"Archiving and starting fresh with acq-{acq:02d}"
-            )
-            # Archive the most recent incomplete attempt
-            archive_incomplete_collection(
-                collection_dir=collection_dir,
-                task=f"task-{task_name}",
-                acq=acq - 1,
-                run=run_num
+                f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}"
             )
 
         output_dir = collection_dir / f"task-{task_name}_acq-{acq:02d}_run-{run_num:02d}"
@@ -974,20 +955,11 @@ class PipelineRunner:
             expected_volumes=n_volumes
         )
         acq = run_info["acq"]
-        interrupted = run_info["interrupted"]
 
         self._emit_progress(f"Collecting real-time 2vol DICOMs (acq-{acq:02d}, run-{run_id:02d})...")
-
-        if interrupted:
+        if run_info["existing_acqs"]:
             self._emit_progress(
-                f"Detected incomplete 2vol collection, acq-{acq-1:02d}. "
-                f"Archiving and starting fresh with acq-{acq:02d}"
-            )
-            archive_incomplete_collection(
-                collection_dir=collection_dir,
-                task="task-2vol",
-                acq=acq - 1,
-                run=run_id
+                f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}"
             )
 
         output_dir = collection_dir / f"task-2vol_acq-{acq:02d}_run-{run_id:02d}"
