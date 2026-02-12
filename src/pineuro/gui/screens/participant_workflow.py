@@ -2398,7 +2398,7 @@ class ParticipantWorkflowScreen:
 
         run_info = get_localizer_run_info(
             collection_dir=collection_dir,
-            task="2vol",
+            task="task-2vol",
             run=1,
             expected_volumes=n_vols,
         )
@@ -2461,7 +2461,7 @@ class ParticipantWorkflowScreen:
 
         run_info = get_localizer_run_info(
             collection_dir=collection_dir,
-            task="2vol",
+            task="task-2vol",
             run=run_num,
             expected_volumes=n_vols,
         )
@@ -2628,7 +2628,7 @@ class ParticipantWorkflowScreen:
             collection_dir = base_dir / "collection"
             run_info = get_localizer_run_info(
                 collection_dir=collection_dir,
-                task=loc_name,
+                task=f"task-{loc_name}",
                 run=run_num,
                 expected_volumes=expected_vols,
             )
