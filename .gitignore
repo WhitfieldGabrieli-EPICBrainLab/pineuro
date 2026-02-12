@@ -12,3 +12,4 @@ data/
 temp/
 drafts/
 tests/benchmark*
+pi_neuro.egg-info/
