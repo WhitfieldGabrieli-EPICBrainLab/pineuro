@@ -28,10 +28,10 @@ from typing import Optional, TYPE_CHECKING
 # Third-party imports
 import numpy as np
 from numpy.typing import NDArray
-from psychopy import visual, core, event, prefs, logging as psychopy_logging
 
-# Silence PsychoPy warnings about monitor specifications and fonts
-psychopy_logging.console.setLevel(psychopy_logging.ERROR)
+# Note: psychopy imports are lazy (inside methods) to avoid initialising
+# pyglet's OpenGL shadow window on the main thread, which breaks
+# background-thread window creation on native Windows.
 
 # Local imports
 from .base import BaseTask
@@ -307,7 +307,8 @@ class BallTask(BaseTask):
 
     def setup(self):
         """Initialize PsychoPy window and ball task stimuli."""
-        from psychopy import visual
+        from psychopy import visual, core, event, logging as psychopy_logging
+        psychopy_logging.console.setLevel(psychopy_logging.ERROR)
 
         # Initialize PsychoPy log file
         self._psychopy_log_file = open(self._psychopy_log_path, 'w', newline='')
@@ -448,6 +449,8 @@ class BallTask(BaseTask):
         Shows BallTask-specific instruction screen first, then delegates
         to base class for question display using BallTask's button mapping.
         """
+        from psychopy import core, event
+
         # Get questions from metadata
         metadata = self.get_task_metadata()
         if not metadata or not metadata.post_run_questions:
@@ -544,6 +547,8 @@ class BallTask(BaseTask):
         - Higher scale_factor = faster movement (adjusted adaptively between runs)
         - internal_scaler normalizes across different TR values
         """
+        from psychopy import core
+
         # Calculate time delta since last frame
         current_time = core.getTime()
         dt = current_time - self._last_frame_time
@@ -597,6 +602,8 @@ class BallTask(BaseTask):
         bool
             True if hit occurred (ball was reset)
         """
+        from psychopy import core
+
         for i, circle in enumerate(self.circles):
             circle_y = self.circle_positions[i]
 
@@ -906,7 +913,7 @@ class BallTask(BaseTask):
         Overrides BaseTask.run() to call update_frame() at monitor refresh rate
         instead of update() once per TR.
         """
-        from psychopy import event
+        from psychopy import core, event
 
         self._running = True
 
