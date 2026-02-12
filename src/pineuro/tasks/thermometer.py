@@ -795,6 +795,13 @@ THERMOMETER_METADATA = TaskMetadata(
     design_type="nuisance_only",
     parameters=[
         TaskParameter(
+            key="use_transfer_runs",
+            label="Use Transfer Runs",
+            type="bool",
+            default=True,
+            hint="Include transfer runs (1 before feedback, 1 after)",
+        ),
+        TaskParameter(
             key="stim_dir",
             label="Stimulus Directory",
             type="str",

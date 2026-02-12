@@ -31,6 +31,15 @@ logger = logging.getLogger(__name__)
 class StudyEditorScreen:
     """Study editor screen with tabbed parameter sections."""
 
+    # Uniform widths for visual consistency across all tabs
+    FIELD_W = 400   # standalone fields (text, dropdown, number)
+    PAIR_W = 195    # side-by-side paired fields (two per row)
+
+    @staticmethod
+    def _f(control):
+        """Wrap a control in a Row so Column doesn't stretch it."""
+        return ft.Row([control])
+
     def __init__(
         self,
         page: ft.Page,
@@ -763,6 +772,13 @@ class StudyEditorScreen:
         self.scanner_dicom_dir_field.visible = not is_simulator
         self.scanner_dicom_dir_browse_btn.visible = not is_simulator
 
+        # Update simulator instruction text
+        if hasattr(self, 'simulator_instruction_text'):
+            if is_simulator:
+                self.simulator_instruction_text.value = "Simulator replays volumes from source directories at configurable speed for offline testing."
+            else:
+                self.simulator_instruction_text.value = "Scanner DICOM directory will be monitored for real-time acquisition."
+
         # Update simulator paths container visibility
         if hasattr(self, 'simulator_paths_container'):
             self.simulator_paths_container.visible = is_simulator
@@ -935,6 +951,11 @@ class StudyEditorScreen:
         # Update target networks label in Localizer tab
         if hasattr(self, 'target_networks_label'):
             self.target_networks_label.value = f"Target Networks (select {n_networks})"
+
+        # Update task info text in Study tab
+        if hasattr(self, 'task_info_text'):
+            task_info = f"Requires {n_networks} {'network' if n_networks == 1 else 'networks'}"
+            self.task_info_text.value = task_info
 
         # Rebuild network dropdowns row based on n_networks
         if hasattr(self, 'network_dropdowns_row'):
@@ -1412,11 +1433,33 @@ class StudyEditorScreen:
         except ValueError:
             task_info = ""
 
+        # Create task info text control (will be updated dynamically)
+        self.task_info_text = ft.Text(
+            task_info,
+            size=11,
+            color=ft.Colors.GREY_600,
+            italic=True,
+        )
+
+        # Create simulator mode instruction text (will be updated dynamically)
+        self.simulator_instruction_text = ft.Text(
+            "Simulator replays volumes from source directories at configurable speed for offline testing." if is_simulator else "Scanner DICOM directory will be monitored for real-time acquisition.",
+            size=11,
+            color=ft.Colors.GREY_600,
+            italic=True,
+        )
+
         return ft.Container(
             content=ft.Column(
                 [
                     ft.Text("Study Information", size=16, weight=ft.FontWeight.BOLD),
-                    self.name_field,
+                    ft.Text(
+                        "Study metadata shown in the GUI and used for organizing session data.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self._f(self.name_field),
                     self.description_field,
                     self.example_participant_id_field,
                     ft.Divider(),
@@ -1430,13 +1473,8 @@ class StudyEditorScreen:
                         italic=True,
                     ),
                     ft.Text("Feedback Task", size=14, weight=ft.FontWeight.BOLD),
-                    self.task_type_dropdown,
-                    ft.Text(
-                        task_info,
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    self._f(self.task_type_dropdown),
+                    self.task_info_text,
                     ft.Divider(),
                     self.multi_visit_enabled_checkbox,
                     ft.Text(
@@ -1457,12 +1495,7 @@ class StudyEditorScreen:
                         self.scanner_dicom_dir_field,
                         self.scanner_dicom_dir_browse_btn,
                     ]),
-                    ft.Text(
-                        "When simulator mode is disabled, the system watches the scanner DICOM directory for incoming files.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    self.simulator_instruction_text,
                     ft.Divider(),
                     ft.Text("Display Settings", size=16, weight=ft.FontWeight.BOLD),
                     ft.Row([
@@ -1536,6 +1569,12 @@ class StudyEditorScreen:
                 self.n_yeo_radio,
                 ft.Divider(),
                 self.target_networks_label,
+                ft.Text(
+                    "Select target networks from the Yeo atlas for neurofeedback training.",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
                 self.network_dropdowns_row,
                 ft.Divider(),
                 ft.Text("ICA Settings", size=14, weight=ft.FontWeight.BOLD),
@@ -1556,7 +1595,13 @@ class StudyEditorScreen:
             content=ft.Column(
                 [
                     ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
-                    self.localizer_tr_field,
+                    ft.Text(
+                        "Configure the localizer scan that identifies participant-specific brain networks.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self._f(self.localizer_tr_field),
                     self.localizer_n_volumes_field,
                     self.localizer_n_runs_field,
                     ft.Divider(),
@@ -1648,7 +1693,13 @@ class StudyEditorScreen:
         # Scanner parameters for feedback
         scanner_section = [
             ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
-            self.feedback_tr_field,
+            ft.Text(
+                "Configure feedback run parameters (must match scanner sequence settings).",
+                size=11,
+                color=ft.Colors.GREY_600,
+                italic=True,
+            ),
+            self._f(self.feedback_tr_field),
             self.feedback_n_volumes_field,
             ft.Divider(),
         ]
@@ -1668,10 +1719,10 @@ class StudyEditorScreen:
                 ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
                 self.max_feedback_runs_field,
                 self.n_baseline_field,
-                self.fd_threshold_field,
+                self._f(self.fd_threshold_field),
                 self.moco_enabled_checkbox,
                 ft.Text(
-                    "Transfer runs are optional (configure in task-specific parameters below)",
+                    "Use Siemens MoCo JSON sidecar if available; falls back to ANTsPy registration (~400-500ms/volume).",
                     size=11,
                     color=ft.Colors.GREY_600,
                     italic=True,
@@ -2072,6 +2123,12 @@ class StudyEditorScreen:
             content=ft.Column(
                 [
                     ft.Text("Output Directory", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "All processed data, masks, and feedback output will be saved under this directory.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
                     ft.Row([
                         self.base_dir_field,
                         self._create_browse_button(self.base_dir_field),
