@@ -819,7 +819,7 @@ class BaseTask(ABC):
         """Create a PsychoPy window with cross-platform monitor targeting.
 
         Handles platform differences:
-        - macOS: Uses screen parameter directly
+        - macOS/Windows: Uses screen parameter directly
         - Linux/WSL2: Creates window then moves it using Xlib
 
         Parameters
@@ -861,8 +861,8 @@ class BaseTask(ABC):
             logger.warning("No monitors detected, using screen 0")
 
         # Platform-specific window creation
-        if platform == 'darwin':
-            # macOS: screen parameter works directly
+        if platform in ('darwin', 'windows'):
+            # macOS/Windows: screen parameter works directly
             self.win = visual.Window(
                 fullscr=fullscreen,
                 monitor=mon,
