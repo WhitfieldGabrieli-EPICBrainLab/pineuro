@@ -39,6 +39,7 @@ from ..components.run_selection_dialog import RunSelectionDialog, RunInfo
 from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, scan_collection_acqs
 from ..components.mask_selection_dialog import MaskSelectionDialog, MaskReviewInfo
 from pineuro.feedback import get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
+from pineuro.session import get_localizer_run_info
 from pineuro.tasks.session import SessionState
 from pineuro.utils import get_dicom_files
 from pineuro.sham import load_randomization, get_condition_for_participant
@@ -2371,6 +2372,62 @@ class ParticipantWorkflowScreen:
             "output_pattern": f"*_to_task-2vol_run-{run_num:02d}_*.nii.gz",
         }
 
+    def _get_2vol_initial_step_info(self, config: dict, base_dir: Path) -> dict:
+        """Get step info for initial 2vol collection with acq tracking.
+
+        Args:
+            config: Session configuration
+            base_dir: Base directory path
+
+        Returns:
+            Dictionary with step information
+        """
+        enabled = config["scan"].get("twovol_initial_enabled", True)
+
+        if not enabled:
+            return {
+                "label": "Collect Initial 2vol (Disabled)",
+                "description": "Initial 2vol collection is disabled in study configuration.",
+                "parameters": {"Status": "Disabled"},
+                "output_path": base_dir / "collection",
+                "output_pattern": "task-2vol_acq-*_run-01",
+            }
+
+        n_vols = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+        collection_dir = base_dir / "collection"
+
+        run_info = get_localizer_run_info(
+            collection_dir=collection_dir,
+            task="2vol",
+            run=1,
+            expected_volumes=n_vols,
+        )
+
+        description = "Collect 2 volumes for initial positioning verification before localizer acquisition."
+        if run_info["existing_acqs"]:
+            attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            description += f" Previous attempts ({attempts_str}) will be preserved."
+
+        info = {
+            "label": "Collect Initial 2vol",
+            "description": description,
+            "parameters": {
+                "Task": "2vol (run-01)",
+                "Attempt": f"acq-{run_info['acq']:02d}",
+                "Volumes": n_vols,
+                "Source": config["scan"]["twovol_initial_dicoms"],
+                "Output": base_dir / "collection" / f"task-2vol_acq-{run_info['acq']:02d}_run-01",
+                "Enabled": "Yes",
+            },
+            "output_path": base_dir / "collection",
+            "output_pattern": "task-2vol_acq-*_run-01",
+        }
+        if run_info["existing_acqs"]:
+            attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            info["parameters"]["Previous Attempts"] = attempts_str
+
+        return info
+
     def _get_2vol_realtime_step_info(self, config: dict, base_dir: Path) -> dict:
         """Get step info for realtime 2vol collection, handling mask reuse mode.
 
@@ -2399,19 +2456,40 @@ class ParticipantWorkflowScreen:
                 "output_pattern": f"task-2vol_acq-*_run-{run_num:02d}",
             }
 
-        return {
+        n_vols = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+        collection_dir = base_dir / "collection"
+
+        run_info = get_localizer_run_info(
+            collection_dir=collection_dir,
+            task="2vol",
+            run=run_num,
+            expected_volumes=n_vols,
+        )
+
+        description = "Collect 2 volumes immediately before feedback session for real-time registration verification."
+        if run_info["existing_acqs"]:
+            attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            description += f" Previous attempts ({attempts_str}) will be preserved."
+
+        info = {
             "label": "Collect Real-time 2vol",
-            "description": "Collect 2 volumes immediately before feedback session for real-time registration verification.",
+            "description": description,
             "parameters": {
                 "Task": f"2vol (run-{run_num:02d})",
-                "Volumes": config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2)),
+                "Attempt": f"acq-{run_info['acq']:02d}",
+                "Volumes": n_vols,
                 "Source": config["scan"]["twovol_realtime_dicoms"],
-                "Output": base_dir / "collection" / f"task-2vol_acq-*_run-{run_num:02d}",
+                "Output": base_dir / "collection" / f"task-2vol_acq-{run_info['acq']:02d}_run-{run_num:02d}",
                 "Enabled": "Yes",
             },
             "output_path": base_dir / "collection",
             "output_pattern": f"task-2vol_acq-*_run-{run_num:02d}",
         }
+        if run_info["existing_acqs"]:
+            attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            info["parameters"]["Previous Attempts"] = attempts_str
+
+        return info
 
     def _get_step_info(self, step_id: str, config: dict, base_dir: Path, participant_id: str) -> dict:
         """Get information about a pipeline step for preview.
@@ -2478,19 +2556,7 @@ class ParticipantWorkflowScreen:
 
         # Map step IDs to their information
         step_info_map = {
-            "2vol_initial": {
-                "label": "Collect Initial 2vol" + ("" if config["scan"].get("twovol_initial_enabled", True) else " (Disabled)"),
-                "description": "Collect 2 volumes for initial positioning verification before localizer acquisition." if config["scan"].get("twovol_initial_enabled", True) else "Initial 2vol collection is disabled in study configuration.",
-                "parameters": {
-                    "Task": "2vol (run-01)",
-                    "Volumes": config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2)),
-                    "Source": config["scan"]["twovol_initial_dicoms"],
-                    "Output": base_dir / "collection" / "task-2vol_acq-*_run-01",
-                    "Enabled": "Yes" if config["scan"].get("twovol_initial_enabled", True) else "No",
-                } if config["scan"].get("twovol_initial_enabled", True) else {"Status": "Disabled"},
-                "output_path": base_dir / "collection",
-                "output_pattern": "task-2vol_acq-*_run-01",
-            },
+            "2vol_initial": self._get_2vol_initial_step_info(config, base_dir),
             "preprocessing": {
                 "label": "Run Preprocessing",
                 "description": "Motion correction, brain extraction, and coregistration of localizer runs.",
@@ -2556,19 +2622,39 @@ class ParticipantWorkflowScreen:
 
             loc_task = config['scan'].get('localizer_task_type', 'rest')
             loc_name = loc_task if loc_task != 'rest' else 'rest'
+            expected_vols = config["scan"].get("localizer_n_volumes") or 200
+
+            # Get acq info for this run (same pattern as feedback steps)
+            collection_dir = base_dir / "collection"
+            run_info = get_localizer_run_info(
+                collection_dir=collection_dir,
+                task=loc_name,
+                run=run_num,
+                expected_volumes=expected_vols,
+            )
+
+            description = f"Collect localizer fMRI data (run {run_num}) for network mask extraction."
+            if run_info["existing_acqs"]:
+                attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+                description += f" Previous attempts ({attempts_str}) will be preserved."
+
             info = {
                 "label": f"Collect Localizer Run {run_num}",
-                "description": f"Collect localizer fMRI data (run {run_num}) for network mask extraction.",
+                "description": description,
                 "parameters": {
                     "Task": f"{loc_task} (run-{run_num:02d})",
-                    "Volumes": config["scan"].get("localizer_n_volumes") or 200,
+                    "Attempt": f"acq-{run_info['acq']:02d}",
+                    "Volumes": expected_vols,
                     "Source": source_dicom,
-                    "Output": base_dir / "collection" / f"task-{loc_name}_acq-*_run-{run_num:02d}",
+                    "Output": base_dir / "collection" / f"task-{loc_name}_acq-{run_info['acq']:02d}_run-{run_num:02d}",
                     "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 10.0))}x",
                 },
                 "output_path": base_dir / "collection",
                 "output_pattern": f"task-{loc_name}_acq-*_run-{run_num:02d}",
             }
+            if run_info["existing_acqs"]:
+                attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+                info["parameters"]["Previous Attempts"] = attempts_str
         # Handle dynamic feedback_N steps
         elif step_id.startswith("feedback_"):
             run_num = int(step_id.split("_")[-1])
