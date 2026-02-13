@@ -870,6 +870,138 @@ class StudyEditorScreen:
         """Handle sham mask mode change (hemisphere_split vs two_networks)."""
         self._update_sham_visibility()
 
+    def _on_generate_randomization(self, e):
+        """Open dialog to generate a randomization file."""
+        prefix_field = ft.TextField(
+            label="Participant ID prefix", value="sub-", width=200,
+            hint_text="e.g. sub- → sub-01, sub-rtchr0 → sub-rtchr001",
+        )
+        n_participants_field = ft.TextField(
+            label="Number of participants", width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        n_sham_field = ft.TextField(
+            label="Number of sham", width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        method_dropdown = ft.Dropdown(
+            label="Method", width=200,
+            options=[
+                ft.dropdown.Option(key="simple", text="Simple"),
+                ft.dropdown.Option(key="replay", text="Replay"),
+            ],
+            value="simple",
+        )
+        seed_field = ft.TextField(
+            label="Seed (optional)", width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Generate Randomization File"),
+            content=ft.Container(
+                content=ft.Column([
+                    prefix_field,
+                    n_participants_field,
+                    n_sham_field,
+                    method_dropdown,
+                    seed_field,
+                ], tight=True, spacing=10),
+                width=300,
+            ),
+        )
+
+        def generate(e):
+            # Validate
+            prefix = prefix_field.value.strip()
+            if not prefix:
+                prefix_field.error_text = "Required"
+                prefix_field.update()
+                return
+
+            try:
+                n_total = int(n_participants_field.value)
+                if n_total < 2:
+                    raise ValueError
+            except (TypeError, ValueError):
+                n_participants_field.error_text = "Must be an integer >= 2"
+                n_participants_field.update()
+                return
+            n_participants_field.error_text = None
+
+            try:
+                n_sham = int(n_sham_field.value)
+                if n_sham < 1 or n_sham >= n_total:
+                    raise ValueError
+            except (TypeError, ValueError):
+                n_sham_field.error_text = f"Must be between 1 and {n_total - 1}" if 'n_total' in dir() else "Must be a positive integer"
+                n_sham_field.update()
+                return
+            n_sham_field.error_text = None
+
+            seed_val = None
+            if seed_field.value and seed_field.value.strip():
+                try:
+                    seed_val = int(seed_field.value)
+                except ValueError:
+                    seed_field.error_text = "Must be an integer"
+                    seed_field.update()
+                    return
+
+            # Ask user where to save
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+            except ImportError:
+                logger.error("tkinter is not available for file dialog")
+                return
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            save_path = filedialog.asksaveasfilename(
+                title="Save randomization file",
+                defaultextension=".tsv",
+                filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv")],
+            )
+            root.destroy()
+
+            if not save_path:
+                return  # User cancelled
+
+            # Generate
+            from pineuro.sham import generate_randomization
+            participant_ids = [f"{prefix}{i:02d}" for i in range(1, n_total + 1)]
+            method = method_dropdown.value
+
+            generate_randomization(
+                participant_ids=participant_ids,
+                n_sham=n_sham,
+                method=method,
+                output_path=save_path,
+                seed=seed_val,
+            )
+
+            # Populate file field and close dialog
+            self.sham_randomization_file_field.value = save_path
+            self.sham_randomization_file_field.update()
+            self.page.pop_dialog()
+
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text(f"Randomization file saved: {save_path}"),
+                open=True,
+            )
+            self.page.update()
+
+        def cancel(e):
+            self.page.pop_dialog()
+
+        dialog.actions = [
+            ft.TextButton("Cancel", on_click=cancel),
+            ft.ElevatedButton("Generate", on_click=generate),
+        ]
+        self.page.show_dialog(dialog)
+
     def _update_sham_visibility(self):
         """Update visibility of sham sections based on enabled state and delivery method."""
         is_enabled = self.sham_enabled_checkbox.value
@@ -1957,6 +2089,11 @@ class StudyEditorScreen:
                     self._create_file_browse_button(
                         self.sham_randomization_file_field,
                         filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")]
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.SHUFFLE,
+                        tooltip="Generate randomization file",
+                        on_click=self._on_generate_randomization,
                     ),
                 ]),
                 ft.Text(

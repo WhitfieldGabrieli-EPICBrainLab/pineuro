@@ -260,6 +260,113 @@ def load_randomization(file_path: Path) -> dict[str, dict]:
     return result
 
 
+def generate_randomization(
+    participant_ids: list[str],
+    n_sham: int,
+    method: str = "simple",
+    matched_visit: Optional[str] = None,
+    output_path: Optional[Path] = None,
+    seed: Optional[int] = None,
+) -> pd.DataFrame:
+    """Generate a randomization file assigning participants to real/sham conditions.
+
+    Creates a TSV-formatted DataFrame (and optionally writes it to disk) that is
+    directly compatible with ``load_randomization()``.
+
+    Parameters
+    ----------
+    participant_ids : list[str]
+        Participant identifiers (e.g., ["sub-01", "sub-02", ..., "sub-20"])
+    n_sham : int
+        Number of participants to assign to the sham condition.
+        Must be > 0 and < len(participant_ids).
+    method : str
+        Assignment method:
+        - "simple": Random real/sham assignment with no replay matching.
+        - "replay": Random assignment plus automatic sham→real participant
+          matching for feedbacklog replay (round-robin if more sham than real).
+    matched_visit : str, optional
+        Visit ID to populate the matched_visit column for replay participants.
+        Ignored when method="simple".
+    output_path : Path, optional
+        If provided, write the randomization table to this path as TSV.
+    seed : int, optional
+        Random seed for reproducible assignments.
+
+    Returns
+    -------
+    pd.DataFrame
+        Randomization table with columns: subject_id, condition,
+        matched_participant, matched_visit, notes.
+
+    Raises
+    ------
+    ValueError
+        If n_sham is out of range or participant_ids contains duplicates.
+    """
+    # --- Validate inputs ---
+    if len(participant_ids) == 0:
+        raise ValueError("participant_ids must not be empty")
+    if n_sham <= 0 or n_sham >= len(participant_ids):
+        raise ValueError(
+            f"n_sham must be between 1 and {len(participant_ids) - 1} "
+            f"(got {n_sham} for {len(participant_ids)} participants)"
+        )
+    if len(set(participant_ids)) != len(participant_ids):
+        raise ValueError("participant_ids contains duplicates")
+
+    rng = np.random.default_rng(seed)
+
+    # --- Shuffle and assign conditions ---
+    indices = np.arange(len(participant_ids))
+    rng.shuffle(indices)
+
+    conditions = ["real"] * len(participant_ids)
+    for i in range(n_sham):
+        conditions[indices[i]] = "sham"
+
+    # --- Build matched_participant column for replay method ---
+    matched_participants: list[Optional[str]] = [None] * len(participant_ids)
+    matched_visits: list[Optional[str]] = [None] * len(participant_ids)
+
+    if method == "replay":
+        real_ids = [
+            participant_ids[i]
+            for i in range(len(participant_ids))
+            if conditions[i] == "real"
+        ]
+        sham_indices = [
+            i for i in range(len(participant_ids)) if conditions[i] == "sham"
+        ]
+
+        # Round-robin match sham → real
+        for j, sham_idx in enumerate(sham_indices):
+            matched_participants[sham_idx] = real_ids[j % len(real_ids)]
+            if matched_visit:
+                matched_visits[sham_idx] = matched_visit
+
+    # --- Build DataFrame ---
+    df = pd.DataFrame({
+        "subject_id": participant_ids,
+        "condition": conditions,
+        "matched_participant": matched_participants,
+        "matched_visit": matched_visits,
+        "notes": [""] * len(participant_ids),
+    })
+
+    # --- Write TSV if path provided ---
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path, sep="\t", index=False)
+        logger.info(
+            f"Generated randomization file: {output_path} "
+            f"({len(participant_ids)} participants, {n_sham} sham)"
+        )
+
+    return df
+
+
 def get_condition_for_participant(
     randomization: dict[str, dict],
     participant_id: str,
