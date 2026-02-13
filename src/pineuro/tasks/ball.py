@@ -238,14 +238,15 @@ class BallTask(BaseTask):
         self._acq = getattr(coordinator, 'acq', None)
 
         if session_state is not None:
-            # Use slot-aware scale factor lookup for retries
+            # Use slot-aware state lookup for retries
             if self._slot_run_number is not None and self._acq is not None:
-                self.scale_factor = session_state.get_scale_factor_for_slot(
+                slot_state = session_state.get_state_for_slot(
                     self._slot_run_number, self._acq
                 )
+                self.scale_factor = slot_state.get('scale_factor', self.scale_factor)
                 logger.info(f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, acq={self._acq})")
             else:
-                self.scale_factor = session_state.scale_factor
+                self.scale_factor = session_state.get('scale_factor', self.scale_factor)
                 logger.info(f"Restored scale_factor from session: {self.scale_factor}")
 
         self.network_directions = np.array([1, -1])  # +1 = up, -1 = down
@@ -782,25 +783,86 @@ class BallTask(BaseTask):
             acq=self._acq,
         )
 
-    def _record_run_completion(self) -> None:
-        """Record run completion with BallTask-specific parameters.
+    def get_run_results(self) -> dict:
+        """Return BallTask-specific results from the completed run."""
+        results = super().get_run_results()
+        results.update({
+            'hit_counters': self.hit_counters.copy(),
+            'scale_factor': self.scale_factor,
+            'circle_radii': self.circle_radii.copy(),
+        })
+        return results
 
-        Overrides BaseTask to include hit counters, scale factor, etc.
+    def _apply_adaptive_difficulty(self) -> None:
+        """Apply adaptive difficulty adjustment to scale_factor.
+
+        Called before recording run completion. Adjusts scale_factor based on
+        hit counts for the run that just completed:
+        - If max single-network hits > max_hits_threshold: decrease scale_factor
+        - If total hits < min_hits_threshold: increase scale_factor
+        - Only adjusts for feedback runs, not transfer runs
+        - Only adjusts for new run slots, not retries (acq > 1)
         """
         if self._session_state is None:
             return
 
         run_type = 'feedback' if self.feedback_mode else 'transfer'
+
+        # Check if this is a retry
+        is_retry = False
+        if self._slot_run_number is not None:
+            for r in self._session_state.completed_runs:
+                if r.slot_run_number == self._slot_run_number:
+                    is_retry = True
+                    break
+
+        if is_retry:
+            logger.info(f"  Retry (acq={self._acq}): skipping scale_factor adjustment")
+            return
+
+        if run_type != 'feedback':
+            logger.info(f"  Transfer run - no adaptive difficulty adjustment")
+            return
+
+        total_hits = sum(self.hit_counters)
+        max_single = max(self.hit_counters)
+        old_scale = self.scale_factor
+
+        if max_single > self._max_hits_threshold:
+            self.scale_factor = old_scale * (1 - self._scale_adjust_factor)
+            logger.info(f"  Adaptive difficulty: {max_single} hits > {self._max_hits_threshold} max → "
+                       f"decreasing scale_factor {old_scale:.1f} → {self.scale_factor:.1f}")
+        elif total_hits < self._min_hits_threshold:
+            self.scale_factor = old_scale * (1 + self._scale_adjust_factor)
+            logger.info(f"  Adaptive difficulty: {total_hits} total hits < {self._min_hits_threshold} min → "
+                       f"increasing scale_factor {old_scale:.1f} → {self.scale_factor:.1f}")
+        else:
+            logger.info(f"  Adaptive difficulty: hits in range → keeping scale_factor at {old_scale:.1f}")
+
+    def _record_run_completion(self) -> None:
+        """Record run completion with BallTask-specific state.
+
+        Overrides BaseTask to apply adaptive difficulty and include
+        BallTask state in the task_state_snapshot.
+        """
+        if self._session_state is None:
+            return
+
+        # Apply adaptive difficulty before recording
+        self._apply_adaptive_difficulty()
+
+        # Build task state snapshot with all BallTask-specific state
+        snapshot = {
+            'hit_counters': self.hit_counters.copy(),
+            'scale_factor': self.scale_factor,
+            'circle_radii': self.circle_radii.copy(),
+        }
+
+        run_type = 'feedback' if self.feedback_mode else 'transfer'
         self._session_state.record_run(
             run_type=run_type,
-            hit_counters=self.hit_counters,
-            scale_factor=self.scale_factor,
-            circle_radii=self.circle_radii,
             volumes_processed=self.current_volume,
-            min_hits_threshold=self._min_hits_threshold,
-            max_hits_threshold=self._max_hits_threshold,
-            scale_adjust_factor=self._scale_adjust_factor,
-            # Slot-based tracking
+            task_state_snapshot=snapshot,
             slot_run_number=self._slot_run_number,
             acq=self._acq,
         )
@@ -998,6 +1060,7 @@ from .task_registry import (
     TaskParameter,
     SessionStateField,
     PostRunQuestion,
+    NetworkRole,
     register_task,
 )
 from typing import Dict, Any
@@ -1101,6 +1164,10 @@ BALL_TASK_METADATA = TaskMetadata(
     ],
     cross_parameter_validator=_validate_ball_hits,
     n_networks=2,  # Ball task requires exactly 2 networks (top/bottom)
+    network_roles=[
+        NetworkRole("top_network", "Top Network (upward)", "Ball moves up when this network is more active"),
+        NetworkRole("bottom_network", "Bottom Network (downward)", "Ball moves down when this network is more active"),
+    ],
     session_state_fields=[
         SessionStateField(
             key="scale_factor",

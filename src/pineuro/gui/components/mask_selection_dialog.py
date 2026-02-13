@@ -427,10 +427,10 @@ class MaskSelectionDialog:
         """Build action buttons for Stage 1."""
         return [
             ft.OutlinedButton(
-                "Open in FSLeyes",
+                "View in Browser",
                 icon=ft.Icons.OPEN_IN_NEW,
-                on_click=self._on_open_fsleyes_clicked,
-                tooltip="Open thresholded masks and BOLD reference in FSLeyes",
+                on_click=self._on_view_in_browser_clicked,
+                tooltip="Open interactive mask viewer in the default web browser",
             ),
             ft.OutlinedButton(
                 "Generate Script",
@@ -1269,21 +1269,8 @@ class MaskSelectionDialog:
         if self.on_cancel:
             self.on_cancel()
 
-    def _on_open_fsleyes_clicked(self, e):
-        """Open thresholded masks and BOLD reference in FSLeyes."""
-        import shutil
-        import subprocess
-
-        # Check if fsleyes is available
-        if not shutil.which("fsleyes"):
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text("FSLeyes not found. Please ensure FSL is installed and in PATH."),
-                bgcolor=ft.Colors.RED,
-            )
-            self.page.snack_bar.open = True
-            self.page.update()
-            return
-
+    def _on_view_in_browser_clicked(self, e):
+        """Open interactive mask viewer in the default web browser."""
         # Check BOLD reference exists
         if not self.ref_file or not Path(self.ref_file).exists():
             self.page.snack_bar = ft.SnackBar(
@@ -1294,7 +1281,7 @@ class MaskSelectionDialog:
             self.page.update()
             return
 
-        # Regenerate any modified masks before opening fsleyes
+        # Regenerate any modified masks before viewing
         # This ensures user sees the currently selected masks, not old ones
         existing = load_mask_selections(self.masks_dir)
         modified_networks = []
@@ -1316,7 +1303,7 @@ class MaskSelectionDialog:
         # Regenerate modified masks
         for name in modified_networks:
             selection = self._selections[name]
-            logger.info(f"Regenerating mask for FSLeyes preview: {name}")
+            logger.info(f"Regenerating mask for browser preview: {name}")
             try:
                 regenerate_mask_from_selection(
                     participant_id=self.participant_id,
@@ -1350,20 +1337,23 @@ class MaskSelectionDialog:
             self.page.update()
             return
 
-        # Build FSLeyes command: fsleyes <ref> <mask1> <mask2> ...
-        cmd = ["fsleyes", str(self.ref_file)]
-        for mask_file in mask_files:
-            cmd.append(str(mask_file))
-
-        # Launch FSLeyes (non-blocking)
+        # Generate HTML viewer and open in browser
         try:
-            subprocess.Popen(cmd, start_new_session=True)
+            from pineuro.gui.utils import open_mask_viewer_in_browser
+
+            qc_dir = self.masks_dir.parent / "qc"
+            open_mask_viewer_in_browser(
+                ref_file=Path(self.ref_file),
+                mask_files=mask_files,
+                output_dir=qc_dir,
+                title=f"Mask Review - {self.participant_id}",
+            )
             if self.on_log:
-                self.on_log(f"[INFO] Opened FSLeyes with {len(mask_files)} masks")
+                self.on_log(f"[INFO] Opened mask viewer in browser with {len(mask_files)} masks")
         except Exception as ex:
-            logger.error(f"Failed to launch FSLeyes: {ex}")
+            logger.error(f"Failed to open mask viewer: {ex}")
             self.page.snack_bar = ft.SnackBar(
-                ft.Text(f"Failed to launch FSLeyes: {ex}"),
+                ft.Text(f"Failed to open mask viewer: {ex}"),
                 bgcolor=ft.Colors.RED,
             )
             self.page.snack_bar.open = True

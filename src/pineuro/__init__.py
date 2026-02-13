@@ -16,16 +16,21 @@ coregister_2vol : Coregister masks to real-time scanner position
 Task Framework
 --------------
 BaseTask : Abstract base for custom neurofeedback tasks
-BallTask : Dual-network ball game with adaptive difficulty
+BaseLocalizerTask : Abstract base for localizer/stimulus tasks
+BallTask : Built-in dual-network ball game with adaptive difficulty
+ThermometerTask : Built-in single-network thermometer feedback
+create_task : Factory function to create tasks from registry
+NetworkRole : Declare network slot semantics for tasks
 ActivationSmoother : Exponential moving average smoothing
 ActivationNormalizer : Percentile-based normalization
 
 Session Orchestration
 --------------------
 SessionConfig : High-level session configuration
-run_full_session : Run complete multi-run session (transfer + feedback + transfer)
+TaskConfig : Generic task configuration (task_type, params, network assignment)
+run_full_session : Run complete multi-run session
 setup_session : Initialize session (collection, preprocessing, mask extraction)
-run_single_task : Run one feedback/transfer task
+run_single_task : Run one feedback/transfer task via task factory
 SessionState : Persistent state across runs
 
 Examples
@@ -61,7 +66,17 @@ __version__ = "0.1.0"
 from .feedback import run_feedback_session, get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
 from .preprocessing import preprocessing, collect_volumes, collect_dicoms
 from .mask_extraction import mask_extraction_rest, mask_extraction_task, coregister_2vol
-from .tasks import BaseTask, BallTask, ActivationSmoother, ActivationNormalizer
+from .tasks import (
+    BaseTask,
+    BaseLocalizerTask,
+    BallTask,
+    ThermometerTask,
+    ActivationSmoother,
+    ActivationNormalizer,
+    NetworkRole,
+    create_task,
+    create_localizer_task,
+)
 from .tasks.session import SessionState, RunInfo
 from .session import (
     # Configuration dataclasses
@@ -108,7 +123,7 @@ from .utils import (
     # Utilities
     outputs_exist,
     ProgressEmitter,
-    # HRF computation
+    # Task regressor computation
     compute_hrf,
     compute_boxcar_task_regressor,
 )
@@ -129,16 +144,22 @@ __all__ = [
     'STEP_TO_RUN_NUMBER',
     'preprocessing',
     'collect_volumes',
-    'collect_dicoms',  # Backward compatibility alias for collect_volumes
+    'collect_dicoms',
     'mask_extraction_rest',
     'mask_extraction_task',
     'coregister_2vol',
     # Task classes
     'BaseTask',
+    'BaseLocalizerTask',
     'BallTask',
+    'ThermometerTask',
     'ActivationSmoother',
     'ActivationNormalizer',
-    # Task regressor computation (ball task)
+    # Task registry & factory
+    'NetworkRole',
+    'create_task',
+    'create_localizer_task',
+    # Task regressor computation
     'compute_hrf',
     'compute_boxcar_task_regressor',
     # Session state

@@ -430,6 +430,27 @@ class BaseTask(TaskBase):
         return responses
 
     # =========================================================================
+    # Run Results
+    # =========================================================================
+
+    def get_run_results(self) -> Dict[str, Any]:
+        """Return task-specific results from the completed run.
+
+        The framework calls this after run() completes to extract results
+        without needing to know about task-specific attributes. Subclasses
+        should override to include their own metrics.
+
+        Returns
+        -------
+        dict
+            Task-specific results. Base implementation includes:
+            - 'volumes_processed': int - number of volumes processed
+        """
+        return {
+            'volumes_processed': getattr(self, 'current_volume', 0) or getattr(self, '_volumes_processed', 0),
+        }
+
+    # =========================================================================
     # Abstract Methods
     # =========================================================================
 

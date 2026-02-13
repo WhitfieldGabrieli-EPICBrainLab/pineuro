@@ -642,7 +642,7 @@ class PipelineRunner:
 
         preproc_file, mask_file, ref_file = preprocessing(
             participant_id=self.participant_id,
-            task="rest",
+            task=task_name,
             root_dir=preprocessing_dir,
             input_dicoms=input_dicoms,
             overwrite=True,  # Overwrite since user clicked "Start"
@@ -711,6 +711,11 @@ class PipelineRunner:
             threshold = config.get("mask", {}).get("threshold", 2000)
             smooth_fwhm = config["mask"].get("smooth_fwhm", 5.0)
             highpass = config["mask"].get("highpass", 0.01)
+            threshold_method = config.get("mask", {}).get("threshold_method", "top_n")
+            atlas_mask_cfg = config.get("mask", {}).get("atlas_mask")
+            atlas_name_cfg = config.get("mask", {}).get("atlas_name")
+            cluster_start_threshold = config.get("mask", {}).get("cluster_start_threshold", 2.0)
+            cluster_step = config.get("mask", {}).get("cluster_step", 0.1)
 
             mask_files = mask_extraction_task(
                 participant_id=self.participant_id,
@@ -721,9 +726,15 @@ class PipelineRunner:
                 contrasts=contrasts,
                 tr=tr,
                 threshold=threshold,
+                threshold_method=threshold_method,
+                atlas_mask=atlas_mask_cfg,
+                atlas_name=atlas_name_cfg,
+                ref_file=str(ref_file) if threshold_method == "cluster" else None,
+                cluster_start_threshold=cluster_start_threshold,
+                cluster_step=cluster_step,
+                overwrite=True,
                 smoothing_fwhm=smooth_fwhm,
                 high_pass=highpass,
-                overwrite=True,
                 qc_enabled=True,
                 progress_callback=progress_callback,
             )
@@ -732,6 +743,7 @@ class PipelineRunner:
             n_yeo = config["mask"]["n_yeo"]
             yeo_targets = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
             n_components = config["mask"].get("n_components", 30)
+            threshold = config.get("mask", {}).get("threshold", 2000)
             smooth_fwhm = config["mask"]["smooth_fwhm"]
             highpass = config["mask"]["highpass"]
             lowpass = config["mask"].get("lowpass")
@@ -763,6 +775,7 @@ class PipelineRunner:
                 n_yeo=n_yeo,
                 yeo_targets=yeo_targets,
                 n_components=n_components,
+                threshold=threshold,
                 smooth_fwhm=smooth_fwhm,
                 highpass=highpass,
                 lowpass=lowpass,
@@ -1040,23 +1053,34 @@ class PipelineRunner:
 
         # Get mask files - use 2vol-coregistered masks if realtime 2vol is enabled,
         # otherwise use boldref space masks from mask extraction
-        #
-        # For ball task, respect top_network/bottom_network assignment if specified
         task_config = config.get("task", {})
-        ball_config = task_config.get("ball", {})
-        top_network = ball_config.get("top_network")
-        bottom_network = ball_config.get("bottom_network")
+        feedback_task_type = task_config.get("task_type", "ball")
 
-        if top_network and bottom_network:
-            # Use explicit ball task network assignment for real condition
-            real_mask_names = [top_network, bottom_network]
+        # Determine mask names based on localizer type.
+        # For task-based (GLM) extraction, mask names come from contrast keys.
+        # For ICA-based (rest) extraction, mask names come from mask_names/yeo_targets.
+        localizer_type = config["mask"].get("localizer_type", "rest")
+        if localizer_type == "task":
+            contrasts = config["mask"].get("contrasts", {})
+            real_mask_names = list(contrasts.keys())
         else:
-            # Fall back to config mask_names
-            real_mask_names = config["mask"]["mask_names"]
+            real_mask_names = list(config["mask"]["mask_names"])
 
-        # Log the ball task network assignment for debugging
-        self._emit_progress(f"Ball task networks: {real_mask_names[0]} (top/yellow) vs {real_mask_names[1]} (bottom/blue)")
-        logger.info(f"Ball mask assignment: top={real_mask_names[0]}, bottom={real_mask_names[1]}")
+        # Resolve task mask names from network assignment in task config
+        metadata = get_task_metadata(feedback_task_type)
+        task_specific_config = task_config.get(feedback_task_type, {})
+
+        if metadata.network_roles:
+            # Use explicit network assignment from task config
+            assigned_names = []
+            for role in metadata.network_roles:
+                name = task_specific_config.get(role.key)
+                if name:
+                    assigned_names.append(name)
+            if len(assigned_names) == metadata.n_networks:
+                real_mask_names = assigned_names
+
+        self._emit_progress(f"Task networks: {real_mask_names}")
 
         twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
 
@@ -1164,8 +1188,8 @@ class PipelineRunner:
         task_regressor = design.compute_regressors(n_volumes, tr)
 
         # Determine sham condition and build complete mask list
-        # New approach: compute ALL masks (real + sham alternatives), let BallTask decide
-        # which two masks control the ball based on condition
+        # Compute ALL masks (real + sham alternatives); the task receives
+        # the appropriate subset based on condition
         condition = "real"
         sham_mask_names = []
         sham_mask_files = []
@@ -1271,15 +1295,14 @@ class PipelineRunner:
         all_mask_names = real_mask_names + sham_mask_names
         self._emit_progress(f"Computing activations for masks: {all_mask_names}")
 
-        # Determine which masks control the ball based on condition
-        # For real: use real_mask_names (e.g., ContA, DefaultA)
-        # For sham: substitute first real mask with first sham mask (e.g., SomMotA replaces ContA)
+        # Determine which masks control the task based on condition
+        # For real: use real_mask_names
+        # For sham: substitute first real mask with first sham mask
         if condition == "sham" and sham_mask_names:
-            # Sham: use sham mask for top (first), keep real mask for bottom (second)
-            ball_mask_names = [sham_mask_names[0], real_mask_names[1]]
-            self._emit_progress(f"Sham: ball controlled by {ball_mask_names} (instead of {real_mask_names})")
+            task_mask_names = [sham_mask_names[0], real_mask_names[1]]
+            self._emit_progress(f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})")
         else:
-            ball_mask_names = real_mask_names
+            task_mask_names = real_mask_names
 
         # Run feedback session (this will handle DICOM collection + processing)
         # Pass ALL masks so all activations are computed and logged
@@ -1350,7 +1373,7 @@ class PipelineRunner:
             # Build factory config with task parameters plus runtime settings
             factory_config = {
                 **task_specific_config,
-                "mask_names": ball_mask_names,
+                "mask_names": task_mask_names,
                 "feedback_mode": feedback_mode,
                 "presenter_monitor": presenter_monitor,
             }
@@ -1392,17 +1415,14 @@ class PipelineRunner:
             coordinator_thread.join()  # Wait for coordinator to finish
             task_thread.join()  # Wait for task to finish
 
-            # Extract results from coordinator and task
-            volumes_processed = coordinator.n_processed
+            # Extract results generically via task contract
+            results = task.get_run_results()
+            volumes_processed = results.get('volumes_processed', coordinator.n_processed)
 
-            # Build results message (handle tasks with/without hit_counters)
             result_msg = f"{task_type.capitalize()} run {task_run_number} complete! Processed {volumes_processed} volumes."
-            if hasattr(task, 'hit_counters') and task.hit_counters:
-                hits = {
-                    ball_mask_names[i]: task.hit_counters[i]
-                    for i in range(min(len(ball_mask_names), len(task.hit_counters)))
-                }
-                result_msg += f" Hits: {hits}"
+            extra = {k: v for k, v in results.items() if k != 'volumes_processed'}
+            if extra:
+                result_msg += f" {extra}"
 
             self._emit_progress(result_msg)
         finally:

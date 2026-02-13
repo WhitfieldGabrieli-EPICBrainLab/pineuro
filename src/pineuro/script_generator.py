@@ -472,6 +472,12 @@ def generate_task_mask_extraction_script(
     contrasts: Dict[str, str],
     tr: float,
     threshold: int = 2000,
+    threshold_method: str = "top_n",
+    atlas_mask: Optional[str] = None,
+    atlas_name: Optional[str] = None,
+    ref_file: Optional[Union[str, Path]] = None,
+    cluster_start_threshold: float = 2.0,
+    cluster_step: float = 0.1,
     stat_type: str = "t",
     smoothing_fwhm: Optional[float] = 5.0,
     high_pass: float = 0.01,
@@ -498,6 +504,18 @@ def generate_task_mask_extraction_script(
         Repetition time in seconds
     threshold : int
         Number of voxels per mask
+    threshold_method : str
+        "top_n" or "cluster"
+    atlas_mask : str or None
+        Path to atlas mask in subject space (for cluster method)
+    atlas_name : str or None
+        Built-in atlas name (for cluster method)
+    ref_file : str, Path, or None
+        BOLD reference for atlas registration (for cluster method with atlas_name)
+    cluster_start_threshold : float
+        Starting stat threshold for cluster search
+    cluster_step : float
+        Threshold increment per iteration
     stat_type : str
         Statistical map type ("t" or "z")
     smoothing_fwhm : float or None
@@ -520,6 +538,38 @@ def generate_task_mask_extraction_script(
     events_file = Path(events_file)
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Build cluster-specific config lines
+    cluster_config = ""
+    cluster_params = ""
+    if threshold_method == "cluster":
+        cluster_config = f"""
+# =============================================================================
+# CLUSTER THRESHOLDING PARAMETERS
+# =============================================================================
+threshold_method = "{threshold_method}"
+atlas_mask = {repr(str(atlas_mask)) if atlas_mask else 'None'}
+atlas_name = {repr(atlas_name)}
+ref_file = {repr(str(ref_file)) if ref_file else 'None'}
+cluster_start_threshold = {cluster_start_threshold}
+cluster_step = {cluster_step}
+"""
+        cluster_params = """        threshold_method=threshold_method,
+        atlas_mask=atlas_mask,
+        atlas_name=atlas_name,
+        ref_file=ref_file,
+        cluster_start_threshold=cluster_start_threshold,
+        cluster_step=cluster_step,"""
+    else:
+        cluster_config = f"""
+# =============================================================================
+# THRESHOLDING METHOD
+# =============================================================================
+threshold_method = "{threshold_method}"
+"""
+        cluster_params = """        threshold_method=threshold_method,"""
+
+    masks_dir_name = "03_masks" if threshold_method == "cluster" else "02_masks"
 
     script = f'''#!/usr/bin/env python3
 """
@@ -585,7 +635,7 @@ contrasts = {repr(contrasts)}
 # MASK PARAMETERS
 # =============================================================================
 threshold = {threshold}
-
+{cluster_config}
 
 # =============================================================================
 # MAIN SCRIPT
@@ -604,7 +654,7 @@ def main():
     print(f"  Input file: {{input_file}}")
     print(f"  Events file: {{events_file}}")
     print(f"  Contrasts: {{contrasts}}")
-    print(f"  Threshold: {{threshold}} voxels")
+    print(f"  Threshold: {{threshold}} voxels ({{threshold_method}})")
     print()
 
     mask_files = mask_extraction_task(
@@ -616,6 +666,7 @@ def main():
         contrasts=contrasts,
         tr=tr,
         threshold=threshold,
+{cluster_params}
         stat_type=stat_type,
         smoothing_fwhm=smoothing_fwhm,
         high_pass=high_pass,
@@ -630,7 +681,7 @@ def main():
     print("=" * 60)
     print("COMPLETE")
     print("=" * 60)
-    print(f"  Masks saved to: {{root_dir / '02_masks'}}")
+    print(f"  Masks saved to: {{root_dir / '{masks_dir_name}'}}")
 
 
 if __name__ == "__main__":

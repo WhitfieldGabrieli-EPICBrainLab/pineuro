@@ -260,12 +260,19 @@ class ParticipantWorkflowScreen:
 
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
         mask_extraction_dir = base_dir / "mask_extraction"
+        qc_dir = base_dir / "qc"
+        config = self.study_config.session_config
+
+        # Task-based localizers use a simpler review flow (no ICA component selection)
+        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+        if localizer_type == "task":
+            self._show_task_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir)
+            return
+
         masks_dir = mask_extraction_dir / "03_masks"
         ica_dir = mask_extraction_dir / "01_ica"
-        qc_dir = base_dir / "qc"
 
         # Get network names from config (include sham alternatives if enabled)
-        config = self.study_config.session_config
         network_names = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
         n_yeo = config["mask"]["n_yeo"]
         threshold = config["mask"].get("threshold", 2000)
@@ -409,9 +416,11 @@ class ParticipantWorkflowScreen:
 
         # Find preprocessing outputs for script generation
         preprocessing_dir = base_dir / "preprocessing"
-        input_file = preprocessing_dir / f"{self.participant_id}_task-rest_preproc.nii.gz"
-        brain_mask_file = preprocessing_dir / f"{self.participant_id}_task-rest_preproc_mask.nii.gz"
-        ref_file = preprocessing_dir / f"{self.participant_id}_task-rest_boldref.nii.gz"
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        loc_task = localizer_task_type if localizer_task_type != "rest" else "rest"
+        input_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_preproc.nii.gz"
+        brain_mask_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_preproc_mask.nii.gz"
+        ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
 
         # Get ICA parameters from config
         n_components = config["mask"].get("n_components", 30)
@@ -446,6 +455,424 @@ class ParticipantWorkflowScreen:
             target_hemisphere=sham_target_hemisphere,
         )
         dialog.show()
+
+    def _show_task_mask_review_dialog(self, config: dict, base_dir: Path, mask_extraction_dir: Path, qc_dir: Path):
+        """Show mask review dialog for task-based (GLM) mask extraction.
+
+        Task-based masks don't have ICA components to select — the user just
+        reviews the thresholded GLM contrast masks and approves or rejects.
+        """
+        import base64
+        from pineuro.gui.components.qc_viewer import open_qc_report
+
+        # Cluster method uses 03_masks/; top_n uses 02_masks/
+        threshold_method = config.get("mask", {}).get("threshold_method", "top_n")
+        if threshold_method == "cluster":
+            masks_dir = mask_extraction_dir / "03_masks"
+        else:
+            masks_dir = mask_extraction_dir / "02_masks"
+        # Fallback: check the other directory if primary doesn't exist
+        if not masks_dir.exists():
+            alt = mask_extraction_dir / ("02_masks" if threshold_method == "cluster" else "03_masks")
+            if alt.exists():
+                masks_dir = alt
+        if not masks_dir.exists():
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Task masks not found. Run mask extraction first."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        mask_files = sorted(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
+        if not mask_files:
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("No thresholded masks found. Run mask extraction first."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+            return
+
+        # Get reference file for mask viewer
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        loc_task = localizer_task_type if localizer_task_type != "rest" else "rest"
+        preprocessing_dir = base_dir / "preprocessing"
+        ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
+
+        # Find QC report
+        qc_report = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
+        if not qc_report.exists():
+            # Try glob fallback
+            matches = list(qc_dir.glob("*mask_extraction_qc.html"))
+            qc_report = matches[0] if matches else None
+
+        # Load mask info from selections JSON
+        import json
+        selections_data = {}
+        selections_file = masks_dir / "mask_selections.json"
+        if selections_file.exists():
+            with open(selections_file) as f:
+                raw = json.load(f)
+            # Task selections have a "selections" wrapper
+            selections_data = raw.get("selections", raw)
+
+        # Build mask cards with overlay images
+        overlays_dir = qc_dir / "overlays" / "subject"
+        overlays_dir.mkdir(parents=True, exist_ok=True)
+        mask_cards = []
+        for mask_file in mask_files:
+            # Strip full .nii.gz suffix then participant prefix and _thr suffix
+            bare = mask_file.name.replace(".nii.gz", "").replace(".nii", "")
+            mask_name = bare.replace(f"{self.participant_id}_", "").replace("_thr", "")
+
+            # Get stats from selections
+            sel = selections_data.get(mask_name, {})
+            parts = []
+            contrast = sel.get("contrast_definition", "")
+            if contrast:
+                parts.append(f"Contrast: {contrast}")
+            n_vox = sel.get("n_voxels_thresholded")
+            if n_vox is not None:
+                parts.append(f"{n_vox} voxels")
+            peak = sel.get("peak_stat")
+            if peak is not None:
+                parts.append(f"peak t = {peak:.2f}")
+            stat_text = "  |  ".join(parts)
+
+            # Find overlay image — generate on-demand if missing
+            overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
+            if not overlay_path.exists() and ref_file.exists() and mask_file.exists():
+                try:
+                    from pineuro.qc import select_slices_from_atlas, plot_mask_overlay_tripanel, summarize_mask
+                    summary = summarize_mask(mask_file, name=mask_name)
+                    atlas_slices = select_slices_from_atlas(
+                        atlas_path=ref_file, labels=[], target_label="",
+                        top_n_per_plane=1, mask_path=mask_file,
+                    )
+                    plot_mask_overlay_tripanel(
+                        mask_path=mask_file, ref_path=ref_file,
+                        out_path=overlay_path, slices=atlas_slices,
+                        title=f"{mask_name}: {sel.get('contrast_definition', '')} ({summary.voxels} voxels)",
+                    )
+                except Exception as ex:
+                    logger.warning(f"Failed to generate overlay for {mask_name}: {ex}")
+
+            if overlay_path.exists():
+                b64 = base64.b64encode(overlay_path.read_bytes()).decode("utf-8")
+                overlay_content = ft.Image(
+                    src=f"data:image/png;base64,{b64}",
+                    fit="contain",
+                    height=150,
+                )
+            else:
+                overlay_content = ft.Container(
+                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
+                    height=150,
+                    alignment=ft.Alignment(0, 0),
+                    bgcolor=ft.Colors.GREY_200,
+                )
+
+            card = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                ft.Text(mask_name, size=16, weight=ft.FontWeight.W_500),
+                                ft.Container(expand=True),
+                                ft.Text(stat_text, size=13, color=ft.Colors.GREY_700),
+                            ],
+                        ),
+                        ft.Container(
+                            content=overlay_content,
+                            border=ft.border.all(1, ft.Colors.GREY_300),
+                            border_radius=5,
+                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                        ),
+                    ],
+                    spacing=10,
+                ),
+                padding=15,
+                bgcolor=ft.Colors.GREY_100,
+                border_radius=8,
+                border=ft.border.all(2, ft.Colors.GREY_300),
+            )
+            mask_cards.append(card)
+
+        def _close_dialog(dlg):
+            dlg.open = False
+            self.page.update()
+
+        def on_approve(e):
+            self._set_qc_approved("initial", True)
+            self._add_log("[SUCCESS] Task masks reviewed and approved")
+            # Close dialog using the same pattern as ICA's _close_dialog:
+            # set open=False then page.update() immediately — do NOT remove from overlay
+            dialog.open = False
+            self.page.update()
+            self._refresh_step_list()
+            self._update_run_next_button()
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text("Masks approved! You can now run coregistration."),
+                bgcolor=ft.Colors.GREEN,
+            )
+            self.page.snack_bar.open = True
+            self.page.update()
+
+        def on_reject(e):
+            """Stage 2: show atlas region overlay as alternative (like Yeo in ICA)."""
+            _close_dialog(dialog)
+
+            atlas_name = config.get("mask", {}).get("atlas_name")
+            if threshold_method != "cluster" or not atlas_name:
+                self._add_log("[INFO] Masks rejected — re-run mask extraction with different parameters")
+                return
+
+            # Find atlas in subject space
+            atlas_subject_file = masks_dir / f"{self.participant_id}_atlas_{atlas_name}.nii.gz"
+            if not atlas_subject_file.exists():
+                atlas_subject_file = mask_extraction_dir / "02_mnireg" / f"{atlas_name}_to_{self.participant_id}.nii.gz"
+
+            if not atlas_subject_file.exists() or not ref_file.exists():
+                self._add_log("[INFO] Masks rejected — atlas in subject space not available")
+                return
+
+            # Generate atlas overlay on demand
+            from pineuro.qc import generate_atlas_region_overlay
+            atlas_overlay_png = generate_atlas_region_overlay(
+                atlas_subject_path=atlas_subject_file,
+                ref_path=ref_file,
+                output_dir=qc_dir,
+                participant_id=self.participant_id,
+                atlas_name=atlas_name,
+            )
+
+            if not atlas_overlay_png or not atlas_overlay_png.exists():
+                self._add_log("[INFO] Masks rejected — could not generate atlas overlay")
+                return
+
+            # Build Stage 2 dialog: show atlas overlay, offer to use it
+            b64_atlas = base64.b64encode(atlas_overlay_png.read_bytes()).decode("utf-8")
+
+            def on_use_atlas(e):
+                """Replace cluster mask with the full atlas region mask."""
+                import shutil as _shutil
+                _close_dialog(stage2_dialog)
+
+                for mask_file in mask_files:
+                    _shutil.copy2(atlas_subject_file, mask_file)
+                    self._add_log(f"[INFO] Replaced {mask_file.name} with atlas region mask")
+
+                self._set_qc_approved("initial", True)
+                self._add_log("[SUCCESS] Using atlas region mask — approved")
+                self._refresh_step_list()
+                self._update_run_next_button()
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text("Atlas mask applied and approved."),
+                    bgcolor=ft.Colors.GREEN,
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+
+            def on_back(e):
+                _close_dialog(stage2_dialog)
+                # Re-show Stage 1
+                self.page.overlay.append(dialog)
+                dialog.open = True
+                self.page.update()
+
+            def on_close_stage2(e):
+                _close_dialog(stage2_dialog)
+
+            stage2_dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.MAP, color=ft.Colors.TEAL),
+                        ft.Text("Alternative: Atlas Region Mask", expand=True),
+                        ft.IconButton(
+                            icon=ft.Icons.CLOSE,
+                            on_click=on_close_stage2,
+                            tooltip="Close",
+                        ),
+                    ],
+                ),
+                content=ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                "The cluster mask was rejected. You can use the full "
+                                "atlas region (warped to subject space) as an alternative, "
+                                "or go back to re-examine the cluster mask.",
+                                size=13,
+                                color=ft.Colors.GREY_700,
+                            ),
+                            ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.Row(
+                                            [
+                                                ft.Text(
+                                                    f"Atlas: {atlas_name}",
+                                                    size=14,
+                                                    weight=ft.FontWeight.W_500,
+                                                ),
+                                                ft.Container(expand=True),
+                                                ft.Text(
+                                                    "In subject space",
+                                                    size=12,
+                                                    color=ft.Colors.GREY_600,
+                                                ),
+                                            ],
+                                        ),
+                                        ft.Container(
+                                            content=ft.Image(
+                                                src=f"data:image/png;base64,{b64_atlas}",
+                                                fit="contain",
+                                                height=180,
+                                            ),
+                                            border=ft.border.all(1, ft.Colors.TEAL_200),
+                                            border_radius=5,
+                                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                                        ),
+                                    ],
+                                    spacing=8,
+                                ),
+                                padding=15,
+                                bgcolor=ft.Colors.TEAL_50,
+                                border_radius=8,
+                                border=ft.border.all(2, ft.Colors.TEAL_200),
+                            ),
+                        ],
+                        spacing=15,
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                    width=650,
+                    height=400,
+                ),
+                actions=[
+                    ft.OutlinedButton(
+                        "Back",
+                        icon=ft.Icons.ARROW_BACK,
+                        on_click=on_back,
+                    ),
+                    ft.FilledButton(
+                        "Use Atlas Mask",
+                        icon=ft.Icons.CHECK,
+                        on_click=on_use_atlas,
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+
+            self.page.overlay.append(stage2_dialog)
+            stage2_dialog.open = True
+            self.page.update()
+
+        def on_open_qc(e):
+            if qc_report and qc_report.exists():
+                open_qc_report(qc_report)
+            else:
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text("QC report not found."),
+                    bgcolor=ft.Colors.ORANGE,
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+
+        def on_view_in_browser(e):
+            if not ref_file.exists():
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text("BOLD reference file not found."),
+                    bgcolor=ft.Colors.RED,
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+                return
+
+            try:
+                from pineuro.gui.utils import open_mask_viewer_in_browser
+
+                viewer_output_dir = mask_extraction_dir / "qc"
+                open_mask_viewer_in_browser(
+                    ref_file=ref_file,
+                    mask_files=mask_files,
+                    output_dir=viewer_output_dir,
+                    title=f"Task Mask Review - {self.participant_id}",
+                )
+                self._add_log(f"[INFO] Opened mask viewer in browser with {len(mask_files)} masks")
+            except Exception as ex:
+                logger.error(f"Failed to open mask viewer: {ex}")
+                self.page.snack_bar = ft.SnackBar(
+                    ft.Text(f"Failed to open mask viewer: {ex}"),
+                    bgcolor=ft.Colors.RED,
+                )
+                self.page.snack_bar.open = True
+                self.page.update()
+
+        def on_close(e):
+            _close_dialog(dialog)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.BIOTECH, color=ft.Colors.BLUE),
+                    ft.Text("Review Task Masks", expand=True),
+                    ft.IconButton(
+                        icon=ft.Icons.CLOSE,
+                        on_click=on_close,
+                        tooltip="Close",
+                    ),
+                ],
+            ),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            f"Extracted {len(mask_files)} mask(s) from GLM contrasts. "
+                            "Review the overlays below, then approve or reject.",
+                            size=13,
+                            color=ft.Colors.GREY_700,
+                        ),
+                        *mask_cards,
+                    ],
+                    spacing=15,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                width=650,
+                height=500,
+            ),
+            actions=[
+                ft.OutlinedButton(
+                    "View in Browser",
+                    icon=ft.Icons.OPEN_IN_NEW,
+                    on_click=on_view_in_browser,
+                    tooltip="Open interactive mask viewer in the default web browser",
+                ),
+                ft.OutlinedButton(
+                    "View QC Report",
+                    icon=ft.Icons.ASSESSMENT,
+                    on_click=on_open_qc,
+                ),
+                ft.OutlinedButton(
+                    "Reject",
+                    icon=ft.Icons.CLOSE,
+                    on_click=on_reject,
+                ),
+                ft.FilledButton(
+                    "Approve",
+                    icon=ft.Icons.CHECK,
+                    on_click=on_approve,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
 
     def _check_collection_status(self, collection_dir: Path, expected_volumes: int) -> StepStatus:
         """Check status of a DICOM collection step.
@@ -889,16 +1316,19 @@ class ParticipantWorkflowScreen:
 
             # Check preprocessing outputs
             preprocessing_dir = base_dir / "preprocessing"
-            preproc_file = preprocessing_dir / f"{participant_id}_task-rest_preproc.nii.gz"
-            mask_file = preprocessing_dir / f"{participant_id}_task-rest_preproc_mask.nii.gz"
-            ref_file = preprocessing_dir / f"{participant_id}_task-rest_boldref.nii.gz"
+            preproc_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz"
+            mask_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc_mask.nii.gz"
+            ref_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_boldref.nii.gz"
 
             if preproc_file.exists() and mask_file.exists() and ref_file.exists():
                 self.step_statuses["preprocessing"] = StepStatus.COMPLETE
 
             # Check mask extraction outputs
             mask_extraction_dir = base_dir / "mask_extraction"
-            masks_dir = mask_extraction_dir / "03_masks"
+            # Task-based uses 02_masks, ICA-based uses 03_masks
+            masks_dir = mask_extraction_dir / "02_masks"
+            if not masks_dir.exists():
+                masks_dir = mask_extraction_dir / "03_masks"
 
             # Check for any network mask files
             if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
@@ -1883,7 +2313,12 @@ class ParticipantWorkflowScreen:
 
         # Get blind display names if blind mode is enabled
         # Include all masks (real + sham alternatives) for proper blinding
-        mask_names = list(config["mask"]["mask_names"])
+        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+        if localizer_type == "task":
+            contrasts = config.get("mask", {}).get("contrasts", {})
+            mask_names = list(contrasts.keys()) if contrasts else list(config["mask"]["mask_names"])
+        else:
+            mask_names = list(config["mask"]["mask_names"])
         sham_config = config.get("sham", {})
         if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
             sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
@@ -2312,7 +2747,9 @@ class ParticipantWorkflowScreen:
                     "Smoothing": f"{config['mask'].get('smooth_fwhm', 5.0)} mm FWHM",
                     "Output": base_dir / "mask_extraction",
                 },
-                "output_path": base_dir / "mask_extraction" / "02_masks",
+                "output_path": base_dir / "mask_extraction" / (
+                    "03_masks" if config.get("mask", {}).get("threshold_method", "top_n") == "cluster" else "02_masks"
+                ),
             }
         else:
             all_networks = self._get_all_network_targets(config)
@@ -2503,58 +2940,40 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step label, description, parameters, and outputs_exist flag
         """
-        # Load session state to get adaptive difficulty info
-        # Session state is stored in the feedback output directory
+        # Load session state for adaptive state display
         feedback_dir = base_dir / "feedback" / "02_feedback_output"
-        initial_scale = config["task"].get("initial_scale_factor", 10.0)
+        task_type = config.get("task", {}).get("task_type", "ball")
         try:
-            session_state = SessionState.load(feedback_dir)
+            session_state = SessionState.load(feedback_dir, task_id=task_type)
             completed_runs = session_state.completed_runs
         except Exception:
             session_state = None
             completed_runs = []
 
-        def get_scale_factor_for_step(step_id: str) -> str:
-            """Get scale factor display string for a specific step.
+        def get_task_state_summary(step_id: str) -> str:
+            """Get task state summary string for a specific step."""
+            if not session_state or not session_state.task_state:
+                return "initial"
 
-            Shows what scale factor that run will use and why.
-            """
-            # First runs (transfer_1, feedback_1) always use initial scale factor
-            # Later feedback runs use the adjusted scale factor from session state
             if step_id in ["transfer_1", "feedback_1"]:
-                return f"{initial_scale} (initial)"
+                return "initial"
 
-            # For later runs, check if we have session state with completed feedback runs
-            if not session_state or not completed_runs:
-                return f"{initial_scale} (initial)"
+            if not completed_runs:
+                return "initial"
 
-            # Find completed feedback runs (only feedback runs trigger adjustment)
-            feedback_runs = [r for r in completed_runs if r.run_type == "feedback"]
-            if not feedback_runs:
-                return f"{initial_scale} (initial)"
-
-            # Get the most recent feedback run for hit info
-            last_feedback = feedback_runs[-1]
-            total_hits = sum(last_feedback.hit_counters)
-            current = session_state.scale_factor
-
-            if current != initial_scale:
-                # Determine what caused the adjustment
-                min_thresh = config["task"].get("min_hits_threshold", 3)
-                max_thresh = config["task"].get("max_hits_threshold", 5)
-
-                if total_hits < min_thresh:
-                    reason = f"increased (only {total_hits} hits in prior feedback)"
-                elif any(h > max_thresh for h in last_feedback.hit_counters):
-                    reason = f"decreased ({max(last_feedback.hit_counters)} hits exceeded threshold)"
+            # Show key task state values
+            state = session_state.task_state
+            parts = []
+            for key, value in state.items():
+                if isinstance(value, float):
+                    parts.append(f"{key}={value:.1f}")
                 else:
-                    reason = "adjusted from prior runs"
-
-                return f"{current} ({reason})"
-
-            return f"{current}"
+                    parts.append(f"{key}={value}")
+            return ", ".join(parts) if parts else "initial"
 
         # Map step IDs to their information
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        loc_task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
         step_info_map = {
             "2vol_initial": self._get_2vol_initial_step_info(config, base_dir),
             "preprocessing": {
@@ -2565,7 +2984,7 @@ class ParticipantWorkflowScreen:
                     "Output": base_dir / "preprocessing",
                     "Expected Outputs": "preproc.nii.gz, mask.nii.gz, boldref.nii.gz",
                 },
-                "output_path": base_dir / "preprocessing" / f"{participant_id}_task-rest_preproc.nii.gz",
+                "output_path": base_dir / "preprocessing" / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz",
             },
             "mask_extraction": self._get_mask_extraction_step_info(config, base_dir),
             "coregistration": {
@@ -2588,7 +3007,7 @@ class ParticipantWorkflowScreen:
                     "Task": "transfer (run-01)",
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
-                    "Feedback": "OFF (ball stationary)",
+                    "Feedback": "OFF",
                     "MoCo": "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)",
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
@@ -2603,7 +3022,7 @@ class ParticipantWorkflowScreen:
                     "Task": "transfer (run-02)",
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
-                    "Feedback": "OFF (ball stationary)",
+                    "Feedback": "OFF",
                     "MoCo": "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)",
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
@@ -2660,22 +3079,36 @@ class ParticipantWorkflowScreen:
             run_num = int(step_id.split("_")[-1])
             ordinal = {1: "First", 2: "Second", 3: "Third", 4: "Fourth", 5: "Fifth"}.get(run_num, f"{run_num}th")
 
+            feedback_task_type = config.get("task", {}).get("task_type", "ball")
+            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+            if localizer_type == "task":
+                networks_str = ", ".join(
+                    list(config["mask"].get("contrasts", {}).keys()) or config['mask']['mask_names']
+                )
+            else:
+                networks_str = ", ".join(config['mask']['mask_names'])
+
+            params = {
+                "Task": f"feedback (run-{run_num:02d})",
+                "Volumes": config["feedback"]["n_volumes"],
+                "Baseline": config["feedback"]["n_baseline"],
+                "Feedback": "ON",
+                "Networks": networks_str,
+            }
+
+            # Show task state summary if session has adaptive state
+            state_summary = get_task_state_summary(step_id)
+            if state_summary != "initial":
+                params["Task State"] = state_summary
+
+            params["MoCo"] = "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)"
+            params["Output"] = base_dir / "feedback" / "02_feedback_output"
+            params["Simulator Speed"] = f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x"
+
             info = {
                 "label": f"Feedback Run {run_num}",
                 "description": f"{ordinal} neurofeedback run with real-time activation feedback.",
-                "parameters": {
-                    "Task": f"feedback (run-{run_num:02d})",
-                    "Volumes": config["feedback"]["n_volumes"],
-                    "Baseline": config["feedback"]["n_baseline"],
-                    "Feedback": "ON",
-                    "Networks": ", ".join(config['mask']['mask_names']),
-                    "Scale Factor": get_scale_factor_for_step(step_id),
-                    "Min/Max Hits": f"{config['task'].get('min_hits_threshold', 3)} / {config['task'].get('max_hits_threshold', 5)}",
-                    "Scale Adjust": f"{config['task'].get('scale_adjust_factor', 0.25) * 100:.0f}%",
-                    "MoCo": "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)",
-                    "Output": base_dir / "feedback" / "02_feedback_output",
-                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
-                },
+                "parameters": params,
                 "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-feedback_run-{run_num:02d}_feedbacklog.tsv",
             }
         else:
@@ -3055,7 +3488,7 @@ class ParticipantWorkflowScreen:
 
             # Determine which masks to show based on blind mode and condition
             if blind_mode and sham_config.get("enabled", False):
-                # In blind mode, only show the 2 masks that control the ball
+                # In blind mode, only show the masks that control the task
                 # Look up condition from randomization file
                 condition = "real"  # Default
                 randomization_file = sham_config.get("randomization_file", "")
@@ -3071,7 +3504,12 @@ class ParticipantWorkflowScreen:
                         except Exception as e:
                             logger.warning(f"Could not load randomization for blind mode: {e}")
 
-                real_mask_names = list(config["mask"]["mask_names"])
+                localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+                if localizer_type == "task":
+                    contrasts = config.get("mask", {}).get("contrasts", {})
+                    real_mask_names = list(contrasts.keys()) if contrasts else list(config["mask"]["mask_names"])
+                else:
+                    real_mask_names = list(config["mask"]["mask_names"])
 
                 if condition == "sham" and sham_config.get("delivery_method") == "alternative_masks":
                     # Sham condition: show sham masks
@@ -3097,7 +3535,12 @@ class ParticipantWorkflowScreen:
                 display_names = ["Target", "Non-Target"]
             else:
                 # Non-blind mode: show all masks with real names
-                mask_names = list(config["mask"]["mask_names"])
+                localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+                if localizer_type == "task":
+                    contrasts = config.get("mask", {}).get("contrasts", {})
+                    mask_names = list(contrasts.keys()) if contrasts else list(config["mask"]["mask_names"])
+                else:
+                    mask_names = list(config["mask"]["mask_names"])
                 if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
                     sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
                     if sham_mask_mode == "hemisphere_split":
@@ -3544,7 +3987,15 @@ class ParticipantWorkflowScreen:
         base_dir = Path(config["paths"]["base_dir"])
 
         # Use the same mask_names that were set when building the monitoring panel
-        mask_names = getattr(self, '_feedback_mask_names', list(config["mask"]["mask_names"]))
+        if hasattr(self, '_feedback_mask_names'):
+            mask_names = self._feedback_mask_names
+        else:
+            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+            if localizer_type == "task":
+                contrasts = config.get("mask", {}).get("contrasts", {})
+                mask_names = list(contrasts.keys()) if contrasts else list(config["mask"]["mask_names"])
+            else:
+                mask_names = list(config["mask"]["mask_names"])
 
         n_volumes = config["feedback"]["n_volumes"]
 
@@ -3641,9 +4092,14 @@ class ParticipantWorkflowScreen:
                     n_baseline = self.study_config.session_config["feedback"]["n_baseline"]
                     if volume < n_baseline:
                         self._status_text.value = f"Baseline ({volume}/{n_baseline})"
+                        self._status_text.color = ft.Colors.ORANGE_600
                     else:
-                        self._status_text.value = "Feedback Active"
-                    self._status_text.color = ft.Colors.GREEN_600 if volume >= n_baseline else ft.Colors.ORANGE_600
+                        step_id = getattr(self, '_current_step_id', '')
+                        if 'transfer' in step_id:
+                            self._status_text.value = "Transfer (no feedback)"
+                        else:
+                            self._status_text.value = "Task Active"
+                        self._status_text.color = ft.Colors.GREEN_600
                     self._status_text.update()
 
                 # Update hits display (from psychopylog.tsv)

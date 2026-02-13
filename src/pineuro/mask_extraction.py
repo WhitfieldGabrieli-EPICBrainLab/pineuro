@@ -11,7 +11,14 @@ Two extraction approaches are provided:
    resting-state data and matches components to Yeo atlas networks.
 
 2. **GLM-based (task localizer)**: ``mask_extraction_task()`` fits a GLM to
-   task localizer data and thresholds contrast maps directly into masks.
+   task localizer data and thresholds contrast maps into masks. Supports two
+   thresholding strategies:
+
+   - **top_n** (default): Selects the top N voxels by stat magnitude.
+   - **cluster**: Atlas-guided iterative cluster thresholding. Restricts the
+     stat map to an anatomical ROI (e.g., Harvard-Oxford STG) and iteratively
+     raises the stat threshold until the largest contiguous cluster fits the
+     target size. See ``fetch_atlas_mask()`` and ``cluster_threshold_stat_map()``.
 
 Key Components
 --------------
@@ -158,6 +165,7 @@ import nibabel as nib
 from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
 from nibabel.spatialimages import SpatialImage
+from scipy.ndimage import label as ndimage_label  # Connected component labeling
 from scipy.stats import pearsonr           # Spatial correlation
 
 # --- Local Imports ---
@@ -277,6 +285,11 @@ def load_mask_selections(masks_dir: Union[str, Path]) -> Dict[str, MaskSelection
 
     with open(selections_file, 'r') as f:
         data = json.load(f)
+
+    # Task-based selections are wrapped: {"type": "task", "selections": {...}}
+    # Return empty for task format — it uses TaskMaskSelection, not MaskSelection
+    if data.get("type") == "task":
+        return {}
 
     # Handle backward compatibility for older selections without combined fields
     selections = {}
@@ -1520,6 +1533,345 @@ def mask_extraction_rest(
 # networks from resting-state correlations.
 
 
+# --- Atlas Region Definitions ---
+# Maps atlas_name strings to nilearn fetch parameters and target region labels.
+# Combined entries (multiple regions merged into one mask) use a "ho_" prefix.
+# Individual parcels use "ho_<index>" and are built lazily from the atlas.
+#
+# Call get_atlas_region_registry() to get the full registry (lazy-populated).
+
+# Curated combined entries (manually defined convenience masks)
+_ATLAS_COMBINED_ENTRIES: Dict[str, Dict[str, Any]] = {
+    "harvard_oxford_stg": {
+        "description": "Superior Temporal Gyrus (anterior + posterior)",
+        "atlas_fetch": "cort-maxprob-thr25-2mm",
+        "regions": [
+            "Superior Temporal Gyrus, anterior division",
+            "Superior Temporal Gyrus, posterior division",
+        ],
+    },
+    "harvard_oxford_ifg": {
+        "description": "Inferior Frontal Gyrus (pars triangularis + opercularis)",
+        "atlas_fetch": "cort-maxprob-thr25-2mm",
+        "regions": [
+            "Inferior Frontal Gyrus, pars triangularis",
+            "Inferior Frontal Gyrus, pars opercularis",
+        ],
+    },
+    "harvard_oxford_mtg": {
+        "description": "Middle Temporal Gyrus (anterior + posterior + temporo-occipital)",
+        "atlas_fetch": "cort-maxprob-thr25-2mm",
+        "regions": [
+            "Middle Temporal Gyrus, anterior division",
+            "Middle Temporal Gyrus, posterior division",
+            "Middle Temporal Gyrus, temporo-occipital part",
+        ],
+    },
+    "harvard_oxford_smg": {
+        "description": "Supramarginal Gyrus (anterior + posterior)",
+        "atlas_fetch": "cort-maxprob-thr25-2mm",
+        "regions": [
+            "Supramarginal Gyrus, anterior division",
+            "Supramarginal Gyrus, posterior division",
+        ],
+    },
+    "harvard_oxford_cingulate": {
+        "description": "Cingulate Gyrus (anterior + posterior)",
+        "atlas_fetch": "cort-maxprob-thr25-2mm",
+        "regions": [
+            "Cingulate Gyrus, anterior division",
+            "Cingulate Gyrus, posterior division",
+        ],
+    },
+}
+
+# Cache for the full registry (populated on first access)
+_ATLAS_REGISTRY_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def get_atlas_region_registry() -> Dict[str, Dict[str, Any]]:
+    """Get the full atlas region registry, including all Harvard-Oxford parcels.
+
+    On first call, fetches the Harvard-Oxford cortical atlas from nilearn to
+    read all available parcel labels. Individual parcels are added as separate
+    entries alongside the curated combined entries.
+
+    Returns
+    -------
+    dict
+        Mapping of atlas_name to dict with "description", "atlas_fetch",
+        and "regions" keys.
+    """
+    global _ATLAS_REGISTRY_CACHE  # noqa: PLW0603
+    if _ATLAS_REGISTRY_CACHE is not None:
+        return _ATLAS_REGISTRY_CACHE
+
+    registry: Dict[str, Dict[str, Any]] = {}
+
+    # Add curated combined entries first (shown at top)
+    registry.update(_ATLAS_COMBINED_ENTRIES)
+
+    # Fetch atlas labels and add individual parcels
+    try:
+        atlas = datasets.fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
+        labels = atlas.labels
+        for idx, label in enumerate(labels):
+            if label == "Background":
+                continue
+            # Create a safe key from the label
+            key = "ho_" + label.lower().replace(" ", "_").replace(",", "").replace("'", "").replace("(", "").replace(")", "")
+            registry[key] = {
+                "description": label,
+                "atlas_fetch": "cort-maxprob-thr25-2mm",
+                "regions": [label],
+            }
+    except Exception as e:
+        logger.warning(f"Could not fetch Harvard-Oxford atlas labels: {e}")
+
+    _ATLAS_REGISTRY_CACHE = registry
+    return registry
+
+
+# Keep ATLAS_REGION_REGISTRY as a reference to the combined entries for
+# backward compatibility. Code that needs all entries should call
+# get_atlas_region_registry() instead.
+ATLAS_REGION_REGISTRY = _ATLAS_COMBINED_ENTRIES
+
+
+def fetch_atlas_mask(
+    atlas_name: str,
+    output_file: Union[str, Path],
+    overwrite: bool = False,
+) -> Path:
+    """Fetch a named atlas from nilearn and extract specified regions as a binary mask.
+
+    Looks up ``atlas_name`` in the atlas registry returned by
+    :func:`get_atlas_region_registry`, fetches the corresponding Harvard-Oxford
+    atlas via nilearn, and creates a binary mask containing only the specified
+    anatomical regions.
+
+    Parameters
+    ----------
+    atlas_name : str
+        Key into the atlas registry (e.g., ``"harvard_oxford_stg"``).
+    output_file : str or Path
+        Path to save the binary MNI-space mask NIfTI.
+    overwrite : bool
+        If True, regenerate even if ``output_file`` exists.
+
+    Returns
+    -------
+    Path
+        Path to the saved binary mask in MNI space.
+
+    Raises
+    ------
+    ValueError
+        If ``atlas_name`` is not found in the atlas registry.
+    """
+    output_file = Path(output_file)
+
+    if output_file.exists() and not overwrite:
+        logger.info(f"Atlas mask already exists: {output_file.name}")
+        return output_file
+
+    registry = get_atlas_region_registry()
+    if atlas_name not in registry:
+        available = ", ".join(sorted(registry.keys()))
+        raise ValueError(
+            f"Unknown atlas_name '{atlas_name}'. Available: {available}"
+        )
+
+    entry = registry[atlas_name]
+    atlas_fetch_name = entry["atlas_fetch"]
+    target_regions = entry["regions"]
+
+    # Fetch atlas from nilearn (cached after first download)
+    atlas = datasets.fetch_atlas_harvard_oxford(atlas_fetch_name)
+    # Newer nilearn returns Nifti1Image directly; older returns a file path
+    atlas_maps = atlas.maps
+    if isinstance(atlas_maps, nib.Nifti1Image):
+        atlas_img = atlas_maps
+    else:
+        atlas_img = nib.load(atlas_maps)
+    atlas_data = atlas_img.get_fdata()
+    labels = atlas.labels
+
+    # Find integer label indices for the target regions
+    label_indices = []
+    for region in target_regions:
+        try:
+            idx = labels.index(region)
+            label_indices.append(idx)
+        except ValueError:
+            raise ValueError(
+                f"Region '{region}' not found in atlas labels. "
+                f"Available labels: {labels}"
+            )
+
+    # Create binary mask: 1 where atlas label is in target regions, 0 elsewhere
+    binary_mask = np.isin(atlas_data, label_indices).astype(np.uint8)
+    n_voxels = int(binary_mask.sum())
+    logger.info(
+        f"Atlas '{atlas_name}': {len(label_indices)} regions, "
+        f"{n_voxels} voxels in MNI space"
+    )
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    save(Nifti1Image(binary_mask, atlas_img.affine, atlas_img.header), output_file)
+    return output_file
+
+
+def cluster_threshold_stat_map(
+    stat_data: np.ndarray,
+    atlas_data: np.ndarray,
+    target_n_voxels: int,
+    start_threshold: float = 2.0,
+    step: float = 0.1,
+    max_iterations: int = 200,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Find the largest contiguous cluster within an atlas-masked stat map.
+
+    Iteratively raises the statistical threshold until the largest spatially
+    contiguous cluster within the atlas region is at most ``target_n_voxels``
+    in size. This mirrors the approach used in FSL-based STG extraction
+    pipelines where ``cluster`` is called repeatedly with increasing thresholds.
+
+    Parameters
+    ----------
+    stat_data : np.ndarray
+        3D array of statistic values (t or z scores).
+    atlas_data : np.ndarray
+        3D binary array (0 or 1) defining the anatomical ROI.
+        Must have the same shape as ``stat_data``.
+    target_n_voxels : int
+        Desired maximum cluster size.
+    start_threshold : float
+        Starting stat threshold for the iterative search.
+    step : float
+        Amount to increase threshold per iteration.
+    max_iterations : int
+        Safety limit to prevent infinite loops.
+
+    Returns
+    -------
+    binary_mask : np.ndarray
+        3D uint8 array with 1 for the selected cluster, 0 elsewhere.
+    info : dict
+        Metadata about the thresholding process:
+
+        - ``final_threshold`` : float — threshold that produced the cluster
+        - ``n_iterations`` : int — number of iterations performed
+        - ``n_clusters_at_final`` : int — clusters at the final threshold
+        - ``cluster_size`` : int — voxels in the selected cluster
+        - ``atlas_voxel_count`` : int — total voxels in the atlas mask
+        - ``outcome`` : str — one of ``"success"``,
+          ``"already_under_target"``, ``"no_clusters_found"``,
+          ``"empty_atlas"``, ``"max_iterations_reached"``
+
+    Raises
+    ------
+    ValueError
+        If ``stat_data`` and ``atlas_data`` have different shapes.
+    """
+    if stat_data.shape != atlas_data.shape:
+        raise ValueError(
+            f"Shape mismatch: stat_data {stat_data.shape} "
+            f"vs atlas_data {atlas_data.shape}"
+        )
+
+    # Restrict stat map to atlas region
+    masked_stat = stat_data * atlas_data
+    atlas_voxel_count = int(atlas_data.sum())
+
+    if atlas_voxel_count == 0:
+        return np.zeros(stat_data.shape, dtype=np.uint8), {
+            "outcome": "empty_atlas",
+            "final_threshold": start_threshold,
+            "n_iterations": 0,
+            "n_clusters_at_final": 0,
+            "cluster_size": 0,
+            "atlas_voxel_count": 0,
+        }
+
+    threshold = start_threshold
+    prev_labeled = None
+    prev_n_clusters = 0
+
+    for iteration in range(max_iterations):
+        above_threshold = masked_stat >= threshold
+
+        if not above_threshold.any():
+            if iteration == 0:
+                return np.zeros(stat_data.shape, dtype=np.uint8), {
+                    "outcome": "no_clusters_found",
+                    "final_threshold": threshold,
+                    "n_iterations": iteration + 1,
+                    "n_clusters_at_final": 0,
+                    "cluster_size": 0,
+                    "atlas_voxel_count": atlas_voxel_count,
+                }
+            # Step back to previous threshold where clusters existed
+            threshold -= step
+            above_threshold = masked_stat >= threshold
+            labeled, n_clusters = ndimage_label(above_threshold.astype(np.int32))
+            cluster_sizes = np.bincount(labeled.ravel())[1:]
+            largest_label = int(cluster_sizes.argmax()) + 1
+            largest_size = int(cluster_sizes.max())
+            binary_mask = (labeled == largest_label).astype(np.uint8)
+            return binary_mask, {
+                "outcome": "success",
+                "final_threshold": float(threshold),
+                "n_iterations": iteration + 1,
+                "n_clusters_at_final": n_clusters,
+                "cluster_size": largest_size,
+                "atlas_voxel_count": atlas_voxel_count,
+            }
+
+        labeled, n_clusters = ndimage_label(above_threshold.astype(np.int32))
+
+        if n_clusters == 0:
+            return np.zeros(stat_data.shape, dtype=np.uint8), {
+                "outcome": "no_clusters_found",
+                "final_threshold": float(threshold),
+                "n_iterations": iteration + 1,
+                "n_clusters_at_final": 0,
+                "cluster_size": 0,
+                "atlas_voxel_count": atlas_voxel_count,
+            }
+
+        cluster_sizes = np.bincount(labeled.ravel())[1:]  # skip background
+        largest_label = int(cluster_sizes.argmax()) + 1  # 1-based
+        largest_size = int(cluster_sizes.max())
+
+        if largest_size <= target_n_voxels:
+            binary_mask = (labeled == largest_label).astype(np.uint8)
+            return binary_mask, {
+                "outcome": "success" if iteration > 0 else "already_under_target",
+                "final_threshold": float(threshold),
+                "n_iterations": iteration + 1,
+                "n_clusters_at_final": n_clusters,
+                "cluster_size": largest_size,
+                "atlas_voxel_count": atlas_voxel_count,
+            }
+
+        # Cluster too large — increase threshold
+        prev_labeled = labeled
+        prev_n_clusters = n_clusters
+        threshold += step
+
+    # Max iterations reached — return the current largest cluster
+    binary_mask = (labeled == largest_label).astype(np.uint8)
+    return binary_mask, {
+        "outcome": "max_iterations_reached",
+        "final_threshold": float(threshold),
+        "n_iterations": max_iterations,
+        "n_clusters_at_final": n_clusters,
+        "cluster_size": largest_size,
+        "atlas_voxel_count": atlas_voxel_count,
+    }
+
+
 @dataclass
 class TaskMaskSelection:
     """Tracks the selection state for a single task-based GLM mask.
@@ -1541,9 +1893,17 @@ class TaskMaskSelection:
     n_voxels_thresholded : int
         Number of voxels in the final mask
     threshold_method : str
-        How the mask was thresholded (e.g., "top_n")
+        How the mask was thresholded (``"top_n"`` or ``"cluster"``)
     selection_reason : str
         Always "auto" for task-based (no manual selection needed)
+    atlas_used : str or None
+        Atlas name or path used for cluster thresholding, if applicable
+    final_cluster_threshold : float or None
+        Stat threshold that produced the final cluster (cluster method only)
+    n_clusters_found : int or None
+        Number of clusters at the final threshold (cluster method only)
+    cluster_outcome : str or None
+        Outcome of cluster thresholding (cluster method only)
     """
     mask_name: str
     source_type: str = "glm_contrast"
@@ -1554,6 +1914,10 @@ class TaskMaskSelection:
     n_voxels_thresholded: int = 0
     threshold_method: str = "top_n"
     selection_reason: str = "auto"
+    atlas_used: Optional[str] = None
+    final_cluster_threshold: Optional[float] = None
+    n_clusters_found: Optional[int] = None
+    cluster_outcome: Optional[str] = None
 
 
 def save_task_mask_selections(
@@ -1598,6 +1962,12 @@ def mask_extraction_task(
         contrasts: Dict[str, str],
         tr: float,
         threshold: int = 2000,
+        threshold_method: str = "top_n",
+        atlas_mask: Optional[Union[str, Path]] = None,
+        atlas_name: Optional[str] = None,
+        ref_file: Optional[Union[str, Path]] = None,
+        cluster_start_threshold: float = 2.0,
+        cluster_step: float = 0.1,
         stat_type: str = "t",
         smoothing_fwhm: Optional[float] = 5.0,
         high_pass: float = 0.01,
@@ -1613,13 +1983,15 @@ def mask_extraction_task(
 
     This function extracts participant-specific functional masks from task localizer
     data. A whole-brain GLM is fit using nilearn's FirstLevelModel, and user-specified
-    contrasts are computed to produce statistical maps. Each contrast map is thresholded
-    to retain the top N voxels, producing binary masks suitable for neurofeedback.
+    contrasts are computed to produce statistical maps. Each contrast map is then
+    thresholded into a binary mask using one of two strategies:
 
-    Unlike the ICA-based approach (mask_extraction_rest), this method:
-    - Uses task-evoked activation rather than resting-state correlations
-    - Does not require MNI registration or Yeo atlas matching
-    - Directly maps each contrast to a mask (user specifies the mapping)
+    - **top_n** (default): Selects the top N voxels by stat value. Simple and fast,
+      but the resulting mask may contain scattered, non-contiguous voxels.
+    - **cluster**: Atlas-guided iterative cluster thresholding. Restricts the stat
+      map to an anatomical ROI (e.g., Harvard-Oxford STG), then iteratively raises
+      the stat threshold until the largest spatially contiguous cluster fits the
+      target size. Guarantees a single contiguous cluster within the atlas region.
 
     Parameters
     ----------
@@ -1642,7 +2014,30 @@ def mask_extraction_task(
     tr : float
         Repetition time in seconds
     threshold : int
-        Number of voxels to retain per mask (default: 2000)
+        Number of voxels to retain per mask (default: 2000). For ``top_n``,
+        this is the exact count selected. For ``cluster``, this is the maximum
+        cluster size target.
+    threshold_method : str
+        ``"top_n"`` (default) selects the top N voxels by stat value.
+        ``"cluster"`` uses atlas-guided iterative cluster thresholding.
+    atlas_mask : str, Path, or None
+        Path to a binary atlas NIfTI in subject space. Used with
+        ``threshold_method="cluster"`` to constrain the search region.
+        Mutually exclusive with ``atlas_name``.
+    atlas_name : str or None
+        Name of a built-in atlas to fetch from nilearn (e.g.,
+        ``"harvard_oxford_stg"``). See :func:`get_atlas_region_registry`.
+        Requires ``ref_file`` for registration to subject space.
+        Mutually exclusive with ``atlas_mask``.
+    ref_file : str, Path, or None
+        BOLD reference image for atlas registration when ``atlas_name`` is
+        provided. Typically the temporal mean from preprocessing.
+    cluster_start_threshold : float
+        Starting stat threshold for iterative cluster search (default: 2.0).
+        Only used when ``threshold_method="cluster"``.
+    cluster_step : float
+        Amount to increase the threshold per iteration (default: 0.1).
+        Only used when ``threshold_method="cluster"``.
     stat_type : str
         Type of statistical map: "t" or "z" (default: "t")
     smoothing_fwhm : float or None
@@ -1672,12 +2067,14 @@ def mask_extraction_task(
     ------
     ValueError
         If events is empty, missing required columns, or contrast references
-        unknown conditions
+        unknown conditions. Also if cluster parameters are invalid.
     FileNotFoundError
         If input_file, mask_file, or events path does not exist
 
     Examples
     --------
+    Top-N thresholding (default):
+
     >>> mask_files = mask_extraction_task(
     ...     participant_id='sub-01',
     ...     root_dir='/data/sub-01/mask_extraction',
@@ -1692,10 +2089,28 @@ def mask_extraction_task(
     ...     tr=1.2,
     ... )
 
+    Atlas-guided cluster thresholding (STG from self/other localizer):
+
+    >>> mask_files = mask_extraction_task(
+    ...     participant_id='sub-01',
+    ...     root_dir='/data/sub-01/mask_extraction',
+    ...     input_file='/data/sub-01/preprocessing/sub-01_task-selfother_preproc.nii.gz',
+    ...     mask_file='/data/sub-01/preprocessing/sub-01_task-selfother_preproc_mask.nii.gz',
+    ...     events='/data/sub-01/events/sub-01_task-selfother_events.tsv',
+    ...     contrasts={"STG": "self - other"},
+    ...     tr=1.2,
+    ...     threshold=200,
+    ...     threshold_method="cluster",
+    ...     atlas_name="harvard_oxford_stg",
+    ...     ref_file='/data/sub-01/preprocessing/sub-01_task-selfother_mean.nii.gz',
+    ... )
+
     See Also
     --------
     mask_extraction_rest : ICA-based extraction from resting-state data
     coregister_2vol : Align masks to feedback scanner position
+    fetch_atlas_mask : Fetch anatomical atlas regions from nilearn
+    cluster_threshold_stat_map : Iterative cluster thresholding algorithm
     """
     from nilearn.glm.first_level import FirstLevelModel
 
@@ -1747,13 +2162,42 @@ def mask_extraction_task(
     available_conditions = sorted(events_df['trial_type'].unique())
     emit_progress("Events loaded", f"{len(events_df)} events, conditions: {available_conditions}")
 
+    # --- Validate threshold_method and cluster-specific params ---
+    if threshold_method not in ("top_n", "cluster"):
+        raise ValueError(
+            f"threshold_method must be 'top_n' or 'cluster', got '{threshold_method}'"
+        )
+    if threshold_method == "cluster":
+        if atlas_mask is None and atlas_name is None:
+            raise ValueError(
+                "When threshold_method='cluster', either atlas_mask or atlas_name "
+                "must be provided to define the anatomical ROI."
+            )
+        if atlas_mask is not None and atlas_name is not None:
+            raise ValueError(
+                "Provide only one of atlas_mask or atlas_name, not both."
+            )
+        if atlas_name is not None and ref_file is None:
+            raise ValueError(
+                "ref_file is required when atlas_name is provided, to register "
+                "the atlas from MNI to subject space."
+            )
+        registry = get_atlas_region_registry()
+        if atlas_name is not None and atlas_name not in registry:
+            available = ", ".join(sorted(registry.keys()))
+            raise ValueError(
+                f"Unknown atlas_name '{atlas_name}'. Available: {available}"
+            )
+
+    n_steps = 3 if threshold_method == "cluster" else 2
+
     # =========================================================================
-    # Step 1/2: GLM Fit
+    # Step 1/{n_steps}: GLM Fit
     # =========================================================================
     glm_dir = root_dir / "01_glm"
     glm_dir.mkdir(parents=True, exist_ok=True)
 
-    emit_progress("Step 1/2: Fitting GLM", f"{len(contrasts)} contrasts to compute")
+    emit_progress(f"Step 1/{n_steps}: Fitting GLM", f"{len(contrasts)} contrasts to compute")
 
     # Check if all outputs already exist
     stat_map_paths = {}
@@ -1766,7 +2210,7 @@ def mask_extraction_task(
 
     if all_exist and not overwrite:
         logger.info("All GLM stat maps exist and overwrite=False. Skipping GLM fit.")
-        emit_progress("Step 1/2", "Skipped (outputs exist)")
+        emit_progress(f"Step 1/{n_steps}", "Skipped (outputs exist)")
     else:
         with Timer("glm_fit", "mask_extraction_task"):
             model = FirstLevelModel(
@@ -1781,7 +2225,7 @@ def mask_extraction_task(
                 n_jobs=1,
             )
 
-            emit_progress("Step 1/2", "Fitting model...")
+            emit_progress(f"Step 1/{n_steps}", "Fitting model...")
             model.fit(str(input_file), events=events_df)
 
             # Save design matrix for QC and reproducibility
@@ -1791,7 +2235,7 @@ def mask_extraction_task(
 
             # Compute and save each contrast
             for mask_name, contrast_expr in contrasts.items():
-                emit_progress("Step 1/2", f"Computing contrast: {mask_name} = {contrast_expr}")
+                emit_progress(f"Step 1/{n_steps}", f"Computing contrast: {mask_name} = {contrast_expr}")
 
                 stat_map = model.compute_contrast(
                     contrast_expr,
@@ -1819,15 +2263,118 @@ def mask_extraction_task(
             with open(info_file, 'w') as f:
                 json.dump(glm_info, f, indent=2)
 
-        emit_progress("Step 1/2", "GLM fit complete")
+        emit_progress(f"Step 1/{n_steps}", "GLM fit complete")
 
     # =========================================================================
-    # Step 2/2: Threshold to Binary Masks
+    # Step 2/3: Atlas Registration (cluster mode only)
     # =========================================================================
-    masks_dir = root_dir / "02_masks"
+    atlas_subject_space_data = None  # Set below if cluster mode
+
+    if threshold_method == "cluster":
+        mnireg_dir = root_dir / "02_mnireg"
+        mnireg_dir.mkdir(parents=True, exist_ok=True)
+
+        emit_progress(f"Step 2/{n_steps}: Preparing atlas mask")
+
+        if atlas_mask is not None:
+            # User-provided atlas — use directly (assumed in subject space)
+            atlas_mask_path = Path(atlas_mask)
+            if not atlas_mask_path.exists():
+                raise FileNotFoundError(f"Atlas mask not found: {atlas_mask_path}")
+            atlas_img = load(atlas_mask_path)
+            atlas_label = atlas_mask_path.name
+            emit_progress(
+                f"Step 2/{n_steps}",
+                f"Using user-provided atlas: {atlas_label}"
+            )
+        else:
+            # Fetch atlas and register to subject space
+            assert atlas_name is not None  # validated above
+            assert ref_file is not None    # validated above
+            ref_file = Path(ref_file)
+
+            # Sub-step: Fetch atlas in MNI space
+            atlas_mni_path = mnireg_dir / f"{atlas_name}_mni.nii.gz"
+            atlas_mni_path = fetch_atlas_mask(
+                atlas_name=atlas_name,
+                output_file=atlas_mni_path,
+                overwrite=overwrite,
+            )
+            emit_progress(
+                f"Step 2/{n_steps}",
+                f"Fetched {atlas_name} atlas in MNI space"
+            )
+
+            # Sub-step: Register to subject space via ANTs
+            xfm_prefix = mnireg_dir / f"{participant_id}_to_MNI_boldref"
+            mni_ref_file, sub2mni_fwd_xfm, sub2mni_inv_xfm = compute_xfm_to_mni(
+                input_file=ref_file,
+                output_prefix=xfm_prefix,
+                overwrite=overwrite,
+            )
+
+            # Sub-step: Apply inverse transform (MNI -> subject space)
+            atlas_subject_path = mnireg_dir / f"{atlas_name}_to_{participant_id}.nii.gz"
+            apply_xfm(
+                moving=atlas_mni_path,
+                fixed=ref_file,
+                transform_files=sub2mni_inv_xfm,
+                output_file=atlas_subject_path,
+                interpolator='nearestNeighbor',
+                invert=False,
+                overwrite=overwrite,
+            )
+            atlas_img = load(atlas_subject_path)
+            atlas_label = atlas_name
+            emit_progress(
+                f"Step 2/{n_steps}",
+                "Atlas registered to subject space"
+            )
+
+        # Resample atlas to stat map resolution if needed
+        first_stat_path = stat_map_paths[list(contrasts.keys())[0]]
+        stat_ref_img: SpatialImage = load(first_stat_path)  # type: ignore
+        atlas_resampled_img = resample_to_img(
+            atlas_img, stat_ref_img, interpolation='nearest'
+        )
+        atlas_subject_space_data = (
+            atlas_resampled_img.get_fdata() > 0.5
+        ).astype(np.float64)
+
+        # Save atlas-in-subject-space for QC
+        masks_dir = root_dir / "03_masks"
+        masks_dir.mkdir(parents=True, exist_ok=True)
+        atlas_qc_path = masks_dir / f"{participant_id}_atlas_{atlas_label}.nii.gz"
+        save(
+            Nifti1Image(
+                atlas_subject_space_data.astype(np.uint8),
+                stat_ref_img.affine,
+                stat_ref_img.header,
+            ),
+            atlas_qc_path,
+        )
+        emit_progress(
+            f"Step 2/{n_steps}",
+            f"Atlas mask: {int(atlas_subject_space_data.sum())} voxels in subject space"
+        )
+
+    # =========================================================================
+    # Step {n_steps}/{n_steps}: Threshold to Binary Masks
+    # =========================================================================
+    if threshold_method == "cluster":
+        masks_dir = root_dir / "03_masks"
+    else:
+        masks_dir = root_dir / "02_masks"
     masks_dir.mkdir(parents=True, exist_ok=True)
 
-    emit_progress("Step 2/2: Thresholding masks", f"{threshold} voxels per mask")
+    step_label = f"Step {n_steps}/{n_steps}"
+    if threshold_method == "top_n":
+        emit_progress(f"{step_label}: Thresholding masks", f"{threshold} voxels per mask")
+    else:
+        emit_progress(
+            f"{step_label}: Cluster thresholding",
+            f"target={threshold} voxels, start_z={cluster_start_threshold}"
+        )
 
     network_thr_files = []
     selections: Dict[str, TaskMaskSelection] = {}
@@ -1855,10 +2402,11 @@ def mask_extraction_task(
                 peak_stat=float(np.nanmax(stat_data)),
                 n_voxels_above_zero=int(np.sum(stat_data > 0)),
                 n_voxels_thresholded=n_voxels,
+                threshold_method=threshold_method,
             )
             continue
 
-        emit_progress("Step 2/2", f"Thresholding {mask_name}...")
+        emit_progress(step_label, f"Thresholding {mask_name}...")
 
         # Load stat map
         stat_img: SpatialImage = load(stat_map_path)  # type: ignore
@@ -1867,53 +2415,130 @@ def mask_extraction_task(
         # Copy unthresholded map
         save(Nifti1Image(stat_data, stat_img.affine, stat_img.header), unthr_file)  # type: ignore
 
-        # Threshold: keep only positive voxels, select top N
         positive_mask = stat_data > 0
         n_positive = int(positive_mask.sum())
         peak_stat = float(np.nanmax(stat_data)) if n_positive > 0 else 0.0
 
-        if n_positive == 0:
-            logger.warning(
-                f"No positive voxels in contrast '{mask_name}' ({contrast_expr}). "
-                f"Saving empty mask."
+        if threshold_method == "top_n":
+            # === TOP-N THRESHOLDING (existing logic) ===
+            if n_positive == 0:
+                logger.warning(
+                    f"No positive voxels in contrast '{mask_name}' ({contrast_expr}). "
+                    f"Saving empty mask."
+                )
+                binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
+                n_kept = 0
+            elif n_positive <= threshold:
+                logger.warning(
+                    f"Contrast '{mask_name}' has only {n_positive} positive voxels "
+                    f"(requested {threshold}). Keeping all positive voxels."
+                )
+                binary_mask = positive_mask.astype(np.uint8)
+                n_kept = n_positive
+            else:
+                # Standard case: threshold to top N voxels
+                flat = stat_data.ravel()
+                mask = np.zeros(flat.shape, dtype=bool)
+                mask[np.argpartition(flat, -threshold)[-threshold:]] = True
+                mask = mask.reshape(stat_data.shape)
+                # Intersect with positive voxels only
+                binary_mask = (mask & positive_mask).astype(np.uint8)
+                n_kept = int(binary_mask.sum())
+
+            selections[mask_name] = TaskMaskSelection(
+                mask_name=mask_name,
+                contrast_definition=contrast_expr,
+                stat_type=stat_type,
+                peak_stat=peak_stat,
+                n_voxels_above_zero=n_positive,
+                n_voxels_thresholded=n_kept,
+                threshold_method="top_n",
             )
-            binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
-            n_kept = 0
-        elif n_positive <= threshold:
-            logger.warning(
-                f"Contrast '{mask_name}' has only {n_positive} positive voxels "
-                f"(requested {threshold}). Keeping all positive voxels."
-            )
-            binary_mask = positive_mask.astype(np.uint8)
-            n_kept = n_positive
+
         else:
-            # Standard case: threshold to top N voxels
-            flat = stat_data.ravel()
-            mask = np.zeros(flat.shape, dtype=bool)
-            mask[np.argpartition(flat, -threshold)[-threshold:]] = True
-            mask = mask.reshape(stat_data.shape)
-            # Intersect with positive voxels only
-            binary_mask = (mask & positive_mask).astype(np.uint8)
+            # === CLUSTER-BASED THRESHOLDING ===
+            assert atlas_subject_space_data is not None
+
+            # Save atlas-masked stat map for QC
+            atlas_masked_stat = stat_data * atlas_subject_space_data
+            atlas_masked_file = masks_dir / f"{participant_id}_{mask_name}_atlas_masked.nii.gz"
+            save(
+                Nifti1Image(atlas_masked_stat, stat_img.affine, stat_img.header),  # type: ignore
+                atlas_masked_file,
+            )
+
+            binary_mask, cluster_info = cluster_threshold_stat_map(
+                stat_data=stat_data,
+                atlas_data=atlas_subject_space_data,
+                target_n_voxels=threshold,
+                start_threshold=cluster_start_threshold,
+                step=cluster_step,
+            )
             n_kept = int(binary_mask.sum())
+            outcome = cluster_info["outcome"]
+
+            if outcome in ("success", "already_under_target"):
+                emit_progress(
+                    step_label,
+                    f"{mask_name}: {n_kept} voxels "
+                    f"(cluster at z>={cluster_info['final_threshold']:.1f}, "
+                    f"{cluster_info['n_clusters_at_final']} clusters)"
+                )
+            elif outcome in ("no_clusters_found", "empty_atlas"):
+                logger.warning(
+                    f"Cluster thresholding failed for '{mask_name}': {outcome}. "
+                    f"Falling back to top-N within atlas region."
+                )
+                # Fallback: top-N on atlas-masked stat data
+                atlas_positive = atlas_masked_stat > 0
+                n_atlas_positive = int(atlas_positive.sum())
+                if n_atlas_positive == 0:
+                    binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
+                    n_kept = 0
+                elif n_atlas_positive <= threshold:
+                    binary_mask = atlas_positive.astype(np.uint8)
+                    n_kept = n_atlas_positive
+                else:
+                    flat = atlas_masked_stat.ravel()
+                    mask = np.zeros(flat.shape, dtype=bool)
+                    mask[np.argpartition(flat, -threshold)[-threshold:]] = True
+                    mask = mask.reshape(stat_data.shape)
+                    binary_mask = (mask & atlas_positive).astype(np.uint8)
+                    n_kept = int(binary_mask.sum())
+                outcome = "fallback_top_n"
+                emit_progress(
+                    step_label,
+                    f"{mask_name}: {outcome} — {n_kept} voxels (fallback)"
+                )
+            elif outcome == "max_iterations_reached":
+                logger.warning(
+                    f"Cluster thresholding for '{mask_name}' hit max iterations. "
+                    f"Using largest cluster ({n_kept} voxels, target was {threshold})."
+                )
+
+            selections[mask_name] = TaskMaskSelection(
+                mask_name=mask_name,
+                contrast_definition=contrast_expr,
+                stat_type=stat_type,
+                peak_stat=peak_stat,
+                n_voxels_above_zero=n_positive,
+                n_voxels_thresholded=n_kept,
+                threshold_method="cluster",
+                atlas_used=str(atlas_name or atlas_mask),
+                final_cluster_threshold=cluster_info.get("final_threshold"),
+                n_clusters_found=cluster_info.get("n_clusters_at_final"),
+                cluster_outcome=outcome,
+            )
 
         save(Nifti1Image(binary_mask, stat_img.affine, stat_img.header), thr_file)  # type: ignore
         network_thr_files.append(thr_file)
 
-        selections[mask_name] = TaskMaskSelection(
-            mask_name=mask_name,
-            contrast_definition=contrast_expr,
-            stat_type=stat_type,
-            peak_stat=peak_stat,
-            n_voxels_above_zero=n_positive,
-            n_voxels_thresholded=n_kept,
-        )
-
-        emit_progress("Step 2/2", f"{mask_name}: {n_kept} voxels (peak {stat_type}={peak_stat:.2f})")
+        emit_progress(step_label, f"{mask_name}: {n_kept} voxels (peak {stat_type}={peak_stat:.2f})")
 
     # Save selection metadata
     save_task_mask_selections(masks_dir, selections)
 
-    emit_progress("Step 2/2", f"Complete ({len(network_thr_files)} masks extracted)")
+    emit_progress(step_label, f"Complete ({len(network_thr_files)} masks extracted)")
 
     # Generate QC report
     if qc_enabled:
@@ -2156,24 +2781,27 @@ def generate_2vol_qc_overlays(
         logger.info(f"Skipping 2vol QC overlays; transforms not found in {xfm_dir}")
         return
 
+    # Warp Yeo atlas to 2vol space if available (ICA workflow).
+    # For task-based workflows the Yeo atlas may not exist; in that case
+    # we skip atlas warping and use the mask itself for slice selection.
     yeo_sub = mask_extraction_dir / "02_mnireg" / f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz"
-    if not yeo_sub.exists():
-        logger.info(f"Skipping 2vol QC overlays; atlas not found at {yeo_sub}")
-        return
-
-    atlas_2vol = twovol_dir / "masks" / f"Yeo_to_task-2vol_run-{run_str}_mean.nii.gz"
-    apply_xfm(
-        moving=yeo_sub,
-        fixed=mean_file,
-        transform_files=xfm_files,
-        output_file=atlas_2vol,
-        interpolator='nearestNeighbor',
-        overwrite=overwrite
-    )
-
-    atlas_data = load(atlas_2vol).get_fdata()
-    n_labels = int(np.max(atlas_data))
-    labels = get_yeo_labels(n_networks=17 if n_labels > 7 else 7)
+    atlas_2vol = None
+    labels: list[str] = []
+    if yeo_sub.exists():
+        atlas_2vol = twovol_dir / "masks" / f"Yeo_to_task-2vol_run-{run_str}_mean.nii.gz"
+        apply_xfm(
+            moving=yeo_sub,
+            fixed=mean_file,
+            transform_files=xfm_files,
+            output_file=atlas_2vol,
+            interpolator='nearestNeighbor',
+            overwrite=overwrite
+        )
+        atlas_data = load(atlas_2vol).get_fdata()
+        n_labels = int(np.max(atlas_data))
+        labels = get_yeo_labels(n_networks=17 if n_labels > 7 else 7)
+    else:
+        logger.info(f"Yeo atlas not found at {yeo_sub}; using mask-based slice selection")
 
     qc_dir = session_dir.parent / "qc"
     overlays_dir = qc_dir / "overlays" / "2vol"
@@ -2186,7 +2814,7 @@ def generate_2vol_qc_overlays(
             target = stem
 
         atlas_slices = qc.select_slices_from_atlas(
-            atlas_path=atlas_2vol,
+            atlas_path=atlas_2vol if atlas_2vol else network,
             labels=labels,
             target_label=str(target),
             top_n_per_plane=1,
@@ -2204,20 +2832,24 @@ def generate_2vol_qc_overlays(
 
     # Regenerate QC report to include 2vol overlays
     logger.info(f"Generated {len(overlays)} 2vol overlays in {overlays_dir}")
-    logger.info("Regenerating QC report with 2vol overlays...")
 
     # Extract network names from the overlay list
     network_names = [name for name, _ in overlays]
 
-    # Regenerate report with 2vol overlays and open in browser
-    # Use overwrite=False to skip regenerating existing images (ICA, corr, subject overlays)
-    # The HTML will still be regenerated to include new 2vol overlays
-    qc.generate_mask_extraction_report(
-        mask_extraction_dir=mask_extraction_dir,
-        participant_id=participant_id,
-        network_names=network_names,
-        output_dir=qc_dir,
-        n_yeo=n_yeo,
-        overwrite=False,  # Skip existing images, just update HTML
-        open_browser=False
-    )
+    # Regenerate report with 2vol overlays. Use the ICA report generator
+    # (which knows about 2vol overlays); for task-based workflows this may
+    # fail gracefully since there are no ICA outputs, but the overlay PNGs
+    # are already written and available for the QC viewer.
+    try:
+        logger.info("Regenerating QC report with 2vol overlays...")
+        qc.generate_mask_extraction_report(
+            mask_extraction_dir=mask_extraction_dir,
+            participant_id=participant_id,
+            network_names=network_names,
+            output_dir=qc_dir,
+            n_yeo=n_yeo,
+            overwrite=False,  # Skip existing images, just update HTML
+            open_browser=False
+        )
+    except Exception as e:
+        logger.info(f"Skipping ICA QC report regeneration (task-based workflow): {e}")

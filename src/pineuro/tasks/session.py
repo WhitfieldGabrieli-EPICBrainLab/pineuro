@@ -4,8 +4,8 @@ Session state management for multi-run neurofeedback sessions.
 Summary
 -------
 Persists adaptive task state across runs via JSON in the session directory.
-Session state is now config-driven: tasks declare their state fields in
-TaskMetadata, and SessionState stores them dynamically.
+Session state is config-driven: tasks declare their state fields in
+TaskMetadata, and SessionState stores them dynamically via get()/set().
 
 Components
 ----------
@@ -16,17 +16,12 @@ Workflow
 --------
 - Create SessionState via create_for_task() with task-specific defaults
 - Or load existing session_state.json via load()
-- Access state fields via get()/set() or backwards-compatible properties
+- Access state fields via get()/set()
 - Save updated state to disk after each run
 
 Dependencies
 ------------
 json (stdlib), dataclasses, pathlib
-
-Notes
------
-Backwards compatible with existing BallTask code that accesses scale_factor,
-hit_counters, and circle_radii as direct attributes.
 """
 
 import json
@@ -50,11 +45,6 @@ class RunInfo:
     # Task-specific state at end of run (e.g., hit_counters, scale_factor)
     task_state_snapshot: Dict[str, Any] = field(default_factory=dict)
 
-    # Legacy fields for backwards compatibility with existing RunInfo data
-    hit_counters: Optional[list[int]] = None
-    final_scale_factor: Optional[float] = None
-    final_circle_radii: Optional[list[float]] = None
-
     # Slot-based tracking: slot_run_number is the fixed run slot (1 or 2),
     # acq is the acquisition number for retries (1, 2, 3, ...)
     slot_run_number: Optional[int] = None
@@ -68,14 +58,6 @@ class RunInfo:
             'volumes_processed': self.volumes_processed,
             'task_state_snapshot': self.task_state_snapshot,
         }
-        # Include legacy fields if present (for backwards compatibility)
-        if self.hit_counters is not None:
-            data['hit_counters'] = self.hit_counters
-        if self.final_scale_factor is not None:
-            data['final_scale_factor'] = self.final_scale_factor
-        if self.final_circle_radii is not None:
-            data['final_circle_radii'] = self.final_circle_radii
-        # Slot-based tracking fields
         if self.slot_run_number is not None:
             data['slot_run_number'] = self.slot_run_number
         if self.acq is not None:
@@ -84,15 +66,12 @@ class RunInfo:
 
     @classmethod
     def from_dict(cls, data: dict) -> "RunInfo":
-        """Create from dictionary (handles both old and new formats)."""
+        """Create from dictionary."""
         return cls(
             run_number=data['run_number'],
             run_type=data['run_type'],
             volumes_processed=data.get('volumes_processed', 0),
             task_state_snapshot=data.get('task_state_snapshot', {}),
-            hit_counters=data.get('hit_counters'),
-            final_scale_factor=data.get('final_scale_factor'),
-            final_circle_radii=data.get('final_circle_radii'),
             slot_run_number=data.get('slot_run_number'),
             acq=data.get('acq'),
         )
@@ -121,41 +100,37 @@ class SessionState:
     Examples
     --------
     >>> # Create new session state with task-specific defaults
-    >>> state = SessionState.create_for_task(session_dir, "ball")
-    >>> state.get("scale_factor")  # Access task state
-    10.0
-    >>> state.set("scale_factor", 12.5)  # Update task state
+    >>> state = SessionState.create_for_task(session_dir, "my_task")
+    >>> state.get("threshold")  # Access task state
+    0.5
+    >>> state.set("threshold", 0.8)  # Update task state
 
     >>> # Or load existing state
-    >>> state = SessionState.load(session_dir)
+    >>> state = SessionState.load(session_dir, task_id="my_task")
 
-    >>> # Backwards-compatible property access (for BallTask)
-    >>> state.scale_factor = 15.0  # Same as state.set("scale_factor", 15.0)
+    >>> state.set("scale_factor", 15.0)  # Update a field
     """
 
     session_dir: Path
-    task_id: str = "ball"  # Default for backwards compatibility
+    task_id: str = "ball"
     task_state: Dict[str, Any] = field(default_factory=dict)
     completed_runs: list[RunInfo] = field(default_factory=list)
     max_feedback_runs: int = 5
 
-    # Slot-based tracking: maps slot_run_number to the scale_factor that should
-    # be used at the START of that slot (before any runs in that slot).
-    # This allows retries (acq > 1) to use the correct initial scale factor.
-    slot_base_scale_factors: Dict[int, float] = field(default_factory=dict)
-
-    # Minimum circle radius (don't shrink below this) - kept for BallTask
-    MIN_CIRCLE_RADIUS: float = field(default=0.05, repr=False)
+    # Slot-based tracking: maps slot_run_number to the task_state snapshot
+    # at the START of that slot (before any runs). Enables retries to restore
+    # the correct initial state for a slot.
+    slot_base_state: Dict[int, Dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self):
-        """Initialize default task state if empty."""
-        # Ensure ball task defaults are present for backwards compatibility
+        """Initialize default task state from metadata if empty."""
         if not self.task_state:
-            self.task_state = {
-                'scale_factor': 10.0,
-                'hit_counters': [0, 0],
-                'circle_radii': [0.15, 0.15],
-            }
+            try:
+                from .task_registry import get_task_metadata
+                metadata = get_task_metadata(self.task_id)
+                self.task_state = {f.key: f.default for f in metadata.session_state_fields}
+            except (ValueError, ImportError):
+                pass
 
     # -------------------------------------------------------------------------
     # Generic state access methods
@@ -167,7 +142,7 @@ class SessionState:
         Parameters
         ----------
         key : str
-            Field name (e.g., "scale_factor", "hit_counters")
+            Field name (e.g., "threshold", "n_blocks_completed")
         default : Any, optional
             Default value if field doesn't exist
 
@@ -189,37 +164,6 @@ class SessionState:
             New value
         """
         self.task_state[key] = value
-
-    # -------------------------------------------------------------------------
-    # Backwards-compatible property accessors for BallTask
-    # -------------------------------------------------------------------------
-
-    @property
-    def scale_factor(self) -> float:
-        """Current scale factor for ball movement (adaptive difficulty)."""
-        return self.get("scale_factor", 10.0)
-
-    @scale_factor.setter
-    def scale_factor(self, value: float):
-        self.set("scale_factor", value)
-
-    @property
-    def hit_counters(self) -> list[int]:
-        """Cumulative hit counts for each target [top, bottom]."""
-        return self.get("hit_counters", [0, 0])
-
-    @hit_counters.setter
-    def hit_counters(self, value: list[int]):
-        self.set("hit_counters", value)
-
-    @property
-    def circle_radii(self) -> list[float]:
-        """Current circle radii (shrink on hits)."""
-        return self.get("circle_radii", [0.15, 0.15])
-
-    @circle_radii.setter
-    def circle_radii(self, value: list[float]):
-        self.set("circle_radii", value)
 
     # -------------------------------------------------------------------------
     # Computed properties
@@ -273,12 +217,12 @@ class SessionState:
         """
         return self.feedback_run_count >= self.max_feedback_runs
 
-    def get_scale_factor_for_slot(self, slot_run_number: int, acq: int = 1) -> float:
-        """Get the appropriate scale factor for a run slot.
+    def get_state_for_slot(self, slot_run_number: int, acq: int = 1) -> Dict[str, Any]:
+        """Get the appropriate task state for a run slot.
 
-        For retries (acq > 1), returns the scale factor from before that slot
+        For retries (acq > 1), returns the task state from before that slot
         was first started. For first attempts (acq == 1), returns the current
-        scale factor and records it as the base for this slot.
+        task state and records it as the base for this slot.
 
         Parameters
         ----------
@@ -289,21 +233,19 @@ class SessionState:
 
         Returns
         -------
-        float
-            The scale factor to use for this run
+        dict
+            The task state to use for this run
         """
-        if acq > 1 and slot_run_number in self.slot_base_scale_factors:
-            # Retry: use the base scale factor for this slot
-            base_sf = self.slot_base_scale_factors[slot_run_number]
-            logger.info(f"Retry (acq={acq}): using base scale_factor {base_sf} for slot {slot_run_number}")
-            return base_sf
+        if acq > 1 and slot_run_number in self.slot_base_state:
+            base = self.slot_base_state[slot_run_number]
+            logger.info(f"Retry (acq={acq}): using base state for slot {slot_run_number}")
+            return base.copy()
         else:
-            # First attempt: record current scale factor as base for this slot
-            if slot_run_number not in self.slot_base_scale_factors:
-                self.slot_base_scale_factors[slot_run_number] = self.scale_factor
-                logger.info(f"First attempt at slot {slot_run_number}: recorded base scale_factor {self.scale_factor}")
+            if slot_run_number not in self.slot_base_state:
+                self.slot_base_state[slot_run_number] = self.task_state.copy()
+                logger.info(f"First attempt at slot {slot_run_number}: recorded base state")
                 self.save()
-            return self.scale_factor
+            return self.task_state.copy()
 
     def has_run_for_slot(self, slot_run_number: int) -> bool:
         """Check if a run has been recorded for a given slot.
@@ -351,12 +293,7 @@ class SessionState:
             'task_state': self.task_state,
             'completed_runs': [r.to_dict() for r in self.completed_runs],
             'max_feedback_runs': self.max_feedback_runs,
-            # Slot-based tracking for retries
-            'slot_base_scale_factors': {str(k): v for k, v in self.slot_base_scale_factors.items()},
-            # Also save legacy fields for backwards compatibility
-            'scale_factor': self.scale_factor,
-            'hit_counters': self.hit_counters,
-            'circle_radii': self.circle_radii,
+            'slot_base_state': {str(k): v for k, v in self.slot_base_state.items()},
         }
 
         with open(self.state_file, 'w') as f:
@@ -388,17 +325,8 @@ class SessionState:
             metadata = get_task_metadata(task_id)
             defaults = {f.key: f.default for f in metadata.session_state_fields}
         except ValueError:
-            # Task not registered, use empty defaults
             logger.warning(f"Task '{task_id}' not registered, using empty state defaults")
             defaults = {}
-
-        # Ensure ball task defaults for backwards compatibility
-        if task_id == "ball" and not defaults:
-            defaults = {
-                'scale_factor': 10.0,
-                'hit_counters': [0, 0],
-                'circle_radii': [0.15, 0.15],
-            }
 
         return cls(
             session_dir=session_dir,
@@ -407,7 +335,7 @@ class SessionState:
         )
 
     @classmethod
-    def load(cls, session_dir: Path, task_id: str = "ball") -> "SessionState":
+    def load(cls, session_dir: Path, task_id: str = "unknown") -> "SessionState":
         """Load state from session_state.json, or create new if not exists.
 
         Handles both old format (direct fields) and new format (task_state dict).
@@ -416,8 +344,8 @@ class SessionState:
         ----------
         session_dir : Path
             Directory containing (or that will contain) session_state.json
-        task_id : str, optional
-            Task identifier for creating fresh state (default: "ball")
+        task_id : str
+            Task identifier for creating fresh state
 
         Returns
         -------
@@ -436,16 +364,27 @@ class SessionState:
                 # New format: use task_state dict
                 task_state = data['task_state']
             else:
-                # Old format: migrate legacy fields to task_state
-                task_state = {
-                    'scale_factor': data.get('scale_factor', 10.0),
-                    'hit_counters': data.get('hit_counters', [0, 0]),
-                    'circle_radii': data.get('circle_radii', [0.15, 0.15]),
-                }
+                # Old format: migrate legacy fields using task metadata
+                loaded_task_id = data.get('task_id', task_id)
+                try:
+                    from .task_registry import get_task_metadata
+                    metadata = get_task_metadata(loaded_task_id)
+                    known_keys = {f.key for f in metadata.session_state_fields}
+                    task_state = {
+                        f.key: data.get(f.key, f.default)
+                        for f in metadata.session_state_fields
+                    }
+                    logger.info(f"Migrated legacy session state for '{loaded_task_id}': {list(task_state.keys())}")
+                except (ValueError, ImportError):
+                    # Task not registered: pull any non-framework keys as best-effort
+                    framework_keys = {'task_id', 'completed_runs', 'max_feedback_runs',
+                                      'slot_base_state', 'slot_base_scale_factors'}
+                    task_state = {k: v for k, v in data.items() if k not in framework_keys}
+                    logger.warning(f"Task '{loaded_task_id}' not registered, migrated all extra keys: {list(task_state.keys())}")
 
-            # Load slot_base_scale_factors (convert string keys back to int)
-            slot_base_scale_factors_raw = data.get('slot_base_scale_factors', {})
-            slot_base_scale_factors = {int(k): v for k, v in slot_base_scale_factors_raw.items()}
+            # Load slot_base_state (convert string keys back to int)
+            slot_base_state_raw = data.get('slot_base_state', {})
+            slot_base_state = {int(k): v for k, v in slot_base_state_raw.items()}
 
             state = cls(
                 session_dir=session_dir,
@@ -455,7 +394,7 @@ class SessionState:
                     RunInfo.from_dict(r) for r in data.get('completed_runs', [])
                 ],
                 max_feedback_runs=data.get('max_feedback_runs', 5),
-                slot_base_scale_factors=slot_base_scale_factors,
+                slot_base_state=slot_base_state,
             )
             logger.info(f"Loaded session state from {state_file}")
             logger.info(f"  Task: {state.task_id}")
@@ -469,15 +408,15 @@ class SessionState:
             return cls.create_for_task(session_dir, task_id)
 
     @classmethod
-    def reset(cls, session_dir: Path, task_id: str = "ball") -> "SessionState":
+    def reset(cls, session_dir: Path, task_id: str = "unknown") -> "SessionState":
         """Reset session state by deleting existing state file.
 
         Parameters
         ----------
         session_dir : Path
             Directory containing session_state.json
-        task_id : str, optional
-            Task identifier for fresh state (default: "ball")
+        task_id : str
+            Task identifier for fresh state
 
         Returns
         -------
@@ -494,7 +433,7 @@ class SessionState:
         return cls.create_for_task(session_dir, task_id)
 
     # -------------------------------------------------------------------------
-    # Run recording (with backwards-compatible BallTask support)
+    # Run recording
     # -------------------------------------------------------------------------
 
     def record_run(
@@ -502,25 +441,16 @@ class SessionState:
         run_type: str,
         volumes_processed: int,
         task_state_snapshot: Optional[Dict[str, Any]] = None,
-        # Legacy parameters for BallTask backwards compatibility
-        hit_counters: Optional[list[int]] = None,
-        scale_factor: Optional[float] = None,
-        circle_radii: Optional[list[float]] = None,
-        min_hits_threshold: int = 3,
-        max_hits_threshold: int = 5,
-        scale_adjust_factor: float = 0.25,
         # Slot-based tracking parameters
         slot_run_number: Optional[int] = None,
         acq: Optional[int] = None,
     ) -> None:
-        """Record a completed run and update state.
+        """Record a completed run and update task state.
 
-        For BallTask, also applies adaptive difficulty adjustment to scale_factor:
-        - If total hits < min_hits_threshold: increase scale_factor
-        - If either network > max_hits_threshold: decrease scale_factor
-
-        Scale factor adjustment only happens when moving to a new run slot, not
-        on retries (acq > 1) of the same slot.
+        Tasks should apply their own adaptive logic (e.g., difficulty
+        adjustment) to the snapshot *before* calling this method. This
+        method simply records the run and updates persistent task_state
+        from the snapshot.
 
         Parameters
         ----------
@@ -529,35 +459,15 @@ class SessionState:
         volumes_processed : int
             Number of volumes processed in this run
         task_state_snapshot : dict, optional
-            Snapshot of task state at end of run (generic tasks)
-        hit_counters : list[int], optional
-            Hit counts from this run (BallTask legacy)
-        scale_factor : float, optional
-            Final scale factor at end of run (BallTask legacy)
-        circle_radii : list[float], optional
-            Final circle radii at end of run (BallTask legacy)
-        min_hits_threshold : int, default=3
-            If total hits < this, increase scale_factor
-        max_hits_threshold : int, default=5
-            If either network > this, decrease scale_factor
-        scale_adjust_factor : float, default=0.25
-            Fraction to adjust scale_factor by (0.25 = 25%)
+            Snapshot of task state at end of run. All keys in this dict
+            will be merged into the persistent task_state.
         slot_run_number : int, optional
             The run slot number (1 or 2). If provided, tracks runs by slot.
         acq : int, optional
             The acquisition number (1, 2, 3, ...). Used for retry tracking.
         """
-        # Build task state snapshot
         if task_state_snapshot is None:
             task_state_snapshot = {}
-
-        # Include legacy fields in snapshot if provided
-        if hit_counters is not None:
-            task_state_snapshot['hit_counters'] = hit_counters.copy()
-        if scale_factor is not None:
-            task_state_snapshot['scale_factor'] = scale_factor
-        if circle_radii is not None:
-            task_state_snapshot['circle_radii'] = circle_radii.copy()
 
         # Determine if this is a retry (acq > 1 for same slot)
         is_retry = False
@@ -580,78 +490,40 @@ class SessionState:
             run_type=run_type,
             volumes_processed=volumes_processed,
             task_state_snapshot=task_state_snapshot,
-            # Legacy fields
-            hit_counters=hit_counters.copy() if hit_counters else None,
-            final_scale_factor=scale_factor,
-            final_circle_radii=circle_radii.copy() if circle_radii else None,
-            # Slot-based tracking
             slot_run_number=slot_run_number,
             acq=acq,
         )
 
         if is_retry and existing_run_idx is not None:
-            # Replace existing run for this slot (this is a retry)
             old_run = self.completed_runs[existing_run_idx]
             logger.info(f"Replacing run for slot {slot_run_number} (acq {old_run.acq} → {acq})")
-
-            # For retries, we need to subtract the old hits before adding the new ones
-            if hit_counters is not None and old_run.hit_counters is not None:
-                current_hits = self.hit_counters
-                # Subtract old hits
-                self.hit_counters = [
-                    current_hits[i] - old_run.hit_counters[i]
-                    for i in range(min(len(current_hits), len(old_run.hit_counters)))
-                ]
-
             self.completed_runs[existing_run_idx] = run_info
         else:
             self.completed_runs.append(run_info)
 
-        # BallTask-specific: update cumulative hit counters
-        if hit_counters is not None:
-            current_hits = self.hit_counters
-            self.hit_counters = [
-                current_hits[i] + hit_counters[i]
-                for i in range(min(len(current_hits), len(hit_counters)))
-            ]
+        # Update persistent task_state from snapshot
+        self.task_state.update(task_state_snapshot)
 
-        if circle_radii is not None:
-            self.circle_radii = circle_radii.copy()
-
-        # BallTask-specific: adaptive difficulty adjustment
-        # Only adjust scale factor for NEW runs, not retries
-        if is_retry:
-            logger.info(f"  Retry (acq={acq}): skipping scale_factor adjustment")
-            # For retries, keep the already-adjusted scale factor from the first attempt
-            # (which was computed relative to the base scale factor)
-        elif hit_counters is not None and scale_factor is not None and run_type == 'feedback':
-            total_hits = sum(hit_counters)
-            max_single_network_hits = max(hit_counters)
-
-            old_scale = scale_factor
-            if max_single_network_hits > max_hits_threshold:
-                new_scale = scale_factor * (1 - scale_adjust_factor)
-                logger.info(f"  Adaptive difficulty: {max_single_network_hits} hits > {max_hits_threshold} max → "
-                           f"decreasing scale_factor {old_scale:.1f} → {new_scale:.1f}")
-            elif total_hits < min_hits_threshold:
-                new_scale = scale_factor * (1 + scale_adjust_factor)
-                logger.info(f"  Adaptive difficulty: {total_hits} total hits < {min_hits_threshold} min → "
-                           f"increasing scale_factor {old_scale:.1f} → {new_scale:.1f}")
-            else:
-                new_scale = scale_factor
-                logger.info(f"  Adaptive difficulty: hits in range → keeping scale_factor at {new_scale:.1f}")
-
-            self.scale_factor = new_scale
-        elif scale_factor is not None and not is_retry:
-            self.scale_factor = scale_factor
-            if run_type == 'transfer':
-                logger.info(f"  Transfer run - no adaptive difficulty adjustment")
+        # Filter to only metadata-declared keys (prevents stale keys from
+        # old task types or pre-refactor data from lingering)
+        try:
+            from .task_registry import get_task_metadata
+            metadata = get_task_metadata(self.task_id)
+            known_keys = {f.key for f in metadata.session_state_fields}
+            # Also keep any keys from the current snapshot (task may use
+            # ad-hoc keys not declared in metadata)
+            known_keys.update(task_state_snapshot.keys())
+            stale = set(self.task_state.keys()) - known_keys
+            if stale:
+                for k in stale:
+                    del self.task_state[k]
+                logger.info(f"Removed stale task state keys: {stale}")
+        except (ValueError, ImportError):
+            pass  # Task not registered -- keep everything
 
         self.save()
 
         logger.info(f"Recorded run {run_info.run_number} ({run_type})")
         if slot_run_number is not None:
             logger.info(f"  Slot: {slot_run_number}, Acq: {acq}")
-        if hit_counters is not None:
-            logger.info(f"  Hits this run: {hit_counters}")
-            logger.info(f"  Cumulative hits: {self.hit_counters}")
+        logger.info(f"  Task state: {self.task_state}")

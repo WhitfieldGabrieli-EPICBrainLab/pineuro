@@ -24,7 +24,7 @@ Configuration Dataclasses:
 - ScanConfig: Scanner/acquisition parameters
 - MaskConfig: Mask extraction parameters
 - FeedbackConfig: Feedback session parameters
-- TaskConfig: BallTask parameters
+- TaskConfig: Generic task parameters (task_type, task_params, network_assignment)
 - VisitConfig: Visit-level configuration for multi-visit studies
 - ShamConfig: Sham/control condition configuration
 - SessionConfig: Top-level config combining all above
@@ -628,6 +628,19 @@ class MaskConfig:
         Drift model for task-based extraction: "cosine", "polynomial", or "none".
     threshold : int
         Number of voxels per mask.
+    threshold_method : str
+        ``"top_n"`` (default) selects the top N voxels by stat value.
+        ``"cluster"`` uses atlas-guided iterative cluster thresholding.
+    atlas_mask : str, optional
+        Path to a binary atlas NIfTI in subject space. Used with
+        ``threshold_method="cluster"``. Mutually exclusive with ``atlas_name``.
+    atlas_name : str, optional
+        Name of a built-in atlas to fetch (e.g., ``"harvard_oxford_stg"``).
+        Used with ``threshold_method="cluster"``. Mutually exclusive with ``atlas_mask``.
+    cluster_start_threshold : float
+        Starting stat threshold for cluster search (default: 2.0).
+    cluster_step : float
+        Threshold increment per iteration (default: 0.1).
     """
     # ICA-based extraction fields
     n_yeo: int = 17
@@ -646,11 +659,20 @@ class MaskConfig:
     drift_model: str = "cosine"
     threshold: int = 2000
 
+    # Cluster-based thresholding fields
+    threshold_method: str = "top_n"
+    atlas_mask: Optional[str] = None
+    atlas_name: Optional[str] = None
+    cluster_start_threshold: float = 2.0
+    cluster_step: float = 0.1
+
     def __post_init__(self):
         if self.localizer_type not in ("rest", "task"):
             raise ValueError(f"localizer_type must be 'rest' or 'task', got '{self.localizer_type}'")
         if self.localizer_type == "task" and not self.contrasts:
             raise ValueError("contrasts must be provided when localizer_type='task'")
+        if self.threshold_method not in ("top_n", "cluster"):
+            raise ValueError(f"threshold_method must be 'top_n' or 'cluster', got '{self.threshold_method}'")
         if self.events_file is not None:
             self.events_file = Path(self.events_file)
 
@@ -680,46 +702,28 @@ class FeedbackConfig:
 
 @dataclass
 class TaskConfig:
-    """BallTask parameters.
+    """Generic task configuration.
+
+    Task-specific parameters are stored in task_params dict and passed to
+    the task factory. Network assignments map role keys (declared in
+    TaskMetadata.network_roles) to mask names.
 
     Parameters
     ----------
-    initial_scale_factor : float
-        Initial scale factor for ball movement
-    trigger_keys : list[str]
-        Scanner trigger key codes
-    left_button : str
-        Left slider button
-    right_button : str
-        Right slider button
-    enter_button : str
-        Confirm/enter button
-    min_hits_threshold : int
-        If total hits < this, increase scale_factor (ball too slow)
-    max_hits_threshold : int
-        If either network > this, decrease scale_factor (ball too fast)
-    scale_adjust_factor : float
-        Fraction to adjust scale_factor by (0.25 = 25%)
+    task_type : str
+        Registered task identifier (e.g., "ball", "thermometer")
     max_feedback_runs : int
-        Total number of feedback runs in session
-    top_network : str, optional
-        Network for upward ball movement (ball moves up when this network is more active).
-        If None, defaults to mask_names[0].
-    bottom_network : str, optional
-        Network for downward ball movement (ball moves down when this network is more active).
-        If None, defaults to mask_names[1].
+        Number of feedback runs in session
+    task_params : dict
+        Task-specific parameters (passed to create_task())
+    network_assignment : dict
+        Maps network role keys to mask names.
+        E.g., {"top_network": "ContA", "bottom_network": "DefaultA"}
     """
-    initial_scale_factor: float = 10.0
-    trigger_keys: list[str] = field(default_factory=lambda: ['t', '+', '5', 'equal'])
-    left_button: str = '1'
-    right_button: str = '2'
-    enter_button: str = '0'
-    min_hits_threshold: int = 3
-    max_hits_threshold: int = 5
-    scale_adjust_factor: float = 0.25
+    task_type: str = "ball"
     max_feedback_runs: int = 2
-    top_network: Optional[str] = None
-    bottom_network: Optional[str] = None
+    task_params: dict = field(default_factory=dict)
+    network_assignment: dict = field(default_factory=dict)
 
 
 def _path_to_str(obj):
@@ -1482,9 +1486,12 @@ def run_preprocessing(
     if rest_dicoms is None:
         rest_dicoms = config.resolve_localizer_sources()
 
+    task_type = config.scan.localizer_task_type
+    task_name = task_type if task_type != "rest" else "rest"
+
     return preprocessing(
         participant_id=config.paths.participant_id,
-        task="rest",
+        task=task_name,
         root_dir=str(config.paths.preprocessing_dir),
         input_dicoms=[str(p) for p in rest_dicoms],
         overwrite=overwrite
@@ -1538,6 +1545,12 @@ def run_mask_extraction(
             contrasts=config.mask.contrasts,
             tr=config.scan.localizer_tr,
             threshold=config.mask.threshold,
+            threshold_method=config.mask.threshold_method,
+            atlas_mask=config.mask.atlas_mask,
+            atlas_name=config.mask.atlas_name,
+            ref_file=ref_file,
+            cluster_start_threshold=config.mask.cluster_start_threshold,
+            cluster_step=config.mask.cluster_step,
             stat_type=config.mask.stat_type,
             smoothing_fwhm=config.mask.smooth_fwhm,
             high_pass=config.mask.highpass,
@@ -1825,6 +1838,9 @@ def run_single_task(
 ) -> dict:
     """Run a single task (transfer or feedback).
 
+    Uses the task registry and factory to create the appropriate task based
+    on config.task.task_type. Task-specific parameters come from config.task.task_params.
+
     Parameters
     ----------
     config : SessionConfig
@@ -1841,10 +1857,12 @@ def run_single_task(
     Returns
     -------
     dict
-        Run results including hits, scale_factor, volumes_processed
+        Run results (task-specific, always includes run_number, run_type,
+        volumes_processed)
     """
     from .feedback import run_feedback_session
-    from .tasks.ball import BallTask, compute_boxcar_task_regressor
+    from .tasks.factory import create_task
+    from .tasks.task_registry import get_task_metadata
 
     run_number = session_state.next_run_number
     task_run_number = session_state.next_run_number_for_type(run_type)
@@ -1855,21 +1873,15 @@ def run_single_task(
     logger.info(f"RUN {run_number}: {run_type.upper()} (task run {task_run_number})")
     logger.info("=" * 60)
     logger.info(f"Mode: {'FEEDBACK' if feedback_mode else 'TRANSFER (no feedback)'}")
-    logger.info(f"Scale factor: {session_state.scale_factor}")
-    logger.info(f"Circle radii: {session_state.circle_radii}")
+    logger.info(f"Task state: {session_state.task_state}")
 
-    # Compute task regressor for ball task (HRF-convolved boxcar)
-    task_regressors = compute_boxcar_task_regressor(
-        n_baseline=config.feedback.n_baseline,
-        n_volumes=config.feedback.n_volumes,
-        tr=config.scan.tr,
-    )
-    logger.info(f"Computed boxcar task regressor (baseline={config.feedback.n_baseline}, volumes={config.feedback.n_volumes})")
+    # Compute task regressors based on task metadata design_type
+    metadata = get_task_metadata(config.task.task_type)
+    task_regressors = _compute_regressors_for_task(metadata, config)
 
     # Set up simulator parameters if using simulator
     simulator_kwargs = {}
     if use_simulator:
-        # Resolve source for this specific run type and run number
         source_run_type = f"{run_type}_run-{task_run_number:02d}"
         simulator_source = config.resolve_simulator_source(source_run_type)
         simulator_kwargs = {
@@ -1878,6 +1890,9 @@ def run_single_task(
             "simulator_clear_target": True,
             "simulator_cleanup": False,
         }
+
+    # Resolve mask names from network assignment
+    task_mask_names = _resolve_mask_names(config, metadata)
 
     # Start feedback session
     session_info = run_feedback_session(
@@ -1905,29 +1920,19 @@ def run_single_task(
     )
     is_first_of_type = (completed_of_type == 0)
 
-    # Determine mask names for ball task (top/bottom network assignment)
-    # Use explicit assignment if configured, otherwise fall back to mask_names order
-    ball_mask_names = [
-        config.task.top_network or config.mask.mask_names[0],
-        config.task.bottom_network or config.mask.mask_names[1],
-    ]
+    # Build config for task factory
+    factory_config = {
+        **config.task.task_params,
+        "mask_names": task_mask_names,
+        "feedback_mode": feedback_mode,
+    }
 
-    # Create task with session state
-    task = BallTask(
-        coordinator,
-        mask_names=ball_mask_names,
-        scale_factor=session_state.scale_factor,
-        trigger_keys=config.task.trigger_keys,
-        left_button=config.task.left_button,
-        right_button=config.task.right_button,
-        enter_button=config.task.enter_button,
-        feedback_mode=feedback_mode,
-        run_number=task_run_number,
-        is_first_of_type=is_first_of_type,
+    # Create task via factory
+    task = create_task(
+        task_id=config.task.task_type,
+        coordinator=coordinator,
+        config=factory_config,
         session_state=session_state,
-        min_hits_threshold=config.task.min_hits_threshold,
-        max_hits_threshold=config.task.max_hits_threshold,
-        scale_adjust_factor=config.task.scale_adjust_factor,
     )
 
     # Register callback
@@ -1943,22 +1948,78 @@ def run_single_task(
             session_info['thread'].join(timeout=5)
         coordinator.cleanup(force=True)
 
-    results = {
-        "run_number": run_number,
-        "run_type": run_type,
-        "hits": task.hit_counters.copy(),
-        "scale_factor": task.scale_factor,
-        "circle_radii": task.circle_radii.copy(),
-        "volumes_processed": task.current_volume,
-    }
+    # Extract results generically via task contract
+    results = task.get_run_results()
+    results["run_number"] = run_number
+    results["run_type"] = run_type
 
     logger.info("")
     logger.info(f"Run {run_number} complete:")
-    logger.info(f"  Hits: {results['hits']}")
-    logger.info(f"  Scale factor: {results['scale_factor']:.1f}")
-    logger.info(f"  Volumes: {results['volumes_processed']}/{config.feedback.n_volumes}")
+    logger.info(f"  Results: {results}")
 
     return results
+
+
+def _compute_regressors_for_task(metadata, config):
+    """Compute task regressors based on metadata.design_type.
+
+    Parameters
+    ----------
+    metadata : TaskMetadata
+        Task metadata with design_type field
+    config : SessionConfig
+        Session configuration with feedback params
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Task regressors, or None for nuisance-only designs
+    """
+    from .utils import compute_boxcar_task_regressor
+
+    if metadata.design_type == "nuisance_only":
+        return None
+    elif metadata.design_type == "block":
+        regressors = compute_boxcar_task_regressor(
+            n_baseline=config.feedback.n_baseline,
+            n_volumes=config.feedback.n_volumes,
+            tr=config.scan.tr,
+        )
+        logger.info(f"Computed boxcar task regressor (baseline={config.feedback.n_baseline}, "
+                    f"volumes={config.feedback.n_volumes})")
+        return regressors
+    else:
+        logger.warning(f"Unknown design_type '{metadata.design_type}', using no task regressors")
+        return None
+
+
+def _resolve_mask_names(config, metadata):
+    """Resolve ordered mask names from network_assignment or defaults.
+
+    Parameters
+    ----------
+    config : SessionConfig
+        Session configuration with task.network_assignment and mask.mask_names
+    metadata : TaskMetadata
+        Task metadata with network_roles and n_networks
+
+    Returns
+    -------
+    list[str]
+        Ordered mask names for this task
+    """
+    if config.task.network_assignment and metadata.network_roles:
+        mask_names = []
+        for i, role in enumerate(metadata.network_roles):
+            name = config.task.network_assignment.get(role.key)
+            if name:
+                mask_names.append(name)
+            elif i < len(config.mask.mask_names):
+                mask_names.append(config.mask.mask_names[i])
+        if len(mask_names) == metadata.n_networks:
+            return mask_names
+    # Fall back to first N mask names from config
+    return config.mask.mask_names[:metadata.n_networks]
 
 
 def coregister_before_first_transfer(
@@ -2043,6 +2104,31 @@ def coregister_before_first_transfer(
 # Session Workflow
 # =============================================================================
 
+def _build_run_sequence(config: SessionConfig, n_feedback_runs: int) -> list[str]:
+    """Build the run sequence based on task configuration.
+
+    Uses the task's use_transfer_runs parameter to determine whether
+    transfer runs are included.
+
+    Parameters
+    ----------
+    config : SessionConfig
+        Session configuration
+    n_feedback_runs : int
+        Number of feedback runs
+
+    Returns
+    -------
+    list[str]
+        Ordered list of run types (e.g., ['transfer', 'feedback', 'feedback', 'transfer'])
+    """
+    use_transfers = config.task.task_params.get("use_transfer_runs", True)
+    if use_transfers:
+        return ['transfer'] + ['feedback'] * n_feedback_runs + ['transfer']
+    else:
+        return ['feedback'] * n_feedback_runs
+
+
 def run_full_session(
     config: SessionConfig,
     mask_files: list[Path],
@@ -2052,7 +2138,8 @@ def run_full_session(
 ) -> list[dict]:
     """Run a complete multi-run session.
 
-    Workflow: Transfer -> Feedback x N -> Transfer
+    Workflow depends on task config: with transfer runs it's
+    Transfer -> Feedback x N -> Transfer; without it's just Feedback x N.
 
     Parameters
     ----------
@@ -2074,19 +2161,22 @@ def run_full_session(
     """
     from .tasks.session import SessionState
 
+    run_sequence = _build_run_sequence(config, n_feedback_runs)
+
     logger.info("")
     logger.info("=" * 60)
     logger.info("STARTING MULTI-RUN SESSION")
     logger.info("=" * 60)
-    logger.info(f"Workflow: Transfer -> Feedback x {n_feedback_runs} -> Transfer")
+    logger.info(f"Task: {config.task.task_type}")
+    logger.info(f"Workflow: {' -> '.join(r.capitalize() for r in run_sequence)}")
 
     session_dir = config.paths.session_dir
     if reset_session:
-        session_state = SessionState.reset(session_dir)
+        session_state = SessionState.reset(session_dir, task_id=config.task.task_type)
         session_state.max_feedback_runs = n_feedback_runs
         session_state.save()
     else:
-        session_state = SessionState.load(session_dir)
+        session_state = SessionState.load(session_dir, task_id=config.task.task_type)
         if session_state.max_feedback_runs != n_feedback_runs:
             session_state.max_feedback_runs = n_feedback_runs
             session_state.save()
@@ -2096,9 +2186,7 @@ def run_full_session(
     all_results = []
 
     completed_count = len(session_state.completed_runs)
-    total_runs = 2 + n_feedback_runs
-
-    run_sequence = ['transfer'] + ['feedback'] * n_feedback_runs + ['transfer']
+    total_runs = len(run_sequence)
 
     logger.info(f"Completed runs: {completed_count}")
     logger.info(f"Remaining runs: {run_sequence[completed_count:]}")
@@ -2119,16 +2207,14 @@ def run_full_session(
         )
         all_results.append(results)
 
-        session_state = SessionState.load(session_dir)
+        session_state = SessionState.load(session_dir, task_id=config.task.task_type)
 
     logger.info("")
     logger.info("=" * 60)
     logger.info("SESSION COMPLETE")
     logger.info("=" * 60)
     logger.info(f"Total runs: {len(session_state.completed_runs)}")
-    logger.info(f"Cumulative hits: {session_state.hit_counters}")
-    logger.info(f"Final scale factor: {session_state.scale_factor:.1f}")
-    logger.info(f"Final circle radii: {session_state.circle_radii}")
+    logger.info(f"Final task state: {session_state.task_state}")
 
     return all_results
 
@@ -2143,8 +2229,6 @@ def run_next_task(
 
     Loads session state, determines the next run type, executes it, and exits.
     Call this repeatedly (separate script invocations) to progress through the session.
-
-    Workflow: Transfer -> Feedback x N -> Transfer
 
     Parameters
     ----------
@@ -2165,7 +2249,7 @@ def run_next_task(
     from .tasks.session import SessionState
 
     session_dir = config.paths.session_dir
-    session_state = SessionState.load(session_dir)
+    session_state = SessionState.load(session_dir, task_id=config.task.task_type)
 
     mask_files = [Path(f) for f in mask_files]
 
@@ -2173,7 +2257,7 @@ def run_next_task(
         session_state.max_feedback_runs = n_feedback_runs
         session_state.save()
 
-    run_sequence = ['transfer'] + ['feedback'] * n_feedback_runs + ['transfer']
+    run_sequence = _build_run_sequence(config, n_feedback_runs)
     total_runs = len(run_sequence)
     completed_count = len(session_state.completed_runs)
 
@@ -2183,8 +2267,7 @@ def run_next_task(
         logger.info("SESSION ALREADY COMPLETE")
         logger.info("=" * 60)
         logger.info(f"Total runs: {completed_count}")
-        logger.info(f"Cumulative hits: {session_state.hit_counters}")
-        logger.info(f"Final scale factor: {session_state.scale_factor:.1f}")
+        logger.info(f"Final task state: {session_state.task_state}")
         logger.info("Use reset_session_state() to start a new session.")
         return None
 
@@ -2225,4 +2308,4 @@ def reset_session_state(config: SessionConfig) -> "SessionState":
         Fresh session state
     """
     from .tasks.session import SessionState
-    return SessionState.reset(config.paths.session_dir)
+    return SessionState.reset(config.paths.session_dir, task_id=config.task.task_type)

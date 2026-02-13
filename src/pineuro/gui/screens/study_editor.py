@@ -134,6 +134,12 @@ class StudyEditorScreen:
                 "highpass": 0.01,
                 "lowpass": None,
                 "mask_names": ["ContA", "DefaultA"],
+                "threshold": 2000,
+                "threshold_method": "top_n",
+                "atlas_name": None,
+                "atlas_mask": None,
+                "cluster_start_threshold": 2.0,
+                "cluster_step": 0.1,
             },
             "feedback": {
                 "n_baseline": 25,
@@ -160,21 +166,7 @@ class StudyEditorScreen:
             "task": {
                 "task_type": "ball",  # Feedback task type identifier
                 "max_feedback_runs": 2,
-                # Ball task parameters
-                "ball": {
-                    "use_transfer_runs": True,
-                    "initial_scale_factor": 10.0,
-
-                    "trigger_keys": ["t", "+", "5", "equal"],
-                    "left_button": "1",
-                    "right_button": "2",
-                    "enter_button": "0",
-                    "min_hits_threshold": 3,
-                    "max_hits_threshold": 5,
-                    "scale_adjust_factor": 0.25,
-                    "top_network": None,      # Network for upward ball movement (defaults to yeo_targets[0])
-                    "bottom_network": None,   # Network for downward ball movement (defaults to yeo_targets[1])
-                },
+                # Task-specific params populated from TaskMetadata defaults
             },
             "sham": {
                 "enabled": False,
@@ -384,6 +376,72 @@ class StudyEditorScreen:
             value=str(config["mask"].get("n_components", 20)),
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_components", self.n_components_field, validate_positive_int),
+        )
+
+        self.threshold_field = ft.TextField(
+            width=600,
+            label="Voxels per mask",
+            value=str(config["mask"].get("threshold", 2000)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Number of voxels to keep per extracted mask",
+            on_change=lambda _: self._validate_field("threshold", self.threshold_field, validate_positive_int),
+        )
+
+        # --- Threshold method (top_n vs cluster) ---
+        self.threshold_method_dropdown = ft.Dropdown(
+            width=600,
+            label="Thresholding method",
+            options=[
+                ft.dropdown.Option(key="top_n", text="Top N voxels (default)"),
+                ft.dropdown.Option(key="cluster", text="Atlas-guided cluster"),
+            ],
+            value=config["mask"].get("threshold_method", "top_n"),
+            on_select=self._on_threshold_method_changed,
+        )
+
+        # Build atlas name options from registry
+        from pineuro.mask_extraction import get_atlas_region_registry
+        atlas_registry = get_atlas_region_registry()
+        atlas_options = [
+            ft.dropdown.Option(
+                key=name,
+                text=f"{name} — {entry['description']}",
+            )
+            for name, entry in sorted(atlas_registry.items())
+        ]
+        current_atlas = config["mask"].get("atlas_name") or (
+            list(atlas_registry.keys())[0] if atlas_registry else None
+        )
+        self.atlas_name_dropdown = ft.Dropdown(
+            width=600,
+            label="Atlas region",
+            options=atlas_options,
+            value=current_atlas,
+        )
+
+        self.cluster_start_threshold_field = ft.TextField(
+            width=290,
+            label="Start threshold",
+            value=str(config["mask"].get("cluster_start_threshold", 2.0)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Initial stat threshold for cluster search",
+        )
+
+        self.cluster_step_field = ft.TextField(
+            width=290,
+            label="Step size",
+            value=str(config["mask"].get("cluster_step", 0.1)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Threshold increment per iteration",
+        )
+
+        # Cluster settings section (shown/hidden based on threshold_method)
+        self.cluster_settings_section = ft.Column(
+            [
+                self.atlas_name_dropdown,
+                ft.Row([self.cluster_start_threshold_field, self.cluster_step_field]),
+            ],
+            visible=config["mask"].get("threshold_method", "top_n") == "cluster",
         )
 
         # Feedback task type selection (populated from registry)
@@ -1028,6 +1086,17 @@ class StudyEditorScreen:
         self.page.snack_bar = ft.SnackBar(ft.Text(msg), open=True)
         self.page.update()
 
+    def _on_threshold_method_changed(self, e):
+        """Handle threshold method dropdown change."""
+        method = e.control.value if e and hasattr(e, 'control') else self.threshold_method_dropdown.value
+        is_cluster = method == "cluster"
+        if hasattr(self, 'cluster_settings_section'):
+            self.cluster_settings_section.visible = is_cluster
+            try:
+                self.cluster_settings_section.update()
+            except Exception:
+                pass
+
     def _on_localizer_n_runs_changed(self, e):
         """Handle localizer n_runs field change - update paths tab visibility."""
         # Validate the field first
@@ -1606,6 +1675,18 @@ class StudyEditorScreen:
                     self.localizer_n_runs_field,
                     ft.Divider(),
                     self.networks_section,
+                    self.localizer_task_params_section,
+                    ft.Text("Mask Extraction", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Configure how network masks are extracted from the stat maps.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self.threshold_field,
+                    self.threshold_method_dropdown,
+                    self.cluster_settings_section,
+                    ft.Divider(),
                     ft.Text("Initial Reference Scan", size=16, weight=ft.FontWeight.BOLD),
                     self.twovol_initial_enabled_checkbox,
                     ft.Text(
@@ -1615,7 +1696,6 @@ class StudyEditorScreen:
                         italic=True,
                     ),
                     ft.Divider(),
-                    self.localizer_task_params_section,
                 ],
                 scroll=ft.ScrollMode.AUTO,
             ),
@@ -2428,10 +2508,32 @@ class StudyEditorScreen:
                 logger.warning(f"n_components_field has invalid value: {n_components_val!r}, using default 30")
                 n_components_val = "30"
 
+            threshold_val = self.threshold_field.value
+            if not threshold_val or threshold_val == "None":
+                logger.warning(f"threshold_field has invalid value: {threshold_val!r}, using default 2000")
+                threshold_val = "2000"
+
             config["mask"]["n_yeo"] = int(n_yeo_val)
             config["mask"]["smooth_fwhm"] = float(smooth_val)
             config["mask"]["highpass"] = float(highpass_val)
             config["mask"]["n_components"] = int(n_components_val)
+            config["mask"]["threshold"] = int(threshold_val)
+
+            # Cluster-based thresholding settings
+            threshold_method = self.threshold_method_dropdown.value or "top_n"
+            config["mask"]["threshold_method"] = threshold_method
+            if threshold_method == "cluster":
+                config["mask"]["atlas_name"] = self.atlas_name_dropdown.value
+                config["mask"]["atlas_mask"] = None
+                config["mask"]["cluster_start_threshold"] = float(
+                    self.cluster_start_threshold_field.value or 2.0
+                )
+                config["mask"]["cluster_step"] = float(
+                    self.cluster_step_field.value or 0.1
+                )
+            else:
+                config["mask"]["atlas_name"] = None
+                config["mask"]["atlas_mask"] = None
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid network parameter: {e}")
             raise ValidationError(f"Invalid network parameter: {e}")
@@ -2508,12 +2610,18 @@ class StudyEditorScreen:
             logger.error(f"Invalid task parameter: {e}")
             raise ValidationError(f"Invalid task parameter: {e}")
 
-        # Always save ball task network assignment (first network = top, second = bottom)
-        # This must be saved regardless of task_type since the dropdowns control ball behavior
-        if "ball" not in config["task"]:
-            config["task"]["ball"] = {}
-        config["task"]["ball"]["top_network"] = self.first_network_dropdown.value
-        config["task"]["ball"]["bottom_network"] = self.second_network_dropdown.value
+        # Save network assignment for current task type using its network_roles
+        task_type = config["task"].get("task_type", "ball")
+        if task_type not in config["task"]:
+            config["task"][task_type] = {}
+        try:
+            task_meta = get_task_metadata(task_type)
+            dropdowns = [self.first_network_dropdown, self.second_network_dropdown]
+            for i, role in enumerate(task_meta.network_roles):
+                if i < len(dropdowns) and dropdowns[i].value:
+                    config["task"][task_type][role.key] = dropdowns[i].value
+        except (ValueError, AttributeError):
+            pass
 
         # Update localizer task config (if not rest)
         localizer_task_type = self.localizer_task_type_dropdown.value

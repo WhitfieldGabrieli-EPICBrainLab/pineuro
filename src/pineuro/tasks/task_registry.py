@@ -35,6 +35,24 @@ _TASK_REGISTRY: Dict[str, 'TaskMetadata'] = {}
 
 
 @dataclass
+class NetworkRole:
+    """Description of a network slot required by a task.
+
+    Allows tasks to declare what each of their required network masks
+    represents, so the GUI can show appropriately labeled dropdowns
+    instead of hardcoding "top_network" / "bottom_network".
+
+    Attributes:
+        key: Identifier used in network_assignment config (e.g., "top_network")
+        label: Display label in GUI (e.g., "Top Network (upward)")
+        description: Tooltip/help text explaining this network's role
+    """
+    key: str
+    label: str
+    description: str = ""
+
+
+@dataclass
 class TaskParameter:
     """Definition of a single task parameter for GUI configuration.
 
@@ -150,6 +168,9 @@ class TaskMetadata:
         default_contrasts: Default GLM contrasts for localizer tasks. Maps
             mask name to contrast expression (e.g., {"STG_self": "self - other"}).
             Used to pre-populate the GUI; users can still edit them.
+        network_roles: Descriptions of network slots required by this task.
+            Allows the GUI to render labeled dropdowns for each network role
+            instead of hardcoding task-specific network names.
         session_state_fields: List of fields to persist across runs.
             These are stored in session_state.json and available to the task.
         post_run_questions: List of slider questions to display after each run.
@@ -167,6 +188,7 @@ class TaskMetadata:
     n_networks: int = 1
     roles: set[str] = field(default_factory=lambda: {"feedback"})
     default_contrasts: Dict[str, str] = field(default_factory=dict)
+    network_roles: List[NetworkRole] = field(default_factory=list)
     session_state_fields: List[SessionStateField] = field(default_factory=list)
     post_run_questions: List[PostRunQuestion] = field(default_factory=list)
     design_type: str = "block"

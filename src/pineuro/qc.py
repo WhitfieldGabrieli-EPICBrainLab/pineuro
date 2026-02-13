@@ -1790,7 +1790,10 @@ def generate_task_mask_extraction_report(
     logger.info(f"Generating task-based mask extraction QC report for {participant_id}")
 
     glm_dir = mask_extraction_dir / "01_glm"
-    masks_dir = mask_extraction_dir / "02_masks"
+    # Cluster method uses 03_masks/; top_n uses 02_masks/
+    masks_dir = mask_extraction_dir / "03_masks"
+    if not masks_dir.exists():
+        masks_dir = mask_extraction_dir / "02_masks"
 
     # Find BOLD reference for overlays
     preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
@@ -2258,6 +2261,89 @@ def generate_yeo_network_overlay(
         # Clean up temp file
         if temp_mask.exists():
             temp_mask.unlink()
+
+
+def generate_atlas_region_overlay(
+        atlas_subject_path: Path,
+        ref_path: Path,
+        output_dir: Path,
+        participant_id: str,
+        atlas_name: str,
+        overwrite: bool = False,
+) -> Path | None:
+    """Generate overlay of an atlas region (e.g. Harvard-Oxford) in subject space.
+
+    Used by the task mask review dialog to show the anatomical constraint
+    region alongside the extracted cluster mask — analogous to the Yeo atlas
+    overlay in the ICA review dialog.
+
+    Parameters
+    ----------
+    atlas_subject_path : Path
+        Atlas binary mask already warped to subject space (e.g.
+        ``03_masks/sub-XXX_atlas_harvard_oxford_stg.nii.gz``).
+    ref_path : Path
+        BOLD reference in subject space.
+    output_dir : Path
+        QC output directory (overlay saved into ``overlays/subject/``).
+    participant_id : str
+        Participant identifier.
+    atlas_name : str
+        Atlas name used in the filename (e.g. ``"harvard_oxford_stg"``).
+    overwrite : bool
+        Regenerate even if the overlay already exists.
+
+    Returns
+    -------
+    Path or None
+        Path to the generated PNG, or None on failure.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    overlays_dir = Path(output_dir) / "overlays" / "subject"
+    overlays_dir.mkdir(parents=True, exist_ok=True)
+    overlay_png = overlays_dir / f"{participant_id}_atlas_{atlas_name}_overlay.png"
+
+    if not overwrite and overlay_png.exists():
+        return overlay_png
+
+    atlas_subject_path = Path(atlas_subject_path)
+    ref_path = Path(ref_path)
+
+    if not atlas_subject_path.exists():
+        logger.warning(f"Atlas in subject space not found: {atlas_subject_path}")
+        return None
+    if not ref_path.exists():
+        logger.warning(f"BOLD reference not found: {ref_path}")
+        return None
+
+    logger.info(f"Generating atlas region overlay for {atlas_name}")
+
+    try:
+        atlas_img = load(atlas_subject_path)
+        n_voxels = int((atlas_img.get_fdata() > 0).sum())
+
+        atlas_slices = select_slices_from_atlas(
+            atlas_path=ref_path,
+            labels=[],
+            target_label="",
+            top_n_per_plane=1,
+            mask_path=atlas_subject_path,
+        )
+
+        plot_mask_overlay_tripanel(
+            mask_path=atlas_subject_path,
+            ref_path=ref_path,
+            out_path=overlay_png,
+            slices=atlas_slices,
+            title=f"Atlas: {atlas_name} ({n_voxels} voxels)",
+        )
+        return overlay_png
+    except Exception as ex:
+        logger.warning(f"Failed to generate atlas overlay: {ex}")
+        return None
 
 
 def generate_mask_overlay(
