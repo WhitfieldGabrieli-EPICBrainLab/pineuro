@@ -1,8 +1,7 @@
 """Cross-platform monitor detection utilities.
 
 This module provides functions to detect and select monitors across
-different platforms (macOS, Windows, Linux, WSL2). It handles platform-specific
-quirks like XWayland not reporting primary monitor status.
+different platforms (macOS, Windows, Linux).
 
 Functions
 ---------
@@ -67,10 +66,6 @@ def get_monitors() -> List[MonitorInfo]:
         List of detected monitors, sorted by x position.
         Empty list if no monitors detected or screeninfo unavailable.
 
-    Notes
-    -----
-    On WSL2/XWayland, `is_primary` will be False for all monitors.
-    Use position-based selection ("left"/"right") instead.
     """
     try:
         from screeninfo import get_monitors as si_get_monitors

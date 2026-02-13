@@ -81,11 +81,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 - **Scope**: Small
 - **Module**: `sham.py` or new `randomization.py`
 
-### 2.9 Windows Support: Add Classifier, Remove WSL Code
-- **Gap**: Windows not in pyproject.toml classifiers. WSL-specific workarounds exist but are unnecessary since all deps are pip-installable natively.
-- **Action**: Add Windows classifier to pyproject.toml. Remove all WSL-specific code/workarounds.
-- **Scope**: Small
-- **Module**: `pyproject.toml`, `display.py`, docs
+### ~~2.9 Windows Support: Add Classifier, Remove WSL Code~~ ✅
+- **Done**: Added Windows classifier to pyproject.toml. Removed `is_wsl()`, WSL-specific warnings, WSL code paths, and WSL documentation. Updated README and installation docs to remove stale FSL references.
 
 ---
 
@@ -155,8 +152,8 @@ These items are deferred for later consideration:
 | `src/pineuro/qc.py` | 1.3 tSNR/DVARS reporting |
 | `src/pineuro/gui/components/fd_plot.py` | 1.3 motion alerts in GUI |
 | `src/pineuro/sham.py` | 2.7 randomization generator |
-| `src/pineuro/display.py` | 2.9 remove WSL code |
-| `pyproject.toml` | 1.7 dev deps, 2.9 Windows classifier |
+| `src/pineuro/display.py` | ~~2.9 remove WSL code~~ ✅ |
+| `pyproject.toml` | 1.7 dev deps, ~~2.9 Windows classifier~~ ✅ |
 | `tests/` (new) | 1.7 formal test suite |
 | `docs/` | A.1 tutorial, A.2 expanded docs |
 | `CONTRIBUTING.md` (new) | A.6 |

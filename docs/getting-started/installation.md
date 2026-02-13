@@ -7,31 +7,25 @@ This guide covers installing pineuro and its dependencies.
 ### Supported Platforms
 - Linux (Ubuntu 20.04+, Debian 11+)
 - macOS (11.0+)
-- Windows via WSL2
+- Windows (10+)
 
 ### Hardware
 - **RAM**: 8GB minimum, 16GB recommended
 - **Storage**: 10GB for dependencies + space for data
 - **Display**: Multi-monitor support for PsychoPy tasks
 
-## Quick Install (Ubuntu/Debian)
+## Quick Install
 
 ```bash
-# Install system dependencies
-sudo apt update
-sudo apt install -y \
-    python3.11 python3.11-venv \
-    dcm2niix \
-    fsl-core
-
-# Set up FSL environment
-echo 'export FSLDIR=/usr/share/fsl' >> ~/.bashrc
-echo 'source $FSLDIR/etc/fslconf/fsl.sh' >> ~/.bashrc
-source ~/.bashrc
-
 # Create virtual environment
-python3.11 -m venv pineuro_env
-source pineuro_env/bin/activate
+python -m venv pineuro_env
+source pineuro_env/bin/activate  # Linux/macOS
+# pineuro_env\Scripts\activate   # Windows
+
+# Install system dependency: dcm2niix
+# Linux:   sudo apt install dcm2niix
+# macOS:   brew install dcm2niix
+# Windows: winget install dcm2niix
 
 # Install pineuro
 pip install -e /path/to/pineuro
@@ -39,29 +33,9 @@ pip install -e /path/to/pineuro
 
 ## Dependencies
 
-### FSL (FMRIB Software Library)
-
-FSL provides motion correction (mcflirt) and brain extraction (bet).
-
-**Ubuntu/Debian:**
-```bash
-sudo apt install fsl-core
-```
-
-**macOS (via Homebrew):**
-```bash
-brew install --cask fsl
-```
-
-**Verify installation:**
-```bash
-mcflirt --help  # Should show usage
-bet --help      # Should show usage
-```
-
 ### dcm2niix
 
-dcm2niix converts DICOM files to NIfTI format.
+dcm2niix converts DICOM files to NIfTI format. This is the only external (non-Python) dependency.
 
 **Ubuntu/Debian:**
 ```bash
@@ -73,28 +47,25 @@ sudo apt install dcm2niix
 brew install dcm2niix
 ```
 
+**Windows:**
+```bash
+winget install dcm2niix
+```
+
 **Verify installation:**
 ```bash
 dcm2niix --version  # Should show version
 ```
 
-### ANTsPy
-
-ANTsPy provides image registration. It's installed automatically with pineuro.
-
-```bash
-pip install antspyx
-```
-
 ### Python Dependencies
 
-All Python dependencies are installed automatically:
-- numpy, scipy - Numerical operations
+All Python dependencies are installed automatically via pip:
+- antspyx - Motion correction, brain extraction, registration
 - nibabel - NIfTI I/O
-- nilearn - Neuroimaging analysis (ICA, etc.)
-- pydicom - DICOM header reading
+- nilearn - Neuroimaging analysis (ICA, atlas fetching)
 - psychopy - Visual stimulus display
 - flet - GUI framework
+- numpy, scipy, pandas, matplotlib, pydicom, pyyaml, screeninfo
 
 ## Development Installation
 
@@ -102,12 +73,13 @@ For contributing to pineuro:
 
 ```bash
 # Clone repository
-git clone https://github.com/your-org/pineuro.git
+git clone https://github.com/marlvan/pineuro.git
 cd pineuro
 
 # Create environment
-python3.11 -m venv venv
-source venv/bin/activate
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+# venv\Scripts\activate   # Windows
 
 # Install in development mode
 pip install -e ".[dev]"
@@ -125,14 +97,6 @@ This will run through the core pipeline with simulated data.
 
 ## Troubleshooting
 
-### FSL not found
-
-If `mcflirt` or `bet` commands aren't found:
-
-1. Ensure FSL is installed: `ls /usr/share/fsl` or `ls $FSLDIR`
-2. Source the FSL setup: `source $FSLDIR/etc/fslconf/fsl.sh`
-3. Add to your shell profile (~/.bashrc or ~/.zshrc)
-
 ### ANTsPy installation fails
 
 ANTsPy can be slow to install (compiles from source). If it fails:
@@ -144,10 +108,6 @@ pip install antspyx --no-cache-dir
 # Or build with specific options
 CMAKE_BUILD_PARALLEL_LEVEL=4 pip install antspyx
 ```
-
-### PsychoPy display issues on WSL2
-
-WSL2 requires special configuration for PsychoPy displays. See [Platform Requirements](../technical/platform-requirements.md) for details.
 
 ## Next Steps
 

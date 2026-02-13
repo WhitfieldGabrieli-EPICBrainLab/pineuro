@@ -7,7 +7,7 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 ## Features
 
 - **Real-time DICOM processing** - Watch for incoming scanner DICOMs and process them as they arrive
-- **Robust preprocessing** - Motion correction, brain extraction, and multi-run coregistration using FSL and ANTs
+- **Robust preprocessing** - Motion correction, brain extraction, and multi-run coregistration using ANTsPy
 - **Network-based neurofeedback** - ICA-based mask extraction with Yeo atlas integration
 - **Incremental GLM estimation** - Online activation computation using Gentleman's algorithm for numerical stability
 - **Task framework** - Thread-safe PsychoPy integration for custom neurofeedback tasks
@@ -17,17 +17,14 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 
 ### Prerequisites
 
-pineuro requires the following external tools:
-
-- **FSL** (FMRIB Software Library) - For preprocessing operations
-  - Install from: https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation
-  - Required commands: `mcflirt`, `bet`, `fslmaths`, `fslmerge`, `convert_xfm`
-
-- **ANTs** (Advanced Normalization Tools) - For registration
-  - Install ANTsPy: `pip install antspyx`
+pineuro requires one external tool:
 
 - **dcm2niix** - For DICOM to NIfTI conversion
-  - Install from: https://github.com/rordenlab/dcm2niix
+  - Linux: `sudo apt install dcm2niix`
+  - macOS: `brew install dcm2niix`
+  - Windows: `winget install dcm2niix`
+
+All other dependencies (including ANTsPy for registration/motion correction) are installed automatically via pip.
 
 ### Install pineuro
 
@@ -135,8 +132,8 @@ pineuro implements a sequential pipeline with numbered output directories for ea
 
 2. **Preprocessing** - Convert and prepare fMRI data
    - DICOM → NIfTI conversion (`dcm2niix`)
-   - Motion correction (`mcflirt`)
-   - Brain extraction (`bet`)
+   - Motion correction (ANTsPy rigid registration)
+   - Brain extraction (ANTsPy)
    - Multi-run coregistration (ANTs)
    - Outputs: `01_nifti/`, `02_motion_correction/`, `03_brain_extraction/`, `04_coregistered/`
 
@@ -166,7 +163,7 @@ pineuro implements a sequential pipeline with numbered output directories for ea
 - **`simulator.py`** - DICOM replay for offline testing
 - **`session.py`** - High-level session orchestration and configuration
 - **`tasks/`** - PsychoPy task framework with example implementations
-- **`utils.py`** - FSL/ANTs command wrappers and DICOM utilities
+- **`utils.py`** - Command wrappers and DICOM utilities
 
 ## Usage Patterns
 
@@ -188,7 +185,7 @@ preprocessing(participant_id='sub-01', task='rest', root_dir='/data',
               input_dicoms='/data/raw', overwrite=True)
 ```
 
-### FSL Command Wrapper
+### Command Wrapper
 
 All external commands go through `run_command()` for consistent validation, logging, and error handling:
 
@@ -196,11 +193,11 @@ All external commands go through `run_command()` for consistent validation, logg
 from pineuro.utils import run_command
 
 run_command(
-    cmd_name='mcflirt',
-    cmd=['mcflirt', '-in', str(input_path), '-out', str(output_path)],
-    description='Motion correction with MCFLIRT',
-    inputs=input_path,  # Validated before execution
-    outputs=output_path,  # Checked for existence/overwrite
+    cmd_name='dcm2niix',
+    cmd=['dcm2niix', '-z', 'y', '-o', str(output_dir), str(input_dir)],
+    description='DICOM to NIfTI conversion',
+    inputs=input_dir,  # Validated before execution
+    outputs=output_dir,  # Checked for existence/overwrite
     overwrite=False,
 )
 ```

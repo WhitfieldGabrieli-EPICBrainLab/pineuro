@@ -13,7 +13,6 @@ PSYCHOPY_SCREEN : int
 
 Platform Detection
 ------------------
-is_wsl() : Check if running under Windows Subsystem for Linux
 is_wayland() : Check if running under Wayland display server
 get_platform() : Get normalized platform name
 
@@ -49,29 +48,6 @@ PSYCHOPY_SCREEN: int = 1
 # Platform Detection
 # =============================================================================
 
-def is_wsl() -> bool:
-    """Detect if running under Windows Subsystem for Linux (WSL).
-
-    Returns
-    -------
-    bool
-        True if running under WSL1 or WSL2, False otherwise.
-
-    Notes
-    -----
-    WSL2 with WSLg supports GUI applications but has known issues with
-    multi-monitor configurations and some X11 features.
-    """
-    if sys.platform != 'linux':
-        return False
-    try:
-        with open('/proc/version', 'r') as f:
-            version_info = f.read().lower()
-            return 'microsoft' in version_info or 'wsl' in version_info
-    except (OSError, IOError):
-        return False
-
-
 def is_wayland() -> bool:
     """Detect if running under Wayland display server.
 
@@ -88,25 +64,18 @@ def is_wayland() -> bool:
     return os.environ.get('XDG_SESSION_TYPE', '').lower() == 'wayland'
 
 
-def get_platform() -> Literal['darwin', 'linux', 'wsl', 'windows']:
+def get_platform() -> Literal['darwin', 'linux', 'windows']:
     """Get normalized platform name.
 
     Returns
     -------
     str
-        One of: 'darwin' (macOS), 'linux', 'wsl', 'windows'
-
-    Notes
-    -----
-    WSL is detected as a distinct platform from native Linux because
-    it has different display server behavior and limitations.
+        One of: 'darwin' (macOS), 'linux', 'windows'
     """
     if sys.platform == 'darwin':
         return 'darwin'
     elif sys.platform == 'win32':
         return 'windows'
-    elif is_wsl():
-        return 'wsl'
     else:
         return 'linux'
 
@@ -116,5 +85,5 @@ def get_platform() -> Literal['darwin', 'linux', 'wsl', 'windows']:
 # =============================================================================
 
 # Note: Default settings (PSYCHOPY_SCREEN=1, QC_BROWSER_SCREEN=0) are kept
-# for all platforms. On WSL2, multi-monitor may require additional setup
-# but the Xlib workaround in ball.py handles window positioning.
+# for all platforms. On Linux/Wayland, the Xlib workaround in task_base.py
+# handles window positioning.

@@ -237,9 +237,9 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
         logger.info(f"Opened QC report in browser: {html_path}")
 
         # On Linux X11, attempt to position browser window on specified screen
-        # Skip on WSL2 and Wayland where xrandr/wmctrl won't work correctly
+        # Skip on Wayland where xrandr/wmctrl won't work correctly
         if (platform.system() == 'Linux' and screen != 0
-                and not config.is_wsl() and not config.is_wayland()):
+                and not config.is_wayland()):
             try:
                 # Get screen geometry using xrandr to handle different monitor setups
                 result = subprocess.run(
@@ -294,9 +294,7 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
                 logger.debug(f"Window positioning unavailable: {type(e).__name__}")
         elif screen != 0:
             # Log why window positioning was skipped
-            if config.is_wsl():
-                logger.debug("Window positioning skipped (WSL2 detected)")
-            elif config.is_wayland():
+            if config.is_wayland():
                 logger.debug("Window positioning skipped (Wayland detected)")
             else:
                 logger.debug(f"Window positioning not supported on {platform.system()}")

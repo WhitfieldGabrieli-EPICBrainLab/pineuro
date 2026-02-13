@@ -275,27 +275,17 @@ def check_platform_requirements() -> list[str]:
     if shutil.which('dcm2niix') is None:
         warnings.append(
             "dcm2niix not found in PATH. DICOM conversion requires dcm2niix. "
-            "Install via: apt install dcm2niix (Linux) or brew install dcm2niix (macOS)"
+            "Install via: apt install dcm2niix (Linux), brew install dcm2niix (macOS), "
+            "or winget install dcm2niix (Windows)"
         )
 
     # Platform-specific warnings
-    if platform == 'wsl':
-        warnings.append(
-            "Running under WSL2: Multi-monitor PsychoPy display may not work correctly. "
-            "Single-monitor mode is recommended (pineuro.config.PSYCHOPY_SCREEN = 0)."
-        )
-
     if platform == 'linux' and config.is_wayland():
         warnings.append(
             "Wayland display server detected. Some X11-based features (window positioning) "
             "may not work. Consider using an X11/Xorg session for full compatibility."
         )
 
-    if platform == 'windows':
-        warnings.append(
-            "Native Windows is not supported. FSL and ANTsPy are not available. "
-            "Please use WSL2 (Windows Subsystem for Linux) instead."
-        )
 
     return warnings
 

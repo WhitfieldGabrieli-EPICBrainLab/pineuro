@@ -94,7 +94,7 @@ class TaskBase(ABC):
 
         IMPORTANT: Call this BEFORE win.flip(), not after. This captures the
         back buffer (what has been drawn but not yet displayed), which works
-        reliably across all platforms including WSL2/XWayland.
+        reliably across all platforms.
 
         To reduce flickering from capture overhead, this method only captures
         every Nth frame (controlled by _mirror_frame_skip) unless force=True.
@@ -127,7 +127,6 @@ class TaskBase(ABC):
             import base64
 
             # Capture back buffer (drawn content before flip)
-            # This works reliably on WSL2/XWayland where front buffer capture fails
             frame = self.win.getMovieFrame(buffer='back')
 
             # Resize to mirror dimensions (16:9 aspect ratio)
@@ -158,7 +157,7 @@ class TaskBase(ABC):
     def _move_window_xlib(self, target_x: int) -> None:
         """Move PsychoPy window to a specific x position using Xlib.
 
-        This is a workaround for WSL2/Wayland ignoring window position requests.
+        This is a workaround for Wayland ignoring window position requests.
         Uses the actual window ID from PsychoPy's window handle.
 
         Parameters
@@ -196,7 +195,7 @@ class TaskBase(ABC):
 
         Handles platform differences:
         - macOS/Windows: Uses screen parameter directly
-        - Linux/WSL2: Creates window then moves it using Xlib
+        - Linux: Creates window then moves it using Xlib
 
         Parameters
         ----------
@@ -246,7 +245,7 @@ class TaskBase(ABC):
                 **kwargs,
             )
         else:
-            # Linux (including WSL2): Wayland/XWayland ignores screen parameter.
+            # Linux: Wayland/XWayland ignores screen parameter.
             # Workaround: Create window at target size, then move it using Xlib.
             if target_monitor:
                 win_width = target_monitor.width
