@@ -62,6 +62,9 @@ class TaskBase(ABC):
         self._running = False
         self.win = None
 
+        # Shared event fired when trigger is received (for external timing sync)
+        self.trigger_event: Optional[threading.Event] = None
+
         # Mirror callback for GUI visualization
         self._mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
         self._mirror_frame_counter = 0
@@ -402,13 +405,14 @@ class TaskBase(ABC):
         self._capture_and_emit_screenshot(force=True)
         self.win.flip()
 
-        # Start simulator if present (replicates real scanner: trigger key + DICOMs)
-        if self._simulator is not None:
-            self._start_simulator_thread()
-
-        # Wait for trigger key (from real scanner or simulator's synthetic key)
+        # Clear stale keyboard events before waiting
         logger.info(f"Waiting for trigger (keys: {self.trigger_keys})...")
         event.clearEvents('keyboard')
+
+        # Start simulator if present (replicates real scanner: trigger key + DICOMs)
+        # Must be AFTER clearEvents to avoid wiping the injected trigger key
+        if self._simulator is not None:
+            self._start_simulator_thread()
         while True:
             if not self._running:
                 raise KeyboardInterrupt("Stopped by user")
@@ -418,6 +422,9 @@ class TaskBase(ABC):
                 raise KeyboardInterrupt("Escaped during trigger wait")
             if any(k in keys for k in self.trigger_keys):
                 logger.info("Trigger received, starting task")
+                # Signal external listeners (e.g., collect_dicoms timing)
+                if self.trigger_event is not None:
+                    self.trigger_event.set()
                 break
 
             core.wait(0.01)

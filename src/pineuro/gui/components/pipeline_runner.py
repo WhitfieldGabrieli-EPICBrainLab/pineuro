@@ -410,9 +410,13 @@ class PipelineRunner:
             # Rest localizer - use fixation task
             actual_task_id = "fixation"
 
+        # Shared event so collect_dicoms knows when acquisition actually starts
+        trigger_event = threading.Event()
+
         # Always launch a localizer task - it controls simulator start timing
         localizer_thread = self._launch_localizer_task(
-            run_num, actual_task_id, watch_dir, acq=acq, simulator=simulator
+            run_num, actual_task_id, watch_dir, acq=acq, simulator=simulator,
+            trigger_event=trigger_event,
         )
 
         # collect_dicoms just watches the directory - no simulator
@@ -427,6 +431,7 @@ class PipelineRunner:
             clear_output_dir=False,
             progress_callback=self.on_collection_progress,
             stop_event=self._stop_event,
+            trigger_event=trigger_event,
         )
 
         self._emit_progress(f"Collected {n_volumes} volumes to {output_dir}")
@@ -437,7 +442,7 @@ class PipelineRunner:
             localizer_thread.join(timeout=60)
             self._current_localizer_task = None
 
-    def _launch_localizer_task(self, run_num: int, task_id: str, watch_dir: Path, acq: int = 1, simulator=None) -> threading.Thread:
+    def _launch_localizer_task(self, run_num: int, task_id: str, watch_dir: Path, acq: int = 1, simulator=None, trigger_event=None) -> threading.Thread:
         """Launch a localizer PsychoPy task in a separate thread.
 
         The task runs concurrently with DICOM collection, presenting stimuli
@@ -486,6 +491,10 @@ class PipelineRunner:
             watch_dir=str(watch_dir),  # Pass watch_dir for auto-trigger on first DICOM
             simulator=simulator,  # Pass simulator for task-controlled start timing
         )
+
+        # Set trigger event for timing synchronization with collect_dicoms
+        if trigger_event is not None:
+            task.trigger_event = trigger_event
 
         # Set mirror callback if available
         if self._task_mirror_callback is not None:

@@ -1146,6 +1146,7 @@ def collect_volumes(
     poll_interval: float = 0.5,
     progress_callback: Optional[Callable[[int, int, float, Path], None]] = None,
     stop_event: Optional[threading.Event] = None,
+    trigger_event: Optional[threading.Event] = None,
 ) -> Path:
     """
     Watch for incoming volumes (DICOM or NIfTI) during scanner acquisition and collect them.
@@ -1391,8 +1392,20 @@ def collect_volumes(
     # The loop combines filesystem events (fast) with periodic scanning (reliable)
     # to ensure we never miss files.
 
-    start_time = None  # Will be set when first volume arrives
     initial_wait_start = time.time()  # Track timeout from beginning
+
+    # If a trigger event is provided, wait for it to start the elapsed timer.
+    # This synchronizes timing with the actual acquisition start (trigger moment).
+    if trigger_event is not None:
+        logger.debug("Waiting for trigger event to start elapsed timer...")
+        while not trigger_event.is_set():
+            if stop_event is not None and stop_event.is_set():
+                break
+            trigger_event.wait(timeout=0.5)
+        start_time = time.time()
+        logger.debug("Trigger event received, elapsed timer started")
+    else:
+        start_time = None  # Will be set when first volume arrives
 
     try:
         while collected_count < n_volumes:
@@ -1438,16 +1451,14 @@ def collect_volumes(
 
                 collected_count += 1
 
-                # --- Set Start Time on First Volume ---
-                # Timer starts when first DICOM arrives, not when we start waiting
+                # Set start_time on first volume if no trigger_event provided
                 if start_time is None:
                     start_time = time.time()
 
                 # --- Progress Callback ---
                 # Notify external code (GUI) of progress
                 if progress_callback is not None:
-                    # Calculate elapsed time since first volume (0 if no volumes yet)
-                    elapsed = time.time() - start_time if start_time is not None else 0.0
+                    elapsed = time.time() - start_time
                     try:
                         progress_callback(collected_count, n_volumes, elapsed, dest_path)
                     except Exception as e:
