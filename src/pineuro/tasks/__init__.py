@@ -49,6 +49,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
+from .task_base import TaskBase
 from .base import BaseTask
 from .session import SessionState
 from .utils import ActivationSmoother, ActivationNormalizer
@@ -183,6 +184,7 @@ from .fixation import FixationTask  # Registers "fixation" localizer task
 
 __all__ = [
     # Base classes
+    'TaskBase',
     'BaseTask',
     'BaseLocalizerTask',
     'BallTask',

@@ -1898,7 +1898,6 @@ class NeurofeedbackCoordinator:
         use_efficiency_weights: bool = True,
         activation_callback: Optional[Callable[[dict[str, float], int, float, bool, bool], None]] = None,
         error_callback: Optional[Callable[[Exception], None]] = None,
-        simulator=None,  # DicomSimulator instance for simulation mode
         qc_enabled: bool = True,  # Generate QC report after session completes
         fd_threshold: float = 0.5,  # FD threshold in mm for QC plots
         acq: str = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
@@ -1998,10 +1997,6 @@ class NeurofeedbackCoordinator:
             'total_ms': [],
             'queue_depth': [],
         }
-
-        # Simulator integration
-        self._simulator = simulator
-        self._simulator_thread: Optional[threading.Thread] = None
 
         # DICOM collection directory (for unified collection with rest/2vol)
         self._dicom_collection_dir = Path(dicom_collection_dir)
@@ -2155,11 +2150,6 @@ class NeurofeedbackCoordinator:
         extracted from the first DICOM file.
         """
         if self._tr is not None:
-            return self._tr
-
-        # Try to get from simulator
-        if self._simulator is not None:
-            self._tr = self._simulator.tr
             return self._tr
 
         raise ValueError(
@@ -2577,23 +2567,6 @@ class NeurofeedbackCoordinator:
             f"[proc:{total_duration:.0f}ms drift:{drift_str}ms{outlier_indicator}]{queue_warning}"
         )
 
-    def _run_simulator(self) -> None:
-        """Internal method to run simulator in background thread."""
-        try:
-            logger.info("Starting simulator thread")
-            if self._simulator is None:
-                logger.error("Simulator is not configured (self._simulator is None)")
-                return
-            for vol_num in self._simulator.copy_volumes_iter(n_volumes=self.n_volumes):
-                if self._stop_event.is_set():
-                    logger.info("Simulator stopped by stop event")
-                    break
-            logger.info("Simulator thread complete")
-        except Exception as e:
-            logger.exception(f"Simulator thread error: {e}")
-            self._error = e
-            self._stop_event.set()
-
     def run(self) -> None:
         """Run the coordinator until n_volumes processed or interrupted.
 
@@ -2603,10 +2576,6 @@ class NeurofeedbackCoordinator:
         try:
             # Initialize CSV
             self._init_csv()
-
-            if self._simulator is not None and self._simulator.clear_target:
-                self._simulator._clear_target_directory()
-                self._simulator.clear_target = False
 
             # Set up watchdog observer
             event_handler = _DicomEventHandler(self._on_new_file)
@@ -2627,17 +2596,6 @@ class NeurofeedbackCoordinator:
                 logger.info("Trigger received - starting acquisition")
 
             self._start_time = time.monotonic()
-
-            if self._simulator is not None and not self._stop_event.is_set():
-                self._simulator.start_time = self._start_time
-
-                self._simulator_thread = threading.Thread(
-                    target=self._run_simulator,
-                    daemon=False,
-                    name="SimulatorThread"
-                )
-                self._simulator_thread.start()
-                logger.info("Simulator thread started")
 
             while (
                 not self._stop_event.is_set()
@@ -2665,14 +2623,6 @@ class NeurofeedbackCoordinator:
             self._error = e
             self._stop_event.set()
         finally:
-            # Stop simulator thread if running
-            if self._simulator_thread is not None and self._simulator_thread.is_alive():
-                logger.info("Stopping simulator thread")
-                self._stop_event.set()
-                self._simulator_thread.join(timeout=5)
-                if self._simulator_thread.is_alive():
-                    logger.warning("Simulator thread did not stop gracefully")
-
             if observer is not None:
                 observer.stop()
                 observer.join()
@@ -3237,7 +3187,6 @@ def run_feedback_session(
         use_efficiency_weights=use_efficiency_weights,
         activation_callback=activation_callback,
         error_callback=error_callback,
-        simulator=simulator,
         qc_enabled=qc_enabled,
         fd_threshold=fd_threshold,
         acq=acq,
@@ -3267,4 +3216,5 @@ def run_feedback_session(
         'thread': coordinator_thread,
         'mode': mode,
         'started': True,
+        'simulator': simulator,
     }

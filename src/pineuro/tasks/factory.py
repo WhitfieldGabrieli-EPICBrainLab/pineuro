@@ -10,7 +10,7 @@ Examples
 >>> task = create_task(
 ...     task_id='ball',
 ...     coordinator=coordinator,
-...     config={'initial_scale_factor': 10.0, 'fullscreen': True},
+...     config={'initial_scale_factor': 10.0},
 ...     session_state=session_state,
 ... )
 """
@@ -60,6 +60,7 @@ def create_task(
     config: Dict[str, Any],
     session_state: Optional['SessionState'] = None,
     output_dir: Optional[str] = None,
+    simulator=None,
 ) -> BaseTask:
     """Create a task instance from registered task type.
 
@@ -77,6 +78,8 @@ def create_task(
         Session state for adaptive difficulty
     output_dir : str, optional
         Output directory for task logs
+    simulator : VolumeSimulator, optional
+        Volume simulator for offline testing
 
     Returns
     -------
@@ -123,6 +126,7 @@ def create_task(
         coordinator=coordinator,
         session_state=session_state,
         output_dir=output_dir,
+        simulator=simulator,
         **filtered_config,
     )
 
@@ -148,7 +152,7 @@ def create_localizer_task(
         Task configuration parameters (validated against metadata)
     **kwargs
         Additional keyword arguments passed to the task constructor
-        (e.g., run, trigger_keys, fullscreen, monitor_position)
+        (e.g., run, trigger_keys, monitor_position)
 
     Returns
     -------

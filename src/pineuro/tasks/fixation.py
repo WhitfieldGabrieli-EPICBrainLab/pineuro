@@ -89,7 +89,6 @@ class FixationTask(BaseLocalizerTask):
     def setup(self) -> None:
         """Create PsychoPy window."""
         self.create_window(
-            fullscreen=self.fullscreen,
             monitor_position=self.monitor_position,
         )
         logger.info(f"FixationTask setup: duration={self.duration}s")

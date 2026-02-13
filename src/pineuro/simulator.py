@@ -149,6 +149,7 @@ class VolumeSimulator:
         # Timing state
         self.start_time: Optional[float] = None
         self.volume_copied_callback: Optional[Callable[[int, float, float], None]] = None
+        self.trigger_callback: Optional[Callable[[], None]] = None
 
         if not self.source_dir.exists():
             raise FileNotFoundError(f"Source directory not found: {self.source_dir}")
@@ -316,6 +317,14 @@ class VolumeSimulator:
         # Set start time if not already set (coordinator may set it earlier)
         if self.start_time is None:
             self.start_time = time.monotonic()
+
+        # Fire trigger callback before any volume copies (replicates real
+        # scanner sending trigger key before acquiring the first volume)
+        if self.trigger_callback is not None:
+            try:
+                self.trigger_callback()
+            except Exception as e:
+                logger.error(f"Trigger callback error: {e}")
 
         volumes_copied = 0
         for i, src_file in enumerate(files_to_send):

@@ -28,11 +28,13 @@ PsychoPy tasks that need thread-safe access to live activations.
 """
 
 # Standard library imports
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 import logging
 import threading
 import time
+
+from .task_base import TaskBase
 
 if TYPE_CHECKING:
     from .session import SessionState
@@ -41,7 +43,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class BaseTask(ABC):
+class BaseTask(TaskBase):
     """Abstract base class for neurofeedback tasks.
 
     Subclasses must implement setup() and update() methods. The cleanup()
@@ -63,6 +65,8 @@ class BaseTask(ABC):
         Whether feedback is active (default: True)
     session_state : SessionState, optional
         Session state for persistence across runs
+    simulator : VolumeSimulator, optional
+        Volume simulator for offline testing
 
     Attributes
     ----------
@@ -101,8 +105,15 @@ class BaseTask(ABC):
         refresh_rate: float = 60.0,
         feedback_mode: bool = True,
         session_state: Optional["SessionState"] = None,
+        simulator=None,
         **kwargs,  # Accept additional kwargs for subclass compatibility
     ):
+        super().__init__(
+            trigger_keys=kwargs.pop('trigger_keys', None),
+            simulator=simulator,
+            **kwargs,
+        )
+
         self.coordinator = coordinator
         self.mask_name = mask_name or coordinator.mask_names[0]
         self.refresh_rate = refresh_rate
@@ -124,13 +135,6 @@ class BaseTask(ABC):
             'is_baseline': True,
         }
 
-        self._running = False
-
-        # Mirror callback for GUI visualization
-        self._mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-        self._mirror_frame_counter = 0
-        self._mirror_frame_skip = 4  # Only capture every Nth frame to reduce overhead
-
     def get_task_metadata(self):
         """Get metadata for this task type.
 
@@ -146,17 +150,9 @@ class BaseTask(ABC):
         except ValueError:
             return None
 
-    def set_mirror_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
-        """Set callback for GUI mirroring.
-
-        The callback receives visual state each frame for rendering in a GUI mirror.
-
-        Parameters
-        ----------
-        callback : Callable[[Dict[str, Any]], None]
-            Function that receives the visual state dictionary from get_mirror_state()
-        """
-        self._mirror_callback = callback
+    # =========================================================================
+    # Mirror state (vector-based, for structured GUI rendering)
+    # =========================================================================
 
     def get_mirror_state(self) -> Dict[str, Any]:
         """Return current visual state for GUI mirroring.
@@ -190,70 +186,9 @@ class BaseTask(ABC):
             except Exception as e:
                 logger.debug(f"Mirror callback failed: {e}")
 
-    def _capture_and_emit_screenshot(self, force: bool = False) -> None:
-        """Capture current PsychoPy frame and emit to mirror callback.
-
-        This provides a true mirror of exactly what participants see on the
-        PsychoPy window. Works for any task without task-specific code.
-
-        IMPORTANT: Call this BEFORE win.flip(), not after. This captures the
-        back buffer (what has been drawn but not yet displayed), which works
-        reliably across all platforms including WSL2/XWayland.
-
-        To reduce flickering from capture overhead, this method only captures
-        every Nth frame (controlled by _mirror_frame_skip) unless force=True.
-
-        Parameters
-        ----------
-        force : bool
-            If True, capture immediately regardless of frame counter.
-            Use for important screens like instructions that need immediate update.
-        """
-        if self._mirror_callback is None:
-            return
-        if not hasattr(self, 'win'):
-            return
-
-        # Frame skipping: only capture every Nth frame to reduce overhead
-        # unless force=True (for important screens like instructions)
-        if not force:
-            self._mirror_frame_counter += 1
-            if self._mirror_frame_counter < self._mirror_frame_skip:
-                return
-            self._mirror_frame_counter = 0
-
-        frame = None
-        frame_resized = None
-        buffer = None
-
-        try:
-            import io
-            import base64
-
-            # Capture back buffer (drawn content before flip)
-            # This works reliably on WSL2/XWayland where front buffer capture fails
-            frame = self.win.getMovieFrame(buffer='back')
-
-            # Resize to mirror dimensions (16:9 aspect ratio)
-            frame_resized = frame.resize((480, 270))
-
-            # Convert to JPEG for faster encoding (less overhead than PNG)
-            buffer = io.BytesIO()
-            frame_resized.save(buffer, format='JPEG', quality=85)
-            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
-            # Emit to callback
-            self._mirror_callback({'type': 'screenshot', 'image': f'data:image/jpeg;base64,{img_base64}'})
-        except Exception as e:
-            logger.debug(f"Screenshot capture failed: {e}")
-        finally:
-            # Clean up PIL Images and BytesIO to prevent memory leaks
-            if buffer is not None:
-                buffer.close()
-            if frame_resized is not None:
-                frame_resized.close()
-            if frame is not None:
-                frame.close()
+    # =========================================================================
+    # Thread-safe Coordinator Data Access
+    # =========================================================================
 
     def _update_data(
         self,
@@ -494,6 +429,10 @@ class BaseTask(ABC):
         logger.info(f"Post-run questions complete: {len(responses)} responses")
         return responses
 
+    # =========================================================================
+    # Abstract Methods
+    # =========================================================================
+
     @abstractmethod
     def setup(self):
         """Initialize PsychoPy window and stimuli.
@@ -521,15 +460,25 @@ class BaseTask(ABC):
         """
         pass
 
+    # =========================================================================
+    # Trigger Hook
+    # =========================================================================
+
+    def _on_trigger(self) -> None:
+        """Notify coordinator that trigger has been received."""
+        self.coordinator.send_trigger()
+
+    # =========================================================================
+    # Lifecycle
+    # =========================================================================
+
     def cleanup(self):
         """Clean up resources after task completes.
 
         Default implementation:
         1. Records run completion to session state (if configured)
         2. Shows post-run questions (if defined in metadata)
-        3. Closes the PsychoPy window (if exists)
-        4. Clears pending keyboard events
-        5. Resets pyglet gl_info for clean window recreation
+        3. Delegates to TaskBase.cleanup() for window/simulator/pyglet cleanup
 
         Subclasses can override to add custom cleanup logic, but should
         call super().cleanup() at the end. Set self._task_state_snapshot
@@ -552,20 +501,8 @@ class BaseTask(ABC):
         else:
             logger.info("Session was stopped - skipping post-run questions")
 
-        # Close window
-        if hasattr(self, 'win') and self.win is not None:
-            self.win.close()
-            self.win = None
-
-        # Clear pending events for clean state
-        try:
-            from psychopy import event
-            event.clearEvents()
-        except Exception:
-            pass
-
-        # Reset pyglet gl_info for clean window recreation
-        self._reset_pyglet_gl_info()
+        # Delegate to TaskBase for window/simulator/pyglet cleanup
+        super().cleanup()
 
     def run(self):
         """Main task loop - runs in main thread for PsychoPy.
@@ -609,150 +546,8 @@ class BaseTask(ABC):
             self._running = False
             self.cleanup()
 
-    def stop(self):
-        """Signal task to stop."""
-        self._running = False
-
     # =========================================================================
-    # Improvement A: Trigger Waiting
-    # =========================================================================
-
-    def wait_for_trigger(
-        self,
-        message: str = "Waiting for scanner...",
-        trigger_keys: list = None,
-    ) -> None:
-        """Wait for scanner trigger before starting task.
-
-        Displays a message and waits for a trigger key press. Handles escape key
-        to abort, and simulation mode for automatic triggering.
-
-        Parameters
-        ----------
-        message : str
-            Text to display while waiting (default: "Waiting for scanner...")
-        trigger_keys : list of str
-            Keys that trigger acquisition start (default: ["t", "+", "5", "equal"])
-
-        Raises
-        ------
-        KeyboardInterrupt
-            If escape is pressed or stop signal received
-        """
-        from psychopy import visual, event, core
-
-        trigger_keys = trigger_keys or ["t", "+", "5", "equal"]
-
-        # Create and display waiting text
-        waiting_text = visual.TextStim(
-            self.win,
-            text=message,
-            pos=(0, 0),
-            height=0.05,
-            color='white',
-        )
-        waiting_text.draw()
-        self._capture_and_emit_screenshot(force=True)
-        self.win.flip()
-
-        # Check if we're in simulation mode (coordinator has a simulator)
-        if hasattr(self.coordinator, '_simulator') and self.coordinator._simulator is not None:
-            logger.info("Simulation mode: auto-triggering")
-            core.wait(0.1)  # Brief pause to show waiting screen
-            self.coordinator.send_trigger()
-        else:
-            # Real-time mode: wait for trigger key
-            logger.info(f"Waiting for trigger (keys: {trigger_keys})...")
-            event.clearEvents('keyboard')
-            while True:
-                # Check for stop signal from GUI
-                if self.coordinator.was_stopped():
-                    logger.info("Stop signal received during trigger wait")
-                    raise KeyboardInterrupt("Stopped by user")
-
-                keys = event.getKeys(keyList=trigger_keys + ['escape'])
-                if 'escape' in keys:
-                    raise KeyboardInterrupt("Escaped during trigger wait")
-                if any(k in keys for k in trigger_keys):
-                    logger.info("Trigger received, starting task")
-                    self.coordinator.send_trigger()
-                    break
-
-                core.wait(0.01)
-
-    # =========================================================================
-    # Improvement B: Instructions Display
-    # =========================================================================
-
-    def show_instructions(
-        self,
-        slides: list,
-        advance_keys: list = None,
-        text_height: float = 0.05,
-        wrap_width: float = 1.5,
-    ) -> None:
-        """Display instruction slides, advancing on key press.
-
-        Shows a sequence of text slides. User advances through them by pressing
-        any of the advance keys. Escape aborts the task.
-
-        Parameters
-        ----------
-        slides : list of str
-            Text content for each slide
-        advance_keys : list of str
-            Keys that advance to next slide (default: ["space", "return", "1", "2", "3"])
-        text_height : float
-            Height of text (default: 0.05)
-        wrap_width : float
-            Width for text wrapping (default: 1.5)
-
-        Raises
-        ------
-        KeyboardInterrupt
-            If escape is pressed or stop signal received
-        """
-        from psychopy import visual, event, core
-
-        advance_keys = advance_keys or ["space", "return", "1", "2", "3"]
-
-        # Create instruction text stimulus
-        instruction_text = visual.TextStim(
-            self.win,
-            text='',
-            pos=(0, 0),
-            height=text_height,
-            wrapWidth=wrap_width,
-            color='white',
-            alignText='center',
-        )
-
-        for i, slide_text in enumerate(slides):
-            instruction_text.text = slide_text
-            instruction_text.draw()
-            self._capture_and_emit_screenshot(force=True)
-            self.win.flip()
-
-            # Wait for advance key
-            event.clearEvents('keyboard')
-            while True:
-                # Check for stop signal from GUI
-                if hasattr(self, 'coordinator') and self.coordinator.was_stopped():
-                    logger.info("Stop signal received during instructions")
-                    raise KeyboardInterrupt("Stopped by user")
-
-                keys = event.getKeys(keyList=advance_keys + ['escape'])
-                if 'escape' in keys:
-                    raise KeyboardInterrupt("Escaped during instructions")
-                if keys:
-                    break
-
-                core.wait(0.01)
-
-        logger.info(f"Instructions complete ({len(slides)} slides)")
-
-    # =========================================================================
-    # Improvement C: Automatic Session State Recording
+    # Automatic Session State Recording
     # =========================================================================
 
     def _record_run_completion(self) -> None:
@@ -772,158 +567,3 @@ class BaseTask(ABC):
             volumes_processed=getattr(self, '_volumes_processed', 0),
             task_state_snapshot=getattr(self, '_task_state_snapshot', {}),
         )
-
-    # =========================================================================
-    # Window Management (Cross-Platform)
-    # =========================================================================
-
-    def _move_window_xlib(self, target_x: int) -> None:
-        """Move PsychoPy window to a specific x position using Xlib.
-
-        This is a workaround for WSL2/Wayland ignoring window position requests.
-        Uses the actual window ID from PsychoPy's window handle.
-
-        Parameters
-        ----------
-        target_x : int
-            X coordinate to move window to (e.g., 1920 for right monitor)
-        """
-        try:
-            from Xlib import display as xlib_display
-
-            # Get the X11 window ID from PsychoPy's pyglet window
-            window_id = self.win.winHandle._window
-
-            d = xlib_display.Display()
-            xlib_win = d.create_resource_object('window', window_id)
-            xlib_win.configure(x=target_x, y=0)
-            d.sync()
-            d.close()
-
-            logger.info(f"Moved window (id={window_id}) to x={target_x} using Xlib")
-
-        except ImportError:
-            logger.warning("Xlib not available - window positioning disabled")
-        except Exception as e:
-            logger.warning(f"Could not move window: {e}")
-
-    def create_window(
-        self,
-        fullscreen: bool = True,
-        monitor_position: str = "right",
-        size: tuple = None,
-        color: str = 'black',
-        units: str = 'height',
-        **kwargs,
-    ):
-        """Create a PsychoPy window with cross-platform monitor targeting.
-
-        Handles platform differences:
-        - macOS/Windows: Uses screen parameter directly
-        - Linux/WSL2: Creates window then moves it using Xlib
-
-        Parameters
-        ----------
-        fullscreen : bool
-            Whether to create fullscreen window (default: True)
-        monitor_position : str
-            Monitor position: "left", "right", or "primary" (default: "right")
-        size : tuple of int, optional
-            Window size (width, height). If None, uses monitor dimensions.
-        color : str
-            Background color (default: 'black')
-        units : str
-            PsychoPy units (default: 'height')
-        **kwargs
-            Additional arguments passed to visual.Window
-
-        Returns
-        -------
-        psychopy.visual.Window
-            The created window (also stored as self.win)
-        """
-        from psychopy import visual, monitors
-        from pineuro import config
-        from pineuro.display import get_monitor_by_position
-
-        platform = config.get_platform()
-
-        # Create minimal monitor to avoid "Monitor specification not found" warning
-        mon = monitors.Monitor('neurofeedback')
-
-        # Get target screen using display module
-        target_monitor = get_monitor_by_position(monitor_position)
-        if target_monitor:
-            target_screen = target_monitor.index
-            logger.info(f"Task window targeting {monitor_position} monitor: {target_monitor.name} (screen={target_screen})")
-        else:
-            target_screen = 0
-            logger.warning("No monitors detected, using screen 0")
-
-        # Platform-specific window creation
-        if platform in ('darwin', 'windows'):
-            # macOS/Windows: screen parameter works directly
-            self.win = visual.Window(
-                fullscr=fullscreen,
-                monitor=mon,
-                screen=target_screen,
-                units=units,
-                color=color,
-                allowGUI=False,
-                waitBlanking=False,
-                **kwargs,
-            )
-        else:
-            # Linux (including WSL2): Wayland/XWayland ignores screen parameter.
-            # Workaround: Create window at target size, then move it using Xlib.
-            if target_monitor:
-                win_width = target_monitor.width
-                win_height = target_monitor.height
-                target_x = target_monitor.x
-            else:
-                win_width, win_height = size or (1920, 1080)
-                target_x = 0
-
-            logger.info(f"Creating {win_width}x{win_height} window, will move to x={target_x}")
-            self.win = visual.Window(
-                fullscr=False,
-                size=(win_width, win_height),
-                pos=(0, 0),
-                monitor=mon,
-                screen=0,
-                units=units,
-                color=color,
-                allowGUI=False,
-                waitBlanking=False,
-                **kwargs,
-            )
-            self.win.flip()
-
-            # Move window to target monitor using Xlib
-            if target_x > 0:
-                import time
-                time.sleep(0.2)  # Give window time to appear
-                self._move_window_xlib(target_x)
-
-        return self.win
-
-    def _reset_pyglet_gl_info(self) -> None:
-        """Reset pyglet's gl_info state to allow clean window recreation.
-
-        Without this, gl_info retains stale OpenGL version info that causes
-        "string index out of range" errors when creating a new window.
-        Should be called in cleanup after closing the window.
-        """
-        try:
-            import pyglet.gl.gl_info as gl_info
-            # Reset the global GLInfo instance to initial state
-            gl_info.remove_active_context()
-            # Also reset the cached version/renderer info so it re-queries on next window
-            gl_info._have_info = False
-            gl_info.version = '0.0.0'
-            gl_info.vendor = ''
-            gl_info.renderer = ''
-            gl_info.extensions = set()
-            logger.debug("Reset pyglet gl_info state for clean window recreation")
-        except Exception as e:
-            logger.debug(f"Could not reset pyglet gl_info state: {e}")

@@ -313,24 +313,24 @@ class SelfOtherTask(BaseLocalizerTask):
 
     def setup(self) -> None:
         """Load stimuli and create PsychoPy window."""
-        from psychopy import sound
+        from psychopy.sound.backend_pygame import SoundPygame
 
         self._load_stim_file()
         self.create_window(
-            fullscreen=self.fullscreen,
             monitor_position=self.monitor_position,
         )
 
-        # Pre-load all audio as PsychoPy Sound objects
-        # This matches the original working implementation
-        logger.info("Pre-loading all audio as PsychoPy Sound objects...")
+        # Pre-load all audio as pygame-backed Sound objects.
+        # We use SoundPygame directly because PsychoPy's default PTB backend
+        # does not respect the OS default audio device on Windows, routing
+        # audio to the wrong output (e.g. a monitor's HDMI audio).
+        logger.info("Pre-loading all audio as SoundPygame objects...")
         for block in self._voice_blocks:
             for item in block:
                 audio_path = item["path"]
                 duration = item["duration"]
                 if audio_path not in self._preloaded_sounds:
-                    # Use PsychoPy's Sound class with duration (like original code)
-                    snd = sound.Sound(audio_path, secs=duration)
+                    snd = SoundPygame(audio_path, secs=duration)
                     snd.setVolume(1.0)
                     self._preloaded_sounds[audio_path] = snd
                     logger.info(f"  Loaded: {Path(audio_path).name} (duration={duration:.2f}s)")

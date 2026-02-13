@@ -147,7 +147,7 @@ class StudyEditorScreen:
                 "ball": {
                     "use_transfer_runs": False,
                     "initial_scale_factor": 10.0,
-                    "fullscreen": True,
+
                     "trigger_keys": ["t", "+", "5", "equal"],
                     "left_button": "1",
                     "right_button": "2",
@@ -164,7 +164,7 @@ class StudyEditorScreen:
                 "ball": {
                     "use_transfer_runs": True,
                     "initial_scale_factor": 10.0,
-                    "fullscreen": True,
+
                     "trigger_keys": ["t", "+", "5", "equal"],
                     "left_button": "1",
                     "right_button": "2",

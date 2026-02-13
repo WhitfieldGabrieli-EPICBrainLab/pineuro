@@ -121,8 +121,6 @@ class BallTask(BaseTask):
         Key for moving slider right during post-run questions.
     enter_button : str, default='0'
         Key for confirming slider selection during post-run questions.
-    fullscreen : bool, default=False
-        Whether to run in fullscreen mode
     feedback_mode : bool, default=True
         If True, ball moves based on activation (feedback mode).
         If False, ball stays stationary but all computations still occur (non-feedback/transfer mode).
@@ -174,7 +172,6 @@ class BallTask(BaseTask):
         left_button: str = '1',
         right_button: str = '2',
         enter_button: str = '0',
-        fullscreen: bool = False,
         feedback_mode: bool = True,
         run_number: int = 1,
         is_first_of_type: bool = True,
@@ -228,7 +225,6 @@ class BallTask(BaseTask):
         self.right_button = right_button
         self.enter_button = enter_button
 
-        self.fullscreen = fullscreen
         self.presenter_monitor = presenter_monitor
 
         self.ball_pos = [0.0, 0.0]
@@ -329,7 +325,6 @@ class BallTask(BaseTask):
 
         # Create window with cross-platform monitor targeting (from BaseTask)
         self.create_window(
-            fullscreen=self.fullscreen,
             monitor_position=self.presenter_monitor,
             color='black',
             units='height',
@@ -1074,13 +1069,6 @@ BALL_TASK_METADATA = TaskMetadata(
             min_value=0,
             max_value=10,
             hint="If hits > this, decrease scale factor 25%",
-        ),
-        TaskParameter(
-            key="fullscreen",
-            label="Fullscreen Mode",
-            type="bool",
-            default=True,
-            hint="Run task in fullscreen",
         ),
         TaskParameter(
             key="trigger_keys",

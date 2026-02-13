@@ -686,8 +686,6 @@ class TaskConfig:
     ----------
     initial_scale_factor : float
         Initial scale factor for ball movement
-    fullscreen : bool
-        Whether to run task in fullscreen mode
     trigger_keys : list[str]
         Scanner trigger key codes
     left_button : str
@@ -712,7 +710,6 @@ class TaskConfig:
         If None, defaults to mask_names[1].
     """
     initial_scale_factor: float = 10.0
-    fullscreen: bool = True
     trigger_keys: list[str] = field(default_factory=lambda: ['t', '+', '5', 'equal'])
     left_button: str = '1'
     right_button: str = '2'
@@ -1924,7 +1921,6 @@ def run_single_task(
         left_button=config.task.left_button,
         right_button=config.task.right_button,
         enter_button=config.task.enter_button,
-        fullscreen=config.task.fullscreen,
         feedback_mode=feedback_mode,
         run_number=task_run_number,
         is_first_of_type=is_first_of_type,

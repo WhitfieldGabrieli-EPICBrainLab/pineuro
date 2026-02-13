@@ -1347,12 +1347,14 @@ class PipelineRunner:
             }
 
             # Create task via factory (validates config against task metadata)
+            simulator = session_info.get('simulator')
             task = create_task(
                 task_id=feedback_task_type,
                 coordinator=coordinator,
                 config=factory_config,
                 session_state=session_state,
                 output_dir=str(output_dir),
+                simulator=simulator,
             )
 
             # Register callback so coordinator updates task with new activations

@@ -104,8 +104,6 @@ class ThermometerTask(BaseTask):
         Lower clamp for thermometer bar height.
     session_state : SessionState, optional
         Session state for persistence across runs.
-    fullscreen : bool
-        Whether to run in fullscreen mode.
     trigger_keys : list of str
         Keys that trigger acquisition start.
     response_keys : list of str
@@ -132,7 +130,6 @@ class ThermometerTask(BaseTask):
         activation_max: float = 1.0,
         activation_min: float = -1.0,
         session_state: Optional["SessionState"] = None,
-        fullscreen: bool = True,
         trigger_keys: Optional[list[str]] = None,
         response_keys: Optional[list[str]] = None,
         presenter_monitor: str = "right",
@@ -150,7 +147,6 @@ class ThermometerTask(BaseTask):
 
         self.mask_names = mask_names
         self.stim_dir = Path(stim_dir) if stim_dir else None
-        self.fullscreen = fullscreen
         self.trigger_keys = trigger_keys or ["t", "+", "5", "equal"]
         self.response_keys = response_keys or ["1", "2", "3", "4", "5", "6"]
         self.presenter_monitor = presenter_monitor
@@ -412,8 +408,8 @@ class ThermometerTask(BaseTask):
             # Use pre-loaded sound or load on demand
             snd = self._preloaded_sounds.get(audio_path)
             if snd is None:
-                from psychopy import sound
-                snd = sound.Sound(audio_path)
+                from psychopy.sound.backend_pygame import SoundPygame
+                snd = SoundPygame(audio_path)
 
             # Show fixation during audio
             self._fixation.draw()
@@ -648,25 +644,27 @@ class ThermometerTask(BaseTask):
 
     def setup(self):
         """Initialize PsychoPy window, load conditions, pre-load audio, create stimuli."""
-        from psychopy import visual, sound
+        from psychopy import visual
+        from psychopy.sound.backend_pygame import SoundPygame
 
         # Load conditions
         self._blocks = self._load_conditions()
 
         # Create window
         self.create_window(
-            fullscreen=self.fullscreen,
             monitor_position=self.presenter_monitor,
             color='black',
             units='height',
         )
 
-        # Pre-load all audio files
+        # Pre-load all audio files using pygame backend.
+        # We use SoundPygame directly because PsychoPy's default PTB backend
+        # does not respect the OS default audio device on Windows.
         for block in self._blocks:
             for audio_path in block.audio_files:
                 if audio_path not in self._preloaded_sounds:
                     try:
-                        self._preloaded_sounds[audio_path] = sound.Sound(audio_path)
+                        self._preloaded_sounds[audio_path] = SoundPygame(audio_path)
                     except Exception as e:
                         logger.warning(f"Could not pre-load audio {audio_path}: {e}")
 
@@ -888,13 +886,6 @@ THERMOMETER_METADATA = TaskMetadata(
             min_value=-10.0,
             max_value=-0.1,
             hint="Lower clamp for thermometer bar",
-        ),
-        TaskParameter(
-            key="fullscreen",
-            label="Fullscreen Mode",
-            type="bool",
-            default=True,
-            hint="Run task in fullscreen",
         ),
         TaskParameter(
             key="trigger_keys",
