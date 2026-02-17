@@ -693,11 +693,22 @@ class FeedbackConfig:
         Whether Siemens MoCo (motion correction) is enabled on scanner.
         When True (default), motion parameters are extracted from JSON sidecar.
         When False, uses ANTsPy multi-resolution rigid registration.
+    smooth_fwhm : float, optional
+        Gaussian spatial smoothing FWHM in mm applied to each volume before
+        voxel extraction. None (default) disables smoothing. Typical values
+        are 5.0-6.0 mm. Uses nilearn.image.smooth_img().
+    differential_pair : list of str, optional
+        Ordered pair [positive_mask, negative_mask] for differential signal
+        computation. The pipeline computes positive - negative and logs it
+        as a column in feedbacklog.tsv. None (default) disables differential.
+        Example: ["ContA", "DefaultA"] computes ContA - DefaultA.
     """
     n_baseline: int = 25
     n_volumes: int = 150
     use_efficiency_weights: bool = True
     moco_enabled: bool = True
+    smooth_fwhm: Optional[float] = None
+    differential_pair: Optional[list[str]] = None
 
 
 @dataclass
@@ -1909,6 +1920,8 @@ def run_single_task(
         mask_names=config.mask.mask_names,
         use_efficiency_weights=config.feedback.use_efficiency_weights,
         moco_enabled=config.feedback.moco_enabled,
+        smooth_fwhm=config.feedback.smooth_fwhm,
+        differential_pair=config.feedback.differential_pair,
         **simulator_kwargs
     )
 

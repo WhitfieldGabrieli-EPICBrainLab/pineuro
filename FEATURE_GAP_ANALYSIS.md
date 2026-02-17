@@ -28,11 +28,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 - **Scope**: Small-Medium
 - **Module**: `feedback.py` (`NeurofeedbackCoordinator`), `qc.py`, GUI `components/fd_plot.py`
 
-### 1.4 Differential Feedback at Pipeline Level
-- **Gap**: Differential feedback (target minus control ROI) exists at the task level (BallTask computes DMN - CEN) but not as a first-class pipeline-level signal in `FeedbackEstimator`. Not logged in `feedbacklog.tsv` as a computed value.
-- **Why**: Most common approach in the literature (Fede et al. 2020). Controls for global signal changes. Should be available to any task without reimplementation.
-- **Scope**: Small
-- **Module**: `feedback.py` (`FeedbackEstimator`), `session.py` (config)
+### ~~1.4 Differential Feedback at Pipeline Level~~ ✅
+- **Done**: Computes differential signal in `NeurofeedbackCoordinator` whenever 2+ masks are used. Direction explicitly configurable via `differential_pair` in `FeedbackConfig` (e.g., `["ContA", "DefaultA"]` = ContA - DefaultA). GUI shows two dropdowns in feedback tab when 2+ masks configured. Logged as dedicated column in `feedbacklog.tsv`. Included in activations dict delivered to tasks and in console output. In sham mode, both delivered and real differentials are logged. Falls back to first two masks if no pair configured.
 
 ### 1.5 Manual ROI Import (NIfTI Masks)
 - **Gap**: No streamlined path to import pre-defined NIfTI masks (FreeSurfer, fMRIPrep, hand-drawn) directly into the feedback pipeline.
@@ -56,11 +53,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 
 ## Tier 2: Medium Priority (Should-Have)
 
-### 2.1 Spatial Smoothing (Real-Time)
-- **Gap**: No Gaussian spatial smoothing in real-time pipeline.
-- **Why**: RTPSpy includes it. Improves SNR for smaller ROIs.
-- **Scope**: Small
-- **Module**: `feedback.py`
+### ~~2.1 Spatial Smoothing (Real-Time)~~ ✅
+- **Done**: Added optional `smooth_fwhm` parameter to `FeedbackConfig`, threaded through `FeedbackEstimator` → `NeurofeedbackCoordinator` → `run_feedback_session()`. Uses `nilearn.image.smooth_img()` per volume. GUI field in Study Editor Feedback tab. Default `None` (disabled).
 
 ### 2.2 Connectivity-Based Feedback (Sliding-Window Correlation)
 - **Gap**: No functional connectivity feedback. Only activation-based (univariate).
@@ -142,7 +136,7 @@ These items are deferred for later consideration:
 
 | File | Changes |
 |------|---------|
-| `src/pineuro/feedback.py` | 1.1 vendor parsing, 1.2 WM/CSF regressors, 1.3 QC metrics, 1.4 differential feedback, 2.1 smoothing, 2.2 connectivity estimator, 2.3 intermittent mode |
+| `src/pineuro/feedback.py` | 1.1 vendor parsing, 1.2 WM/CSF regressors, 1.3 QC metrics, ~~1.4 differential feedback~~ ✅, ~~2.1 smoothing~~ ✅, 2.2 connectivity estimator, 2.3 intermittent mode |
 | `src/pineuro/session.py` | Config dataclass extensions for all new features |
 | `src/pineuro/mask_extraction.py` | 1.5 manual ROI import, 1.6 atlas registry expansion |
 | `src/pineuro/preprocessing.py` | 1.1 vendor auto-detection, 1.2 WM/CSF mask extraction |

@@ -827,6 +827,7 @@ class FeedbackEstimator:
         sham_provider: Optional["ShamActivationProvider"] = None,
         external_motion_diff: Optional[NDArray[np.float64]] = None,
         dump_algo_vars_path: Optional[Path | str] = None,
+        smooth_fwhm: Optional[float] = None,
     ) -> None:
         if len(mask_paths) == 0:
             raise ValueError("At least one mask path required")
@@ -842,6 +843,7 @@ class FeedbackEstimator:
         self._tr = tr
         self.n_volumes = 0
         self.use_efficiency_weights = use_efficiency_weights
+        self._smooth_fwhm = smooth_fwhm
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
         self._algo_dump_fh: Optional[TextIO] = None
 
@@ -1299,6 +1301,12 @@ class FeedbackEstimator:
         # ===== 1. Load volume data =====
         # type: ignore[assignment] - nibabel load() returns SpatialImage, not Nifti1Image
         img: Nifti1Image = nib.loadsave.load(nifti_path)  # type: ignore[assignment]
+
+        # Apply spatial smoothing if configured
+        if self._smooth_fwhm is not None:
+            from nilearn.image import smooth_img
+            img = smooth_img(img, fwhm=self._smooth_fwhm)
+
         data = np.asarray(img.dataobj, dtype=np.float64)
 
         # Verify shape matches masks
@@ -1906,6 +1914,8 @@ class NeurofeedbackCoordinator:
         moco_enabled: bool = True,  # Whether Siemens MoCo is enabled on scanner
         external_motion_diff: Optional[NDArray[np.float64]] = None,  # Pre-loaded motion diff (e.g., MURFI)
         dump_algo_vars_path: Optional[Path | str] = None,  # Path to dump GLM algo vars for debugging
+        smooth_fwhm: Optional[float] = None,  # Gaussian spatial smoothing FWHM in mm per volume
+        differential_pair: Optional[list[str]] = None,  # Ordered pair [positive, negative] for differential signal
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -1957,6 +1967,25 @@ class NeurofeedbackCoordinator:
             mask_names = [p.stem for p in mask_paths_resolved]
         self.mask_names = mask_names
 
+        # Differential signal: explicit pair, or auto from first two masks
+        self._differential_name: Optional[str] = None
+        self._differential_pair: Optional[tuple[str, str]] = None
+        if differential_pair is not None and len(differential_pair) == 2:
+            m0, m1 = differential_pair
+            if m0 in self.mask_names and m1 in self.mask_names:
+                self._differential_pair = (m0, m1)
+                self._differential_name = f"{m0}-{m1}"
+            else:
+                logger.warning(
+                    f"differential_pair {differential_pair} references unknown mask names "
+                    f"(available: {self.mask_names}). Differential disabled."
+                )
+        elif len(self.mask_names) >= 2:
+            # Auto-compute from first two masks when no explicit pair given
+            m0, m1 = self.mask_names[0], self.mask_names[1]
+            self._differential_pair = (m0, m1)
+            self._differential_name = f"{m0}-{m1}"
+
         # Sham mode configuration
         self._sham_provider = sham_provider
         self._condition = condition
@@ -1974,6 +2003,7 @@ class NeurofeedbackCoordinator:
             sham_provider=sham_provider,
             external_motion_diff=external_motion_diff,
             dump_algo_vars_path=self._dump_algo_vars_path,
+            smooth_fwhm=smooth_fwhm,
         )
 
         # Processing state
@@ -2041,10 +2071,14 @@ class NeurofeedbackCoordinator:
         # Simple header: one column per mask (no _delivered/_real suffix)
         header = ["volume", "time", "is_baseline", "is_outlier", "fd", "condition"]
         header.extend(self.mask_names)
+        if self._differential_name:
+            header.append(self._differential_name)
 
         # In sham mode, add {mask}_real columns for the actual computed activations
         if self._is_sham_mode:
             header.extend([f"{name}_real" for name in self.mask_names])
+            if self._differential_name:
+                header.append(f"{self._differential_name}_real")
 
         self._csv_writer.writerow(header)
         self._csv_file.flush()
@@ -2478,6 +2512,10 @@ class NeurofeedbackCoordinator:
                     motion_source = motion_params
 
             activations = self._estimator.process_volume(nifti_path, motion_source)
+            # Compute differential signal (explicit pair)
+            if self._differential_name is not None:
+                m0, m1 = self._differential_pair
+                activations[self._differential_name] = activations.get(m0, 0.0) - activations.get(m1, 0.0)
             self.design_matrix.append(self._estimator._last_design_row)
             # Write design row incrementally (so it's not lost on interrupt)
             self._append_design_row(self._estimator._last_design_row)
@@ -2539,11 +2577,16 @@ class NeurofeedbackCoordinator:
 
         # Add activation for each mask (these are delivered values - sham or real)
         row.extend([f"{activations.get(name, 0.0):.4f}" for name in self.mask_names])
+        if self._differential_name:
+            row.append(f"{activations.get(self._differential_name, 0.0):.4f}")
 
         # In sham mode, also log the real computed activations
         if self._is_sham_mode:
             real_activations = self._estimator._last_real_activations
             row.extend([f"{real_activations.get(name, 0.0):.4f}" for name in self.mask_names])
+            if self._differential_name:
+                real_diff = real_activations.get(self._differential_pair[0], 0.0) - real_activations.get(self._differential_pair[1], 0.0)
+                row.append(f"{real_diff:.4f}")
 
         if self._csv_writer is not None:
             self._csv_writer.writerow(row)
@@ -2555,6 +2598,8 @@ class NeurofeedbackCoordinator:
         activation_str = "  ".join(
             f"{name}={activations[name]:+.3f}" for name in self.mask_names
         )
+        if self._differential_name and self._differential_name in activations:
+            activation_str += f"  diff={activations[self._differential_name]:+.3f}"
 
         queue_warning = f" [QUEUE:{queue_depth}]" if queue_depth > 0 else ""
         timing_drift_ms = timing_drift * 1000  # Convert to ms for consistency
@@ -2866,6 +2911,8 @@ def run_feedback_session(
     moco_enabled: bool = True,
     murfi_design_path: Optional[Path | str] = None,
     dump_algo_vars_path: Optional[Path | str] = None,
+    smooth_fwhm: Optional[float] = None,
+    differential_pair: Optional[list[str]] = None,
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -3195,6 +3242,8 @@ def run_feedback_session(
         moco_enabled=moco_enabled,
         external_motion_diff=external_motion_diff,
         dump_algo_vars_path=dump_algo_vars_path,
+        smooth_fwhm=smooth_fwhm,
+        differential_pair=differential_pair,
     )
 
     # Set cleanup flags for simulation mode

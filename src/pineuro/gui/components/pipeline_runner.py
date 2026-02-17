@@ -1335,6 +1335,7 @@ class PipelineRunner:
                 sham_provider=sham_provider,  # Replay provider for sham participants
                 moco_enabled=config["feedback"].get("moco_enabled", True),  # Motion correction mode
                 murfi_design_path=murfi_design_path,  # External design matrix (MURFI format)
+                smooth_fwhm=config["feedback"].get("smooth_fwhm"),  # Real-time spatial smoothing
             )
 
             # Wait for the coordinator thread to complete

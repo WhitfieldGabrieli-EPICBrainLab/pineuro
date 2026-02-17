@@ -147,6 +147,8 @@ class StudyEditorScreen:
                 "use_efficiency_weights": True,
                 "fd_threshold": 0.5,
                 "moco_enabled": True,
+                "smooth_fwhm": None,
+                "differential_pair": None,
             },
             "localizer_task": {
                 # Localizer task parameters (when not rest)
@@ -499,6 +501,53 @@ class StudyEditorScreen:
             tooltip="Uncheck if Siemens MoCo is disabled on scanner. Will use ANTsPy for motion correction.",
         )
 
+        # Real-time spatial smoothing (checkbox + conditional FWHM field)
+        rt_smooth_val = config.get("feedback", {}).get("smooth_fwhm")
+        self.rt_smooth_enabled_checkbox = ft.Checkbox(
+            label="Enable real-time spatial smoothing",
+            value=rt_smooth_val is not None,
+            on_change=self._on_rt_smooth_enabled_changed,
+        )
+        self.rt_smooth_fwhm_field = ft.TextField(
+            width=600,
+            label="Smoothing FWHM (mm)",
+            value=str(rt_smooth_val) if rt_smooth_val is not None else "6.0",
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Gaussian kernel size in mm (e.g., 5.0 or 6.0)",
+            visible=rt_smooth_val is not None,
+        )
+
+        # Differential feedback pair (two dropdowns: positive - negative)
+        # Shown automatically when 2+ masks are configured
+        diff_pair = config.get("feedback", {}).get("differential_pair")
+        mask_names_for_diff = config.get("mask", {}).get("mask_names", [])
+        diff_options = [ft.dropdown.Option(key=name, text=name) for name in mask_names_for_diff]
+        has_multi_mask = len(mask_names_for_diff) >= 2
+
+        self.differential_positive_dropdown = ft.Dropdown(
+            width=250,
+            label="Positive mask",
+            options=diff_options,
+            value=diff_pair[0] if diff_pair and len(diff_pair) == 2 else (mask_names_for_diff[0] if mask_names_for_diff else None),
+        )
+        self.differential_negative_dropdown = ft.Dropdown(
+            width=250,
+            label="Negative mask",
+            options=diff_options,
+            value=diff_pair[1] if diff_pair and len(diff_pair) == 2 else (mask_names_for_diff[1] if has_multi_mask else None),
+        )
+        self.differential_row = ft.Column(
+            [
+                ft.Text("Differential Signal", size=14, weight=ft.FontWeight.W_500),
+                ft.Row([
+                    self.differential_positive_dropdown,
+                    ft.Text("minus", size=14),
+                    self.differential_negative_dropdown,
+                ]),
+            ],
+            visible=has_multi_mask,
+        )
+
         # Create dynamic task parameter fields for current feedback task type
         self._create_task_parameter_fields()
 
@@ -779,6 +828,8 @@ class StudyEditorScreen:
             self.sham_first_network_dropdown,
             self.sham_second_network_dropdown,
             self.sham_hemisphere_network_dropdown,
+            self.differential_positive_dropdown,
+            self.differential_negative_dropdown,
         ]:
             # Clear value if it's not in the new options
             old_value = dropdown.value
@@ -856,6 +907,11 @@ class StudyEditorScreen:
         if hasattr(self, 'simulator_individual_container'):
             self.simulator_individual_container.visible = (mode == "individual")
 
+        self.page.update()
+
+    def _on_rt_smooth_enabled_changed(self, e):
+        """Toggle visibility of the smoothing FWHM field."""
+        self.rt_smooth_fwhm_field.visible = self.rt_smooth_enabled_checkbox.value
         self.page.update()
 
     def _on_sham_enabled_changed(self, e):
@@ -1137,6 +1193,10 @@ class StudyEditorScreen:
         # Update network dropdown visibility in Localizer tab
         if hasattr(self, 'second_network_dropdown'):
             self.second_network_dropdown.visible = (n_networks >= 2)
+
+        # Update differential row visibility (only for 2+ masks)
+        if hasattr(self, 'differential_row'):
+            self.differential_row.visible = (n_networks >= 2)
 
         # Update target networks label in Localizer tab
         if hasattr(self, 'target_networks_label'):
@@ -1939,6 +1999,9 @@ class StudyEditorScreen:
                     color=ft.Colors.GREY_600,
                     italic=True,
                 ),
+                self.rt_smooth_enabled_checkbox,
+                self.rt_smooth_fwhm_field,
+                self.differential_row,
                 ft.Divider(),
             ]),
             visible=True,  # Always visible for all tasks
@@ -2708,6 +2771,19 @@ class StudyEditorScreen:
             config["feedback"]["fd_threshold"] = float(self.fd_threshold_field.value)
             # Motion correction mode
             config["feedback"]["moco_enabled"] = self.moco_enabled_checkbox.value
+            # Real-time spatial smoothing
+            if self.rt_smooth_enabled_checkbox.value:
+                rt_smooth_val = self.rt_smooth_fwhm_field.value.strip()
+                config["feedback"]["smooth_fwhm"] = float(rt_smooth_val) if rt_smooth_val else 6.0
+            else:
+                config["feedback"]["smooth_fwhm"] = None
+            # Differential feedback pair (auto-enabled when 2+ masks)
+            pos = self.differential_positive_dropdown.value
+            neg = self.differential_negative_dropdown.value
+            if pos and neg and pos != neg:
+                config["feedback"]["differential_pair"] = [pos, neg]
+            else:
+                config["feedback"]["differential_pair"] = None
             # Also save to task-specific config for reference
             if task_type not in config["task"]:
                 config["task"][task_type] = {}
