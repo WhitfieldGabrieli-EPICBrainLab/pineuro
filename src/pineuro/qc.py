@@ -33,6 +33,7 @@ plot_ica_component_grid : Grid display of ICA components
 plot_activation_timeseries : Per-mask activation over time
 plot_design_matrix : GLM design matrix heatmap
 plot_fd_timeseries : Framewise displacement during feedback
+plot_dvars_timeseries : DVARS timeseries during feedback
 
 Helper Functions
 ----------------
@@ -2805,6 +2806,70 @@ def plot_fd_timeseries(
     plt.close(fig)
 
 
+def plot_dvars_timeseries(
+        feedback_log_path: Path,
+        out_path: Path,
+        n_baseline: int | None = None,
+        title: str | None = None,
+) -> None:
+    """
+    Plot DVARS timeseries from feedback log.
+
+    Parameters
+    ----------
+    feedback_log_path : Path
+        Path to feedback log TSV file
+    out_path : Path
+        Path to save the PNG
+    n_baseline : int, optional
+        Number of baseline volumes (will be shaded differently)
+    title : str, optional
+        Figure title
+    """
+    df = pd.read_csv(feedback_log_path, sep='\t')
+
+    if 'dvars' not in df.columns:
+        logger.warning("No 'dvars' column in feedback log, skipping DVARS plot")
+        return
+
+    df['dvars'] = pd.to_numeric(df['dvars'], errors='coerce')
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+
+    dvars = df['dvars'].values
+    volumes = df['volume'].values
+    n_volumes = len(dvars)
+
+    fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
+
+    ax.plot(volumes, dvars, linewidth=1.5, color='#009E73', label='DVARS')
+
+    # Shade baseline period
+    if n_baseline is not None and n_baseline > 0:
+        ax.axvspan(-0.5, n_baseline - 0.5, color='gray', alpha=0.1, label='Baseline')
+        ax.axvline(n_baseline - 0.5, color='gray', linestyle='--', linewidth=1.0, alpha=0.5)
+
+    # Summary statistics
+    mean_dvars = np.nanmean(dvars)
+    max_dvars = np.nanmax(dvars)
+    ax.text(0.02, 0.98, f'Mean DVARS: {mean_dvars:.1f}\nMax DVARS: {max_dvars:.1f}',
+            transform=ax.transAxes, fontsize=10, verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    ax.set_xlabel('Volume Index', fontweight='bold')
+    ax.set_ylabel('DVARS', fontweight='bold')
+    ax.legend(loc='upper right')
+    ax.set_xlim(-0.5, n_volumes - 0.5)
+
+    if title:
+        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+    else:
+        ax.set_title('DVARS (Temporal Derivative of RMS Variance)', fontsize=12, fontweight='bold', pad=10)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
 def generate_feedback_report(
         feedback_dir: Path,
         subject: str,
@@ -2948,6 +3013,19 @@ def generate_feedback_report(
                 summary_data['Motion quality'] = 'Moderate'
             else:
                 summary_data['Motion quality'] = 'High motion'
+
+        # DVARS statistics
+        dvars_values = pd.to_numeric(df['dvars'], errors='coerce').values
+        dvars_mean = np.nanmean(dvars_values)
+        dvars_max = np.nanmax(dvars_values)
+        summary_data['Mean DVARS'] = f'{dvars_mean:.1f}'
+        summary_data['Max DVARS'] = f'{dvars_max:.1f}'
+
+        # tSNR: use last value (most stable estimate)
+        tsnr_values = pd.to_numeric(df['tsnr'], errors='coerce').values
+        valid_tsnr = tsnr_values[np.isfinite(tsnr_values) & (tsnr_values > 0)]
+        if len(valid_tsnr) > 0:
+            summary_data['Final tSNR'] = f'{valid_tsnr[-1]:.1f}'
     else:
         summary_data['Status'] = 'NO DATA'
 
@@ -3035,6 +3113,26 @@ def generate_feedback_report(
                 'alt': 'Framewise displacement timeseries'
             })
 
+    # DVARS timeseries
+    if feedback_log.exists() and 'dvars' in df.columns:
+        sections.append({'type': 'heading', 'content': 'DVARS'})
+
+        dvars_out = output_dir / "dvars_timeseries.png"
+        if overwrite or not dvars_out.exists():
+            logger.info("Generating DVARS timeseries")
+            plot_dvars_timeseries(
+                feedback_log_path=feedback_log,
+                out_path=dvars_out,
+                n_baseline=n_baseline,
+                title=f"DVARS - {subject} (task: {task}, run: {run})"
+            )
+
+        if dvars_out.exists():
+            sections.append({
+                'type': 'single_image',
+                'path': dvars_out.relative_to(output_dir).as_posix(),
+                'alt': 'DVARS timeseries'
+            })
 
     # Design matrix
     if design_file.exists():

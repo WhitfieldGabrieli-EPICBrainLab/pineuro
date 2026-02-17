@@ -899,6 +899,16 @@ class FeedbackEstimator:
         # Framewise displacement tracking (computed each volume)
         self._latest_fd: float = 0.0
 
+        # DVARS tracking (per-volume metric: RMS of temporal derivative across voxels)
+        self._latest_dvars: float = 0.0
+        self._prev_voxel_values: Optional[NDArray[np.float64]] = None
+
+        # tSNR tracking (running aggregate via Welford's online algorithm)
+        self._latest_tsnr: float = 0.0
+        self._welford_count: int = 0
+        self._welford_mean: Optional[NDArray[np.float64]] = None
+        self._welford_m2: Optional[NDArray[np.float64]] = None
+
         # Dict to store efficiency weights per mask: {mask_name: weights_array}
         # Weights are computed from residual MSE for inverse-variance weighting
         self._weights: dict[str, NDArray[np.float64]] = {}
@@ -1149,6 +1159,67 @@ class FeedbackEstimator:
         fd = float(np.sum(np.abs(diff_mm)))
         return fd
 
+    def _compute_dvars(self, voxel_values: NDArray[np.float64]) -> float:
+        """Compute DVARS from current and previous volume's voxel values.
+
+        DVARS (Power et al., 2012) is the spatial root mean square of the
+        temporal derivative: sqrt(mean((I_t - I_{t-1})^2)) across all brain
+        mask voxels. Returns 0.0 for the first volume.
+
+        Parameters
+        ----------
+        voxel_values : ndarray
+            Voxel intensities for current volume (all mask voxels).
+
+        Returns
+        -------
+        float
+            DVARS value for this volume.
+        """
+        if self._prev_voxel_values is None:
+            return 0.0
+        diff = voxel_values - self._prev_voxel_values
+        return float(np.sqrt(np.mean(diff ** 2)))
+
+    def _update_tsnr(self, voxel_values: NDArray[np.float64]) -> float:
+        """Update running tSNR estimate using Welford's online algorithm.
+
+        tSNR = median(mean_i / std_i) across voxels, where mean and std are
+        computed incrementally (Welford, 1962). Returns 0.0 until at least
+        2 volumes have been processed.
+
+        Parameters
+        ----------
+        voxel_values : ndarray
+            Voxel intensities for current volume (all mask voxels).
+
+        Returns
+        -------
+        float
+            Current median tSNR estimate across voxels.
+        """
+        self._welford_count += 1
+        if self._welford_mean is None:
+            self._welford_mean = voxel_values.copy()
+            self._welford_m2 = np.zeros_like(voxel_values)
+            return 0.0
+
+        delta = voxel_values - self._welford_mean
+        self._welford_mean += delta / self._welford_count
+        delta2 = voxel_values - self._welford_mean
+        self._welford_m2 += delta * delta2
+
+        if self._welford_count < 2:
+            return 0.0
+
+        variance = self._welford_m2 / (self._welford_count - 1)
+        std = np.sqrt(variance)
+        valid = std > 0
+        if not np.any(valid):
+            return 0.0
+        voxel_tsnr = self._welford_mean[valid] / std[valid]
+        return float(np.median(voxel_tsnr))
+
     def _build_design_row(
         self, motion_params: NDArray[np.float64]
     ) -> NDArray[np.float64]:
@@ -1331,9 +1402,16 @@ class FeedbackEstimator:
             # Treat as JSON file path
             motion_params = self._extract_motion_params_from_json(motion_path)
 
-        # ===== 3. Compute FD and build design matrix =====
+        # ===== 3. Compute QC metrics and build design matrix =====
         # FD must be computed before _build_design_row (which updates _prev_motion)
         self._latest_fd = self._compute_fd(motion_params)
+
+        # DVARS: RMS of temporal derivative across mask voxels
+        self._latest_dvars = self._compute_dvars(voxel_values)
+        self._prev_voxel_values = voxel_values.copy()
+
+        # tSNR: running median(mean/std) across voxels (Welford's algorithm)
+        self._latest_tsnr = self._update_tsnr(voxel_values)
 
         X = self._build_design_row(motion_params)
         self._last_design_row = X
@@ -2078,7 +2156,7 @@ class NeurofeedbackCoordinator:
         self._csv_writer = csv.writer(self._csv_file, delimiter='\t')
 
         # Simple header: one column per mask (no _delivered/_real suffix)
-        header = ["volume", "time", "is_baseline", "is_outlier", "fd", "condition"]
+        header = ["volume", "time", "is_baseline", "is_outlier", "fd", "dvars", "tsnr", "condition"]
         header.extend(self.mask_names)
         if self._differential_name:
             header.append(self._differential_name)
@@ -2583,8 +2661,10 @@ class NeurofeedbackCoordinator:
         with self._lock:
             is_outlier = self._latest_is_outlier
 
-        # Get FD from estimator (computed during process_volume)
+        # Get QC metrics from estimator (computed during process_volume)
         fd = self._estimator._latest_fd
+        dvars = self._estimator._latest_dvars
+        tsnr = self._estimator._latest_tsnr
 
         # Build CSV row: one column per mask (simplified format)
         # All masks are computed and logged regardless of condition
@@ -2594,6 +2674,8 @@ class NeurofeedbackCoordinator:
             is_baseline,
             is_outlier,
             f"{fd:.4f}",
+            f"{dvars:.4f}",
+            f"{tsnr:.2f}",
             self._condition,  # Log condition (real/sham) for each volume
         ]
 
@@ -2631,7 +2713,7 @@ class NeurofeedbackCoordinator:
         logger.info(
             f"[{elapsed_time:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
             f"({status}): {activation_str} "
-            f"[proc:{total_duration:.0f}ms drift:{drift_str}ms{outlier_indicator}]{queue_warning}"
+            f"[proc:{total_duration:.0f}ms drift:{drift_str}ms FD:{fd:.2f} DVARS:{dvars:.1f}{outlier_indicator}]{queue_warning}"
         )
 
     def run(self) -> None:

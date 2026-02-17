@@ -34,6 +34,9 @@ class FeedbackSummaryData:
     fd_pct_above_threshold: float
     fd_threshold: float
     completed: bool
+    dvars_mean: float
+    dvars_max: float
+    tsnr_final: float
 
 
 def compute_feedback_summary(
@@ -88,6 +91,16 @@ def compute_feedback_summary(
 
     completed = total_volumes >= n_expected_volumes
 
+    # DVARS statistics
+    dvars_values = pd.to_numeric(df["dvars"], errors="coerce").values
+    dvars_mean = float(np.nanmean(dvars_values)) if len(dvars_values) > 0 else 0.0
+    dvars_max = float(np.nanmax(dvars_values)) if len(dvars_values) > 0 else 0.0
+
+    # tSNR: use last value (most stable estimate after convergence)
+    tsnr_values = pd.to_numeric(df["tsnr"], errors="coerce").values
+    valid_tsnr = tsnr_values[np.isfinite(tsnr_values) & (tsnr_values > 0)]
+    tsnr_final = float(valid_tsnr[-1]) if len(valid_tsnr) > 0 else 0.0
+
     return FeedbackSummaryData(
         total_volumes=total_volumes,
         baseline_volumes=baseline_volumes,
@@ -100,6 +113,9 @@ def compute_feedback_summary(
         fd_pct_above_threshold=fd_pct,
         fd_threshold=fd_threshold,
         completed=completed,
+        dvars_mean=dvars_mean,
+        dvars_max=dvars_max,
+        tsnr_final=tsnr_final,
     )
 
 
@@ -212,6 +228,7 @@ class FeedbackSummaryDialog:
             [
                 self._build_hits_card(),
                 self._build_motion_card(),
+                self._build_signal_quality_card(),
             ],
             spacing=15,
             alignment=ft.MainAxisAlignment.CENTER,
@@ -425,6 +442,76 @@ class FeedbackSummaryDialog:
                 ],
                 spacing=4,
             ),
+            padding=15,
+            bgcolor=ft.Colors.GREY_100,
+            border_radius=8,
+            border=ft.border.all(1, ft.Colors.GREY_300),
+            width=200,
+        )
+
+    def _build_signal_quality_card(self) -> ft.Control:
+        """Build the signal quality summary card (DVARS + tSNR)."""
+        data = self.summary_data
+
+        # Determine tSNR quality color
+        if data.tsnr_final >= 40:
+            tsnr_color = ft.Colors.GREEN
+            tsnr_text = "Good"
+        elif data.tsnr_final >= 20:
+            tsnr_color = ft.Colors.ORANGE
+            tsnr_text = "Moderate"
+        elif data.tsnr_final > 0:
+            tsnr_color = ft.Colors.RED
+            tsnr_text = "Low"
+        else:
+            tsnr_color = ft.Colors.GREY_500
+            tsnr_text = "N/A"
+
+        rows = [
+            ft.Row(
+                [
+                    ft.Icon(ft.Icons.INSIGHTS, color=ft.Colors.CYAN, size=20),
+                    ft.Text("Signal Quality", size=14, weight=ft.FontWeight.BOLD),
+                ],
+                spacing=8,
+            ),
+            ft.Container(height=8),
+            ft.Row(
+                [
+                    ft.Text("Mean DVARS:", size=13, color=ft.Colors.GREY_700),
+                    ft.Text(f"{data.dvars_mean:.1f}", size=13, weight=ft.FontWeight.W_500),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            ft.Row(
+                [
+                    ft.Text("Max DVARS:", size=13, color=ft.Colors.GREY_700),
+                    ft.Text(f"{data.dvars_max:.1f}", size=13, weight=ft.FontWeight.W_500),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            ft.Row(
+                [
+                    ft.Text("tSNR:", size=13, color=ft.Colors.GREY_700),
+                    ft.Text(
+                        f"{data.tsnr_final:.1f}" if data.tsnr_final > 0 else "N/A",
+                        size=13, weight=ft.FontWeight.W_500,
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            ft.Divider(height=1),
+            ft.Row(
+                [
+                    ft.Text("tSNR quality:", size=13, weight=ft.FontWeight.W_500),
+                    ft.Text(tsnr_text, size=13, weight=ft.FontWeight.BOLD, color=tsnr_color),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+        ]
+
+        return ft.Container(
+            content=ft.Column(rows, spacing=4),
             padding=15,
             bgcolor=ft.Colors.GREY_100,
             border_radius=8,

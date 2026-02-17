@@ -174,7 +174,7 @@ class FeedbackMonitor:
         log_path: Path,
         mask_names: List[str],
         n_volumes: int,
-        on_update: Callable[[int, Dict[str, float], Dict[str, float], Optional[float]], None],
+        on_update: Callable[[int, Dict[str, float], Dict[str, float], Optional[float], Optional[float], Optional[float]], None],
         poll_interval: float = 0.5,
     ):
         """Initialize the feedback monitor.
@@ -183,7 +183,7 @@ class FeedbackMonitor:
             log_path: Path to the feedbacklog.tsv file
             mask_names: List of expected mask names
             n_volumes: Expected total number of volumes
-            on_update: Callback (volume, mask_activations, motion_params, fd)
+            on_update: Callback (volume, mask_activations, motion_params, fd, dvars, tsnr)
             poll_interval: Polling interval in seconds
         """
         self.log_path = Path(log_path)
@@ -248,11 +248,13 @@ class FeedbackMonitor:
             if key.startswith("motion_") and isinstance(value, (int, float)):
                 motion_params[key] = value
 
-        # Extract framewise displacement
+        # Extract framewise displacement and QC metrics
         fd: Optional[float] = data.get("fd")
+        dvars: Optional[float] = data.get("dvars")
+        tsnr: Optional[float] = data.get("tsnr")
 
         # Call update callback
-        self.on_update(volume, mask_activations, motion_params, fd)
+        self.on_update(volume, mask_activations, motion_params, fd, dvars, tsnr)
 
 
 def get_hits_from_psychopylog(log_path: Path) -> Dict[str, int]:

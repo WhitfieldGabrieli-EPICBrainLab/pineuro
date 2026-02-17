@@ -30,7 +30,7 @@ from ..config_manager import ConfigManager
 from ..models import StudyConfig
 from ..components.pipeline_runner import PipelineRunner
 from ..components.activation_plot import ActivationPlot
-from ..components.fd_plot import FDPlot
+from ..components.fd_plot import FDPlot, DVARSPlot
 from ..components.task_mirror import TaskMirror
 from ..components.csv_poller import FeedbackMonitor
 from ..components.qc_viewer import QCReportManager
@@ -3587,6 +3587,15 @@ class ParticipantWorkflowScreen:
                 threshold=fd_threshold,
             )
 
+            # Create DVARS plot for signal quality monitoring
+            self.dvars_plot = DVARSPlot(
+                n_volumes=n_volumes,
+                height=100,
+            )
+
+            # tSNR text indicator (running aggregate, not a timeseries)
+            self._tsnr_text = ft.Text("tSNR: --", size=14, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
+
             # Create task mirror for visual feedback display
             self.task_mirror = TaskMirror(width=480, height=270)
 
@@ -3617,8 +3626,16 @@ class ParticipantWorkflowScreen:
                                         [
                                             ft.Text("Network Activation", size=14, weight=ft.FontWeight.W_500),
                                             self.activation_plot.build(),
-                                            ft.Text("Framewise Displacement", size=14, weight=ft.FontWeight.W_500),
+                                            ft.Row(
+                                                [
+                                                    ft.Text("Framewise Displacement", size=14, weight=ft.FontWeight.W_500),
+                                                    self._tsnr_text,
+                                                ],
+                                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                            ),
                                             self.fd_plot.build(),
+                                            ft.Text("DVARS", size=14, weight=ft.FontWeight.W_500),
+                                            self.dvars_plot.build(),
                                         ],
                                         spacing=5,
                                     ),
@@ -4058,7 +4075,7 @@ class ParticipantWorkflowScreen:
         except Exception:
             pass
 
-    def _on_feedback_update(self, volume: int, mask_activations: Dict[str, float], motion_params: Dict[str, float], fd: Optional[float]):
+    def _on_feedback_update(self, volume: int, mask_activations: Dict[str, float], motion_params: Dict[str, float], fd: Optional[float], dvars: Optional[float] = None, tsnr: Optional[float] = None):
         """Handle real-time feedback data update.
 
         Args:
@@ -4066,6 +4083,8 @@ class ParticipantWorkflowScreen:
             mask_activations: Dict mapping mask name to activation value
             motion_params: Dict of motion parameters
             fd: Framewise displacement in mm (None if not available)
+            dvars: DVARS value (None if not available)
+            tsnr: Running tSNR estimate (None if not available)
         """
         # Schedule UI update on main thread
         async def update_ui():
@@ -4077,6 +4096,21 @@ class ParticipantWorkflowScreen:
                 # Update FD plot
                 if hasattr(self, 'fd_plot') and self.fd_plot and fd is not None:
                     self.fd_plot.add_data(volume, fd)
+
+                # Update DVARS plot
+                if hasattr(self, 'dvars_plot') and self.dvars_plot and dvars is not None:
+                    self.dvars_plot.add_data(volume, dvars)
+
+                # Update tSNR text indicator
+                if hasattr(self, '_tsnr_text') and self._tsnr_text and tsnr is not None and tsnr > 0:
+                    self._tsnr_text.value = f"tSNR: {tsnr:.1f}"
+                    if tsnr >= 40:
+                        self._tsnr_text.color = ft.Colors.GREEN_600
+                    elif tsnr >= 20:
+                        self._tsnr_text.color = ft.Colors.ORANGE_600
+                    else:
+                        self._tsnr_text.color = ft.Colors.RED_600
+                    self._tsnr_text.update()
 
                 # Update progress
                 n_volumes = self.study_config.session_config["feedback"]["n_volumes"]

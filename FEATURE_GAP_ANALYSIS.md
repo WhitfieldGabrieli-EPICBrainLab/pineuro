@@ -22,11 +22,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 - **Scope**: Medium
 - **Module**: `feedback.py` (`FeedbackEstimator._build_design_row`), `preprocessing.py`
 
-### 1.3 Real-Time QC Metrics: tSNR, DVARS, Motion Alerts
-- **Gap**: No tSNR, no DVARS, no automated motion threshold alerts. FD is displayed but not acted upon.
-- **Why**: Davydov et al. 2022 standard rtQA metrics. OpenNFT includes rtQA. Operators need warnings when quality degrades mid-run.
-- **Scope**: Small-Medium
-- **Module**: `feedback.py` (`NeurofeedbackCoordinator`), `qc.py`, GUI `components/fd_plot.py`
+### ~~1.3 Real-Time QC Metrics: tSNR, DVARS, Motion Alerts~~ ✅
+- **Done**: Added real-time tSNR (Welford's online algorithm, median across voxels) and DVARS (RMS of temporal derivative across mask voxels) to `FeedbackEstimator`. Both metrics logged per-volume in `feedbacklog.tsv` (`dvars` and `tsnr` columns). DVARS displayed in real-time via `DVARSPlot` chart in monitoring panel. tSNR displayed as color-coded text indicator (green ≥40, orange ≥20, red <20). Post-run summary dialog includes Signal Quality card with DVARS stats and tSNR quality rating. QC report includes DVARS timeseries plot and tSNR/DVARS stats in summary box. FD monitoring with in-run alerting was already implemented.
 
 ### ~~1.4 Differential Feedback at Pipeline Level~~ ✅
 - **Done**: Computes differential signal in `NeurofeedbackCoordinator` whenever 2+ masks are used. Direction explicitly configurable via `differential_pair` in `FeedbackConfig` (e.g., `["ContA", "DefaultA"]` = ContA - DefaultA). GUI shows two dropdowns in feedback tab when 2+ masks configured. Logged as dedicated column in `feedbacklog.tsv`. Included in activations dict delivered to tasks and in console output. In sham mode, both delivered and real differentials are logged. Falls back to first two masks if no pair configured.
