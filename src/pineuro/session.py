@@ -601,8 +601,14 @@ class MaskConfig:
     ----------
     n_yeo : int
         Number of Yeo networks (7 or 17). Used for ICA-based extraction.
+        Ignored when ``network_atlas`` is explicitly set.
     yeo_targets : list[str]
         Target network names to extract. Used for ICA-based extraction.
+    network_atlas : str
+        Network atlas for ICA component identification in resting-state
+        extraction. Options: ``"yeo_7"``, ``"yeo_17"``,
+        ``"schaefer_100_7net"``, ``"schaefer_100_17net"``,
+        ``"schaefer_400_7net"``, ``"schaefer_400_17net"``.
     smooth_fwhm : float
         Spatial smoothing FWHM in mm
     highpass : float
@@ -633,10 +639,19 @@ class MaskConfig:
         ``"cluster"`` uses atlas-guided iterative cluster thresholding.
     atlas_mask : str, optional
         Path to a binary atlas NIfTI in subject space. Used with
-        ``threshold_method="cluster"``. Mutually exclusive with ``atlas_name``.
+        ``threshold_method="cluster"``. Mutually exclusive with ``atlas_name``
+        and ``atlas_source``.
     atlas_name : str, optional
-        Name of a built-in atlas to fetch (e.g., ``"harvard_oxford_stg"``).
-        Used with ``threshold_method="cluster"``. Mutually exclusive with ``atlas_mask``.
+        Legacy: name of a curated combined atlas entry (e.g., ``"harvard_oxford_stg"``).
+        Used with ``threshold_method="cluster"``. Mutually exclusive with ``atlas_mask``
+        and ``atlas_source``.
+    atlas_source : str, optional
+        Atlas source key (e.g., ``"harvard_oxford"``, ``"aal"``,
+        ``"schaefer_400_7net"``). Used with ``atlas_regions`` for cluster
+        thresholding. Mutually exclusive with ``atlas_mask`` and ``atlas_name``.
+    atlas_regions : list[str], optional
+        Region labels from the atlas to include in the cluster mask.
+        Required when ``atlas_source`` is provided.
     cluster_start_threshold : float
         Starting stat threshold for cluster search (default: 2.0).
     cluster_step : float
@@ -645,6 +660,7 @@ class MaskConfig:
     # ICA-based extraction fields
     n_yeo: int = 17
     yeo_targets: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
+    network_atlas: str = "yeo_17"
     smooth_fwhm: float = 5.0
     highpass: float = 0.01
     lowpass: Optional[float] = None
@@ -663,6 +679,8 @@ class MaskConfig:
     threshold_method: str = "top_n"
     atlas_mask: Optional[str] = None
     atlas_name: Optional[str] = None
+    atlas_source: Optional[str] = None
+    atlas_regions: Optional[list[str]] = None
     cluster_start_threshold: float = 2.0
     cluster_step: float = 0.1
 
@@ -1566,6 +1584,8 @@ def run_mask_extraction(
             threshold_method=config.mask.threshold_method,
             atlas_mask=config.mask.atlas_mask,
             atlas_name=config.mask.atlas_name,
+            atlas_source=config.mask.atlas_source,
+            atlas_regions=config.mask.atlas_regions,
             ref_file=ref_file,
             cluster_start_threshold=config.mask.cluster_start_threshold,
             cluster_step=config.mask.cluster_step,
@@ -1588,6 +1608,7 @@ def run_mask_extraction(
             ref_file=ref_file,
             n_yeo=config.mask.n_yeo,
             yeo_targets=config.mask.yeo_targets,
+            network_atlas=config.mask.network_atlas,
             smooth_fwhm=config.mask.smooth_fwhm,
             highpass=config.mask.highpass,
             lowpass=config.mask.lowpass,

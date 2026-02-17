@@ -714,6 +714,8 @@ class PipelineRunner:
             threshold_method = config.get("mask", {}).get("threshold_method", "top_n")
             atlas_mask_cfg = config.get("mask", {}).get("atlas_mask")
             atlas_name_cfg = config.get("mask", {}).get("atlas_name")
+            atlas_source_cfg = config.get("mask", {}).get("atlas_source")
+            atlas_regions_cfg = config.get("mask", {}).get("atlas_regions")
             cluster_start_threshold = config.get("mask", {}).get("cluster_start_threshold", 2.0)
             cluster_step = config.get("mask", {}).get("cluster_step", 0.1)
 
@@ -729,6 +731,8 @@ class PipelineRunner:
                 threshold_method=threshold_method,
                 atlas_mask=atlas_mask_cfg,
                 atlas_name=atlas_name_cfg,
+                atlas_source=atlas_source_cfg,
+                atlas_regions=atlas_regions_cfg,
                 ref_file=str(ref_file) if threshold_method == "cluster" else None,
                 cluster_start_threshold=cluster_start_threshold,
                 cluster_step=cluster_step,
@@ -741,6 +745,7 @@ class PipelineRunner:
         else:
             # ICA-based extraction (existing behavior)
             n_yeo = config["mask"]["n_yeo"]
+            network_atlas = config["mask"].get("network_atlas", f"yeo_{n_yeo}")
             yeo_targets = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
             n_components = config["mask"].get("n_components", 30)
             threshold = config.get("mask", {}).get("threshold", 2000)
@@ -774,6 +779,7 @@ class PipelineRunner:
                 ref_file=ref_file,
                 n_yeo=n_yeo,
                 yeo_targets=yeo_targets,
+                network_atlas=network_atlas,
                 n_components=n_components,
                 threshold=threshold,
                 smooth_fwhm=smooth_fwhm,

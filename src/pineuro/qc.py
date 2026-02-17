@@ -1479,8 +1479,10 @@ def generate_mask_extraction_report(
         ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
     ref_file = Path(ref_files[0]) if ref_files else None
 
-    # Find correlation matrix
-    corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
+    # Find correlation matrix (new name or legacy Yeo name)
+    corr_file = masks_dir / "network_IC_spatial_correlation.csv"
+    if not corr_file.exists():
+        corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
 
     # Find network masks
     network_masks = {}
@@ -2052,15 +2054,19 @@ def generate_alternative_overlays(
         return {}
     ref_file = Path(ref_files[0])
 
-    # Load correlation matrix
-    corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
+    # Load correlation matrix (new name or legacy Yeo name)
+    corr_file = masks_dir / "network_IC_spatial_correlation.csv"
+    if not corr_file.exists():
+        corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
     if not corr_file.exists():
         logger.warning("No correlation matrix found")
         return {}
     corr_df = pd.read_csv(corr_file)
 
-    # Find Yeo atlas in subject space for slice selection
+    # Find network atlas in subject space for slice selection (Yeo or Schaefer)
     yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
+    if not yeo2sub_files:
+        yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Schaefer_to_*.nii.gz")))
     yeo2sub = Path(yeo2sub_files[0]) if yeo2sub_files else None
 
     # Determine Yeo network count
@@ -2196,10 +2202,12 @@ def generate_yeo_network_overlay(
     if not overwrite and overlay_png.exists():
         return overlay_png
 
-    # Find required files
+    # Find required files (Yeo or Schaefer atlas in subject space)
     yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
     if not yeo2sub_files:
-        logger.warning("No Yeo atlas in subject space found")
+        yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Schaefer_to_*.nii.gz")))
+    if not yeo2sub_files:
+        logger.warning("No network atlas in subject space found")
         return None
     yeo2sub = Path(yeo2sub_files[0])
 
@@ -2528,8 +2536,10 @@ def generate_hemisphere_overlays(
         return {}
     ref_file = Path(ref_files[0])
 
-    # Find Yeo atlas in subject space for slice selection
+    # Find network atlas in subject space for slice selection (Yeo or Schaefer)
     yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
+    if not yeo2sub_files:
+        yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Schaefer_to_*.nii.gz")))
     yeo2sub = Path(yeo2sub_files[0]) if yeo2sub_files else None
 
     labels = get_yeo_labels(n_yeo)

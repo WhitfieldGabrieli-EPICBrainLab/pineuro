@@ -1372,7 +1372,9 @@ class MaskSelectionDialog:
             existing = load_mask_selections(self.masks_dir)
 
             # Re-read correlation matrix if it exists (updated by script)
-            corr_file = self.masks_dir / "Yeo_IC_spatial_correlation.csv"
+            corr_file = self.masks_dir / "network_IC_spatial_correlation.csv"
+            if not corr_file.exists():
+                corr_file = self.masks_dir / "Yeo_IC_spatial_correlation.csv"
             corr_df = None
             if corr_file.exists():
                 corr_df = pd.read_csv(corr_file, index_col=0)

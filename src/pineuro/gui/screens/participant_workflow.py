@@ -298,7 +298,9 @@ class ParticipantWorkflowScreen:
                         network_names.append(target)
 
         # Load correlation matrix
-        corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
+        corr_file = masks_dir / "network_IC_spatial_correlation.csv"
+        if not corr_file.exists():
+            corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
         if not corr_file.exists():
             self.page.snack_bar = ft.SnackBar(
                 ft.Text("Correlation matrix not found. Run mask extraction first."),

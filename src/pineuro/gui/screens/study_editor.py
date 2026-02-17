@@ -128,6 +128,7 @@ class StudyEditorScreen:
             },
             "mask": {
                 "n_yeo": 17,
+                "network_atlas": "yeo_17",
                 "yeo_targets": ["ContA", "DefaultA"],
                 "n_components": 20,
                 "smooth_fwhm": 5.0,
@@ -138,6 +139,8 @@ class StudyEditorScreen:
                 "threshold_method": "top_n",
                 "atlas_name": None,
                 "atlas_mask": None,
+                "atlas_source": None,
+                "atlas_regions": None,
                 "cluster_start_threshold": 2.0,
                 "cluster_step": 0.1,
             },
@@ -329,33 +332,40 @@ class StudyEditorScreen:
         )
 
 
-        # Network fields (only shown when localizer is rest)
-        self.n_yeo_radio = ft.RadioGroup(
-            content=ft.Row([
-                ft.Radio(value="7", label="7 Networks"),
-                ft.Radio(value="17", label="17 Networks"),
-            ]),
-            value=str(config["mask"]["n_yeo"]),
-            on_change=self._on_n_yeo_changed,
+        # Network atlas dropdown (replaces n_yeo_radio)
+        from pineuro.mask_extraction import ATLAS_SOURCES
+        self.network_atlas_dropdown = ft.Dropdown(
+            width=600,
+            label="Network atlas",
+            options=[
+                ft.dropdown.Option(key=k, text=v["display_name"])
+                for k, v in ATLAS_SOURCES.items() if v["type"] == "network"
+            ],
+            value=config["mask"].get("network_atlas", "yeo_17"),
+            on_select=self._on_network_atlas_changed,
         )
 
-        # Network selection dropdowns (replacing checkboxes)
+        # Network selection dropdowns
         # Get current targets from config
         yeo_targets = config["mask"].get("yeo_targets", ["DefaultA", "ContA"])
         first_network = yeo_targets[0] if len(yeo_targets) > 0 else None
         second_network = yeo_targets[1] if len(yeo_targets) > 1 else None
 
+        # Derive n_networks from the selected atlas
+        current_atlas = config["mask"].get("network_atlas", "yeo_17")
+        current_n_networks = ATLAS_SOURCES.get(current_atlas, {}).get("n_networks", 17)
+
         self.first_network_dropdown = ft.Dropdown(
             width=290,
             label="First Network",
-            options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
+            options=self._get_yeo_network_options(current_n_networks),
             value=first_network,
         )
 
         self.second_network_dropdown = ft.Dropdown(
             width=290,
             label="Second Network",
-            options=self._get_yeo_network_options(config["mask"]["n_yeo"]),
+            options=self._get_yeo_network_options(current_n_networks),
             value=second_network,
         )
 
@@ -402,24 +412,29 @@ class StudyEditorScreen:
             on_select=self._on_threshold_method_changed,
         )
 
-        # Build atlas name options from registry
-        from pineuro.mask_extraction import get_atlas_region_registry
-        atlas_registry = get_atlas_region_registry()
-        atlas_options = [
-            ft.dropdown.Option(
-                key=name,
-                text=f"{name} — {entry['description']}",
-            )
-            for name, entry in sorted(atlas_registry.items())
+        # Two-tier atlas selection for cluster thresholding
+        # First tier: atlas source (Harvard-Oxford, AAL, Schaefer)
+        cluster_atlas_options = [
+            ft.dropdown.Option(key=k, text=v["display_name"])
+            for k, v in ATLAS_SOURCES.items()
+            if v["type"] == "anatomical" or k.startswith("schaefer")
         ]
-        current_atlas = config["mask"].get("atlas_name") or (
-            list(atlas_registry.keys())[0] if atlas_registry else None
-        )
-        self.atlas_name_dropdown = ft.Dropdown(
+        current_atlas_source = config["mask"].get("atlas_source") or "harvard_oxford"
+        self.atlas_source_dropdown = ft.Dropdown(
             width=600,
-            label="Atlas region",
-            options=atlas_options,
-            value=current_atlas,
+            label="Atlas",
+            options=cluster_atlas_options,
+            value=current_atlas_source,
+            on_select=self._on_atlas_source_changed,
+        )
+
+        # Second tier: region selection (populated on demand from atlas)
+        current_regions = config["mask"].get("atlas_regions") or []
+        self.atlas_region_dropdown = ft.Dropdown(
+            width=600,
+            label="Region",
+            options=[],
+            value=current_regions[0] if current_regions else None,
         )
 
         self.cluster_start_threshold_field = ft.TextField(
@@ -441,7 +456,8 @@ class StudyEditorScreen:
         # Cluster settings section (shown/hidden based on threshold_method)
         self.cluster_settings_section = ft.Column(
             [
-                self.atlas_name_dropdown,
+                self.atlas_source_dropdown,
+                self.atlas_region_dropdown,
                 ft.Row([self.cluster_start_threshold_field, self.cluster_step_field]),
             ],
             visible=config["mask"].get("threshold_method", "top_n") == "cluster",
@@ -819,24 +835,26 @@ class StudyEditorScreen:
                 padding=10,
             )
 
-    def _get_yeo_network_options(self, n_yeo: int) -> list:
-        """Get Yeo network options for dropdowns based on atlas size.
+    def _get_yeo_network_options(self, n_networks: int) -> list:
+        """Get network options for dropdowns based on network count.
 
         Args:
-            n_yeo: 7 or 17
+            n_networks: 7 or 17
 
         Returns:
             List of dropdown options
         """
         from ..utils import YEO_7_LABELS, YEO_17_LABELS
 
-        labels = YEO_7_LABELS if n_yeo == 7 else YEO_17_LABELS
+        labels = YEO_7_LABELS if n_networks == 7 else YEO_17_LABELS
         return [ft.dropdown.Option(key=label, text=label) for label in labels]
 
-    def _on_n_yeo_changed(self, e):
-        """Handle Yeo atlas size change - update all network dropdowns."""
-        n_yeo = int(self.n_yeo_radio.value)
-        new_options = self._get_yeo_network_options(n_yeo)
+    def _on_network_atlas_changed(self, e):
+        """Handle network atlas change - update all network dropdowns."""
+        from pineuro.mask_extraction import ATLAS_SOURCES
+        atlas_key = self.network_atlas_dropdown.value
+        n_networks = ATLAS_SOURCES.get(atlas_key, {}).get("n_networks", 17)
+        new_options = self._get_yeo_network_options(n_networks)
 
         # Update all network dropdowns with new options
         for dropdown in [
@@ -848,7 +866,6 @@ class StudyEditorScreen:
             self.differential_positive_dropdown,
             self.differential_negative_dropdown,
         ]:
-            # Clear value if it's not in the new options
             old_value = dropdown.value
             dropdown.options = new_options
             valid_keys = [opt.key for opt in new_options]
@@ -856,6 +873,44 @@ class StudyEditorScreen:
                 dropdown.value = None
 
         self.page.update()
+
+    def _on_atlas_source_changed(self, e):
+        """Handle cluster atlas source change - populate region dropdown on demand."""
+        import threading
+
+        atlas_source = self.atlas_source_dropdown.value
+        if not atlas_source:
+            return
+
+        # Show loading state
+        self.atlas_region_dropdown.options = [
+            ft.dropdown.Option(key="__loading__", text="Loading regions...")
+        ]
+        self.atlas_region_dropdown.value = "__loading__"
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+        def _fetch_and_update():
+            try:
+                from pineuro.mask_extraction import get_atlas_labels
+                labels = get_atlas_labels(atlas_source)
+                self.atlas_region_dropdown.options = [
+                    ft.dropdown.Option(key=l, text=l) for l in labels
+                ]
+                self.atlas_region_dropdown.value = labels[0] if labels else None
+            except Exception as ex:
+                logger.warning(f"Failed to load atlas labels for {atlas_source}: {ex}")
+                self.atlas_region_dropdown.options = []
+                self.atlas_region_dropdown.value = None
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        # Fetch labels in background thread to avoid blocking UI
+        threading.Thread(target=_fetch_and_update, daemon=True).start()
 
     def _validate_field(self, field_name: str, field: ft.TextField, validator):
         """Validate a form field and update UI.
@@ -1848,12 +1903,12 @@ class StudyEditorScreen:
                     italic=True,
                 ),
                 ft.Divider(),
-                ft.Text("Yeo Atlas", size=14, weight=ft.FontWeight.BOLD),
-                self.n_yeo_radio,
+                ft.Text("Network Atlas", size=14, weight=ft.FontWeight.BOLD),
+                self.network_atlas_dropdown,
                 ft.Divider(),
                 self.target_networks_label,
                 ft.Text(
-                    "Select target networks from the Yeo atlas for neurofeedback training.",
+                    "Select target networks for neurofeedback training.",
                     size=11,
                     color=ft.Colors.GREY_600,
                     italic=True,
@@ -2713,15 +2768,16 @@ class StudyEditorScreen:
 
         # Update network config with validation
         try:
-            n_yeo_val = self.n_yeo_radio.value
+            # Network atlas
+            from pineuro.mask_extraction import ATLAS_SOURCES
+            network_atlas_val = self.network_atlas_dropdown.value or "yeo_17"
+            n_networks = ATLAS_SOURCES.get(network_atlas_val, {}).get("n_networks", 17)
+
             smooth_val = self.smooth_fwhm_field.value
             highpass_val = self.highpass_field.value
             n_components_val = self.n_components_field.value
 
             # Debug: log values if they look wrong
-            if not n_yeo_val or n_yeo_val == "None":
-                logger.warning(f"n_yeo_radio has invalid value: {n_yeo_val!r}, using default 7")
-                n_yeo_val = "7"
             if not smooth_val or smooth_val == "None":
                 logger.warning(f"smooth_fwhm_field has invalid value: {smooth_val!r}, using default 6.0")
                 smooth_val = "6.0"
@@ -2737,7 +2793,8 @@ class StudyEditorScreen:
                 logger.warning(f"threshold_field has invalid value: {threshold_val!r}, using default 2000")
                 threshold_val = "2000"
 
-            config["mask"]["n_yeo"] = int(n_yeo_val)
+            config["mask"]["network_atlas"] = network_atlas_val
+            config["mask"]["n_yeo"] = n_networks
             config["mask"]["smooth_fwhm"] = float(smooth_val)
             config["mask"]["highpass"] = float(highpass_val)
             config["mask"]["n_components"] = int(n_components_val)
@@ -2747,7 +2804,11 @@ class StudyEditorScreen:
             threshold_method = self.threshold_method_dropdown.value or "top_n"
             config["mask"]["threshold_method"] = threshold_method
             if threshold_method == "cluster":
-                config["mask"]["atlas_name"] = self.atlas_name_dropdown.value
+                atlas_source = self.atlas_source_dropdown.value
+                atlas_region = self.atlas_region_dropdown.value
+                config["mask"]["atlas_source"] = atlas_source
+                config["mask"]["atlas_regions"] = [atlas_region] if atlas_region and atlas_region != "__loading__" else None
+                config["mask"]["atlas_name"] = None
                 config["mask"]["atlas_mask"] = None
                 config["mask"]["cluster_start_threshold"] = float(
                     self.cluster_start_threshold_field.value or 2.0
@@ -2756,6 +2817,8 @@ class StudyEditorScreen:
                     self.cluster_step_field.value or 0.1
                 )
             else:
+                config["mask"]["atlas_source"] = None
+                config["mask"]["atlas_regions"] = None
                 config["mask"]["atlas_name"] = None
                 config["mask"]["atlas_mask"] = None
         except (ValueError, TypeError) as e:

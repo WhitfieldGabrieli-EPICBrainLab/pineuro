@@ -65,7 +65,13 @@ __version__ = "0.1.0"
 
 from .feedback import run_feedback_session, get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
 from .preprocessing import preprocessing, collect_volumes, collect_dicoms
-from .mask_extraction import mask_extraction_rest, mask_extraction_task, coregister_2vol
+from .mask_extraction import (
+    mask_extraction_rest,
+    mask_extraction_task,
+    coregister_2vol,
+    ATLAS_SOURCES,
+    get_atlas_labels,
+)
 from .tasks import (
     BaseTask,
     BaseLocalizerTask,
@@ -149,6 +155,8 @@ __all__ = [
     'mask_extraction_rest',
     'mask_extraction_task',
     'coregister_2vol',
+    'ATLAS_SOURCES',
+    'get_atlas_labels',
     # Task classes
     'BaseTask',
     'BaseLocalizerTask',
