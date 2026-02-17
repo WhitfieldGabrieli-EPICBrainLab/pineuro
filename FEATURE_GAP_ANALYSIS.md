@@ -63,11 +63,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 - **Scope**: Medium
 - **Module**: `feedback.py` (new `ConnectivityEstimator` class)
 
-### 2.3 Intermittent Feedback Mode
-- **Gap**: Feedback is continuous (every TR). No block-summary or periodic mode.
-- **Why**: Stoeckel et al. 2014 found intermittent may be superior for imagery-based strategies.
-- **Scope**: Small
-- **Module**: `feedback.py`, `session.py` (config)
+### ~~2.3 Intermittent Feedback Mode~~ ✅
+- **Done**: Added `feedback_interval` to `FeedbackConfig`. When set, coordinator accumulates activations and delivers the mean every N volumes after baseline. CSV logging retains per-volume resolution. GUI checkbox + interval field in Study Editor feedback tab. Baseline always delivered continuously.
 
 ### ~~2.7 Randomization File Generator~~ ✅
 - **Done**: Added `generate_randomization()` to `sham.py` with simple and replay methods. Added Generate button + dialog in Study Editor sham tab. Exported from `__init__.py`.
@@ -136,7 +133,7 @@ These items are deferred for later consideration:
 
 | File | Changes |
 |------|---------|
-| `src/pineuro/feedback.py` | 1.1 vendor parsing, 1.2 WM/CSF regressors, 1.3 QC metrics, ~~1.4 differential feedback~~ ✅, ~~2.1 smoothing~~ ✅, 2.2 connectivity estimator, 2.3 intermittent mode |
+| `src/pineuro/feedback.py` | 1.1 vendor parsing, 1.2 WM/CSF regressors, 1.3 QC metrics, ~~1.4 differential feedback~~ ✅, ~~2.1 smoothing~~ ✅, 2.2 connectivity estimator, ~~2.3 intermittent mode~~ ✅ |
 | `src/pineuro/session.py` | Config dataclass extensions for all new features |
 | `src/pineuro/mask_extraction.py` | 1.5 manual ROI import, 1.6 atlas registry expansion |
 | `src/pineuro/preprocessing.py` | 1.1 vendor auto-detection, 1.2 WM/CSF mask extraction |

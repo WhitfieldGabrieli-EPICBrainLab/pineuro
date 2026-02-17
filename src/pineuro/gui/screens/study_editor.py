@@ -149,6 +149,7 @@ class StudyEditorScreen:
                 "moco_enabled": True,
                 "smooth_fwhm": None,
                 "differential_pair": None,
+                "feedback_interval": None,
             },
             "localizer_task": {
                 # Localizer task parameters (when not rest)
@@ -548,6 +549,22 @@ class StudyEditorScreen:
             visible=has_multi_mask,
         )
 
+        # Intermittent feedback mode (checkbox + interval field)
+        interval_val = config.get("feedback", {}).get("feedback_interval")
+        self.intermittent_enabled_checkbox = ft.Checkbox(
+            label="Enable intermittent feedback",
+            value=interval_val is not None,
+            on_change=self._on_intermittent_enabled_changed,
+        )
+        self.feedback_interval_field = ft.TextField(
+            width=600,
+            label="Feedback interval (volumes)",
+            value=str(interval_val) if interval_val is not None else "5",
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Deliver mean activation every N volumes after baseline",
+            visible=interval_val is not None,
+        )
+
         # Create dynamic task parameter fields for current feedback task type
         self._create_task_parameter_fields()
 
@@ -912,6 +929,11 @@ class StudyEditorScreen:
     def _on_rt_smooth_enabled_changed(self, e):
         """Toggle visibility of the smoothing FWHM field."""
         self.rt_smooth_fwhm_field.visible = self.rt_smooth_enabled_checkbox.value
+        self.page.update()
+
+    def _on_intermittent_enabled_changed(self, e):
+        """Toggle visibility of the intermittent feedback interval field."""
+        self.feedback_interval_field.visible = self.intermittent_enabled_checkbox.value
         self.page.update()
 
     def _on_sham_enabled_changed(self, e):
@@ -2002,6 +2024,8 @@ class StudyEditorScreen:
                 self.rt_smooth_enabled_checkbox,
                 self.rt_smooth_fwhm_field,
                 self.differential_row,
+                self.intermittent_enabled_checkbox,
+                self.feedback_interval_field,
                 ft.Divider(),
             ]),
             visible=True,  # Always visible for all tasks
@@ -2784,6 +2808,12 @@ class StudyEditorScreen:
                 config["feedback"]["differential_pair"] = [pos, neg]
             else:
                 config["feedback"]["differential_pair"] = None
+            # Intermittent feedback interval
+            if self.intermittent_enabled_checkbox.value:
+                interval_str = self.feedback_interval_field.value.strip()
+                config["feedback"]["feedback_interval"] = int(interval_str) if interval_str else 5
+            else:
+                config["feedback"]["feedback_interval"] = None
             # Also save to task-specific config for reference
             if task_type not in config["task"]:
                 config["task"][task_type] = {}

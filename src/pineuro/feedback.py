@@ -1916,6 +1916,7 @@ class NeurofeedbackCoordinator:
         dump_algo_vars_path: Optional[Path | str] = None,  # Path to dump GLM algo vars for debugging
         smooth_fwhm: Optional[float] = None,  # Gaussian spatial smoothing FWHM in mm per volume
         differential_pair: Optional[list[str]] = None,  # Ordered pair [positive, negative] for differential signal
+        feedback_interval: Optional[int] = None,  # Intermittent mode: deliver mean every N volumes
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -1985,6 +1986,14 @@ class NeurofeedbackCoordinator:
             m0, m1 = self.mask_names[0], self.mask_names[1]
             self._differential_pair = (m0, m1)
             self._differential_name = f"{m0}-{m1}"
+
+        # Intermittent feedback mode
+        self._feedback_interval = feedback_interval
+        self._intermittent_buffer: list[dict[str, float]] = []
+        if feedback_interval is not None:
+            if feedback_interval < 2:
+                raise ValueError(f"feedback_interval must be >= 2 (got {feedback_interval})")
+            logger.info(f"Intermittent feedback: delivering mean every {feedback_interval} volumes")
 
         # Sham mode configuration
         self._sham_provider = sham_provider
@@ -2548,7 +2557,20 @@ class NeurofeedbackCoordinator:
 
         if self._activation_callback is not None:
             try:
-                self._activation_callback(activations, self.n_processed, elapsed_time, is_baseline, False)
+                if self._feedback_interval is None or is_baseline:
+                    # Continuous mode or baseline: deliver every volume
+                    self._activation_callback(activations, self.n_processed, elapsed_time, is_baseline, False)
+                else:
+                    # Intermittent mode: accumulate and deliver mean every N volumes
+                    self._intermittent_buffer.append(activations.copy())
+                    if len(self._intermittent_buffer) >= self._feedback_interval:
+                        mean_activations = {}
+                        for key in self._intermittent_buffer[0]:
+                            mean_activations[key] = sum(
+                                buf.get(key, 0.0) for buf in self._intermittent_buffer
+                            ) / len(self._intermittent_buffer)
+                        self._intermittent_buffer.clear()
+                        self._activation_callback(mean_activations, self.n_processed, elapsed_time, False, False)
             except Exception as e:
                 logger.error(f"Error in activation callback: {e}")
                 if self._error_callback is not None:
@@ -2913,6 +2935,7 @@ def run_feedback_session(
     dump_algo_vars_path: Optional[Path | str] = None,
     smooth_fwhm: Optional[float] = None,
     differential_pair: Optional[list[str]] = None,
+    feedback_interval: Optional[int] = None,
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -3010,6 +3033,17 @@ def run_feedback_session(
         moco_enabled=False. This enables replaying archived data with its original
         design. When murfi_design_path is provided, the task_regressors parameter
         is ignored.
+    smooth_fwhm : float, optional
+        Gaussian spatial smoothing FWHM in mm applied to each volume before
+        voxel extraction. None (default) disables smoothing.
+    differential_pair : list of str, optional
+        Ordered pair [positive_mask, negative_mask] for differential signal.
+        None (default) auto-computes from first two masks if 2+ masks given.
+    feedback_interval : int, optional
+        Number of volumes between feedback deliveries (intermittent mode).
+        When set, activations are accumulated and the mean is delivered to
+        the task every N volumes after baseline. None (default) delivers
+        feedback every volume (continuous mode).
 
     Returns
     -------
@@ -3244,6 +3278,7 @@ def run_feedback_session(
         dump_algo_vars_path=dump_algo_vars_path,
         smooth_fwhm=smooth_fwhm,
         differential_pair=differential_pair,
+        feedback_interval=feedback_interval,
     )
 
     # Set cleanup flags for simulation mode

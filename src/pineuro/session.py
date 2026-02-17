@@ -702,6 +702,12 @@ class FeedbackConfig:
         computation. The pipeline computes positive - negative and logs it
         as a column in feedbacklog.tsv. None (default) disables differential.
         Example: ["ContA", "DefaultA"] computes ContA - DefaultA.
+    feedback_interval : int, optional
+        Number of volumes between feedback deliveries. When set, activations
+        are accumulated and the mean is delivered to the task every N volumes.
+        None (default) delivers feedback every volume (continuous mode).
+        Only applies after baseline period. Example: 5 delivers feedback
+        every 5th volume.
     """
     n_baseline: int = 25
     n_volumes: int = 150
@@ -709,6 +715,7 @@ class FeedbackConfig:
     moco_enabled: bool = True
     smooth_fwhm: Optional[float] = None
     differential_pair: Optional[list[str]] = None
+    feedback_interval: Optional[int] = None
 
 
 @dataclass
@@ -1922,6 +1929,7 @@ def run_single_task(
         moco_enabled=config.feedback.moco_enabled,
         smooth_fwhm=config.feedback.smooth_fwhm,
         differential_pair=config.feedback.differential_pair,
+        feedback_interval=config.feedback.feedback_interval,
         **simulator_kwargs
     )
 

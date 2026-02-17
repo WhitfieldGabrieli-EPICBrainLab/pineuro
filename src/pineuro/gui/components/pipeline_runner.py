@@ -1336,6 +1336,8 @@ class PipelineRunner:
                 moco_enabled=config["feedback"].get("moco_enabled", True),  # Motion correction mode
                 murfi_design_path=murfi_design_path,  # External design matrix (MURFI format)
                 smooth_fwhm=config["feedback"].get("smooth_fwhm"),  # Real-time spatial smoothing
+                differential_pair=config["feedback"].get("differential_pair"),  # Configurable differential signal
+                feedback_interval=config["feedback"].get("feedback_interval"),  # Intermittent feedback mode
             )
 
             # Wait for the coordinator thread to complete
