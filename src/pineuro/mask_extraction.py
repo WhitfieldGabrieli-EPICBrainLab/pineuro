@@ -158,9 +158,9 @@ import logging
 # --- Third-Party: Neuroimaging ---
 import numpy as np
 import pandas as pd
-from nilearn.decomposition import CanICA  # Independent Component Analysis
-from nilearn import datasets               # Atlas fetching (Yeo networks)
-from nilearn.image import get_data, resample_to_img
+# NOTE: nilearn is imported lazily inside the functions that need it to avoid
+# ~8s import cost at module load time. The GUI imports this module at startup
+# but doesn't need nilearn until mask extraction actually runs.
 import nibabel as nib
 from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
@@ -366,6 +366,8 @@ def compute_mask_network_correlation(
     """
     mask_file = Path(mask_file)
     yeo_subject_space = Path(yeo_subject_space)
+
+    from nilearn.image import resample_to_img
 
     if not mask_file.exists():
         raise FileNotFoundError(f"Mask file not found: {mask_file}")
@@ -994,6 +996,8 @@ def run_ica(
 
     """
 
+    from nilearn.decomposition import CanICA
+
     logger.info(f"CanICA...")
 
     output_dir = Path(output_dir)
@@ -1131,6 +1135,8 @@ def spatial_correlation(
     input_file = Path(input_file)
     mask_file = Path(mask_file)
     parcellation_file = Path(parcellation_file)
+    from nilearn.image import get_data, resample_to_img
+
     output_file = Path(output_file)
 
     # Check if outputs exist and skip if overwrite=False
@@ -1155,8 +1161,8 @@ def spatial_correlation(
 
     # Load input file
     logger.info(f"Loading: {input_file}...")
-    img = load(input_file)  
-    data = get_data(img) 
+    img = load(input_file)
+    data = get_data(img)
     n = data.shape[3]
 
     # Load parcellation and resample (note: they should already be co-registered)
@@ -1302,6 +1308,9 @@ def mask_extraction_rest(
         If network_atlas, n_yeo, or yeo_targets parameter is invalid
 
     """
+
+    from nilearn.image import get_data
+    from nilearn import datasets
 
     # Helper to emit progress to both logger and callback
     def emit_progress(step: str, detail: str = ""):
@@ -1608,21 +1617,9 @@ def mask_extraction_rest(
 
 
 # --- Atlas Source Definitions ---
-# Static metadata for all supported atlases. No nilearn fetching at import time.
-# Labels are fetched on demand via get_atlas_labels().
-
-ATLAS_SOURCES: Dict[str, Dict[str, Any]] = {
-    # Network atlases (resting-state ICA pathway)
-    "yeo_7":              {"display_name": "Yeo 7-network",              "type": "network", "n_networks": 7},
-    "yeo_17":             {"display_name": "Yeo 17-network",             "type": "network", "n_networks": 17},
-    "schaefer_100_7net":  {"display_name": "Schaefer 100 (7-network)",   "type": "network", "n_networks": 7,  "n_rois": 100},
-    "schaefer_100_17net": {"display_name": "Schaefer 100 (17-network)",  "type": "network", "n_networks": 17, "n_rois": 100},
-    "schaefer_400_7net":  {"display_name": "Schaefer 400 (7-network)",   "type": "network", "n_networks": 7,  "n_rois": 400},
-    "schaefer_400_17net": {"display_name": "Schaefer 400 (17-network)",  "type": "network", "n_networks": 17, "n_rois": 400},
-    # Anatomical/parcel atlases (cluster thresholding pathway)
-    "harvard_oxford":     {"display_name": "Harvard-Oxford Cortical",    "type": "anatomical"},
-    "aal":                {"display_name": "AAL (SPM12)",                "type": "anatomical"},
-}
+# Atlas metadata lives in atlas_registry.py (lightweight, no heavy deps)
+# so the GUI can import it without triggering nibabel/scipy/nilearn.
+from pineuro.atlas_registry import ATLAS_SOURCES
 
 # Cache for on-demand atlas label fetching
 _ATLAS_LABELS_CACHE: Dict[str, List[str]] = {}
@@ -1647,6 +1644,8 @@ def get_atlas_labels(atlas_source: str) -> List[str]:
     ValueError
         If ``atlas_source`` is not in ``ATLAS_SOURCES``.
     """
+    from nilearn import datasets
+
     if atlas_source in _ATLAS_LABELS_CACHE:
         return _ATLAS_LABELS_CACHE[atlas_source]
 
@@ -1867,6 +1866,8 @@ def _fetch_atlas_and_resolve_regions(
         - labels: all label names from the atlas
         - label_indices: integer values in atlas_data corresponding to target_regions
     """
+    from nilearn import datasets
+
     if atlas_source == "harvard_oxford":
         atlas = datasets.fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
         atlas_maps = atlas.maps
@@ -2334,6 +2335,7 @@ def mask_extraction_task(
     cluster_threshold_stat_map : Iterative cluster thresholding algorithm
     """
     from nilearn.glm.first_level import FirstLevelModel
+    from nilearn.image import resample_to_img
 
     # --- Setup ---
     root_dir = Path(root_dir)
@@ -2792,6 +2794,237 @@ def mask_extraction_task(
         emit_progress("QC report", f"Saved to {report_path.name}")
 
     return network_thr_files
+
+
+# =============================================================================
+# SECTION 3B: MANUAL ROI IMPORT
+# =============================================================================
+# For researchers with pre-existing NIfTI masks (FreeSurfer, fMRIPrep,
+# hand-drawn ROIs, standard atlases). Bypasses the ICA/GLM extraction pipeline
+# and imports masks directly into 03_masks/ for use in the feedback pipeline.
+#
+# Supports three input spaces:
+# - "native": masks already in functional/EPI space (copied + binarized)
+# - "anat": masks drawn on T1/structural (ANTs Rigid T1→EPI registration)
+# - "mni": masks in MNI152 (ANTs SyN EPI→MNI, inverse applied to masks)
+
+
+def import_manual_masks(
+        participant_id: str,
+        root_dir: Union[str, Path],
+        mask_paths: List[Union[str, Path]],
+        mask_names: List[str],
+        ref_file: Union[str, Path],
+        mask_space: str = "native",
+        anat_file: Optional[Union[str, Path]] = None,
+        overwrite: bool = False,
+        progress_callback: Optional[Callable[[str, str], None]] = None,
+) -> List[Path]:
+    """Import pre-existing NIfTI masks into the feedback pipeline.
+
+    Copies (and optionally registers) user-provided NIfTI masks into
+    ``{root_dir}/03_masks/`` with standardised naming so that downstream
+    coregistration and feedback can proceed normally.
+
+    Parameters
+    ----------
+    participant_id : str
+        Participant identifier (e.g. ``"sub-01"``).
+    root_dir : str or Path
+        Mask extraction root directory. Output goes to ``root_dir/03_masks/``.
+    mask_paths : list of str or Path
+        NIfTI files to import (one per mask). Must match ``mask_names`` in
+        length.
+    mask_names : list of str
+        Human-readable names for each mask (e.g. ``["ContA", "DefaultA"]``).
+        Used in output file naming and feedback display.
+    ref_file : str or Path
+        Native-space BOLD/EPI reference volume. Used as the registration
+        target for ``"anat"`` and ``"mni"`` modes, and later by
+        ``coregister_2vol()``.
+    mask_space : str
+        Input space of the masks:
+
+        - ``"native"`` — masks are already in functional/EPI space (same
+          space as *ref_file*). Validated, binarised, and copied.
+        - ``"anat"`` — masks are drawn on a T1/structural image. Rigid-body
+          registration (T1→EPI) is computed via ANTs and applied to each mask.
+          Requires *anat_file*.
+        - ``"mni"`` — masks are in MNI152 standard space. SyN registration
+          (EPI→MNI) is computed and the inverse is applied to each mask.
+
+    anat_file : str or Path, optional
+        Required when ``mask_space="anat"``. The T1/structural image on which
+        the masks were drawn.
+    overwrite : bool
+        If ``True``, re-import even when output files already exist.
+    progress_callback : callable, optional
+        ``(step: str, detail: str) -> None`` for progress reporting.
+
+    Returns
+    -------
+    list of Path
+        Paths to the imported mask files in ``03_masks/``.
+
+    Raises
+    ------
+    ValueError
+        If *mask_paths* and *mask_names* lengths differ, *mask_space* is
+        invalid, or *anat_file* is missing when required.
+    FileNotFoundError
+        If any input file does not exist.
+    """
+    root_dir = Path(root_dir)
+    ref_file = Path(ref_file)
+
+    from nilearn.image import resample_to_img
+
+    def emit_progress(step: str, detail: str) -> None:
+        logger.info(f"[Manual Import] {step}: {detail}")
+        if progress_callback is not None:
+            progress_callback(step, detail)
+
+    # ---- Validation ----
+    if len(mask_paths) != len(mask_names):
+        raise ValueError(
+            f"mask_paths ({len(mask_paths)}) and mask_names ({len(mask_names)}) "
+            f"must have the same length"
+        )
+    if mask_space not in ("native", "anat", "mni"):
+        raise ValueError(f"mask_space must be 'native', 'anat', or 'mni', got '{mask_space}'")
+    if mask_space == "anat" and anat_file is None:
+        raise ValueError("anat_file is required when mask_space='anat'")
+    if not ref_file.exists():
+        raise FileNotFoundError(f"Reference file not found: {ref_file}")
+    for mp in mask_paths:
+        if not Path(mp).exists():
+            raise FileNotFoundError(f"Mask file not found: {mp}")
+    if mask_space == "anat" and anat_file is not None and not Path(anat_file).exists():
+        raise FileNotFoundError(f"Anatomical file not found: {anat_file}")
+
+    masks_dir = root_dir / "03_masks"
+    masks_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Space-specific registration ----
+    xfm_files: Optional[List[str]] = None
+
+    if mask_space == "anat":
+        anat_file = Path(anat_file)  # type: ignore[arg-type]
+        reg_dir = root_dir / "02_anat_reg"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+
+        emit_progress("Registration", "Computing T1→EPI rigid transform...")
+        xfm_prefix = reg_dir / f"{participant_id}_anat_to_epi"
+        _, xfm_files = compute_xfm(
+            moving=anat_file,
+            fixed=ref_file,
+            output_prefix=xfm_prefix,
+            type_of_transform='Rigid',
+            overwrite=overwrite,
+        )
+        emit_progress("Registration", "T1→EPI transform computed")
+
+    elif mask_space == "mni":
+        reg_dir = root_dir / "02_mnireg"
+        reg_dir.mkdir(parents=True, exist_ok=True)
+
+        emit_progress("Registration", "Computing EPI→MNI SyN transform...")
+        xfm_prefix = reg_dir / f"{participant_id}_epi_to_mni"
+        _, _fwd_xfm, inv_xfm_files = compute_xfm_to_mni(
+            input_file=ref_file,
+            output_prefix=xfm_prefix,
+            type_of_transform='SyN',
+            overwrite=overwrite,
+        )
+        xfm_files = inv_xfm_files
+        emit_progress("Registration", "EPI→MNI transform computed")
+
+    # ---- Import each mask ----
+    output_files: List[Path] = []
+
+    for i, (mask_path, mask_name) in enumerate(zip(mask_paths, mask_names), 1):
+        mask_path = Path(mask_path)
+        out_file = masks_dir / f"{participant_id}_{mask_name}_thr.nii.gz"
+
+        if out_file.exists() and not overwrite:
+            logger.info(f"Output exists, skipping: {out_file.name}")
+            output_files.append(out_file)
+            continue
+
+        emit_progress(f"Mask {i}/{len(mask_paths)}", f"Importing {mask_name}...")
+
+        if mask_space == "native":
+            # Load and validate
+            img: SpatialImage = load(mask_path)  # type: ignore
+            data = np.asarray(img.get_fdata())
+
+            if data.ndim != 3:
+                raise ValueError(f"Mask must be 3D, got {data.ndim}D: {mask_path}")
+
+            # Warn on shape mismatch with ref_file
+            ref_img: SpatialImage = load(ref_file)  # type: ignore
+            if data.shape != ref_img.shape[:3]:
+                logger.warning(
+                    f"Shape mismatch for {mask_name}: mask {data.shape} vs "
+                    f"ref {ref_img.shape[:3]}. Resampling to reference grid."
+                )
+                img = resample_to_img(img, ref_img, interpolation='nearest')
+                data = np.asarray(img.get_fdata())
+
+            # Binarize
+            binarized = (data > 0).astype(np.uint8)
+            save(Nifti1Image(binarized, img.affine, img.header), out_file)  # type: ignore
+
+        else:
+            # anat or mni: apply registration transform
+            assert xfm_files is not None
+
+            transformed_file = masks_dir / f"{participant_id}_{mask_name}_transformed.nii.gz"
+            apply_xfm(
+                moving=mask_path,
+                fixed=ref_file,
+                transform_files=xfm_files,
+                output_file=transformed_file,
+                interpolator='nearestNeighbor',
+                overwrite=overwrite,
+            )
+
+            # Load transformed mask and binarize
+            img = load(transformed_file)  # type: ignore
+            data = np.asarray(img.get_fdata())
+
+            binarized = (data > 0).astype(np.uint8)
+            save(Nifti1Image(binarized, img.affine, img.header), out_file)  # type: ignore
+
+            # Clean up intermediate transformed file
+            if transformed_file.exists() and transformed_file != out_file:
+                transformed_file.unlink()
+
+        n_voxels = int(np.sum(nib.load(out_file).get_fdata() > 0))
+        emit_progress(f"Mask {i}/{len(mask_paths)}", f"{mask_name}: {n_voxels} voxels")
+        output_files.append(out_file)
+
+    # Save selections JSON for review dialog and persistence
+    selections_data = {
+        "type": "manual",
+        "ref_file": str(ref_file),
+        "mask_space": mask_space,
+        "selections": {},
+    }
+    for mask_name, out_file in zip(mask_names, output_files):
+        n_vox = int(np.sum(nib.load(out_file).get_fdata() > 0))
+        selections_data["selections"][mask_name] = {
+            "n_voxels_thresholded": n_vox,
+            "source": "manual_import",
+            "mask_space": mask_space,
+        }
+    selections_file = masks_dir / "mask_selections.json"
+    with open(selections_file, 'w') as f:
+        json.dump(selections_data, f, indent=2)
+    logger.info(f"Saved manual mask selections to {selections_file}")
+
+    emit_progress("Complete", f"Imported {len(output_files)} masks to {masks_dir}")
+    return output_files
 
 
 # =============================================================================

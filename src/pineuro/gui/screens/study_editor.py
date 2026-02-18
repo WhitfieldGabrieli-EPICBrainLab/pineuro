@@ -1120,10 +1120,11 @@ class StudyEditorScreen:
             self.sham_randomization_file_field.update()
             self.page.pop_dialog()
 
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text(f"Randomization file saved: {save_path}"),
-                open=True,
+            _snack = ft.SnackBar(
+                ft.Text(f"Randomization file saved: {save_path}")
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
         def cancel(e):
@@ -1313,7 +1314,9 @@ class StudyEditorScreen:
         else:
             msg = f"Task changed to {task_type}"
 
-        self.page.snack_bar = ft.SnackBar(ft.Text(msg), open=True)
+        _snack = ft.SnackBar(ft.Text(msg))
+        _snack.open = True
+        self.page.overlay.append(_snack)
         self.page.update()
 
     def _on_localizer_task_type_changed(self, e):
@@ -1352,7 +1355,9 @@ class StudyEditorScreen:
 
         # Show snackbar feedback
         msg = "Localizer: Rest (ICA-based network extraction)" if is_rest else f"Localizer: {localizer_task_type} (GLM-based coming soon)"
-        self.page.snack_bar = ft.SnackBar(ft.Text(msg), open=True)
+        _snack = ft.SnackBar(ft.Text(msg))
+        _snack.open = True
+        self.page.overlay.append(_snack)
         self.page.update()
 
     def _on_threshold_method_changed(self, e):
@@ -1454,10 +1459,11 @@ class StudyEditorScreen:
                 from tkinter import filedialog
             except ImportError:
                 logger.error("tkinter is not available")
-                self.page.snack_bar = ft.SnackBar(
-                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"),
-                    open=True,
+                _snack = ft.SnackBar(
+                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk")
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
                 return
 
@@ -1484,10 +1490,11 @@ class StudyEditorScreen:
             except Exception as ex:
                 logger.error(f"Error opening directory picker: {ex}")
                 # Show error to user
-                self.page.snack_bar = ft.SnackBar(
-                    ft.Text(f"Error opening file browser: {ex}"),
-                    open=True,
+                _snack = ft.SnackBar(
+                    ft.Text(f"Error opening file browser: {ex}")
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
         return ft.IconButton(
@@ -1524,10 +1531,11 @@ class StudyEditorScreen:
                 from tkinter import filedialog
             except ImportError:
                 logger.error("tkinter is not available")
-                self.page.snack_bar = ft.SnackBar(
-                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"),
-                    open=True,
+                _snack = ft.SnackBar(
+                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk")
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
                 return
 
@@ -1564,10 +1572,11 @@ class StudyEditorScreen:
             except Exception as ex:
                 logger.error(f"Error opening file picker: {ex}")
                 # Show error to user
-                self.page.snack_bar = ft.SnackBar(
-                    ft.Text(f"Error opening file browser: {ex}"),
-                    open=True,
+                _snack = ft.SnackBar(
+                    ft.Text(f"Error opening file browser: {ex}")
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
         return ft.IconButton(
@@ -1597,10 +1606,11 @@ class StudyEditorScreen:
                 from tkinter import filedialog
             except ImportError:
                 logger.error("tkinter is not available")
-                self.page.snack_bar = ft.SnackBar(
-                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"),
-                    open=True,
+                _snack = ft.SnackBar(
+                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk")
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
                 return
 
@@ -1639,10 +1649,11 @@ class StudyEditorScreen:
             except Exception as ex:
                 logger.error(f"Error opening file picker: {ex}")
                 # Show error to user
-                self.page.snack_bar = ft.SnackBar(
-                    ft.Text(f"Error opening file browser: {ex}"),
-                    open=True,
+                _snack = ft.SnackBar(
+                    ft.Text(f"Error opening file browser: {ex}")
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
         return ft.IconButton(
@@ -2508,10 +2519,11 @@ class StudyEditorScreen:
     def _on_save(self, e):
         """Handle save button click."""
         if self.validation_errors:
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text("Please fix validation errors before saving"),
-                open=True,
+            _snack = ft.SnackBar(
+                ft.Text("Please fix validation errors before saving")
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -2521,10 +2533,11 @@ class StudyEditorScreen:
         # Save
         try:
             path = self.config_manager.save_study(self.study_config, overwrite=True)
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text(f"Study saved: {self.study_config.metadata.name}"),
-                open=True,
+            _snack = ft.SnackBar(
+                ft.Text(f"Study saved: {self.study_config.metadata.name}")
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
             logger.info(f"Study saved: {path}")
@@ -2535,10 +2548,11 @@ class StudyEditorScreen:
 
         except Exception as ex:
             logger.error(f"Failed to save study: {ex}")
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text(f"Error saving study: {ex}"),
-                open=True,
+            _snack = ft.SnackBar(
+                ft.Text(f"Error saving study: {ex}")
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
     def _on_save_as(self, e):
@@ -2590,10 +2604,11 @@ class StudyEditorScreen:
                 path = self.config_manager.save_study(self.study_config, overwrite=False)
                 self.page.pop_dialog()
 
-                self.page.snack_bar = ft.SnackBar(
-                    ft.Text(f"Study saved as: {new_name}"),
-                    open=True,
+                _snack = ft.SnackBar(
+                    ft.Text(f"Study saved as: {new_name}")
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
                 logger.info(f"Study saved as: {path}")

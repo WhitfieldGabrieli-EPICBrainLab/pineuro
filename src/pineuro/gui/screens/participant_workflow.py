@@ -302,11 +302,12 @@ class ParticipantWorkflowScreen:
         if not corr_file.exists():
             corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
         if not corr_file.exists():
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Correlation matrix not found. Run mask extraction first."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -318,22 +319,24 @@ class ParticipantWorkflowScreen:
         # Find required files
         components_files = sorted(glob(str(ica_dir / "*_components.nii.gz")))
         if not components_files:
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("ICA components not found. Run mask extraction first."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
         components_file = Path(components_files[0])
 
         yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
         if not yeo2sub_files:
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Yeo atlas in subject space not found."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
         yeo_subject_space = Path(yeo2sub_files[0])
@@ -409,11 +412,12 @@ class ParticipantWorkflowScreen:
             self._add_log("[SUCCESS] Masks reviewed and approved")
             self._refresh_step_list()
             self._update_run_next_button()
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Masks approved! You can now run coregistration."),
-                bgcolor=ft.Colors.GREEN,
+                bgcolor=ft.Colors.GREEN
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
         # Find preprocessing outputs for script generation
@@ -479,21 +483,23 @@ class ParticipantWorkflowScreen:
             if alt.exists():
                 masks_dir = alt
         if not masks_dir.exists():
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Task masks not found. Run mask extraction first."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
         mask_files = sorted(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
         if not mask_files:
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("No thresholded masks found. Run mask extraction first."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -615,11 +621,12 @@ class ParticipantWorkflowScreen:
             self.page.update()
             self._refresh_step_list()
             self._update_run_next_button()
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Masks approved! You can now run coregistration."),
-                bgcolor=ft.Colors.GREEN,
+                bgcolor=ft.Colors.GREEN
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
         def on_reject(e):
@@ -670,11 +677,12 @@ class ParticipantWorkflowScreen:
                 self._add_log("[SUCCESS] Using atlas region mask — approved")
                 self._refresh_step_list()
                 self._update_run_next_button()
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text("Atlas mask applied and approved."),
-                    bgcolor=ft.Colors.GREEN,
+                    bgcolor=ft.Colors.GREEN
                 )
-                self.page.snack_bar.open = True
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
             def on_back(e):
@@ -776,20 +784,22 @@ class ParticipantWorkflowScreen:
             if qc_report and qc_report.exists():
                 open_qc_report(qc_report)
             else:
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text("QC report not found."),
-                    bgcolor=ft.Colors.ORANGE,
+                    bgcolor=ft.Colors.ORANGE
                 )
-                self.page.snack_bar.open = True
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
         def on_view_in_browser(e):
             if not ref_file.exists():
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text("BOLD reference file not found."),
-                    bgcolor=ft.Colors.RED,
+                    bgcolor=ft.Colors.RED
                 )
-                self.page.snack_bar.open = True
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
                 return
 
@@ -806,11 +816,12 @@ class ParticipantWorkflowScreen:
                 self._add_log(f"[INFO] Opened mask viewer in browser with {len(mask_files)} masks")
             except Exception as ex:
                 logger.error(f"Failed to open mask viewer: {ex}")
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text(f"Failed to open mask viewer: {ex}"),
-                    bgcolor=ft.Colors.RED,
+                    bgcolor=ft.Colors.RED
                 )
-                self.page.snack_bar.open = True
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
         def on_close(e):
@@ -2091,11 +2102,12 @@ class ParticipantWorkflowScreen:
             self._add_log("[SUCCESS] Cleanup complete")
 
             # Show success snackbar
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Cleanup complete. Temporary files have been deleted."),
-                bgcolor=ft.Colors.GREEN,
-                open=True,
+                bgcolor=ft.Colors.GREEN
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
             # Refresh the UI - step list first (to update utilities section status)
@@ -2107,11 +2119,12 @@ class ParticipantWorkflowScreen:
             self._add_log(f"[ERROR] Cleanup failed: {e}")
             logger.error(f"Cleanup failed: {e}")
 
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text(f"Cleanup failed: {e}"),
-                bgcolor=ft.Colors.RED,
-                open=True,
+                bgcolor=ft.Colors.RED
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
     def _show_qc_approval_dialog(self, approval_type: str):
@@ -2159,20 +2172,22 @@ class ParticipantWorkflowScreen:
                 self._set_qc_approved(approval_type, True)
                 self._add_log("[SUCCESS] Initial 2vol QC approved")
                 self._refresh_step_list()
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text("Initial coregistration approved! You can now collect real-time 2vol."),
-                    bgcolor=ft.Colors.GREEN,
-                    open=True,
+                    bgcolor=ft.Colors.GREEN
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
             def on_reject():
                 self._add_log("[WARNING] Initial 2vol QC rejected")
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text("Masks rejected. Please review and re-run coregistration."),
-                    bgcolor=ft.Colors.ORANGE,
-                    open=True,
+                    bgcolor=ft.Colors.ORANGE
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
 
             viewer = QCPlotViewer(
@@ -3329,11 +3344,12 @@ class ParticipantWorkflowScreen:
                 self.right_panel_container.update()
 
             # Show completion snackbar
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text(result_message if result_message else "Step completed"),
-                open=True,
                 bgcolor=ft.Colors.GREEN if success else ft.Colors.RED,
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
             # Auto-show QC approval dialog after coregistration steps
@@ -3362,11 +3378,12 @@ class ParticipantWorkflowScreen:
         # This callback runs in the background thread
         async def update_ui():
             self._add_log(f"[ERROR] {str(error)}")
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text(f"Error: {str(error)}"),
-                open=True,
                 bgcolor=ft.Colors.RED,
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
         try:
@@ -4329,10 +4346,11 @@ class ParticipantWorkflowScreen:
         next_step = self._get_next_step()
 
         if next_step is None:
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text("Session complete! All steps finished."),
-                open=True,
+            _snack = ft.SnackBar(
+                ft.Text("Session complete! All steps finished.")
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 

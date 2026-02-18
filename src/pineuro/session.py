@@ -684,11 +684,32 @@ class MaskConfig:
     cluster_start_threshold: float = 2.0
     cluster_step: float = 0.1
 
+    # Manual ROI import fields
+    manual_mask_paths: list[Path] = field(default_factory=list)
+    manual_ref_file: Optional[Path] = None
+    manual_anat_file: Optional[Path] = None
+    manual_mask_space: str = "native"
+
     def __post_init__(self):
-        if self.localizer_type not in ("rest", "task"):
-            raise ValueError(f"localizer_type must be 'rest' or 'task', got '{self.localizer_type}'")
+        if self.localizer_type not in ("rest", "task", "manual"):
+            raise ValueError(f"localizer_type must be 'rest', 'task', or 'manual', got '{self.localizer_type}'")
         if self.localizer_type == "task" and not self.contrasts:
             raise ValueError("contrasts must be provided when localizer_type='task'")
+        if self.localizer_type == "manual":
+            if not self.manual_mask_paths:
+                raise ValueError("manual_mask_paths must be provided when localizer_type='manual'")
+            if self.manual_mask_space not in ("native", "anat", "mni"):
+                raise ValueError(
+                    f"manual_mask_space must be 'native', 'anat', or 'mni', "
+                    f"got '{self.manual_mask_space}'"
+                )
+            if self.manual_mask_space == "anat" and self.manual_anat_file is None:
+                raise ValueError("manual_anat_file is required when manual_mask_space='anat'")
+            self.manual_mask_paths = [Path(p) for p in self.manual_mask_paths]
+            if self.manual_ref_file is not None:
+                self.manual_ref_file = Path(self.manual_ref_file)
+            if self.manual_anat_file is not None:
+                self.manual_anat_file = Path(self.manual_anat_file)
         if self.threshold_method not in ("top_n", "cluster"):
             raise ValueError(f"threshold_method must be 'top_n' or 'cluster', got '{self.threshold_method}'")
         if self.events_file is not None:
@@ -1568,7 +1589,21 @@ def run_mask_extraction(
 
     localizer_type = config.mask.localizer_type
 
-    if localizer_type == "task":
+    if localizer_type == "manual":
+        from .mask_extraction import import_manual_masks
+
+        logger.info("Using manual ROI import")
+        return import_manual_masks(
+            participant_id=config.paths.participant_id,
+            root_dir=str(config.paths.mask_extraction_dir),
+            mask_paths=config.mask.manual_mask_paths,
+            mask_names=config.mask.mask_names,
+            ref_file=config.mask.manual_ref_file or ref_file,
+            mask_space=config.mask.manual_mask_space,
+            anat_file=config.mask.manual_anat_file,
+            overwrite=overwrite,
+        )
+    elif localizer_type == "task":
         from .mask_extraction import mask_extraction_task
 
         logger.info("Using task-based (GLM) mask extraction")
@@ -1804,6 +1839,47 @@ def setup_session(
             twovol_dicoms = twovol_list[0]
 
         return setup_visit_with_reused_masks(config, twovol_dicoms, overwrite=overwrite)
+
+    # Manual ROI import: skip localizer + preprocessing, just import + coregister
+    if config.mask.localizer_type == "manual":
+        if config.visit:
+            logger.info(f"Visit {config.visit.visit_id}: Manual ROI import")
+
+        # Step 0: Initial 2vol (still needed for coregistration)
+        initial_twovol_source = config.resolve_simulator_source("2vol_initial")
+        if skip_collection:
+            logger.info("Skipping initial 2vol collection (using source DICOMs directly)")
+            initial_twovol = [initial_twovol_source]
+        else:
+            initial_twovol = run_dicom_collection(
+                config,
+                use_simulator=use_simulator,
+                task_name="2vol",
+                source_dirs=[initial_twovol_source] if initial_twovol_source else [],
+                n_volumes_list=[config.scan.twovol_n_volumes],
+                start_run=None,
+                max_runs=config.scan.twovol_max_runs,
+            )
+
+        # Step 1: Import manual masks (no localizer or preprocessing needed)
+        ref_file = config.mask.manual_ref_file
+        network_files = run_mask_extraction(config, None, None, ref_file, overwrite)
+
+        # Step 2: Coregistration to initial 2vol
+        coreg_mask_files = run_coregistration(
+            config,
+            network_files,
+            ref_file,
+            twovol_dicom_dir=initial_twovol[0],
+            overwrite=overwrite
+        )
+
+        logger.info("")
+        logger.info("Setup complete! Masks ready for feedback:")
+        for f in coreg_mask_files:
+            logger.info(f"  {f}")
+
+        return coreg_mask_files
 
     # Standard setup: full pipeline (compute masks)
     if config.visit:
