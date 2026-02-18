@@ -68,19 +68,18 @@ screens.participant_workflow : Pipeline execution screen
 """
 
 import logging
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
 
 import flet as ft
 
 from .config_manager import ConfigManager
 from .models import StudyConfig
 
+if TYPE_CHECKING:
+    from pineuro.session import VisitConfig
+
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -95,7 +94,7 @@ class PyrtnfApp:
         """
         self.page = page
         self.config_manager = ConfigManager()
-        self.current_study: Optional[StudyConfig] = None
+        self.current_study: StudyConfig | None = None
 
         # Configure page
         self._setup_page()
@@ -288,6 +287,7 @@ class PyrtnfApp:
             study_name: Name of the study to start
         """
         from pathlib import Path
+
         from .components.visit_selection_dialog import VisitSelectionDialog
 
         logger.info(f"Starting session for study: {study_name}")
@@ -295,9 +295,7 @@ class PyrtnfApp:
         # Load study to get example participant ID
         study_config = self.config_manager.load_study(study_name)
         if not study_config:
-            _snack = ft.SnackBar(
-                ft.Text(f"Failed to load study: {study_name}")
-            )
+            _snack = ft.SnackBar(ft.Text(f"Failed to load study: {study_name}"))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -389,9 +387,7 @@ class PyrtnfApp:
         new_study = self.config_manager.duplicate_study(study_name)
 
         if new_study:
-            _snack = ft.SnackBar(
-                ft.Text(f"Study duplicated: {new_study.metadata.name}")
-            )
+            _snack = ft.SnackBar(ft.Text(f"Study duplicated: {new_study.metadata.name}"))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -403,14 +399,13 @@ class PyrtnfApp:
         Args:
             study_name: Name of the study to delete
         """
+
         def delete_confirmed(e):
             self.page.pop_dialog()
 
             success = self.config_manager.delete_study(study_name)
             if success:
-                _snack = ft.SnackBar(
-                    ft.Text(f"Study deleted: {study_name}")
-                )
+                _snack = ft.SnackBar(ft.Text(f"Study deleted: {study_name}"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -430,7 +425,7 @@ class PyrtnfApp:
 
         self.page.show_dialog(dialog)
 
-    def show_study_editor(self, study_name: Optional[str]):
+    def show_study_editor(self, study_name: str | None):
         """Show the study editor screen.
 
         Args:
@@ -458,7 +453,7 @@ class PyrtnfApp:
             on_save=lambda: self.show_study_manager(),
             on_start_session=lambda participant_id, visit_id=None, visit_config=None: self.show_participant_workflow(
                 self.current_study, participant_id, visit_id, visit_config
-            )
+            ),
         )
 
         # Add editor UI

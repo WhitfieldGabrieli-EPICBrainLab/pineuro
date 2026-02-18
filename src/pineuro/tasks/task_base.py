@@ -17,16 +17,17 @@ Dependencies
 PsychoPy (for concrete tasks)
 """
 
-from abc import ABC
-from typing import Any, Callable, Dict, List, Optional
 import logging
 import threading
 import time
+from abc import ABC
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-class TaskBase(ABC):
+class TaskBase(ABC):  # noqa: B024
     """Common abstract base for all PsychoPy tasks.
 
     Provides shared functionality:
@@ -51,22 +52,22 @@ class TaskBase(ABC):
 
     def __init__(
         self,
-        trigger_keys: Optional[List[str]] = None,
+        trigger_keys: list[str] | None = None,
         simulator=None,
         **kwargs,
     ):
         self.trigger_keys = trigger_keys or ["t", "+", "5", "equal"]
         self._simulator = simulator
-        self._simulator_thread: Optional[threading.Thread] = None
+        self._simulator_thread: threading.Thread | None = None
 
         self._running = False
         self.win = None
 
         # Shared event fired when trigger is received (for external timing sync)
-        self.trigger_event: Optional[threading.Event] = None
+        self.trigger_event: threading.Event | None = None
 
         # Mirror callback for GUI visualization
-        self._mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._mirror_callback: Callable[[dict[str, Any]], None] | None = None
         self._mirror_frame_counter = 0
         self._mirror_frame_skip = 4  # Only capture every Nth frame
 
@@ -74,7 +75,7 @@ class TaskBase(ABC):
     # Mirror callback support
     # =========================================================================
 
-    def set_mirror_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
+    def set_mirror_callback(self, callback: Callable[[dict[str, Any]], None]) -> None:
         """Set callback for GUI mirroring.
 
         The callback receives visual state each frame for rendering in a GUI mirror.
@@ -107,7 +108,7 @@ class TaskBase(ABC):
         """
         if self._mirror_callback is None:
             return
-        if not hasattr(self, 'win') or self.win is None:
+        if not hasattr(self, "win") or self.win is None:
             return
 
         # Frame skipping: only capture every Nth frame to reduce overhead
@@ -123,22 +124,22 @@ class TaskBase(ABC):
         buffer = None
 
         try:
-            import io
             import base64
+            import io
 
             # Capture back buffer (drawn content before flip)
-            frame = self.win.getMovieFrame(buffer='back')
+            frame = self.win.getMovieFrame(buffer="back")
 
             # Resize to mirror dimensions (16:9 aspect ratio)
             frame_resized = frame.resize((480, 270))
 
             # Convert to JPEG for faster encoding (less overhead than PNG)
             buffer = io.BytesIO()
-            frame_resized.save(buffer, format='JPEG', quality=85)
-            img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            frame_resized.save(buffer, format="JPEG", quality=85)
+            img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
             # Emit to callback
-            self._mirror_callback({'type': 'screenshot', 'image': f'data:image/jpeg;base64,{img_base64}'})
+            self._mirror_callback({"type": "screenshot", "image": f"data:image/jpeg;base64,{img_base64}"})
         except Exception as e:
             logger.debug(f"Screenshot capture failed: {e}")
         finally:
@@ -172,7 +173,7 @@ class TaskBase(ABC):
             window_id = self.win.winHandle._window
 
             d = xlib_display.Display()
-            xlib_win = d.create_resource_object('window', window_id)
+            xlib_win = d.create_resource_object("window", window_id)
             xlib_win.configure(x=target_x, y=0)
             d.sync()
             d.close()
@@ -187,8 +188,8 @@ class TaskBase(ABC):
     def create_window(
         self,
         monitor_position: str = "right",
-        color: str = 'black',
-        units: str = 'height',
+        color: str = "black",
+        units: str = "height",
         **kwargs,
     ):
         """Create a fullscreen PsychoPy window with cross-platform monitor targeting.
@@ -213,26 +214,29 @@ class TaskBase(ABC):
         psychopy.visual.Window
             The created window (also stored as self.win)
         """
-        from psychopy import visual, monitors
+        from psychopy import monitors, visual
+
         from pineuro import config
         from pineuro.display import get_monitor_by_position
 
         platform = config.get_platform()
 
         # Create minimal monitor to avoid "Monitor specification not found" warning
-        mon = monitors.Monitor('neurofeedback')
+        mon = monitors.Monitor("neurofeedback")
 
         # Get target screen using display module
         target_monitor = get_monitor_by_position(monitor_position)
         if target_monitor:
             target_screen = target_monitor.index
-            logger.info(f"Task window targeting {monitor_position} monitor: {target_monitor.name} (screen={target_screen})")
+            logger.info(
+                f"Task window targeting {monitor_position} monitor: {target_monitor.name} (screen={target_screen})"
+            )
         else:
             target_screen = 0
             logger.warning("No monitors detected, using screen 0")
 
         # Platform-specific window creation
-        if platform in ('darwin', 'windows'):
+        if platform in ("darwin", "windows"):
             # macOS/Windows: screen parameter works directly
             self.win = visual.Window(
                 fullscr=True,
@@ -286,13 +290,14 @@ class TaskBase(ABC):
         """
         try:
             import pyglet.gl.gl_info as gl_info
+
             # Reset the global GLInfo instance to initial state
             gl_info.remove_active_context()
             # Also reset the cached version/renderer info so it re-queries on next window
             gl_info._have_info = False
-            gl_info.version = '0.0.0'
-            gl_info.vendor = ''
-            gl_info.renderer = ''
+            gl_info.version = "0.0.0"
+            gl_info.vendor = ""
+            gl_info.renderer = ""
             gl_info.extensions = set()
             logger.debug("Reset pyglet gl_info state for clean window recreation")
         except Exception as e:
@@ -304,8 +309,8 @@ class TaskBase(ABC):
 
     def show_instructions(
         self,
-        slides: List[str],
-        advance_keys: Optional[List[str]] = None,
+        slides: list[str],
+        advance_keys: list[str] | None = None,
         text_height: float = 0.05,
         wrap_width: float = 1.5,
     ) -> None:
@@ -330,19 +335,19 @@ class TaskBase(ABC):
         KeyboardInterrupt
             If escape is pressed or stop signal received
         """
-        from psychopy import visual, event, core
+        from psychopy import core, event, visual
 
         advance_keys = advance_keys or ["space", "return", "1", "2", "3"]
 
         # Create instruction text stimulus
         instruction_text = visual.TextStim(
             self.win,
-            text='',
+            text="",
             pos=(0, 0),
             height=text_height,
             wrapWidth=wrap_width,
-            color='white',
-            alignText='center',
+            color="white",
+            alignText="center",
         )
 
         for slide_text in slides:
@@ -352,13 +357,13 @@ class TaskBase(ABC):
             self.win.flip()
 
             # Wait for advance key
-            event.clearEvents('keyboard')
+            event.clearEvents("keyboard")
             while True:
                 if not self._running:
                     raise KeyboardInterrupt("Stopped by user")
 
-                keys = event.getKeys(keyList=advance_keys + ['escape'])
-                if 'escape' in keys:
+                keys = event.getKeys(keyList=advance_keys + ["escape"])
+                if "escape" in keys:
                     raise KeyboardInterrupt("Escaped during instructions")
                 if keys:
                     break
@@ -390,7 +395,7 @@ class TaskBase(ABC):
         KeyboardInterrupt
             If escape is pressed or stop signal received
         """
-        from psychopy import visual, event, core
+        from psychopy import core, event, visual
 
         # Display waiting message
         waiting_text = visual.TextStim(
@@ -398,7 +403,7 @@ class TaskBase(ABC):
             text=message,
             pos=(0, 0),
             height=0.05,
-            color='white',
+            color="white",
         )
         waiting_text.draw()
         self._capture_and_emit_screenshot(force=True)
@@ -406,7 +411,7 @@ class TaskBase(ABC):
 
         # Clear stale keyboard events before waiting
         logger.info(f"Waiting for trigger (keys: {self.trigger_keys})...")
-        event.clearEvents('keyboard')
+        event.clearEvents("keyboard")
 
         # Start simulator if present (replicates real scanner: trigger key + DICOMs)
         # Must be AFTER clearEvents to avoid wiping the injected trigger key
@@ -416,8 +421,8 @@ class TaskBase(ABC):
             if not self._running:
                 raise KeyboardInterrupt("Stopped by user")
 
-            keys = event.getKeys(keyList=self.trigger_keys + ['escape'])
-            if 'escape' in keys:
+            keys = event.getKeys(keyList=self.trigger_keys + ["escape"])
+            if "escape" in keys:
                 raise KeyboardInterrupt("Escaped during trigger wait")
             if any(k in keys for k in self.trigger_keys):
                 logger.info("Trigger received, starting task")
@@ -431,7 +436,7 @@ class TaskBase(ABC):
         # Post-trigger hook (e.g., BaseTask calls coordinator.send_trigger())
         self._on_trigger()
 
-    def _on_trigger(self) -> None:
+    def _on_trigger(self) -> None:  # noqa: B027
         """Hook called after trigger is received.
 
         Default is no-op. BaseTask overrides to call coordinator.send_trigger().
@@ -449,6 +454,7 @@ class TaskBase(ABC):
         scanner sending a trigger key before acquiring volumes.
         """
         from psychopy import event as psychopy_event
+
         key = self.trigger_keys[0]  # e.g. 't'
         psychopy_event._keyBuffer.append((key, 0.0))
         logger.info(f"Simulator injected synthetic trigger key: '{key}'")
@@ -517,13 +523,14 @@ class TaskBase(ABC):
                 logger.info("Simulator thread joined successfully")
 
         # Close window
-        if hasattr(self, 'win') and self.win is not None:
+        if hasattr(self, "win") and self.win is not None:
             self.win.close()
             self.win = None
 
         # Clear pending events for clean state
         try:
             from psychopy import event
+
             event.clearEvents()
         except Exception:
             pass

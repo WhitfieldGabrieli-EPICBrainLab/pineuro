@@ -32,18 +32,18 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
 from .base import BaseTask
+from .factory import register_task_class
 from .task_registry import (
+    NetworkRole,
     TaskMetadata,
     TaskParameter,
-    NetworkRole,
     register_task,
 )
-from .factory import register_task_class
 
 if TYPE_CHECKING:
     from .session import SessionState
@@ -55,9 +55,11 @@ logger = logging.getLogger(__name__)
 # Data structures
 # =============================================================================
 
+
 @dataclass
 class BlockInfo:
     """Condition information for a single block."""
+
     instruction_text: str
     audio_files: list[str]
     question_text: str
@@ -67,6 +69,7 @@ class BlockInfo:
 # =============================================================================
 # Task implementation
 # =============================================================================
+
 
 class ThermometerTask(BaseTask):
     """Block-design audio neurofeedback task with thermometer feedback.
@@ -121,7 +124,7 @@ class ThermometerTask(BaseTask):
     def __init__(
         self,
         coordinator,
-        mask_names: Optional[list[str]] = None,
+        mask_names: list[str] | None = None,
         stim_dir: str = "",
         feedback_mode: bool = True,
         baseline_duration: float = 30.0,
@@ -138,7 +141,7 @@ class ThermometerTask(BaseTask):
         right_button: str = "2",
         confirm_button: str = "3",
         session_state: Optional["SessionState"] = None,
-        trigger_keys: Optional[list[str]] = None,
+        trigger_keys: list[str] | None = None,
         presenter_monitor: str = "right",
         **kwargs,
     ):
@@ -194,7 +197,7 @@ class ThermometerTask(BaseTask):
         self._task_clock = None
 
         # Date string for TSV
-        self._date = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+        self._date = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
         logger.info(
             f"ThermometerTask initialized: mask={self.mask_name}, "
@@ -224,14 +227,12 @@ class ThermometerTask(BaseTask):
             If no matching condition file is found.
         """
         if self.stim_dir is None or not self.stim_dir.is_dir():
-            raise FileNotFoundError(
-                f"Stimulus directory not found or not set: {self.stim_dir}"
-            )
+            raise FileNotFoundError(f"Stimulus directory not found or not set: {self.stim_dir}")
 
         # Get participant/session/run info from coordinator
-        participant = getattr(self.coordinator, 'subject', 'unknown')
-        run_number = getattr(self.coordinator, 'run_number', 1)
-        session = getattr(self.coordinator, 'session', 'feedback')
+        participant = getattr(self.coordinator, "subject", "unknown")
+        run_number = getattr(self.coordinator, "run_number", 1)
+        session = getattr(self.coordinator, "session", "feedback")
 
         run_str = f"run-{run_number:02d}"
 
@@ -274,12 +275,12 @@ class ThermometerTask(BaseTask):
         with open(condition_path) as f:
             reader = csv.DictReader(f)
             for row in reader:
-                instruction = row['instruction_text'].strip()
+                instruction = row["instruction_text"].strip()
                 raw_files = [
-                    row['voice_file1'].strip(),
-                    row['voice_file2'].strip(),
-                    row['voice_file3'].strip(),
-                    row['voice_file4'].strip(),
+                    row["voice_file1"].strip(),
+                    row["voice_file2"].strip(),
+                    row["voice_file3"].strip(),
+                    row["voice_file4"].strip(),
                 ]
 
                 # Resolve audio file paths relative to stim_dir if provided
@@ -291,19 +292,21 @@ class ThermometerTask(BaseTask):
                     else:
                         audio_files.append(str(f_path))
 
-                question = row['question'].strip()
+                question = row["question"].strip()
 
-                if 'listen' in instruction.lower():
-                    block_type = 'listen'
+                if "listen" in instruction.lower():
+                    block_type = "listen"
                 else:
-                    block_type = 'ignore'
+                    block_type = "ignore"
 
-                blocks.append(BlockInfo(
-                    instruction_text=instruction,
-                    audio_files=audio_files,
-                    question_text=question,
-                    block_type=block_type,
-                ))
+                blocks.append(
+                    BlockInfo(
+                        instruction_text=instruction,
+                        audio_files=audio_files,
+                        question_text=question,
+                        block_type=block_type,
+                    )
+                )
 
         logger.info(f"Loaded {len(blocks)} blocks from {condition_path}")
         if self.stim_dir:
@@ -319,13 +322,15 @@ class ThermometerTask(BaseTask):
         super()._update_data(activations, volume, elapsed, is_baseline, is_outlier)
 
         # Store all activations for end-of-run per-TR logging
-        self._all_activations.append({
-            'volume': volume,
-            'elapsed': elapsed,
-            'stg': activations.get(self.mask_name, float('nan')),
-            'is_baseline': is_baseline,
-            'is_outlier': is_outlier,
-        })
+        self._all_activations.append(
+            {
+                "volume": volume,
+                "elapsed": elapsed,
+                "stg": activations.get(self.mask_name, float("nan")),
+                "is_baseline": is_baseline,
+                "is_outlier": is_outlier,
+            }
+        )
 
         if self._accumulating and not is_outlier:
             activation = activations.get(self.mask_name, 0.0)
@@ -347,19 +352,31 @@ class ThermometerTask(BaseTask):
 
     # Fixed column order matching the original Run_STG_Task.py
     _TSV_COLUMNS = [
-        'onset', 'duration', 'trial_type', 'block_count', 'block_type',
-        'response', 'response_time', 'stg_activity', 'smc_activity',
-        'feedback', 'sound_content', 'visual_content', 'number',
-        'stim_file', 'stim_duration', 'date',
+        "onset",
+        "duration",
+        "trial_type",
+        "block_count",
+        "block_type",
+        "response",
+        "response_time",
+        "stg_activity",
+        "smc_activity",
+        "feedback",
+        "sound_content",
+        "visual_content",
+        "number",
+        "stim_file",
+        "stim_duration",
+        "date",
     ]
 
     def _record_event(self, onset: float, duration: float, trial_type: str, **kwargs):
         """Record an event for the BIDS events TSV."""
-        event = {col: 'n/a' for col in self._TSV_COLUMNS}
-        event['onset'] = round(onset, 1)
-        event['duration'] = round(duration, 1) if not isinstance(duration, str) else duration
-        event['trial_type'] = trial_type
-        event['date'] = self._date
+        event = {col: "n/a" for col in self._TSV_COLUMNS}
+        event["onset"] = round(onset, 1)
+        event["duration"] = round(duration, 1) if not isinstance(duration, str) else duration
+        event["trial_type"] = trial_type
+        event["date"] = self._date
         event.update(kwargs)
         self._events.append(event)
 
@@ -368,23 +385,25 @@ class ThermometerTask(BaseTask):
         if not self._events:
             return
 
-        output_dir = getattr(self.coordinator, 'output_dir', None)
+        output_dir = getattr(self.coordinator, "output_dir", None)
         if output_dir is None:
             logger.warning("No output_dir on coordinator, cannot save events TSV")
             return
 
         output_dir = Path(output_dir)
-        subject = getattr(self.coordinator, 'subject', 'unknown')
-        task = getattr(self.coordinator, 'task', 'thermometer')
-        run_number = getattr(self.coordinator, 'run_number', 1)
+        subject = getattr(self.coordinator, "subject", "unknown")
+        task = getattr(self.coordinator, "task", "thermometer")
+        run_number = getattr(self.coordinator, "run_number", 1)
         run_str = f"run-{run_number:02d}"
 
         path = output_dir / f"{subject}_task-{task}_{run_str}_events.tsv"
 
-        with open(path, 'w', newline='') as f:
+        with open(path, "w", newline="") as f:
             writer = csv.DictWriter(
-                f, fieldnames=self._TSV_COLUMNS, delimiter='\t',
-                extrasaction='ignore',
+                f,
+                fieldnames=self._TSV_COLUMNS,
+                delimiter="\t",
+                extrasaction="ignore",
             )
             writer.writeheader()
             for event in self._events:
@@ -408,13 +427,13 @@ class ThermometerTask(BaseTask):
             display is redrawn, captured, and flipped every frame (matching
             the ball task pattern). If None, the screen is not updated.
         """
-        from psychopy import event, core
+        from psychopy import core, event
 
         clock = core.Clock()
         while clock.getTime() < duration and self._running:
-            if hasattr(self, 'coordinator') and self.coordinator.was_stopped():
+            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
                 raise KeyboardInterrupt("Stopped by user")
-            keys = event.getKeys(keyList=['escape'])
+            keys = event.getKeys(keyList=["escape"])
             if keys:
                 raise KeyboardInterrupt("Escaped")
             if draw_func:
@@ -426,19 +445,22 @@ class ThermometerTask(BaseTask):
 
     def _show_fixation(self, duration: float):
         """Display fixation cross for a given duration, updating GUI each frame."""
+
         def draw():
             self._fixation.draw()
+
         self._wait_with_escape(duration, draw_func=draw)
 
     def _show_instruction_prompt(self, text: str, duration: float):
         """Display block instruction for a given duration, updating GUI each frame."""
         self._instruction_stim.text = text
+
         def draw():
             self._instruction_stim.draw()
+
         self._wait_with_escape(duration, draw_func=draw)
 
-    def _play_audio_block(self, audio_files: list[str], block_idx: int,
-                          block_type: str):
+    def _play_audio_block(self, audio_files: list[str], block_idx: int, block_type: str):
         """Play audio sentences with fixed timing: ISI(0.5s) + voice(3.5s) each.
 
         Matches the original Run_STG_Task.py timing structure where each
@@ -450,7 +472,6 @@ class ThermometerTask(BaseTask):
         list[dict]
             Per-voice event info dicts with onset, file, duration, number.
         """
-        from psychopy import core
 
         voice_events = []
 
@@ -460,14 +481,19 @@ class ThermometerTask(BaseTask):
 
             # --- ISI transition (0.5s fixation) ---
             isi_onset = self._task_clock.getTime()
+
             def draw_fix():
                 self._fixation.draw()
+
             self._wait_with_escape(self.isi_duration, draw_func=draw_fix)
 
             self._record_event(
-                isi_onset, self.isi_duration, 'ISI',
-                block_count=block_idx + 1, block_type=block_type,
-                visual_content='+',
+                isi_onset,
+                self.isi_duration,
+                "ISI",
+                block_count=block_idx + 1,
+                block_type=block_type,
+                visual_content="+",
             )
 
             # --- Voice file (3.5s fixed) ---
@@ -477,6 +503,7 @@ class ThermometerTask(BaseTask):
             snd = self._preloaded_sounds.get(audio_path)
             if snd is None:
                 from psychopy.sound.backend_pygame import SoundPygame
+
                 snd = SoundPygame(audio_path)
 
             # Play audio over fixation cross for fixed duration
@@ -487,14 +514,14 @@ class ThermometerTask(BaseTask):
             # Extract file number from path for logging
             file_stem = Path(audio_path).stem
             # Try to extract numeric portion (e.g., "036_103" -> "103", "JO_S347" -> "347")
-            number = 'n/a'
-            parts = file_stem.split('_')
+            number = "n/a"
+            parts = file_stem.split("_")
             for part in reversed(parts):
                 if part.isdigit():
                     number = part
                     break
                 # Handle e.g. "S347" -> "347"
-                stripped = part.lstrip('SsQq')
+                stripped = part.lstrip("SsQq")
                 if stripped.isdigit():
                     number = stripped
                     break
@@ -503,19 +530,25 @@ class ThermometerTask(BaseTask):
             actual_duration = snd.getDuration() or self.voice_duration
 
             self._record_event(
-                voice_onset, self.voice_duration, 'voice_file',
-                block_count=block_idx + 1, block_type=block_type,
-                visual_content='+', number=number,
+                voice_onset,
+                self.voice_duration,
+                "voice_file",
+                block_count=block_idx + 1,
+                block_type=block_type,
+                visual_content="+",
+                number=number,
                 stim_file=audio_path,
                 stim_duration=round(actual_duration, 1),
             )
 
-            voice_events.append({
-                'onset': voice_onset,
-                'file': audio_path,
-                'number': number,
-                'actual_duration': actual_duration,
-            })
+            voice_events.append(
+                {
+                    "onset": voice_onset,
+                    "file": audio_path,
+                    "number": number,
+                    "actual_duration": actual_duration,
+                }
+            )
 
         return voice_events
 
@@ -535,7 +568,7 @@ class ThermometerTask(BaseTask):
         tuple of (rating_value, response_time)
             (int or None, float or None). None if timed out.
         """
-        from psychopy import visual, event, core
+        from psychopy import core, event, visual
 
         # Scale layout parameters
         scale_low = 1
@@ -558,9 +591,11 @@ class ThermometerTask(BaseTask):
 
         # Create scale line
         scale_line = visual.Line(
-            self.win, start=(-scale_width / 2, scale_y),
+            self.win,
+            start=(-scale_width / 2, scale_y),
             end=(scale_width / 2, scale_y),
-            lineColor='white', lineWidth=2,
+            lineColor="white",
+            lineWidth=2,
         )
 
         # Create tick marks and number labels
@@ -568,25 +603,36 @@ class ThermometerTask(BaseTask):
         tick_labels_stim = []
         for i, val in enumerate(range(scale_low, scale_high + 1)):
             tick = visual.Line(
-                self.win, start=(tick_x[i], scale_y - 0.015),
+                self.win,
+                start=(tick_x[i], scale_y - 0.015),
                 end=(tick_x[i], scale_y + 0.015),
-                lineColor='white', lineWidth=2,
+                lineColor="white",
+                lineWidth=2,
             )
             tick_marks.append(tick)
             label = visual.TextStim(
-                self.win, text=str(val), pos=(tick_x[i], scale_y - 0.05),
-                height=0.035, color='white',
+                self.win,
+                text=str(val),
+                pos=(tick_x[i], scale_y - 0.05),
+                height=0.035,
+                color="white",
             )
             tick_labels_stim.append(label)
 
         # Endpoint labels below number labels
         left_label = visual.TextStim(
-            self.win, text='Completely',
-            pos=(tick_x[0], scale_y - 0.1), height=0.035, color='white',
+            self.win,
+            text="Completely",
+            pos=(tick_x[0], scale_y - 0.1),
+            height=0.035,
+            color="white",
         )
         right_label = visual.TextStim(
-            self.win, text='Not at all',
-            pos=(tick_x[-1], scale_y - 0.1), height=0.035, color='white',
+            self.win,
+            text="Not at all",
+            pos=(tick_x[-1], scale_y - 0.1),
+            height=0.035,
+            color="white",
         )
 
         # Triangle marker (pointing down toward the scale line)
@@ -595,12 +641,15 @@ class ThermometerTask(BaseTask):
 
         def make_marker(x_pos):
             return visual.ShapeStim(
-                self.win, vertices=[
+                self.win,
+                vertices=[
                     (x_pos - marker_size, scale_y + marker_gap + marker_size * 2),
                     (x_pos + marker_size, scale_y + marker_gap + marker_size * 2),
                     (x_pos, scale_y + marker_gap),
                 ],
-                fillColor='white', lineColor='white', closeShape=True,
+                fillColor="white",
+                lineColor="white",
+                closeShape=True,
             )
 
         # Question text - positioned above the scale with enough clearance
@@ -614,18 +663,18 @@ class ThermometerTask(BaseTask):
         confirmed = False
         rt = None
 
-        event.clearEvents('keyboard')
+        event.clearEvents("keyboard")
 
         while timer.getTime() > 0 and self._running:
-            if hasattr(self, 'coordinator') and self.coordinator.was_stopped():
+            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
                 raise KeyboardInterrupt("Stopped by user")
 
             keys = event.getKeys(
-                keyList=[self.left_button, self.right_button,
-                         self.confirm_button, 'return', 'escape'],
-                timeStamped=clock)
+                keyList=[self.left_button, self.right_button, self.confirm_button, "return", "escape"],
+                timeStamped=clock,
+            )
             for key, t in keys:
-                if key == 'escape':
+                if key == "escape":
                     raise KeyboardInterrupt("Escaped during rating")
                 if key == self.left_button:
                     if marker_pos != int(marker_pos):
@@ -639,7 +688,7 @@ class ThermometerTask(BaseTask):
                         marker_pos = math.ceil(marker_pos)
                     elif marker_pos < scale_high:
                         marker_pos += 1
-                elif key in (self.confirm_button, 'return'):
+                elif key in (self.confirm_button, "return"):
                     confirmed = True
                     rt = t
                     break
@@ -666,14 +715,15 @@ class ThermometerTask(BaseTask):
         # Wait out remaining time showing fixation
         remaining = timer.getTime()
         if remaining > 0:
+
             def draw_fix():
                 self._fixation.draw()
+
             self._wait_with_escape(remaining, draw_func=draw_fix)
 
         return last_rating
 
-    def _show_feedback_thermometer(self, block_median: float, block_type: str,
-                                   duration: float):
+    def _show_feedback_thermometer(self, block_median: float, block_type: str, duration: float):
         """Display animated thermometer feedback for a block.
 
         Creates 30 rectangle segments and reveals them progressively
@@ -688,7 +738,7 @@ class ThermometerTask(BaseTask):
         duration : float
             How long to display the thermometer.
         """
-        from psychopy import visual, event, core
+        from psychopy import core, event, visual
 
         if not self.feedback_mode:
             self._show_fixation(duration)
@@ -705,21 +755,24 @@ class ThermometerTask(BaseTask):
         recs = []
         n_segments = 30
 
-        if block_type == 'ignore':
+        if block_type == "ignore":
             if fb >= zero_val:
                 # Positive when should be negative -> Red (bad)
                 rec_height = (fb - zero_val) / (n_segments * (act_max - zero_val)) * 0.5
                 for idx in range(n_segments):
                     rec = visual.ShapeStim(
-                        self.win, closeShape=True,
+                        self.win,
+                        closeShape=True,
                         vertices=(
                             (-0.125, idx * rec_height),
                             (0.125, idx * rec_height),
                             (0.125, (idx + 1) * rec_height),
                             (-0.125, (idx + 1) * rec_height),
                         ),
-                        depth=-3, opacity=1,
-                        fillColor='Red', lineColor='Red',
+                        depth=-3,
+                        opacity=1,
+                        fillColor="Red",
+                        lineColor="Red",
                     )
                     recs.append(rec)
             else:
@@ -727,15 +780,18 @@ class ThermometerTask(BaseTask):
                 rec_height = (fb - zero_val) / (n_segments * (act_min - zero_val)) * 0.5
                 for idx in range(n_segments):
                     rec = visual.ShapeStim(
-                        self.win, closeShape=True,
+                        self.win,
+                        closeShape=True,
                         vertices=(
                             (-0.125, idx * -1 * rec_height),
                             (0.125, idx * -1 * rec_height),
                             (0.125, (idx + 1) * -1 * rec_height),
                             (-0.125, (idx + 1) * -1 * rec_height),
                         ),
-                        depth=-3, opacity=1,
-                        fillColor='Green', lineColor='Green',
+                        depth=-3,
+                        opacity=1,
+                        fillColor="Green",
+                        lineColor="Green",
                     )
                     recs.append(rec)
         else:  # "listen"
@@ -744,15 +800,18 @@ class ThermometerTask(BaseTask):
                 rec_height = (fb - zero_val) / (n_segments * (act_max - zero_val)) * 0.5
                 for idx in range(n_segments):
                     rec = visual.ShapeStim(
-                        self.win, closeShape=True,
+                        self.win,
+                        closeShape=True,
                         vertices=(
                             (-0.125, idx * rec_height),
                             (0.125, idx * rec_height),
                             (0.125, (idx + 1) * rec_height),
                             (-0.125, (idx + 1) * rec_height),
                         ),
-                        depth=-3, opacity=1,
-                        fillColor='Green', lineColor='Green',
+                        depth=-3,
+                        opacity=1,
+                        fillColor="Green",
+                        lineColor="Green",
                     )
                     recs.append(rec)
             else:
@@ -760,31 +819,34 @@ class ThermometerTask(BaseTask):
                 rec_height = (fb - zero_val) / (n_segments * (act_min - zero_val)) * 0.5
                 for idx in range(n_segments):
                     rec = visual.ShapeStim(
-                        self.win, closeShape=True,
+                        self.win,
+                        closeShape=True,
                         vertices=(
                             (-0.125, idx * -1 * rec_height),
                             (0.125, idx * -1 * rec_height),
                             (0.125, (idx + 1) * -1 * rec_height),
                             (-0.125, (idx + 1) * -1 * rec_height),
                         ),
-                        depth=-3, opacity=1,
-                        fillColor='Red', lineColor='Red',
+                        depth=-3,
+                        opacity=1,
+                        fillColor="Red",
+                        lineColor="Red",
                     )
                     recs.append(rec)
 
         # Set top/bottom labels
-        self._thermo_top_label.text = 'listen to self'
-        self._thermo_bottom_label.text = 'ignore all sounds'
+        self._thermo_top_label.text = "listen to self"
+        self._thermo_bottom_label.text = "ignore all sounds"
 
         # Animated display loop
         timer = core.CountdownTimer(duration)
         frame_n = 0
 
         while timer.getTime() > 0 and self._running:
-            if hasattr(self, 'coordinator') and self.coordinator.was_stopped():
+            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
                 raise KeyboardInterrupt("Stopped by user")
 
-            keys = event.getKeys(keyList=['escape'])
+            keys = event.getKeys(keyList=["escape"])
             if keys:
                 raise KeyboardInterrupt("Escaped during feedback")
 
@@ -807,9 +869,9 @@ class ThermometerTask(BaseTask):
 
         # Determine feedback color for TSV logging
         if recs:
-            feedback_color = 'red' if recs[0].fillColor[0] == 1.0 else 'green'
+            feedback_color = "red" if recs[0].fillColor[0] == 1.0 else "green"
         else:
-            feedback_color = 'n/a'
+            feedback_color = "n/a"
 
         return feedback_color
 
@@ -827,12 +889,10 @@ class ThermometerTask(BaseTask):
         if not self._all_activations:
             return
 
-        tr = getattr(self.coordinator, 'tr', 1.2)
+        tr = getattr(self.coordinator, "tr", 1.2)
 
         # Find block stimulus events to determine TR ranges
-        block_events = [
-            e for e in self._events if e['trial_type'] == 'voice_file'
-        ]
+        block_events = [e for e in self._events if e["trial_type"] == "voice_file"]
         if not block_events:
             return
 
@@ -840,7 +900,7 @@ class ThermometerTask(BaseTask):
         # Group voice events by block_count
         blocks_by_count: dict[int, list[dict]] = {}
         for e in block_events:
-            bc = e['block_count']
+            bc = e["block_count"]
             if bc not in blocks_by_count:
                 blocks_by_count[bc] = []
             blocks_by_count[bc].append(e)
@@ -851,15 +911,15 @@ class ThermometerTask(BaseTask):
         block_types = []
         for bc in sorted(blocks_by_count.keys()):
             events = blocks_by_count[bc]
-            first_onset = min(float(e['onset']) for e in events)
-            last_onset = max(float(e['onset']) for e in events)
+            first_onset = min(float(e["onset"]) for e in events)
+            last_onset = max(float(e["onset"]) for e in events)
             block_end = last_onset + self.voice_duration
 
             # Convert to TR indices (1-indexed, offset by baseline)
             start_tr = int(round(first_onset / tr)) + 1
             end_tr = int(round(block_end / tr)) + 1
             block_tr_ranges.append((start_tr, end_tr))
-            block_types.append(events[0]['block_type'])
+            block_types.append(events[0]["block_type"])
 
         # Determine overall range: first block start to last block end
         if not block_tr_ranges:
@@ -873,23 +933,25 @@ class ThermometerTask(BaseTask):
         intertrial_count = 0
 
         for act_data in self._all_activations:
-            vol = act_data['volume']
+            vol = act_data["volume"]
             if vol < overall_start_tr or vol > overall_end_tr:
                 continue
 
             onset = round(vol * tr, 1)
-            stg_val = act_data['stg']
+            stg_val = act_data["stg"]
 
             # Determine which block this TR belongs to
             in_block = False
             for block_idx, (start, end) in enumerate(block_tr_ranges):
                 if start <= vol <= end:
                     self._record_event(
-                        onset, tr, 'activation',
+                        onset,
+                        tr,
+                        "activation",
                         block_count=block_idx + 1,
                         block_type=block_types[block_idx],
                         stg_activity=stg_val,
-                        stim_file='murfi',
+                        stim_file="murfi",
                     )
                     in_block = True
                     break
@@ -900,10 +962,12 @@ class ThermometerTask(BaseTask):
                     intertrial_num += 1
 
                 self._record_event(
-                    onset, tr, 'activation',
-                    block_type=f'intertrial{intertrial_num}',
+                    onset,
+                    tr,
+                    "activation",
+                    block_type=f"intertrial{intertrial_num}",
                     stg_activity=stg_val,
-                    stim_file='murfi',
+                    stim_file="murfi",
                 )
 
     # =========================================================================
@@ -915,14 +979,21 @@ class ThermometerTask(BaseTask):
         # 1. Instruction prompt
         onset = self._task_clock.getTime()
         self._show_instruction_prompt(block_info.instruction_text, self.instruction_duration)
-        self._record_event(onset, self.instruction_duration, block_info.instruction_text,
-                           block_count=block_idx + 1, block_type='instruction',
-                           visual_content=block_info.instruction_text)
+        self._record_event(
+            onset,
+            self.instruction_duration,
+            block_info.instruction_text,
+            block_count=block_idx + 1,
+            block_type="instruction",
+            visual_content=block_info.instruction_text,
+        )
 
         # 2. Stimulus block with activation accumulation
         self._start_accumulating()
-        voice_events = self._play_audio_block(
-            block_info.audio_files, block_idx, block_info.block_type,
+        _voice_events = self._play_audio_block(
+            block_info.audio_files,
+            block_idx,
+            block_info.block_type,
         )
         block_activations = self._stop_accumulating()
         block_median = float(np.median(block_activations)) if block_activations else 0.0
@@ -930,40 +1001,60 @@ class ThermometerTask(BaseTask):
         # 3. Rating
         onset = self._task_clock.getTime()
         last_rating = self._run_block_rating(block_info.question_text, self.rating_duration)
-        rating_response = last_rating[0] if last_rating[0] is not None else 'n/a'
-        rating_rt = round(last_rating[1], 2) if last_rating[1] is not None else 'n/a'
-        self._record_event(onset, self.rating_duration, 'rating',
-                           block_count=block_idx + 1, block_type=block_info.instruction_text,
-                           response=rating_response, response_time=rating_rt,
-                           visual_content=block_info.question_text)
+        rating_response = last_rating[0] if last_rating[0] is not None else "n/a"
+        rating_rt = round(last_rating[1], 2) if last_rating[1] is not None else "n/a"
+        self._record_event(
+            onset,
+            self.rating_duration,
+            "rating",
+            block_count=block_idx + 1,
+            block_type=block_info.instruction_text,
+            response=rating_response,
+            response_time=rating_rt,
+            visual_content=block_info.question_text,
+        )
 
         # 4. Feedback thermometer (or fixation for transfer)
         onset = self._task_clock.getTime()
         if self.feedback_mode:
             feedback_color = self._show_feedback_thermometer(
-                block_median, block_info.block_type, self.feedback_duration,
+                block_median,
+                block_info.block_type,
+                self.feedback_duration,
             )
-            self._record_event(onset, self.feedback_duration, 'feedback',
-                               block_count=block_idx + 1,
-                               block_type=block_info.instruction_text,
-                               feedback=round(block_median, 3),
-                               visual_content=feedback_color)
+            self._record_event(
+                onset,
+                self.feedback_duration,
+                "feedback",
+                block_count=block_idx + 1,
+                block_type=block_info.instruction_text,
+                feedback=round(block_median, 3),
+                visual_content=feedback_color,
+            )
             fixation_dur = self.fixation_nfb_duration
         else:
             self._show_fixation(self.feedback_duration)
-            self._record_event(onset, self.feedback_duration, 'nofeedback',
-                               block_count=block_idx + 1,
-                               block_type=block_info.instruction_text,
-                               visual_content='+')
+            self._record_event(
+                onset,
+                self.feedback_duration,
+                "nofeedback",
+                block_count=block_idx + 1,
+                block_type=block_info.instruction_text,
+                visual_content="+",
+            )
             fixation_dur = self.fixation_transfer_duration
 
         # 5. Inter-block fixation
         onset = self._task_clock.getTime()
         self._show_fixation(fixation_dur)
-        self._record_event(onset, fixation_dur, 'fixation',
-                           block_count=block_idx + 1,
-                           block_type=block_info.instruction_text,
-                           visual_content='+')
+        self._record_event(
+            onset,
+            fixation_dur,
+            "fixation",
+            block_count=block_idx + 1,
+            block_type=block_info.instruction_text,
+            visual_content="+",
+        )
 
     # =========================================================================
     # Lifecycle
@@ -980,8 +1071,8 @@ class ThermometerTask(BaseTask):
         # Create window
         self.create_window(
             monitor_position=self.presenter_monitor,
-            color='black',
-            units='height',
+            color="black",
+            units="height",
         )
 
         # Pre-load all audio files using pygame backend.
@@ -997,58 +1088,99 @@ class ThermometerTask(BaseTask):
 
         # Create fixation cross
         self._fixation = visual.TextStim(
-            self.win, text='+', pos=(0, 0), height=0.3, color='white',
+            self.win,
+            text="+",
+            pos=(0, 0),
+            height=0.3,
+            color="white",
         )
 
         # Create instruction text stimulus
         self._instruction_stim = visual.TextStim(
-            self.win, text='', pos=(0, 0), height=0.1, color='white',
+            self.win,
+            text="",
+            pos=(0, 0),
+            height=0.1,
+            color="white",
         )
 
         # Create rating question stimulus
         self._rating_question = visual.TextStim(
-            self.win, text='', pos=(0, 0), height=0.1, wrapWidth=None, color='white',
+            self.win,
+            text="",
+            pos=(0, 0),
+            height=0.1,
+            wrapWidth=None,
+            color="white",
         )
 
         # Create thermometer visual components
         self._thermo_outline = visual.ShapeStim(
-            self.win, lineWidth=2.0, lineColor='white',
+            self.win,
+            lineWidth=2.0,
+            lineColor="white",
             vertices=((-0.125, -0.5), (0.125, -0.5), (0.125, 0.5), (-0.125, 0.5)),
-            closeShape=True, fillColor=None,
+            closeShape=True,
+            fillColor=None,
         )
         self._thermo_zero_line = visual.ShapeStim(
-            self.win, lineWidth=2.0, lineColor='white',
+            self.win,
+            lineWidth=2.0,
+            lineColor="white",
             vertices=((-0.125, 0), (0.125, 0)),
             closeShape=False,
         )
         self._thermo_zero_label = visual.TextStim(
-            self.win, text='0', pos=(0.155, 0), height=0.04, color='white',
+            self.win,
+            text="0",
+            pos=(0.155, 0),
+            height=0.04,
+            color="white",
         )
         self._thermo_top_label = visual.TextStim(
-            self.win, text='listen to self', pos=(0, 0.6), height=0.06, color='white',
+            self.win,
+            text="listen to self",
+            pos=(0, 0.6),
+            height=0.06,
+            color="white",
         )
         self._thermo_bottom_label = visual.TextStim(
-            self.win, text='ignore all sounds', pos=(0, -0.6), height=0.06, color='white',
+            self.win,
+            text="ignore all sounds",
+            pos=(0, -0.6),
+            height=0.06,
+            color="white",
         )
         self._thermo_top_star = visual.TextStim(
-            self.win, text='*', pos=(0.5, 0.5), height=0.5, color='white',
+            self.win,
+            text="*",
+            pos=(0.5, 0.5),
+            height=0.5,
+            color="white",
         )
         self._thermo_bottom_star = visual.TextStim(
-            self.win, text='*', pos=(0.5, -0.5), height=0.5, color='white',
+            self.win,
+            text="*",
+            pos=(0.5, -0.5),
+            height=0.5,
+            color="white",
         )
 
         # Show task instructions (matching original wording)
         # Only confirm_button advances (original accepted any button box key)
-        self.show_instructions([
-            'In this task you will be asked to either '
-            'attend to your own voice or ignore all sounds '
-            'including the voices and any other noise '
-            'in the environment.\n\n'
-            'When ignoring sounds, you may use '
-            '"noting practice" strategy suggested '
-            'by the experimenter.\n\n'
-            'When you are ready please press the "YES" button.',
-        ], advance_keys=[self.confirm_button, 'space'])
+        self.show_instructions(
+            [
+                "In this task you will be asked to either "
+                "attend to your own voice or ignore all sounds "
+                "including the voices and any other noise "
+                "in the environment.\n\n"
+                "When ignoring sounds, you may use "
+                '"noting practice" strategy suggested '
+                "by the experimenter.\n\n"
+                'When you are ready please press the "YES" button.',
+            ],
+            advance_keys=[self.confirm_button, "space"],
+        )
 
         # Wait for scanner trigger
         self.wait_for_trigger()
@@ -1073,8 +1205,7 @@ class ThermometerTask(BaseTask):
             # Initial baseline
             onset = self._task_clock.getTime()
             self._show_fixation(self.baseline_duration)
-            self._record_event(onset, self.baseline_duration, 'baseline',
-                               block_type='baseline', visual_content='+')
+            self._record_event(onset, self.baseline_duration, "baseline", block_type="baseline", visual_content="+")
 
             # Block loop
             for block_idx, block_info in enumerate(self._blocks):
@@ -1095,10 +1226,9 @@ class ThermometerTask(BaseTask):
     def get_run_results(self) -> dict:
         """Return ThermometerTask-specific results from the completed run."""
         results = super().get_run_results()
-        results['n_blocks_completed'] = len([
-            e for e in self._events
-            if e['trial_type'] == 'voice_file'
-        ]) // 4  # 4 voice files per block
+        results["n_blocks_completed"] = (
+            len([e for e in self._events if e["trial_type"] == "voice_file"]) // 4
+        )  # 4 voice files per block
         return results
 
     def cleanup(self):
@@ -1110,19 +1240,23 @@ class ThermometerTask(BaseTask):
 
         # Set snapshot for base class run recording
         self._task_state_snapshot = {
-            "n_blocks_completed": len([
-                e for e in self._events
-                if e['trial_type'] == 'voice_file'
-            ]) // 4,  # 4 voice files per block
+            "n_blocks_completed": len([e for e in self._events if e["trial_type"] == "voice_file"])
+            // 4,  # 4 voice files per block
         }
 
         # Delete visual stimuli while GL context is still alive
         # (prevents PsychoPy TextStim.__del__ access violations during GC)
         for attr in [
-            '_fixation', '_instruction_stim', '_rating_question',
-            '_thermo_outline', '_thermo_zero_line', '_thermo_zero_label',
-            '_thermo_top_label', '_thermo_bottom_label',
-            '_thermo_top_star', '_thermo_bottom_star',
+            "_fixation",
+            "_instruction_stim",
+            "_rating_question",
+            "_thermo_outline",
+            "_thermo_zero_line",
+            "_thermo_zero_label",
+            "_thermo_top_label",
+            "_thermo_bottom_label",
+            "_thermo_top_star",
+            "_thermo_bottom_star",
         ]:
             if hasattr(self, attr):
                 delattr(self, attr)

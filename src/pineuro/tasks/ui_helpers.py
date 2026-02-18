@@ -26,7 +26,6 @@ class MyTask(BaseTask):
 """
 
 import logging
-from typing import Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +33,9 @@ logger = logging.getLogger(__name__)
 def create_fixation_cross(
     win,
     size: float = 0.05,
-    color: str = 'white',
+    color: str = "white",
     line_width: float = 3,
-    pos: Tuple[float, float] = (0, 0),
+    pos: tuple[float, float] = (0, 0),
 ):
     """Create a fixation cross stimulus.
 
@@ -61,9 +60,11 @@ def create_fixation_cross(
     from psychopy import visual
 
     vertices = [
-        (-size, 0), (size, 0),  # Horizontal line
+        (-size, 0),
+        (size, 0),  # Horizontal line
         (0, 0),  # Return to center
-        (0, -size), (0, size),  # Vertical line
+        (0, -size),
+        (0, size),  # Vertical line
     ]
 
     return visual.ShapeStim(
@@ -80,9 +81,9 @@ def create_progress_bar(
     win,
     width: float = 0.8,
     height: float = 0.05,
-    pos: Tuple[float, float] = (0, -0.4),
-    fill_color: str = 'green',
-    outline_color: str = 'white',
+    pos: tuple[float, float] = (0, -0.4),
+    fill_color: str = "green",
+    outline_color: str = "white",
     line_width: float = 2,
 ):
     """Create a progress bar with outline and fill.
@@ -165,14 +166,14 @@ def update_progress_bar(
 def display_text(
     win,
     text: str,
-    duration: Optional[float] = None,
+    duration: float | None = None,
     wait_key: bool = False,
     wait_keys: list = None,
-    pos: Tuple[float, float] = (0, 0),
+    pos: tuple[float, float] = (0, 0),
     height: float = 0.05,
-    color: str = 'white',
+    color: str = "white",
     wrap_width: float = 1.5,
-) -> Optional[str]:
+) -> str | None:
     """Display text on screen, optionally for a duration or until keypress.
 
     Parameters
@@ -202,7 +203,7 @@ def display_text(
     str or None
         Key pressed if wait_key is True, otherwise None
     """
-    from psychopy import visual, event, core
+    from psychopy import core, event, visual
 
     text_stim = visual.TextStim(
         win,
@@ -221,7 +222,7 @@ def display_text(
         return None
 
     if wait_key:
-        event.clearEvents('keyboard')
+        event.clearEvents("keyboard")
         while True:
             keys = event.getKeys(keyList=wait_keys)
             if keys:
@@ -234,9 +235,9 @@ def display_text(
 def create_circle(
     win,
     radius: float = 0.1,
-    pos: Tuple[float, float] = (0, 0),
-    fill_color: str = 'white',
-    line_color: Optional[str] = None,
+    pos: tuple[float, float] = (0, 0),
+    fill_color: str = "white",
+    line_color: str | None = None,
     line_width: float = 0,
 ):
     """Create a circle stimulus.
@@ -278,7 +279,7 @@ def create_target_zone(
     y_center: float,
     height: float,
     width: float = 0.2,
-    color: str = 'yellow',
+    color: str = "yellow",
     line_width: float = 2,
     opacity: float = 0.5,
 ):
@@ -345,17 +346,17 @@ def wait_with_escape(
     KeyboardInterrupt
         If escape is pressed or stop signal received
     """
-    from psychopy import event, core
+    from psychopy import core, event
 
     clock = core.Clock()
-    event.clearEvents('keyboard')
+    event.clearEvents("keyboard")
 
     while clock.getTime() < duration:
         if check_stop_callback and check_stop_callback():
             raise KeyboardInterrupt("Stopped by user")
 
-        keys = event.getKeys(keyList=['escape'])
-        if 'escape' in keys:
+        keys = event.getKeys(keyList=["escape"])
+        if "escape" in keys:
             raise KeyboardInterrupt("Escaped by user")
 
         core.wait(0.01)

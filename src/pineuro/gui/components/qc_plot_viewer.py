@@ -6,8 +6,8 @@ in an external browser.
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
 
 import flet as ft
 
@@ -30,11 +30,11 @@ class QCPlotViewer:
         self,
         page: ft.Page,
         title: str,
-        plots: List[Tuple[str, Path]],
-        html_report_path: Optional[Path] = None,
+        plots: list[tuple[str, Path]],
+        html_report_path: Path | None = None,
         require_approval: bool = False,
-        on_approve: Optional[Callable[[], None]] = None,
-        on_reject: Optional[Callable[[], None]] = None,
+        on_approve: Callable[[], None] | None = None,
+        on_reject: Callable[[], None] | None = None,
     ):
         """Initialize the QC plot viewer.
 
@@ -54,7 +54,7 @@ class QCPlotViewer:
         self.require_approval = require_approval
         self.on_approve = on_approve
         self.on_reject = on_reject
-        self._dialog: Optional[ft.AlertDialog] = None
+        self._dialog: ft.AlertDialog | None = None
 
     def show(self):
         """Display the modal dialog."""
@@ -68,7 +68,6 @@ class QCPlotViewer:
             self.page.overlay.append(_snack)
             self.page.update()
             return
-
 
         # Use different styling for approval mode
         if self.require_approval:
@@ -142,7 +141,7 @@ class QCPlotViewer:
             height=600,
         )
 
-    def _build_actions(self) -> List[ft.Control]:
+    def _build_actions(self) -> list[ft.Control]:
         """Build dialog action buttons.
 
         Returns:

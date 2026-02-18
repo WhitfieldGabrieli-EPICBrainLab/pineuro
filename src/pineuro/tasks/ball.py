@@ -23,16 +23,14 @@ import csv
 import logging
 import time
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 # Third-party imports
 import numpy as np
-from numpy.typing import NDArray
 
 # Note: psychopy imports are lazy (inside methods) to avoid initialising
 # pyglet's OpenGL shadow window on the main thread, which breaks
 # background-thread window creation on native Windows.
-
 # Local imports
 from .base import BaseTask
 
@@ -50,14 +48,15 @@ logger = logging.getLogger(__name__)
 # Re-export for backward compatibility with existing imports from this module.
 # compute_hrf and compute_boxcar_task_regressor are imported lazily via __getattr__
 # to avoid pulling in pineuro.utils (and its heavy deps) at import time.
-__all__ = ['BallTask', 'compute_hrf', 'compute_boxcar_task_regressor']
+__all__ = ["BallTask", "compute_hrf", "compute_boxcar_task_regressor"]  # noqa: F822
 
 
 def __getattr__(name):
-    if name in ('compute_hrf', 'compute_boxcar_task_regressor'):
-        from pineuro.utils import compute_hrf, compute_boxcar_task_regressor
-        globals()['compute_hrf'] = compute_hrf
-        globals()['compute_boxcar_task_regressor'] = compute_boxcar_task_regressor
+    if name in ("compute_hrf", "compute_boxcar_task_regressor"):
+        from pineuro.utils import compute_boxcar_task_regressor, compute_hrf
+
+        globals()["compute_hrf"] = compute_hrf
+        globals()["compute_boxcar_task_regressor"] = compute_boxcar_task_regressor
         return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -172,14 +171,14 @@ class BallTask(BaseTask):
     def __init__(
         self,
         coordinator,
-        mask_names: Optional[list[str]] = None,
+        mask_names: list[str] | None = None,
         scale_factor: float = 10.0,
         internal_scaler: float = 10.0,
         pda_outlier_threshold: float = 2.0,
         trigger_keys: list[str] = None,
-        left_button: str = '1',
-        right_button: str = '2',
-        enter_button: str = '0',
+        left_button: str = "1",
+        right_button: str = "2",
+        enter_button: str = "0",
         feedback_mode: bool = True,
         run_number: int = 1,
         is_first_of_type: bool = True,
@@ -196,16 +195,14 @@ class BallTask(BaseTask):
         self._session_state = session_state
         self.run_number = run_number
         self.is_first_of_type = is_first_of_type
-        
+
         self._min_hits_threshold = min_hits_threshold
         self._max_hits_threshold = max_hits_threshold
         self._scale_adjust_factor = scale_adjust_factor
         self.circle_shrink_factor = circle_shrink_factor
 
         if len(coordinator.mask_names) < 2:
-            raise ValueError(
-                f"BallTask requires at least 2 masks, got {len(coordinator.mask_names)}"
-            )
+            raise ValueError(f"BallTask requires at least 2 masks, got {len(coordinator.mask_names)}")
 
         if mask_names is None:
             mask_names = coordinator.mask_names[:2]
@@ -226,9 +223,9 @@ class BallTask(BaseTask):
         self.internal_scaler = internal_scaler
         self.pda_outlier_threshold = pda_outlier_threshold
 
-        self.trigger_keys = trigger_keys if trigger_keys is not None else ['t']
-        self.instruction_advance_keys = ['space']
-        
+        self.trigger_keys = trigger_keys if trigger_keys is not None else ["t"]
+        self.instruction_advance_keys = ["space"]
+
         self.left_button = left_button
         self.right_button = right_button
         self.enter_button = enter_button
@@ -239,48 +236,50 @@ class BallTask(BaseTask):
         self.hit_counters = [0, 0]
         self.circle_positions = [1.0 / 3, -1.0 / 3]
         self.circle_radii = [0.15, 0.15]
-        self.circle_colors = ['yellow', '#1E90FF']
+        self.circle_colors = ["yellow", "#1E90FF"]
 
         # Store slot info from coordinator for session state tracking
-        self._slot_run_number = getattr(coordinator, 'run_number', None)
-        self._acq = getattr(coordinator, 'acq', None)
+        self._slot_run_number = getattr(coordinator, "run_number", None)
+        self._acq = getattr(coordinator, "acq", None)
 
         if session_state is not None:
             # Use slot-aware state lookup for retries
             if self._slot_run_number is not None and self._acq is not None:
-                slot_state = session_state.get_state_for_slot(
-                    self._slot_run_number, self._acq
+                slot_state = session_state.get_state_for_slot(self._slot_run_number, self._acq)
+                self.scale_factor = slot_state.get("scale_factor", self.scale_factor)
+                logger.info(
+                    f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, acq={self._acq})"
                 )
-                self.scale_factor = slot_state.get('scale_factor', self.scale_factor)
-                logger.info(f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, acq={self._acq})")
             else:
-                self.scale_factor = session_state.get('scale_factor', self.scale_factor)
+                self.scale_factor = session_state.get("scale_factor", self.scale_factor)
                 logger.info(f"Restored scale_factor from session: {self.scale_factor}")
 
         self.network_directions = np.array([1, -1])  # +1 = up, -1 = down
 
         self._latest_data = {
-            'activations': {name: 0.0 for name in self.mask_names},
-            'volume': 0,
-            'time': 0.0,
-            'is_baseline': True,
+            "activations": {name: 0.0 for name in self.mask_names},
+            "volume": 0,
+            "time": 0.0,
+            "is_baseline": True,
         }
 
         output_dir = Path(coordinator.output_dir)
         # Use acq-based naming if coordinator has acq attribute
-        if hasattr(coordinator, 'acq') and coordinator.acq is not None:
+        if hasattr(coordinator, "acq") and coordinator.acq is not None:
             # Format acq as 2-digit number if int
             acq_str = f"{coordinator.acq:02d}" if isinstance(coordinator.acq, int) else coordinator.acq
             run_acq_str = f"acq-{acq_str}_run-{coordinator.run_number:02d}"
         else:
             run_acq_str = f"run-{coordinator.run_number:02d}"
-        self._psychopy_log_path = output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_psychopylog.tsv"
+        self._psychopy_log_path = (
+            output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_psychopylog.tsv"
+        )
         self._psychopy_log_file = None
         self._psychopy_log_writer = None
         self._frame_counter = 0
 
         self.current_activity = 0.0
-        self.current_direction = 0   # +1 (up) or -1 (down)
+        self.current_direction = 0  # +1 (up) or -1 (down)
         self.pause_movement = False
         self.is_baseline = True
         self.current_volume = 0
@@ -291,14 +290,7 @@ class BallTask(BaseTask):
         self.outlier_count = 0
         self._current_is_outlier = False
 
-    def _update_data(
-        self,
-        activations: dict,
-        volume: int,
-        elapsed: float,
-        is_baseline: bool,
-        is_outlier: bool
-    ):
+    def _update_data(self, activations: dict, volume: int, elapsed: float, is_baseline: bool, is_outlier: bool):
         """Internal callback with outlier detection for dual networks."""
         # Check for outliers based on activation threshold
         acts = [activations.get(name, 0.0) for name in self.mask_names]
@@ -312,22 +304,24 @@ class BallTask(BaseTask):
 
     def setup(self):
         """Initialize PsychoPy window and ball task stimuli."""
-        from psychopy import visual, core, event, logging as psychopy_logging
+        from psychopy import logging as psychopy_logging
+        from psychopy import visual
+
         psychopy_logging.console.setLevel(psychopy_logging.ERROR)
 
         # Initialize PsychoPy log file
-        self._psychopy_log_file = open(self._psychopy_log_path, 'w', newline='')
-        self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter='\t')
+        self._psychopy_log_file = open(self._psychopy_log_path, "w", newline="")  # noqa: SIM115
+        self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter="\t")
         header = [
-            'frame',
-            'time',
-            'volume',
-            'ball_y_pos',
-            'scale_factor',
-            f'{self.mask_names[0]}_activation',
-            f'{self.mask_names[1]}_activation',
-            f'{self.mask_names[0]}_hits',
-            f'{self.mask_names[1]}_hits'
+            "frame",
+            "time",
+            "volume",
+            "ball_y_pos",
+            "scale_factor",
+            f"{self.mask_names[0]}_activation",
+            f"{self.mask_names[1]}_activation",
+            f"{self.mask_names[0]}_hits",
+            f"{self.mask_names[1]}_hits",
         ]
         self._psychopy_log_writer.writerow(header)
         self._psychopy_log_file.flush()
@@ -335,8 +329,8 @@ class BallTask(BaseTask):
         # Create window with cross-platform monitor targeting (from BaseTask)
         self.create_window(
             monitor_position=self.presenter_monitor,
-            color='black',
-            units='height',
+            color="black",
+            units="height",
         )
 
         # Use default frame duration for display loop timing (prevents CPU spinning)
@@ -362,31 +356,31 @@ class BallTask(BaseTask):
             win=self.win,
             pos=self.ball_pos,
             radius=0.03,
-            fillColor='white',
-            lineColor='white',
+            fillColor="white",
+            lineColor="white",
         )
 
         # Fixation cross for baseline period
         self.fixation_cross = visual.TextStim(
             win=self.win,
-            text='+',
+            text="+",
             pos=(0, 0),
             height=0.3,
-            color='white',
+            color="white",
             font=None,
         )
 
         # Question text stimulus (for post-run slider questions)
         self.question_text = visual.TextStim(
             win=self.win,
-            text='',
+            text="",
             pos=(0, 0.2),
             height=0.06,
             wrapWidth=1.2,
-            color='white',
+            color="white",
             font=None,
         )
-        
+
         # Slider instruction text
         self.slider_instruction_text = visual.TextStim(
             win=self.win,
@@ -399,23 +393,25 @@ class BallTask(BaseTask):
             pos=(0, 0),
             height=0.06,
             wrapWidth=1.2,
-            color='white',
+            color="white",
             font=None,
-            anchorVert='center',
+            anchorVert="center",
         )
-        
+
         # Setup questions CSV file with BIDS-style naming (use acq if available)
         output_dir = Path(self.coordinator.output_dir)
-        if hasattr(self.coordinator, 'acq') and self.coordinator.acq is not None:
+        if hasattr(self.coordinator, "acq") and self.coordinator.acq is not None:
             # Format acq as 2-digit number if int
             acq_str = f"{self.coordinator.acq:02d}" if isinstance(self.coordinator.acq, int) else self.coordinator.acq
             run_acq_str = f"acq-{acq_str}_run-{self.coordinator.run_number:02d}"
         else:
             run_acq_str = f"run-{self.coordinator.run_number:02d}"
-        self._questions_file_path = output_dir / f"{self.coordinator.subject}_task-{self.coordinator.task}_{run_acq_str}_questions.tsv"
-        self._questions_file = open(self._questions_file_path, 'w', newline='')
-        self._questions_writer = csv.writer(self._questions_file, delimiter='\t')
-        self._questions_writer.writerow(['subject', 'run', 'feedback_mode', 'question_text', 'response', 'rt'])
+        self._questions_file_path = (
+            output_dir / f"{self.coordinator.subject}_task-{self.coordinator.task}_{run_acq_str}_questions.tsv"
+        )
+        self._questions_file = open(self._questions_file_path, "w", newline="")  # noqa: SIM115
+        self._questions_writer = csv.writer(self._questions_file, delimiter="\t")
+        self._questions_writer.writerow(["subject", "run", "feedback_mode", "question_text", "response", "rt"])
         self._questions_file.flush()
 
     def show_instructions(self):
@@ -467,16 +463,14 @@ class BallTask(BaseTask):
         self.win.flip()
 
         # Wait for any button press to continue
-        event.clearEvents('keyboard')
+        event.clearEvents("keyboard")
         while True:
             # Check for stop signal from GUI
             if self.coordinator.was_stopped():
                 logger.info("Stop signal received during slider instructions")
                 raise KeyboardInterrupt("Stopped by user")
 
-            keys = event.getKeys(keyList=[
-                self.left_button, self.right_button, self.enter_button
-            ])
+            keys = event.getKeys(keyList=[self.left_button, self.right_button, self.enter_button])
             if keys:
                 break
 
@@ -573,11 +567,7 @@ class BallTask(BaseTask):
         # Calculate movement for this frame based on elapsed time
         # Movement per second = activity × scale_factor / internal_scaler / TR
         # This ensures consistent total movement per TR interval regardless of frame rate
-        movement_per_second = (
-            self.current_activity
-            * (self.scale_factor / self.internal_scaler)
-            / self.coordinator.tr
-        )
+        movement_per_second = self.current_activity * (self.scale_factor / self.internal_scaler) / self.coordinator.tr
 
         # Apply directional movement scaled by time delta
         dy = self.current_direction * movement_per_second * dt
@@ -626,7 +616,7 @@ class BallTask(BaseTask):
                 logger.info(f"✓ Hit! {network_name} target (total: {self.hit_counters[i]})")
 
                 # Flash circle white for visual feedback
-                self.circles[i].fillColor = 'white'
+                self.circles[i].fillColor = "white"
 
                 # Reset ball to center position (game continues immediately)
                 self.ball_pos = [0.0, 0.0]
@@ -682,8 +672,8 @@ class BallTask(BaseTask):
         data : dict
             Dictionary containing 'activations', 'volume', 'time', 'is_baseline'
         """
-        self.is_baseline = data.get('is_baseline', False)
-        new_volume = data.get('volume', 0)
+        self.is_baseline = data.get("is_baseline", False)
+        new_volume = data.get("volume", 0)
 
         # Only process when we have new data (volume changed)
         if new_volume != self.current_volume:
@@ -691,7 +681,7 @@ class BallTask(BaseTask):
 
             # Update movement parameters with new data
             if not self.is_baseline:
-                activations = data.get('activations', {})
+                activations = data.get("activations", {})
                 if activations:
                     self.calculate_ball_movement(activations)
 
@@ -699,7 +689,7 @@ class BallTask(BaseTask):
         """Log current frame data to TSV file."""
         # Get latest activations in thread-safe manner
         with self._lock:
-            activations = self._latest_data['activations']
+            activations = self._latest_data["activations"]
 
         # Calculate frame timestamp relative to task start
         frame_time = time.time() - self._task_start_time
@@ -713,7 +703,7 @@ class BallTask(BaseTask):
             activations[self.mask_names[0]],
             activations[self.mask_names[1]],
             self.hit_counters[0],
-            self.hit_counters[1]
+            self.hit_counters[1],
         ]
         self._psychopy_log_writer.writerow(row)
         self._psychopy_log_file.flush()
@@ -776,7 +766,7 @@ class BallTask(BaseTask):
             logger.debug("No session state provided, skipping save")
             return
 
-        run_type = 'feedback' if self.feedback_mode else 'transfer'
+        run_type = "feedback" if self.feedback_mode else "transfer"
         state.record_run(
             run_type=run_type,
             hit_counters=self.hit_counters,
@@ -794,11 +784,13 @@ class BallTask(BaseTask):
     def get_run_results(self) -> dict:
         """Return BallTask-specific results from the completed run."""
         results = super().get_run_results()
-        results.update({
-            'hit_counters': self.hit_counters.copy(),
-            'scale_factor': self.scale_factor,
-            'circle_radii': self.circle_radii.copy(),
-        })
+        results.update(
+            {
+                "hit_counters": self.hit_counters.copy(),
+                "scale_factor": self.scale_factor,
+                "circle_radii": self.circle_radii.copy(),
+            }
+        )
         return results
 
     def _apply_adaptive_difficulty(self) -> None:
@@ -814,7 +806,7 @@ class BallTask(BaseTask):
         if self._session_state is None:
             return
 
-        run_type = 'feedback' if self.feedback_mode else 'transfer'
+        run_type = "feedback" if self.feedback_mode else "transfer"
 
         # Check if this is a retry
         is_retry = False
@@ -828,8 +820,8 @@ class BallTask(BaseTask):
             logger.info(f"  Retry (acq={self._acq}): skipping scale_factor adjustment")
             return
 
-        if run_type != 'feedback':
-            logger.info(f"  Transfer run - no adaptive difficulty adjustment")
+        if run_type != "feedback":
+            logger.info("  Transfer run - no adaptive difficulty adjustment")
             return
 
         total_hits = sum(self.hit_counters)
@@ -838,12 +830,16 @@ class BallTask(BaseTask):
 
         if max_single > self._max_hits_threshold:
             self.scale_factor = old_scale * (1 - self._scale_adjust_factor)
-            logger.info(f"  Adaptive difficulty: {max_single} hits > {self._max_hits_threshold} max → "
-                       f"decreasing scale_factor {old_scale:.1f} → {self.scale_factor:.1f}")
+            logger.info(
+                f"  Adaptive difficulty: {max_single} hits > {self._max_hits_threshold} max → "
+                f"decreasing scale_factor {old_scale:.1f} → {self.scale_factor:.1f}"
+            )
         elif total_hits < self._min_hits_threshold:
             self.scale_factor = old_scale * (1 + self._scale_adjust_factor)
-            logger.info(f"  Adaptive difficulty: {total_hits} total hits < {self._min_hits_threshold} min → "
-                       f"increasing scale_factor {old_scale:.1f} → {self.scale_factor:.1f}")
+            logger.info(
+                f"  Adaptive difficulty: {total_hits} total hits < {self._min_hits_threshold} min → "
+                f"increasing scale_factor {old_scale:.1f} → {self.scale_factor:.1f}"
+            )
         else:
             logger.info(f"  Adaptive difficulty: hits in range → keeping scale_factor at {old_scale:.1f}")
 
@@ -861,12 +857,12 @@ class BallTask(BaseTask):
 
         # Build task state snapshot with all BallTask-specific state
         snapshot = {
-            'hit_counters': self.hit_counters.copy(),
-            'scale_factor': self.scale_factor,
-            'circle_radii': self.circle_radii.copy(),
+            "hit_counters": self.hit_counters.copy(),
+            "scale_factor": self.scale_factor,
+            "circle_radii": self.circle_radii.copy(),
         }
 
-        run_type = 'feedback' if self.feedback_mode else 'transfer'
+        run_type = "feedback" if self.feedback_mode else "transfer"
         self._session_state.record_run(
             run_type=run_type,
             volumes_processed=self.current_volume,
@@ -897,55 +893,57 @@ class BallTask(BaseTask):
         if is_baseline:
             # Fixation cross during baseline
             cross_size = 0.1  # Size in normalized units
-            shapes.extend([
-                {
-                    'type': 'line',
-                    'x1': 0.5 - cross_size, 'y1': 0.5,
-                    'x2': 0.5 + cross_size, 'y2': 0.5,
-                    'stroke': 'white', 'stroke_width': 3
-                },
-                {
-                    'type': 'line',
-                    'x1': 0.5, 'y1': 0.5 - cross_size,
-                    'x2': 0.5, 'y2': 0.5 + cross_size,
-                    'stroke': 'white', 'stroke_width': 3
-                },
-            ])
+            shapes.extend(
+                [
+                    {
+                        "type": "line",
+                        "x1": 0.5 - cross_size,
+                        "y1": 0.5,
+                        "x2": 0.5 + cross_size,
+                        "y2": 0.5,
+                        "stroke": "white",
+                        "stroke_width": 3,
+                    },
+                    {
+                        "type": "line",
+                        "x1": 0.5,
+                        "y1": 0.5 - cross_size,
+                        "x2": 0.5,
+                        "y2": 0.5 + cross_size,
+                        "stroke": "white",
+                        "stroke_width": 3,
+                    },
+                ]
+            )
         else:
             # Active task: show circles and ball
             # Convert PsychoPy height units to normalized 0-1 coordinates
             # PsychoPy: y in [-0.5, 0.5], we need [0, 1] with y inverted
-            for pos, color, radius in zip(
-                self.circle_positions, self.circle_colors, self.circle_radii
-            ):
+            for pos, color, radius in zip(self.circle_positions, self.circle_colors, self.circle_radii, strict=False):
                 # +0.33 -> 0.17 (top), -0.33 -> 0.83 (bottom)
                 y = 0.5 - pos
-                shapes.append({
-                    'type': 'circle',
-                    'x': 0.5, 'y': y,
-                    'radius': radius,
-                    'stroke': color, 'stroke_width': 3
-                })
+                shapes.append(
+                    {"type": "circle", "x": 0.5, "y": y, "radius": radius, "stroke": color, "stroke_width": 3}
+                )
 
             # Ball
             ball_y = 0.5 - self.ball_pos[1]
-            shapes.append({
-                'type': 'circle',
-                'x': 0.5, 'y': ball_y,
-                'radius': 0.03,
-                'fill': 'white'
-            })
+            shapes.append({"type": "circle", "x": 0.5, "y": ball_y, "radius": 0.03, "fill": "white"})
 
             # Hit counter text
-            shapes.append({
-                'type': 'text',
-                'content': f"{self.mask_names[0]}: {self.hit_counters[0]}  "
-                           f"{self.mask_names[1]}: {self.hit_counters[1]}",
-                'x': 0.5, 'y': 0.95,
-                'size': 10, 'color': 'gray'
-            })
+            shapes.append(
+                {
+                    "type": "text",
+                    "content": f"{self.mask_names[0]}: {self.hit_counters[0]}  "
+                    f"{self.mask_names[1]}: {self.hit_counters[1]}",
+                    "x": 0.5,
+                    "y": 0.95,
+                    "size": 10,
+                    "color": "gray",
+                }
+            )
 
-        return {'background': 'black', 'shapes': shapes}
+        return {"background": "black", "shapes": shapes}
 
     def cleanup(self):
         """Close window and quit."""
@@ -978,7 +976,7 @@ class BallTask(BaseTask):
         Overrides BaseTask.run() to call update_frame() at monitor refresh rate
         instead of update() once per TR.
         """
-        from psychopy import core, event
+        from psychopy import core
 
         self._running = True
 
@@ -994,12 +992,12 @@ class BallTask(BaseTask):
             self.show_instructions()
 
             # Show waiting screen and wait for trigger (uses base class method)
-            self.wait_for_trigger(trigger_keys=self.trigger_keys)
+            self.wait_for_trigger()
 
             # Record task start time for frame timestamps
             self._task_start_time = core.getTime()
             self._last_frame_time = core.getTime()  # Initialize for time-based movement
-            
+
             logger.info("=== BallTask Session Started ===")
             logger.info(f"Mode: {'FEEDBACK' if self.feedback_mode else 'NON-FEEDBACK (transfer)'}")
             logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
@@ -1032,7 +1030,7 @@ class BallTask(BaseTask):
             # immediately when the coordinator finishes the last volume.
             # This ensures we don't miss the final volume's data.
             data = self.get_latest_data()
-            if data.get('volume', 0) > self.current_volume:
+            if data.get("volume", 0) > self.current_volume:
                 self.update(data)
                 self.update_frame()
 
@@ -1041,12 +1039,14 @@ class BallTask(BaseTask):
             pass
         finally:
             self._running = False
-            
+
             # Log session summary
             logger.info("")
             logger.info("=== BallTask Session Complete ===")
             logger.info(f"Total volumes: {self.current_volume}/{self.coordinator.n_volumes}")
-            logger.info(f"Hits - {self.mask_names[0]}: {self.hit_counters[0]}, {self.mask_names[1]}: {self.hit_counters[1]}")
+            logger.info(
+                f"Hits - {self.mask_names[0]}: {self.hit_counters[0]}, {self.mask_names[1]}: {self.hit_counters[1]}"
+            )
             logger.info(f"Total hits: {sum(self.hit_counters)}")
             logger.info(f"Final scale factor: {self.scale_factor:.1f}")
             logger.info(f"Total frames rendered: {self._frame_counter}")
@@ -1063,25 +1063,25 @@ class BallTask(BaseTask):
 # Task Metadata for GUI Configuration
 # ==============================================================================
 
+from typing import Any
+
 from .task_registry import (
+    NetworkRole,
+    PostRunQuestion,
+    SessionStateField,
     TaskMetadata,
     TaskParameter,
-    SessionStateField,
-    PostRunQuestion,
-    NetworkRole,
     register_task,
 )
-from typing import Dict, Any
 
 
-def _validate_ball_hits(config: Dict[str, Any]) -> None:
+def _validate_ball_hits(config: dict[str, Any]) -> None:
     """Cross-parameter validator for ball task hit thresholds."""
     min_hits = config.get("min_hits_threshold")
     max_hits = config.get("max_hits_threshold")
 
-    if min_hits is not None and max_hits is not None:
-        if min_hits >= max_hits:
-            raise ValueError("Min hits threshold must be < max hits threshold")
+    if min_hits is not None and max_hits is not None and min_hits >= max_hits:
+        raise ValueError("Min hits threshold must be < max hits threshold")
 
 
 BALL_TASK_METADATA = TaskMetadata(
@@ -1250,4 +1250,5 @@ register_task(BALL_TASK_METADATA)
 
 # Register with factory for create_task() support
 from .factory import register_task_class
+
 register_task_class("ball", BallTask)

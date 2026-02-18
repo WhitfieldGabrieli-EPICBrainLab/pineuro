@@ -39,13 +39,11 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from nilearn import datasets
-from nilearn.image import resample_to_img, load_img, get_data
+from nilearn.image import get_data, load_img, resample_to_img
 
 # Add pineuro to path if running from repo
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
-
-from pineuro.utils import get_yeo_labels
 
 from setup_validation import (
     get_mask_extraction_dir,
@@ -54,6 +52,7 @@ from setup_validation import (
     load_subjects_csv,
 )
 
+from pineuro.utils import get_yeo_labels
 
 # =============================================================================
 # fMRIPrep Path Helpers
@@ -139,11 +138,7 @@ def preprocess_for_ica(
     sigma = smooth_fwhm / 2.355
 
     smoothed_file = output_file.parent / "temp_smoothed.nii.gz"
-    cmd_smooth = [
-        "fslmaths", str(input_file),
-        "-s", str(sigma),
-        str(smoothed_file)
-    ]
+    cmd_smooth = ["fslmaths", str(input_file), "-s", str(sigma), str(smoothed_file)]
 
     print(f"  Applying {smooth_fwhm}mm FWHM smoothing...")
     result = subprocess.run(cmd_smooth, capture_output=True, text=True)
@@ -153,12 +148,7 @@ def preprocess_for_ica(
     # Highpass filtering
     hp_sigma = 1.0 / (2.0 * tr * highpass)
 
-    cmd_hp = [
-        "fslmaths", str(smoothed_file),
-        "-bptf", str(hp_sigma), "-1",
-        "-mas", str(mask_file),
-        str(output_file)
-    ]
+    cmd_hp = ["fslmaths", str(smoothed_file), "-bptf", str(hp_sigma), "-1", "-mas", str(mask_file), str(output_file)]
 
     print(f"  Applying {highpass}Hz highpass filter (sigma={hp_sigma:.1f} vols)...")
     result = subprocess.run(cmd_hp, capture_output=True, text=True)
@@ -190,10 +180,14 @@ def run_melodic(
 
     cmd = [
         "melodic",
-        "-i", str(input_file),
-        "-o", str(output_dir),
-        "-m", str(mask_file),
-        "-d", str(n_components),
+        "-i",
+        str(input_file),
+        "-o",
+        str(output_dir),
+        "-m",
+        str(mask_file),
+        "-d",
+        str(n_components),
         "--report",
         "--Oall",
     ]
@@ -238,7 +232,7 @@ def compute_yeo_correlation_mni(
     yeo_img = load_img(yeo_atlas.maps)
 
     print("  Resampling Yeo atlas to MELODIC space...")
-    yeo_resampled = resample_to_img(yeo_img, ic_img, interpolation='nearest')
+    yeo_resampled = resample_to_img(yeo_img, ic_img, interpolation="nearest")
     yeo_data = np.squeeze(get_data(yeo_resampled)).astype(int)
 
     labels = get_yeo_labels(n_yeo)
@@ -346,9 +340,13 @@ def transform_melodic_masks_to_subject(
         raise FileNotFoundError(f"MNI-to-T1w transform not found in {fmriprep_anat_dir}")
     mni_to_t1w = mni_to_t1w_files[0]
 
-    boldref_to_t1w_files = list(fmriprep_func_dir.glob("*_task-rest_run-01_from-boldref_to-T1w_mode-image_desc-coreg_xfm.txt"))
+    boldref_to_t1w_files = list(
+        fmriprep_func_dir.glob("*_task-rest_run-01_from-boldref_to-T1w_mode-image_desc-coreg_xfm.txt")
+    )
     if not boldref_to_t1w_files:
-        boldref_to_t1w_files = list(fmriprep_func_dir.glob("*_task-rest_*_from-boldref_to-T1w_mode-image_desc-coreg_xfm.txt"))
+        boldref_to_t1w_files = list(
+            fmriprep_func_dir.glob("*_task-rest_*_from-boldref_to-T1w_mode-image_desc-coreg_xfm.txt")
+        )
     if not boldref_to_t1w_files:
         raise FileNotFoundError(f"boldref-to-T1w transform not found in {fmriprep_func_dir}")
     boldref_to_t1w = boldref_to_t1w_files[0]
@@ -364,7 +362,7 @@ def transform_melodic_masks_to_subject(
         raise FileNotFoundError(f"fMRIPrep boldref not found in {fmriprep_func_dir}")
     fmriprep_boldref = fmriprep_boldref_files[0]
 
-    print(f"  Using transforms:")
+    print("  Using transforms:")
     print(f"    MNI->T1w: {mni_to_t1w.name}")
     print(f"    BOLD->T1w: {boldref_to_t1w.name} (will invert)")
     print(f"    fMRIPrep boldref: {fmriprep_boldref.name}")
@@ -377,10 +375,10 @@ def transform_melodic_masks_to_subject(
     boldref_alignment = ants.registration(
         fixed=subject_ref,
         moving=fmriprep_boldref_ants,
-        type_of_transform='Rigid',
+        type_of_transform="Rigid",
         verbose=False,
     )
-    fmriprep_to_pineuro_boldref = boldref_alignment['fwdtransforms'][0]
+    fmriprep_to_pineuro_boldref = boldref_alignment["fwdtransforms"][0]
 
     # Invert BOLD->T1w transform
     boldref_to_t1w_xfm = ants.read_transform(str(boldref_to_t1w))
@@ -397,15 +395,15 @@ def transform_melodic_masks_to_subject(
         if output_file.exists() and not overwrite:
             print(f"  Transformed mask exists, skipping: {output_file.name}")
             transformed_masks[network] = {
-                'thresholded': output_file,
-                'continuous': continuous_file if continuous_file.exists() else None,
+                "thresholded": output_file,
+                "continuous": continuous_file if continuous_file.exists() else None,
             }
             continue
 
         # Get unthresholded component path
         unthr_mask_path = thr_mask_path.parent / thr_mask_path.name.replace("_thr.nii.gz", ".nii.gz")
         if not unthr_mask_path.exists():
-            print(f"  Warning: Unthresholded component not found, using thresholded")
+            print("  Warning: Unthresholded component not found, using thresholded")
             unthr_mask_path = thr_mask_path
 
         print(f"  Transforming {network} to subject space...")
@@ -416,7 +414,7 @@ def transform_melodic_masks_to_subject(
             fixed=subject_ref,
             moving=component_ants,
             transformlist=[fmriprep_to_pineuro_boldref, str(t1w_to_boldref_file), str(mni_to_t1w)],
-            interpolator='linear',
+            interpolator="linear",
         )
 
         # Save continuous map
@@ -441,8 +439,8 @@ def transform_melodic_masks_to_subject(
         print(f"  Saved: {output_file.name} ({thresholded.sum()} voxels)")
 
         transformed_masks[network] = {
-            'thresholded': output_file,
-            'continuous': continuous_file,
+            "thresholded": output_file,
+            "continuous": continuous_file,
         }
 
     return transformed_masks
@@ -487,13 +485,13 @@ def compare_masks(
     print("COMPARISON RESULTS (subject space)")
     print("=" * 60)
 
-    for network in melodic_masks.keys():
+    for network in melodic_masks:
         if network not in pineuro_masks:
             print(f"\n{network}: pineuro mask not found, skipping")
             continue
 
-        melodic_thr = get_data(load_img(melodic_masks[network]['thresholded'])) > 0
-        pineuro_thr = get_data(load_img(pineuro_masks[network]['thresholded'])) > 0
+        melodic_thr = get_data(load_img(melodic_masks[network]["thresholded"])) > 0
+        pineuro_thr = get_data(load_img(pineuro_masks[network]["thresholded"])) > 0
 
         dice = compute_dice(melodic_thr, pineuro_thr)
         jaccard = compute_jaccard(melodic_thr, pineuro_thr)
@@ -512,10 +510,15 @@ def compare_masks(
         }
 
         # Spatial correlation of continuous maps
-        melodic_cont_path = melodic_masks[network].get('continuous')
-        pineuro_cont_path = pineuro_masks[network].get('continuous')
+        melodic_cont_path = melodic_masks[network].get("continuous")
+        pineuro_cont_path = pineuro_masks[network].get("continuous")
 
-        if melodic_cont_path and pineuro_cont_path and Path(melodic_cont_path).exists() and Path(pineuro_cont_path).exists():
+        if (
+            melodic_cont_path
+            and pineuro_cont_path
+            and Path(melodic_cont_path).exists()
+            and Path(pineuro_cont_path).exists()
+        ):
             melodic_cont = get_data(load_img(melodic_cont_path))
             pineuro_cont = get_data(load_img(pineuro_cont_path))
 
@@ -550,7 +553,7 @@ def compare_masks(
         if "spatial_correlation" in results[network]:
             print(f"  Spatial correlation: {results[network]['spatial_correlation']:.4f}")
         if "tiered_dice" in results[network]:
-            print(f"  Tiered Dice: ", end="")
+            print("  Tiered Dice: ", end="")
             print(", ".join(f"{k}={v:.4f}" for k, v in results[network]["tiered_dice"].items()))
         print(f"  MELODIC voxels:   {melodic_thr.sum()}")
         print(f"  pineuro voxels:   {pineuro_thr.sum()}")
@@ -571,23 +574,23 @@ def compare_masks(
 
         cross_pairs = []
         for i, net1 in enumerate(networks):
-            for net2 in networks[i+1:]:
-                cross_pairs.append(('melodic', net1, 'melodic', net2))
-                cross_pairs.append(('pineuro', net1, 'pineuro', net2))
-                cross_pairs.append(('melodic', net1, 'pineuro', net2))
-                cross_pairs.append(('melodic', net2, 'pineuro', net1))
+            for net2 in networks[i + 1 :]:
+                cross_pairs.append(("melodic", net1, "melodic", net2))
+                cross_pairs.append(("pineuro", net1, "pineuro", net2))
+                cross_pairs.append(("melodic", net1, "pineuro", net2))
+                cross_pairs.append(("melodic", net2, "pineuro", net1))
 
         for method1, net1, method2, net2 in cross_pairs:
             pair_key = f"{method1}_{net1}_vs_{method2}_{net2}"
 
-            mask1_dict = melodic_masks.get(net1) if method1 == 'melodic' else pineuro_masks.get(net1)
-            mask2_dict = melodic_masks.get(net2) if method2 == 'melodic' else pineuro_masks.get(net2)
+            mask1_dict = melodic_masks.get(net1) if method1 == "melodic" else pineuro_masks.get(net1)
+            mask2_dict = melodic_masks.get(net2) if method2 == "melodic" else pineuro_masks.get(net2)
 
             if not mask1_dict or not mask2_dict:
                 continue
 
-            mask1_thr = get_data(load_img(mask1_dict['thresholded'])) > 0
-            mask2_thr = get_data(load_img(mask2_dict['thresholded'])) > 0
+            mask1_thr = get_data(load_img(mask1_dict["thresholded"])) > 0
+            mask2_thr = get_data(load_img(mask2_dict["thresholded"])) > 0
 
             dice = compute_dice(mask1_thr, mask2_thr)
             jaccard = compute_jaccard(mask1_thr, mask2_thr)
@@ -601,8 +604,8 @@ def compare_masks(
                 "network2": net2,
             }
 
-            cont1_path = mask1_dict.get('continuous')
-            cont2_path = mask2_dict.get('continuous')
+            cont1_path = mask1_dict.get("continuous")
+            cont2_path = mask2_dict.get("continuous")
 
             if cont1_path and cont2_path and Path(cont1_path).exists() and Path(cont2_path).exists():
                 cont1 = get_data(load_img(cont1_path))
@@ -677,28 +680,28 @@ def create_comparison_plot(
         if network not in pineuro_masks:
             continue
 
-        melodic_data = get_data(load_img(melodic_masks[network]['thresholded'])) > 0
-        pineuro_data = get_data(load_img(pineuro_masks[network]['thresholded'])) > 0
+        melodic_data = get_data(load_img(melodic_masks[network]["thresholded"])) > 0
+        pineuro_data = get_data(load_img(pineuro_masks[network]["thresholded"])) > 0
 
         z_mid = melodic_data.shape[2] // 2
 
-        axes[i, 0].imshow(melodic_data[:, :, z_mid].T, origin='lower', cmap='Blues')
+        axes[i, 0].imshow(melodic_data[:, :, z_mid].T, origin="lower", cmap="Blues")
         axes[i, 0].set_title(f"MELODIC {network}")
-        axes[i, 0].axis('off')
+        axes[i, 0].axis("off")
 
-        axes[i, 1].imshow(pineuro_data[:, :, z_mid].T, origin='lower', cmap='Oranges')
+        axes[i, 1].imshow(pineuro_data[:, :, z_mid].T, origin="lower", cmap="Oranges")
         axes[i, 1].set_title(f"pineuro {network}")
-        axes[i, 1].axis('off')
+        axes[i, 1].axis("off")
 
         overlap = np.zeros((*melodic_data.shape[:2], 3))
         overlap[:, :, 2] = melodic_data[:, :, z_mid]
         overlap[:, :, 0] = pineuro_data[:, :, z_mid]
         overlap[:, :, 1] = melodic_data[:, :, z_mid] & pineuro_data[:, :, z_mid]
 
-        axes[i, 2].imshow(np.transpose(overlap, (1, 0, 2)), origin='lower')
+        axes[i, 2].imshow(np.transpose(overlap, (1, 0, 2)), origin="lower")
         metrics = results.get(network, {})
         axes[i, 2].set_title(f"Overlap (Dice={metrics.get('dice', 0):.3f})")
-        axes[i, 2].axis('off')
+        axes[i, 2].axis("off")
 
     plt.tight_layout()
     plot_path = output_dir / "comparison_plot.png"
@@ -736,13 +739,15 @@ def run_setup_for_subject(
     fmriprep_dir: Path,
     n_components: int = 30,
     threshold: int = 2000,
-    targets: list[str] = ["DefaultA", "ContA"],
+    targets: list[str] | None = None,
     smooth_fwhm: float = 5.0,
     highpass: float = 0.01,
     tr: float = 1.2,
     overwrite: bool = False,
 ) -> dict[str, Path]:
     """Run MELODIC setup for a single subject."""
+    if targets is None:
+        targets = ["DefaultA", "ContA"]
     subject_dir = get_subject_dir(output_dir, subject)
     melodic_dir = subject_dir / "melodic"
 
@@ -764,31 +769,46 @@ def run_setup_for_subject(
     mask_file = get_fmriprep_mask(fmriprep_dir, subject)
     preproc_file = melodic_dir / "01_input" / "rest_runs_preproc.nii.gz"
     preprocess_for_ica(
-        concat_file, mask_file, preproc_file,
-        smooth_fwhm=smooth_fwhm, highpass=highpass, tr=tr, overwrite=overwrite,
+        concat_file,
+        mask_file,
+        preproc_file,
+        smooth_fwhm=smooth_fwhm,
+        highpass=highpass,
+        tr=tr,
+        overwrite=overwrite,
     )
 
     # Step 3: Run MELODIC
     print("\nStep 3: Running MELODIC...")
     melodic_ic = run_melodic(
-        preproc_file, mask_file,
+        preproc_file,
+        mask_file,
         melodic_dir / "02_melodic",
-        n_components, overwrite,
+        n_components,
+        overwrite,
     )
 
     # Step 4: Compute Yeo correlation
     print("\nStep 4: Computing Yeo correlation...")
     corr_file = melodic_dir / "03_yeo_correlation" / "Yeo_IC_spatial_correlation.csv"
     corr_df = compute_yeo_correlation_mni(
-        melodic_ic, mask_file, corr_file, n_yeo=17, overwrite=overwrite,
+        melodic_ic,
+        mask_file,
+        corr_file,
+        n_yeo=17,
+        overwrite=overwrite,
     )
 
     # Step 5: Extract network masks
     print("\nStep 5: Extracting network masks...")
     masks = extract_network_masks(
-        melodic_ic, corr_df,
+        melodic_ic,
+        corr_df,
         melodic_dir / "04_masks",
-        subject, targets, threshold, overwrite,
+        subject,
+        targets,
+        threshold,
+        overwrite,
     )
 
     print(f"\nSetup complete for {subject}")
@@ -804,10 +824,12 @@ def run_compare_for_subject(
     subject: str,
     output_dir: Path,
     fmriprep_dir: Path,
-    targets: list[str] = ["DefaultA", "ContA"],
+    targets: list[str] | None = None,
     overwrite: bool = False,
 ) -> dict:
     """Run comparison for a single subject."""
+    if targets is None:
+        targets = ["DefaultA", "ContA"]
     subject_dir = get_subject_dir(output_dir, subject)
     melodic_dir = subject_dir / "melodic"
 
@@ -833,8 +855,8 @@ def run_compare_for_subject(
         cont_path = pineuro_mask_dir / f"{subject}_{target}.nii.gz"
         if thr_path.exists():
             pineuro_masks[target] = {
-                'thresholded': thr_path,
-                'continuous': cont_path if cont_path.exists() else None,
+                "thresholded": thr_path,
+                "continuous": cont_path if cont_path.exists() else None,
             }
         else:
             print(f"  Warning: pineuro mask not found: {thr_path}")
@@ -895,18 +917,20 @@ def save_group_results(all_results: list[dict], output_dir: Path) -> None:
         for network, metrics in r["results"].items():
             if network.startswith("_"):
                 continue
-            rows.append({
-                "subject": r["subject"],
-                "network": network,
-                "dice": metrics.get("dice"),
-                "jaccard": metrics.get("jaccard"),
-                "spatial_correlation": metrics.get("spatial_correlation"),
-                "melodic_yeo_corr": metrics.get("melodic_yeo_corr"),
-                "pineuro_yeo_corr": metrics.get("pineuro_yeo_corr"),
-                "melodic_voxels": metrics.get("melodic_voxels"),
-                "pineuro_voxels": metrics.get("pineuro_voxels"),
-                "overlap_voxels": metrics.get("overlap_voxels"),
-            })
+            rows.append(
+                {
+                    "subject": r["subject"],
+                    "network": network,
+                    "dice": metrics.get("dice"),
+                    "jaccard": metrics.get("jaccard"),
+                    "spatial_correlation": metrics.get("spatial_correlation"),
+                    "melodic_yeo_corr": metrics.get("melodic_yeo_corr"),
+                    "pineuro_yeo_corr": metrics.get("pineuro_yeo_corr"),
+                    "melodic_voxels": metrics.get("melodic_voxels"),
+                    "pineuro_voxels": metrics.get("pineuro_voxels"),
+                    "overlap_voxels": metrics.get("overlap_voxels"),
+                }
+            )
 
     if rows:
         df = pd.DataFrame(rows)
@@ -1039,7 +1063,7 @@ def print_summary(all_results: list[dict]) -> None:
         for network, metrics in r["results"].items():
             if network.startswith("_"):
                 continue
-            spatial_r = metrics.get('spatial_correlation')
+            spatial_r = metrics.get("spatial_correlation")
             spatial_str = f", spatial_corr={spatial_r:.3f}" if spatial_r else ""
             print(f"  {network}: Dice={metrics['dice']:.4f}, Jaccard={metrics['jaccard']:.4f}{spatial_str}")
 
@@ -1062,8 +1086,10 @@ def print_summary(all_results: list[dict]) -> None:
         jaccard_arr = np.array(jaccard_by_network[network])
 
         print(f"\n{network} (n={len(dice_arr)}):")
-        print(f"  Dice:    mean={dice_arr.mean():.4f}, std={dice_arr.std():.4f}, "
-              f"min={dice_arr.min():.4f}, max={dice_arr.max():.4f}")
+        print(
+            f"  Dice:    mean={dice_arr.mean():.4f}, std={dice_arr.std():.4f}, "
+            f"min={dice_arr.min():.4f}, max={dice_arr.max():.4f}"
+        )
         print(f"  Jaccard: mean={jaccard_arr.mean():.4f}, std={jaccard_arr.std():.4f}")
 
         if spatial_corr_by_network[network]:

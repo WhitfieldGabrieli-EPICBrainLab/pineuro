@@ -27,11 +27,11 @@ Example YAML structure:
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+
 import yaml
 
-from .models import StudyConfig, StudyMetadata
 from . import STUDIES_DIR
+from .models import StudyConfig, StudyMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class ConfigManager:
     """Manages study configuration files in the studies library."""
 
-    def __init__(self, studies_dir: Optional[Path] = None):
+    def __init__(self, studies_dir: Path | None = None):
         """Initialize the config manager.
 
         Args:
@@ -66,7 +66,7 @@ class ConfigManager:
         safe_name = study_name.replace(" ", "_").replace("/", "_")
         return self.studies_dir / f"{safe_name}.yaml"
 
-    def list_studies(self) -> List[StudyMetadata]:
+    def list_studies(self) -> list[StudyMetadata]:
         """List all available studies.
 
         Returns:
@@ -86,7 +86,7 @@ class ConfigManager:
         studies.sort(key=lambda s: s.modified, reverse=True)
         return studies
 
-    def load_study(self, study_name: str) -> Optional[StudyConfig]:
+    def load_study(self, study_name: str) -> StudyConfig | None:
         """Load a study configuration by name.
 
         Args:
@@ -118,7 +118,7 @@ class ConfigManager:
         """
         logger.info(f"Loading study from {file_path}")
 
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             data = yaml.safe_load(f)
 
         return StudyConfig.from_dict(data, file_path=file_path)
@@ -145,9 +145,7 @@ class ConfigManager:
 
         # Check for overwrite
         if study_config.file_path.exists() and not overwrite:
-            raise FileExistsError(
-                f"Study file already exists: {study_config.file_path}"
-            )
+            raise FileExistsError(f"Study file already exists: {study_config.file_path}")
 
         # Save to YAML
         logger.info(f"Saving study to {study_config.file_path}")
@@ -181,9 +179,7 @@ class ConfigManager:
         study_path.unlink()
         return True
 
-    def duplicate_study(
-        self, source_name: str, new_name: Optional[str] = None
-    ) -> Optional[StudyConfig]:
+    def duplicate_study(self, source_name: str, new_name: str | None = None) -> StudyConfig | None:
         """Duplicate an existing study.
 
         Args:

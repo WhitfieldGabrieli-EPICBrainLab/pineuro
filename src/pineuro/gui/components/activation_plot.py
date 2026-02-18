@@ -7,7 +7,6 @@ Requires flet-charts package: pip install flet-charts
 """
 
 import logging
-from typing import List, Optional, Dict
 from dataclasses import dataclass, field
 
 import flet as ft
@@ -15,6 +14,7 @@ import flet as ft
 # Import chart types from flet_charts package
 try:
     import flet_charts as fch
+
     LineChart = fch.LineChart
     LineChartData = fch.LineChartData
     LineChartDataPoint = fch.LineChartDataPoint
@@ -53,10 +53,11 @@ class ActivationData:
         volumes: List of volume numbers (x-axis)
         activations: Dict mapping mask name to list of activation values
     """
-    volumes: List[int] = field(default_factory=list)
-    activations: Dict[str, List[float]] = field(default_factory=dict)
 
-    def add_point(self, volume: int, mask_activations: Dict[str, float]):
+    volumes: list[int] = field(default_factory=list)
+    activations: dict[str, list[float]] = field(default_factory=dict)
+
+    def add_point(self, volume: int, mask_activations: dict[str, float]):
         """Add a new data point.
 
         Args:
@@ -92,12 +93,12 @@ class ActivationPlot:
 
     def __init__(
         self,
-        mask_names: List[str],
+        mask_names: list[str],
         n_volumes: int,
         height: float = 250,
         y_min: float = -2.0,
         y_max: float = 2.0,
-        display_names: Optional[List[str]] = None,
+        display_names: list[str] | None = None,
     ):
         """Initialize the activation plot.
 
@@ -121,16 +122,13 @@ class ActivationPlot:
         self.data = ActivationData()
 
         # Assign colors to masks
-        self.mask_colors = {
-            name: NETWORK_COLORS[i % len(NETWORK_COLORS)]
-            for i, name in enumerate(mask_names)
-        }
+        self.mask_colors = {name: NETWORK_COLORS[i % len(NETWORK_COLORS)] for i, name in enumerate(mask_names)}
 
         # Chart control (created in build())
-        self.chart: Optional[LineChart] = None
-        self._data_series: List[LineChartData] = []
+        self.chart: LineChart | None = None
+        self._data_series: list[LineChartData] = []
 
-    def _create_data_series(self) -> List[LineChartData]:
+    def _create_data_series(self) -> list[LineChartData]:
         """Create LineChartData objects for each mask.
 
         Returns:
@@ -365,7 +363,7 @@ class ActivationPlot:
             padding=10,
         )
 
-    def add_data(self, volume: int, mask_activations: Dict[str, float]):
+    def add_data(self, volume: int, mask_activations: dict[str, float]):
         """Add new activation data and update chart.
 
         Args:

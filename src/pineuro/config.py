@@ -48,6 +48,7 @@ PSYCHOPY_SCREEN: int = 1
 # Platform Detection
 # =============================================================================
 
+
 def is_wayland() -> bool:
     """Detect if running under Wayland display server.
 
@@ -61,10 +62,10 @@ def is_wayland() -> bool:
     Some X11-dependent features (like Xlib window positioning) may not
     work correctly under Wayland without XWayland compatibility layer.
     """
-    return os.environ.get('XDG_SESSION_TYPE', '').lower() == 'wayland'
+    return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
 
 
-def get_platform() -> Literal['darwin', 'linux', 'windows']:
+def get_platform() -> Literal["darwin", "linux", "windows"]:
     """Get normalized platform name.
 
     Returns
@@ -72,12 +73,12 @@ def get_platform() -> Literal['darwin', 'linux', 'windows']:
     str
         One of: 'darwin' (macOS), 'linux', 'windows'
     """
-    if sys.platform == 'darwin':
-        return 'darwin'
-    elif sys.platform == 'win32':
-        return 'windows'
+    if sys.platform == "darwin":
+        return "darwin"
+    elif sys.platform == "win32":
+        return "windows"
     else:
-        return 'linux'
+        return "linux"
 
 
 # =============================================================================

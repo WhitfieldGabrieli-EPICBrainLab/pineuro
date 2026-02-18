@@ -7,8 +7,9 @@ The TaskMirror receives base64-encoded PNG screenshots from tasks and
 displays them in the GUI.
 """
 
+import contextlib
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 import flet as ft
 
@@ -51,8 +52,8 @@ class TaskMirror:
         """
         self.width = width
         self.height = height
-        self._image: Optional[ft.Image] = None
-        self._container: Optional[ft.Container] = None
+        self._image: ft.Image | None = None
+        self._container: ft.Container | None = None
 
     def build(self) -> ft.Container:
         """Build the image container.
@@ -80,7 +81,7 @@ class TaskMirror:
         )
         return self._container
 
-    def update_state(self, state: Dict[str, Any]) -> None:
+    def update_state(self, state: dict[str, Any]) -> None:
         """Update with new visual state from task.
 
         Parameters
@@ -90,11 +91,11 @@ class TaskMirror:
             - 'type': 'screenshot'
             - 'image': data URI (e.g., 'data:image/jpeg;base64,...') or raw base64
         """
-        if state.get('type') == 'screenshot' and self._image is not None:
-            img_data = state.get('image', '')
+        if state.get("type") == "screenshot" and self._image is not None:
+            img_data = state.get("image", "")
             if img_data:
                 # Use data URI directly if provided, otherwise wrap as PNG
-                if img_data.startswith('data:'):
+                if img_data.startswith("data:"):
                     self._image.src = img_data
                 else:
                     self._image.src = f"data:image/png;base64,{img_data}"
@@ -107,7 +108,5 @@ class TaskMirror:
         """Reset to empty state."""
         if self._image is not None:
             self._image.src_base64 = None
-            try:
+            with contextlib.suppress(Exception):
                 self._image.update()
-            except Exception:
-                pass

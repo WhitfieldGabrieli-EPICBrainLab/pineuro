@@ -7,7 +7,6 @@ Requires flet-charts package: pip install flet-charts
 """
 
 import logging
-from typing import List, Optional
 from dataclasses import dataclass, field
 
 import flet as ft
@@ -15,6 +14,7 @@ import flet as ft
 # Import chart types from flet_charts package
 try:
     import flet_charts as fch
+
     LineChart = fch.LineChart
     LineChartData = fch.LineChartData
     LineChartDataPoint = fch.LineChartDataPoint
@@ -52,8 +52,9 @@ class FDData:
         volumes: List of volume numbers (x-axis)
         fd_values: List of FD values in mm (y-axis)
     """
-    volumes: List[int] = field(default_factory=list)
-    fd_values: List[float] = field(default_factory=list)
+
+    volumes: list[int] = field(default_factory=list)
+    fd_values: list[float] = field(default_factory=list)
 
     def add_point(self, volume: int, fd: float):
         """Add a new data point.
@@ -145,13 +146,13 @@ class FDPlot:
         self.y_max = max(1.0, threshold * 1.2)
 
         # Chart control (created in build())
-        self.chart: Optional[LineChart] = None
-        self._data_series: List[LineChartData] = []
+        self.chart: LineChart | None = None
+        self._data_series: list[LineChartData] = []
 
         # Summary text control (created in build())
-        self._summary_text: Optional[ft.Text] = None
+        self._summary_text: ft.Text | None = None
 
-    def _create_data_series(self) -> List[LineChartData]:
+    def _create_data_series(self) -> list[LineChartData]:
         """Create LineChartData objects for FD line and threshold reference.
 
         Returns:
@@ -399,6 +400,7 @@ class FDPlot:
 # DVARS Plot
 # =============================================================================
 
+
 @dataclass
 class DVARSData:
     """Container for DVARS timeseries data.
@@ -407,8 +409,9 @@ class DVARSData:
         volumes: List of volume numbers (x-axis)
         dvars_values: List of DVARS values (y-axis)
     """
-    volumes: List[int] = field(default_factory=list)
-    dvars_values: List[float] = field(default_factory=list)
+
+    volumes: list[int] = field(default_factory=list)
+    dvars_values: list[float] = field(default_factory=list)
 
     def add_point(self, volume: int, dvars: float):
         """Add a new data point."""
@@ -452,8 +455,8 @@ class DVARSPlot:
         self.n_volumes = n_volumes
         self.height = height
         self.data = DVARSData()
-        self.chart: Optional[LineChart] = None
-        self._summary_text: Optional[ft.Text] = None
+        self.chart: LineChart | None = None
+        self._summary_text: ft.Text | None = None
 
     def _create_data_series(self) -> list:
         if LineChartData is None:

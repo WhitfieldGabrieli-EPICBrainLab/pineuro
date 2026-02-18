@@ -8,9 +8,9 @@ Displays a summary after feedback runs complete, showing:
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional
 
 import flet as ft
 import numpy as np
@@ -27,7 +27,7 @@ class FeedbackSummaryData:
     baseline_volumes: int
     feedback_volumes: int
     expected_volumes: int
-    hits_per_network: Dict[str, int]  # {network_name: final_hit_count}
+    hits_per_network: dict[str, int]  # {network_name: final_hit_count}
     fd_mean: float
     fd_max: float
     fd_above_threshold: int
@@ -41,7 +41,7 @@ class FeedbackSummaryData:
 
 def compute_feedback_summary(
     feedbacklog_path: Path,
-    psychopy_log_path: Optional[Path],
+    psychopy_log_path: Path | None,
     n_baseline: int,
     n_expected_volumes: int,
     fd_threshold: float = 0.5,
@@ -74,7 +74,7 @@ def compute_feedback_summary(
     fd_pct = (fd_above / total_volumes * 100) if total_volumes > 0 else 0.0
 
     # Parse hits from PsychoPy log
-    hits_per_network: Dict[str, int] = {}
+    hits_per_network: dict[str, int] = {}
     if psychopy_log_path and psychopy_log_path.exists():
         try:
             psych_df = pd.read_csv(psychopy_log_path, sep="\t")
@@ -136,11 +136,11 @@ class FeedbackSummaryDialog:
         subject: str,
         task: str,
         run: int,
-        activation_plot_path: Optional[Path] = None,
-        fd_plot_path: Optional[Path] = None,
-        on_close: Optional[Callable[[], None]] = None,
-        on_view_full_qc: Optional[Callable[[], None]] = None,
-        display_names: Optional[Dict[str, str]] = None,
+        activation_plot_path: Path | None = None,
+        fd_plot_path: Path | None = None,
+        on_close: Callable[[], None] | None = None,
+        on_view_full_qc: Callable[[], None] | None = None,
+        display_names: dict[str, str] | None = None,
     ):
         """Initialize the feedback summary dialog.
 
@@ -166,7 +166,7 @@ class FeedbackSummaryDialog:
         self.on_close = on_close
         self.on_view_full_qc = on_view_full_qc
         self.display_names = display_names or {}
-        self._dialog: Optional[ft.AlertDialog] = None
+        self._dialog: ft.AlertDialog | None = None
 
     def show(self):
         """Display the modal dialog."""
@@ -495,7 +495,8 @@ class FeedbackSummaryDialog:
                     ft.Text("tSNR:", size=13, color=ft.Colors.GREY_700),
                     ft.Text(
                         f"{data.tsnr_final:.1f}" if data.tsnr_final > 0 else "N/A",
-                        size=13, weight=ft.FontWeight.W_500,
+                        size=13,
+                        weight=ft.FontWeight.W_500,
                     ),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,

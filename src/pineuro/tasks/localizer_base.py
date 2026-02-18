@@ -23,10 +23,10 @@ Dependencies
 PsychoPy (for concrete tasks), pandas (for events TSV output)
 """
 
+import logging
 from abc import abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-import logging
+from typing import Any, Union
 
 from .task_base import TaskBase
 
@@ -72,8 +72,8 @@ class BaseLocalizerTask(TaskBase):
         output_dir: Union[str, Path],
         participant_id: str,
         run: int = 1,
-        acq: Optional[int] = None,
-        trigger_keys: Optional[List[str]] = None,
+        acq: int | None = None,
+        trigger_keys: list[str] | None = None,
         monitor_position: str = "right",
         simulator=None,
         **kwargs,
@@ -90,7 +90,7 @@ class BaseLocalizerTask(TaskBase):
         self.acq_number = acq
         self.monitor_position = monitor_position
 
-        self._events: List[Dict[str, Any]] = []
+        self._events: list[dict[str, Any]] = []
         self._experiment_clock = None
 
     # =========================================================================
@@ -109,10 +109,13 @@ class BaseLocalizerTask(TaskBase):
         height : float
             Text height.
         """
-        from psychopy import visual, event, core
+        from psychopy import core, event, visual
 
         fixation = visual.TextStim(
-            self.win, text=text, height=height, color='white',
+            self.win,
+            text=text,
+            height=height,
+            color="white",
         )
         fixation.draw()
         self._capture_and_emit_screenshot(force=True)
@@ -120,7 +123,7 @@ class BaseLocalizerTask(TaskBase):
 
         timer = core.CountdownTimer(duration)
         while timer.getTime() > 0 and self._running:
-            if event.getKeys(keyList=['escape']):
+            if event.getKeys(keyList=["escape"]):
                 raise KeyboardInterrupt("Escaped during fixation")
             core.wait(0.01)
 
@@ -148,13 +151,12 @@ class BaseLocalizerTask(TaskBase):
         **extras
             Additional columns (e.g., response, response_time, stim_file).
         """
-        ev = {"onset": round(onset, 3), "duration": round(duration, 3),
-              "trial_type": trial_type}
+        ev = {"onset": round(onset, 3), "duration": round(duration, 3), "trial_type": trial_type}
         ev.update(extras)
         self._events.append(ev)
         logger.debug(f"Event: {trial_type} onset={onset:.1f} dur={duration:.1f}")
 
-    def save_events(self, path: Optional[Path] = None) -> Path:
+    def save_events(self, path: Path | None = None) -> Path:
         """Write recorded events to a BIDS-compatible TSV file.
 
         Parameters
@@ -172,11 +174,14 @@ class BaseLocalizerTask(TaskBase):
         if path is None:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             if self.acq_number is not None:
-                path = (self.output_dir /
-                        f"{self.participant_id}_task-{self.task_id}_acq-{self.acq_number:02d}_run-{self.run_number:02d}_events.tsv")
+                path = (
+                    self.output_dir
+                    / f"{self.participant_id}_task-{self.task_id}_acq-{self.acq_number:02d}_run-{self.run_number:02d}_events.tsv"
+                )
             else:
-                path = (self.output_dir /
-                        f"{self.participant_id}_task-{self.task_id}_run-{self.run_number:02d}_events.tsv")
+                path = (
+                    self.output_dir / f"{self.participant_id}_task-{self.task_id}_run-{self.run_number:02d}_events.tsv"
+                )
 
         if not self._events:
             logger.warning("No events recorded, saving empty events file")
@@ -188,7 +193,7 @@ class BaseLocalizerTask(TaskBase):
             extra_cols = [c for c in df.columns if c not in bids_cols]
             df = df[bids_cols + extra_cols]
 
-        df.to_csv(path, sep='\t', index=False)
+        df.to_csv(path, sep="\t", index=False)
         logger.info(f"Saved {len(self._events)} events to {path}")
         return path
 

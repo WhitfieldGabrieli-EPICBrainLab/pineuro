@@ -28,7 +28,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -39,41 +39,42 @@ class RunInfo:
 
     Stores task-agnostic run information plus task-specific state snapshot.
     """
+
     run_number: int
     run_type: str  # 'transfer' or 'feedback'
     volumes_processed: int
     # Task-specific state at end of run (e.g., hit_counters, scale_factor)
-    task_state_snapshot: Dict[str, Any] = field(default_factory=dict)
+    task_state_snapshot: dict[str, Any] = field(default_factory=dict)
 
     # Slot-based tracking: slot_run_number is the fixed run slot (1 or 2),
     # acq is the acquisition number for retries (1, 2, 3, ...)
-    slot_run_number: Optional[int] = None
-    acq: Optional[int] = None
+    slot_run_number: int | None = None
+    acq: int | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         data = {
-            'run_number': self.run_number,
-            'run_type': self.run_type,
-            'volumes_processed': self.volumes_processed,
-            'task_state_snapshot': self.task_state_snapshot,
+            "run_number": self.run_number,
+            "run_type": self.run_type,
+            "volumes_processed": self.volumes_processed,
+            "task_state_snapshot": self.task_state_snapshot,
         }
         if self.slot_run_number is not None:
-            data['slot_run_number'] = self.slot_run_number
+            data["slot_run_number"] = self.slot_run_number
         if self.acq is not None:
-            data['acq'] = self.acq
+            data["acq"] = self.acq
         return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "RunInfo":
         """Create from dictionary."""
         return cls(
-            run_number=data['run_number'],
-            run_type=data['run_type'],
-            volumes_processed=data.get('volumes_processed', 0),
-            task_state_snapshot=data.get('task_state_snapshot', {}),
-            slot_run_number=data.get('slot_run_number'),
-            acq=data.get('acq'),
+            run_number=data["run_number"],
+            run_type=data["run_type"],
+            volumes_processed=data.get("volumes_processed", 0),
+            task_state_snapshot=data.get("task_state_snapshot", {}),
+            slot_run_number=data.get("slot_run_number"),
+            acq=data.get("acq"),
         )
 
 
@@ -113,20 +114,21 @@ class SessionState:
 
     session_dir: Path
     task_id: str = "ball"
-    task_state: Dict[str, Any] = field(default_factory=dict)
+    task_state: dict[str, Any] = field(default_factory=dict)
     completed_runs: list[RunInfo] = field(default_factory=list)
     max_feedback_runs: int = 5
 
     # Slot-based tracking: maps slot_run_number to the task_state snapshot
     # at the START of that slot (before any runs). Enables retries to restore
     # the correct initial state for a slot.
-    slot_base_state: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    slot_base_state: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self):
         """Initialize default task state from metadata if empty."""
         if not self.task_state:
             try:
                 from .task_registry import get_task_metadata
+
                 metadata = get_task_metadata(self.task_id)
                 self.task_state = {f.key: f.default for f in metadata.session_state_fields}
             except (ValueError, ImportError):
@@ -196,7 +198,7 @@ class SessionState:
         return count + 1
 
     @property
-    def last_run_type(self) -> Optional[str]:
+    def last_run_type(self) -> str | None:
         """Type of the last completed run, or None if no runs completed."""
         if self.completed_runs:
             return self.completed_runs[-1].run_type
@@ -205,7 +207,7 @@ class SessionState:
     @property
     def feedback_run_count(self) -> int:
         """Number of feedback runs completed so far."""
-        return sum(1 for r in self.completed_runs if r.run_type == 'feedback')
+        return sum(1 for r in self.completed_runs if r.run_type == "feedback")
 
     @property
     def is_last_feedback_run(self) -> bool:
@@ -217,7 +219,7 @@ class SessionState:
         """
         return self.feedback_run_count >= self.max_feedback_runs
 
-    def get_state_for_slot(self, slot_run_number: int, acq: int = 1) -> Dict[str, Any]:
+    def get_state_for_slot(self, slot_run_number: int, acq: int = 1) -> dict[str, Any]:
         """Get the appropriate task state for a run slot.
 
         For retries (acq > 1), returns the task state from before that slot
@@ -262,7 +264,7 @@ class SessionState:
         """
         return any(r.slot_run_number == slot_run_number for r in self.completed_runs)
 
-    def get_run_for_slot(self, slot_run_number: int) -> Optional[RunInfo]:
+    def get_run_for_slot(self, slot_run_number: int) -> RunInfo | None:
         """Get the run info for a given slot, if it exists.
 
         Parameters
@@ -289,14 +291,14 @@ class SessionState:
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
         data = {
-            'task_id': self.task_id,
-            'task_state': self.task_state,
-            'completed_runs': [r.to_dict() for r in self.completed_runs],
-            'max_feedback_runs': self.max_feedback_runs,
-            'slot_base_state': {str(k): v for k, v in self.slot_base_state.items()},
+            "task_id": self.task_id,
+            "task_state": self.task_state,
+            "completed_runs": [r.to_dict() for r in self.completed_runs],
+            "max_feedback_runs": self.max_feedback_runs,
+            "slot_base_state": {str(k): v for k, v in self.slot_base_state.items()},
         }
 
-        with open(self.state_file, 'w') as f:
+        with open(self.state_file, "w") as f:
             json.dump(data, f, indent=2)
 
         logger.info(f"Session state saved to {self.state_file}")
@@ -356,44 +358,47 @@ class SessionState:
         state_file = session_dir / "session_state.json"
 
         if state_file.exists():
-            with open(state_file, 'r') as f:
+            with open(state_file) as f:
                 data = json.load(f)
 
             # Handle both old and new formats
-            if 'task_state' in data:
+            if "task_state" in data:
                 # New format: use task_state dict
-                task_state = data['task_state']
+                task_state = data["task_state"]
             else:
                 # Old format: migrate legacy fields using task metadata
-                loaded_task_id = data.get('task_id', task_id)
+                loaded_task_id = data.get("task_id", task_id)
                 try:
                     from .task_registry import get_task_metadata
+
                     metadata = get_task_metadata(loaded_task_id)
-                    known_keys = {f.key for f in metadata.session_state_fields}
-                    task_state = {
-                        f.key: data.get(f.key, f.default)
-                        for f in metadata.session_state_fields
-                    }
+                    _known_keys = {f.key for f in metadata.session_state_fields}
+                    task_state = {f.key: data.get(f.key, f.default) for f in metadata.session_state_fields}
                     logger.info(f"Migrated legacy session state for '{loaded_task_id}': {list(task_state.keys())}")
                 except (ValueError, ImportError):
                     # Task not registered: pull any non-framework keys as best-effort
-                    framework_keys = {'task_id', 'completed_runs', 'max_feedback_runs',
-                                      'slot_base_state', 'slot_base_scale_factors'}
+                    framework_keys = {
+                        "task_id",
+                        "completed_runs",
+                        "max_feedback_runs",
+                        "slot_base_state",
+                        "slot_base_scale_factors",
+                    }
                     task_state = {k: v for k, v in data.items() if k not in framework_keys}
-                    logger.warning(f"Task '{loaded_task_id}' not registered, migrated all extra keys: {list(task_state.keys())}")
+                    logger.warning(
+                        f"Task '{loaded_task_id}' not registered, migrated all extra keys: {list(task_state.keys())}"
+                    )
 
             # Load slot_base_state (convert string keys back to int)
-            slot_base_state_raw = data.get('slot_base_state', {})
+            slot_base_state_raw = data.get("slot_base_state", {})
             slot_base_state = {int(k): v for k, v in slot_base_state_raw.items()}
 
             state = cls(
                 session_dir=session_dir,
-                task_id=data.get('task_id', task_id),
+                task_id=data.get("task_id", task_id),
                 task_state=task_state,
-                completed_runs=[
-                    RunInfo.from_dict(r) for r in data.get('completed_runs', [])
-                ],
-                max_feedback_runs=data.get('max_feedback_runs', 5),
+                completed_runs=[RunInfo.from_dict(r) for r in data.get("completed_runs", [])],
+                max_feedback_runs=data.get("max_feedback_runs", 5),
                 slot_base_state=slot_base_state,
             )
             logger.info(f"Loaded session state from {state_file}")
@@ -440,10 +445,10 @@ class SessionState:
         self,
         run_type: str,
         volumes_processed: int,
-        task_state_snapshot: Optional[Dict[str, Any]] = None,
+        task_state_snapshot: dict[str, Any] | None = None,
         # Slot-based tracking parameters
-        slot_run_number: Optional[int] = None,
-        acq: Optional[int] = None,
+        slot_run_number: int | None = None,
+        acq: int | None = None,
     ) -> None:
         """Record a completed run and update task state.
 
@@ -508,6 +513,7 @@ class SessionState:
         # old task types or pre-refactor data from lingering)
         try:
             from .task_registry import get_task_metadata
+
             metadata = get_task_metadata(self.task_id)
             known_keys = {f.key for f in metadata.session_state_fields}
             # Also keep any keys from the current snapshot (task may use

@@ -96,53 +96,50 @@ References
 
 # --- Standard Library ---
 # Type hints for function signatures (improves IDE support and documentation)
-from typing import Union, List, Optional, Callable
-from pathlib import Path
-import heapq      # Priority queue for ordered volume collection
-import shutil     # File operations (copy during DICOM collection)
-import copy       # Deep copy for data structures
+import heapq  # Priority queue for ordered volume collection
+import logging  # Structured logging throughout the pipeline
+import shutil  # File operations (copy during DICOM collection)
 import threading  # Multi-threading for volume collection with watchdog
-import time       # Timing for collection timeout and progress tracking
-import logging    # Structured logging throughout the pipeline
+import time  # Timing for collection timeout and progress tracking
+from collections.abc import Callable
+from pathlib import Path
+from typing import Union
+
+import nibabel as nib
 
 # --- Third-Party: Neuroimaging ---
 import numpy as np
-import nibabel as nib
-from nibabel.loadsave import load, save
+from nibabel.loadsave import save
 from nibabel.nifti1 import Nifti1Image
-from scipy.signal import butter, filtfilt   # Butterworth temporal filtering
+from scipy.signal import butter, filtfilt  # Butterworth temporal filtering
+from watchdog.events import FileSystemEventHandler
+
 # NOTE: nilearn and ANTsPy are imported lazily inside the functions that need
 # them to avoid ~17s combined import cost at module load time. The GUI imports
 # this module at startup but doesn't need these until a pipeline actually runs.
-
 # --- Third-Party: Filesystem Monitoring ---
 # Watchdog provides cross-platform filesystem event monitoring for detecting
 # new DICOM files as they arrive from the scanner during acquisition
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileCreatedEvent, DirCreatedEvent
 
 # --- Local Imports ---
 from pineuro.utils import (
+    # Timing
+    Timer,  # Performance timing context manager
+    # Masking
+    apply_mask,  # Apply brain mask to volume
+    apply_xfm,  # Apply transformation to volume
+    compute_mean,  # Compute temporal mean of 4D volume
+    # Registration (ANTs-backed)
+    compute_xfm,  # Compute transformation matrix
+    # DICOM/NIfTI operations
+    dicom_to_nifti,  # dcm2niix wrapper
+    erode_mask,  # Erode mask to reduce edge effects
+    get_json_sidecar_path,  # Get path to JSON sidecar for NIfTI
+    is_nifti_file,  # Check if file is NIfTI format
+    is_valid_volume,  # Validate DICOM/NIfTI files
     # Command execution
     parallel_run_command,  # Parallel execution for multi-run dcm2niix
-
-    # DICOM/NIfTI operations
-    dicom_to_nifti,        # dcm2niix wrapper
-    is_valid_volume,       # Validate DICOM/NIfTI files
-    is_nifti_file,         # Check if file is NIfTI format
-    get_json_sidecar_path, # Get path to JSON sidecar for NIfTI
-
-    # Registration (ANTs-backed)
-    compute_xfm,           # Compute transformation matrix
-    apply_xfm,             # Apply transformation to volume
-    compute_mean,          # Compute temporal mean of 4D volume
-
-    # Masking
-    apply_mask,            # Apply brain mask to volume
-    erode_mask,            # Erode mask to reduce edge effects
-
-    # Timing
-    Timer,                 # Performance timing context manager
 )
 
 # --- Module Logger ---
@@ -161,11 +158,7 @@ logger = logging.getLogger(__name__)
 #   - Return output paths
 
 
-def motion_correction(
-        input_file: Union[str, Path],
-        output_file: Union[str, Path],
-        overwrite: bool = False
-) -> None:
+def motion_correction(input_file: Union[str, Path], output_file: Union[str, Path], overwrite: bool = False) -> None:
     """
     Perform motion correction on fMRI data using ANTsPy rigid registration.
 
@@ -210,7 +203,7 @@ def motion_correction(
 
     input_file = Path(input_file)
     output_file = Path(output_file)
-    par_file = Path(str(output_file) + '.par')
+    par_file = Path(str(output_file) + ".par")
 
     # Check if outputs exist
     if not overwrite and output_file.exists() and par_file.exists():
@@ -219,7 +212,7 @@ def motion_correction(
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with Timer('motion_correction', category='preprocessing'):
+    with Timer("motion_correction", category="preprocessing"):
         logger.info(f"Running motion correction: {input_file.name}")
 
         # Load 4D image
@@ -248,17 +241,17 @@ def motion_correction(
             result = ants.registration(
                 fixed=ref_ants,
                 moving=mov_ants,
-                type_of_transform='Rigid',
+                type_of_transform="Rigid",
                 aff_iterations=(5, 2),
                 aff_shrink_factors=(2, 1),
                 aff_smoothing_sigmas=(1, 0),
                 verbose=False,
             )
 
-            corrected[..., i] = result['warpedmovout'].numpy()
+            corrected[..., i] = result["warpedmovout"].numpy()
 
             # Extract motion parameters from transform
-            tx = ants.read_transform(result['fwdtransforms'][0])
+            tx = ants.read_transform(result["fwdtransforms"][0])
             params = np.array(tx.parameters)
 
             if len(params) == 6:
@@ -271,9 +264,8 @@ def motion_correction(
                 fp = tx.fixed_parameters
                 fixed_p = np.array(fp) if fp is not None and len(fp) > 0 else np.zeros(3)
                 translation = offset + fixed_p - matrix @ fixed_p
-                euler = Rotation.from_matrix(matrix).as_euler('xyz')
-                motion_params[i] = [euler[0], euler[1], euler[2],
-                                    translation[0], translation[1], translation[2]]
+                euler = Rotation.from_matrix(matrix).as_euler("xyz")
+                motion_params[i] = [euler[0], euler[1], euler[2], translation[0], translation[1], translation[2]]
 
         # Save corrected 4D image
         corrected_img = nib.Nifti1Image(corrected, affine, img.header)
@@ -281,15 +273,12 @@ def motion_correction(
 
         # Save motion parameters in .par format (mcflirt-compatible)
         # 6 columns: rot_x, rot_y, rot_z (radians), trans_x, trans_y, trans_z (mm)
-        np.savetxt(par_file, motion_params, fmt='%10.6f')
+        np.savetxt(par_file, motion_params, fmt="%10.6f")
 
         logger.info(f"Motion correction complete: {output_file.name} ({n_vols} volumes)")
 
-def concat(
-        input_files: List[Union[str, Path]],
-        output_file: Union[str, Path],
-        overwrite: bool = False
-) -> None:
+
+def concat(input_files: list[Union[str, Path]], output_file: Union[str, Path], overwrite: bool = False) -> None:
     """
     Concatenate multiple fMRI volumes along the time axis.
 
@@ -335,7 +324,7 @@ def concat(
 
     # --- Check for existing output (skip if not overwriting) ---
     if not overwrite and output_path.exists():
-        logger.info(f"Output file exists and overwrite=False. Skipping concatenation.")
+        logger.info("Output file exists and overwrite=False. Skipping concatenation.")
         return
 
     logger.info("Concatenating...")
@@ -358,6 +347,7 @@ def concat(
     save(out_img, output_path)
     logger.info(f"Output: {output_path}")
 
+
 # =============================================================================
 # SECTION 2: OPTIONAL PREPROCESSING STEPS
 # =============================================================================
@@ -366,10 +356,7 @@ def concat(
 
 
 def spatial_smoothing(
-        input_file: Union[str, Path],
-        output_file: Union[str, Path],
-        fwhm: float = 5.0,
-        overwrite: bool = False
+    input_file: Union[str, Path], output_file: Union[str, Path], fwhm: float = 5.0, overwrite: bool = False
 ) -> None:
     """
     Apply Gaussian spatial smoothing to fMRI data.
@@ -415,7 +402,7 @@ def spatial_smoothing(
 
     # --- Check for existing output ---
     if not overwrite and output_path.exists():
-        logger.info(f"Output file exists and overwrite=False. Skipping spatial smoothing.")
+        logger.info("Output file exists and overwrite=False. Skipping spatial smoothing.")
         return
 
     logger.info("Spatial smoothing...")
@@ -424,16 +411,18 @@ def spatial_smoothing(
     # --- Apply Gaussian smoothing via nilearn ---
     # nilearn handles 3D and 4D inputs automatically
     from nilearn.image import smooth_img
+
     smoothed = smooth_img(str(input_file), fwhm=fwhm)
     smoothed.to_filename(str(output_path))
     logger.info(f"Output: {output_path}")
 
+
 def temporal_filtering(
-        input_file: Union[str, Path],
-        output_file: Union[str, Path],
-        highpass: Optional[float] = None,
-        lowpass: Optional[float] = None,
-        overwrite: bool = False
+    input_file: Union[str, Path],
+    output_file: Union[str, Path],
+    highpass: float | None = None,
+    lowpass: float | None = None,
+    overwrite: bool = False,
 ) -> None:
     """
     Apply temporal bandpass filtering to fMRI data.
@@ -489,7 +478,7 @@ def temporal_filtering(
 
     # --- Check for existing output ---
     if not overwrite and output_path.exists():
-        logger.info(f"Output file exists and overwrite=False. Skipping temporal filtering.")
+        logger.info("Output file exists and overwrite=False. Skipping temporal filtering.")
         return
 
     # --- Load image and extract timing parameters ---
@@ -499,8 +488,8 @@ def temporal_filtering(
     # Extract TR from NIfTI header (4th element of zooms is temporal spacing)
     # nibabel's type hints don't recognize this, hence type: ignore
     tr = img.header.get_zooms()[3]  # type: ignore
-    fs = 1.0 / tr          # Sampling frequency in Hz
-    nyquist = fs / 2.0     # Nyquist frequency (max representable frequency)
+    fs = 1.0 / tr  # Sampling frequency in Hz
+    nyquist = fs / 2.0  # Nyquist frequency (max representable frequency)
 
     logger.info(f"Temporal filtering (TR={tr}s, fs={fs:.3f}Hz)...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -508,15 +497,15 @@ def temporal_filtering(
     # --- Determine filter type based on provided cutoffs ---
     if highpass is not None and lowpass is not None:
         # Bandpass: keep frequencies between highpass and lowpass
-        btype = 'bandpass'
+        btype = "bandpass"
         Wn = [highpass / nyquist, lowpass / nyquist]  # Normalize to Nyquist
     elif highpass is not None:
         # High-pass: remove frequencies below highpass (removes slow drifts)
-        btype = 'highpass'
+        btype = "highpass"
         Wn = highpass / nyquist
     elif lowpass is not None:
         # Low-pass: remove frequencies above lowpass (removes high-freq noise)
-        btype = 'lowpass'
+        btype = "lowpass"
         Wn = lowpass / nyquist
     else:
         # No filtering requested - save unchanged
@@ -544,15 +533,14 @@ def temporal_filtering(
     save(out_img, output_path)
     logger.info(f"Output: {output_path}")
 
+
 # =============================================================================
 # SECTION 3: BRAIN EXTRACTION
 # =============================================================================
 
 
 def brain_extraction(
-        input_file: Union[str, Path],
-        output_dir: Union[str, Path],
-        overwrite: bool = False
+    input_file: Union[str, Path], output_dir: Union[str, Path], overwrite: bool = False
 ) -> tuple[Path, Path]:
     """
     Perform brain extraction using ANTsPy's get_mask.
@@ -612,7 +600,7 @@ def brain_extraction(
     # --- Run brain extraction with ANTsPy ---
     import ants
 
-    with Timer('brain_extraction', category='preprocessing'):
+    with Timer("brain_extraction", category="preprocessing"):
         logger.info(f"Running brain extraction: {input_file.name}")
 
         # Load image with ANTs
@@ -634,20 +622,21 @@ def brain_extraction(
 
     return brain_file, mask_file
 
+
 # =============================================================================
 # SECTION 4: MAIN PREPROCESSING PIPELINE
 # =============================================================================
 
 
 def preprocessing(
-        participant_id: str,
-        task: str,
-        root_dir: Union[str, Path],
-        input_dicoms: Union[str, Path, List[Union[str, Path]]],
-        overwrite: bool = False,
-        n_jobs: int = -1,
-        qc_enabled: bool = True,
-        progress_callback: Optional[Callable[[str, str], None]] = None
+    participant_id: str,
+    task: str,
+    root_dir: Union[str, Path],
+    input_dicoms: Union[str, Path, list[Union[str, Path]]],
+    overwrite: bool = False,
+    n_jobs: int = -1,
+    qc_enabled: bool = True,
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> tuple[Path, Path, Path]:
     """
     Run the complete preprocessing pipeline for fMRI data.
@@ -798,7 +787,7 @@ def preprocessing(
 
     # Validate each input directory
     input_paths: list[str] = []
-    logger.info(f"Input DICOM folders:\n")
+    logger.info("Input DICOM folders:\n")
     for f in input_dicoms:
         path = Path(f)
 
@@ -845,33 +834,35 @@ def preprocessing(
         nifti_file_paths = []
         for run, path in enumerate(input_paths):
             # BIDS-style naming: sub-XX_task-YY_run-01.nii.gz
-            output_name = f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}"
+            output_name = f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}"
             nifti_file_path = nifti_dir / f"{output_name}.nii.gz"
             nifti_file_paths.append(nifti_file_path)
 
-            dcm_jobs.append({
-                'cmd_name': 'dcm2niix',
-                'cmd': ['dcm2niix', '-z', 'y', '-o', str(nifti_dir), '-f', output_name, str(path)],
-                'description': f'DICOM to NIfTI conversion run {run+1}',
-                'inputs': path,
-                'outputs': nifti_file_path,
-                'overwrite': overwrite,
-                'verbose': False  # Suppress per-job output in parallel mode
-            })
+            dcm_jobs.append(
+                {
+                    "cmd_name": "dcm2niix",
+                    "cmd": ["dcm2niix", "-z", "y", "-o", str(nifti_dir), "-f", output_name, str(path)],
+                    "description": f"DICOM to NIfTI conversion run {run + 1}",
+                    "inputs": path,
+                    "outputs": nifti_file_path,
+                    "overwrite": overwrite,
+                    "verbose": False,  # Suppress per-job output in parallel mode
+                }
+            )
 
         # Execute all jobs in parallel using joblib
-        parallel_run_command(dcm_jobs, n_jobs=n_jobs, timing_category='preprocessing')
+        parallel_run_command(dcm_jobs, n_jobs=n_jobs, timing_category="preprocessing")
         nifti_files = nifti_file_paths
 
     else:
         # --- Sequential Conversion (single run or n_jobs=1) ---
         for run, path in enumerate(input_paths):
-            emit_progress("Step 1/4", f"Converting run {run+1}/{len(input_paths)}...")
+            emit_progress("Step 1/4", f"Converting run {run + 1}/{len(input_paths)}...")
             nifti_file = dicom_to_nifti(
                 dicom_dir=path,
                 output_dir=nifti_dir,
-                output_name=f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}",
-                overwrite=overwrite
+                output_name=f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}",
+                overwrite=overwrite,
             )
             nifti_files.append(nifti_file)
 
@@ -897,8 +888,8 @@ def preprocessing(
     mcf_files = []
 
     for run, nifti in enumerate(nifti_files):
-        emit_progress("Step 2/4", f"Running motion correction on run {run+1}/{len(nifti_files)}...")
-        mcf_file = mcf_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mcf.nii.gz")
+        emit_progress("Step 2/4", f"Running motion correction on run {run + 1}/{len(nifti_files)}...")
+        mcf_file = mcf_dir / Path(f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}_mcf.nii.gz")
         motion_correction(input_file=nifti, output_file=mcf_file, overwrite=overwrite)
         mcf_files.append(mcf_file)
 
@@ -929,7 +920,7 @@ def preprocessing(
     emit_progress("Step 3/4", "Computing temporal mean images...")
     mean_files = []
     for run, nifti in enumerate(mcf_files):
-        mean_file = bet_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mean.nii.gz")
+        mean_file = bet_dir / Path(f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}_mean.nii.gz")
         compute_mean(input_file=nifti, output_file=mean_file, overwrite=overwrite)
         mean_files.append(mean_file)
 
@@ -979,7 +970,6 @@ def preprocessing(
         concat_files = []
 
         for run, mean_file in enumerate(mean_files):
-
             if run == 0:
                 # First run IS the reference - no transformation needed
                 # Just add its motion-corrected data to the concatenation list
@@ -989,28 +979,32 @@ def preprocessing(
                 # --- Compute Rigid Transform ---
                 # Estimate the 6 rigid-body parameters (3 translation, 3 rotation)
                 # that align this run's mean to run-01's mean
-                emit_progress("Step 4/4", f"Computing transform for run {run+1}/{len(mean_files)}...")
-                output_prefix = xfm_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_mean_to_run-01_mean")
+                emit_progress("Step 4/4", f"Computing transform for run {run + 1}/{len(mean_files)}...")
+                output_prefix = xfm_dir / Path(
+                    f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}_mean_to_run-01_mean"
+                )
                 _, xfm_files = compute_xfm(
-                    moving=mean_file,       # This run's mean (to be transformed)
-                    fixed=sub_ref,          # Run-01 mean (target space)
+                    moving=mean_file,  # This run's mean (to be transformed)
+                    fixed=sub_ref,  # Run-01 mean (target space)
                     output_prefix=output_prefix,
-                    type_of_transform='Rigid',  # 6 DOF: preserves brain shape
-                    overwrite=overwrite
+                    type_of_transform="Rigid",  # 6 DOF: preserves brain shape
+                    overwrite=overwrite,
                 )
 
                 # --- Apply Transform to Full 4D Timeseries ---
                 # The transform was computed on the mean, but we apply it to the
                 # full 4D timeseries so all volumes are in the same space
-                emit_progress("Step 4/4", f"Applying transform to run {run+1}/{len(mean_files)}...")
-                output_file = coreg_dir / Path(f"{participant_id}_task-{task}_run-{str(run+1).zfill(2)}_to_run-01.nii.gz")
+                emit_progress("Step 4/4", f"Applying transform to run {run + 1}/{len(mean_files)}...")
+                output_file = coreg_dir / Path(
+                    f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}_to_run-01.nii.gz"
+                )
                 apply_xfm(
                     moving=mcf_files[run],  # Full 4D timeseries
-                    fixed=sub_ref,          # Reference space
+                    fixed=sub_ref,  # Reference space
                     transform_files=xfm_files,
                     output_file=output_file,
-                    interpolator='linear',  # Linear interpolation for smooth results
-                    overwrite=overwrite
+                    interpolator="linear",  # Linear interpolation for smooth results
+                    overwrite=overwrite,
                 )
                 concat_files.append(output_file)
 
@@ -1067,11 +1061,9 @@ def preprocessing(
         emit_progress("Generating QC report...")
         try:
             from . import qc
+
             qc_report = qc.generate_preprocessing_report(
-                preprocessing_dir=root_dir,
-                participant_id=participant_id,
-                task=task,
-                overwrite=overwrite
+                preprocessing_dir=root_dir, participant_id=participant_id, task=task, overwrite=overwrite
             )
             emit_progress("QC report", f"Saved to {qc_report.name}")
         except Exception as e:
@@ -1146,12 +1138,12 @@ def collect_volumes(
     timeout: float = 300.0,
     clear_watch_dir: bool = True,
     clear_output_dir: bool = True,
-    simulator_source_dir: Optional[Union[str, Path]] = None,
+    simulator_source_dir: Union[str, Path] | None = None,
     simulator_speed: float = 1.0,
     poll_interval: float = 0.5,
-    progress_callback: Optional[Callable[[int, int, float, Path], None]] = None,
-    stop_event: Optional[threading.Event] = None,
-    trigger_event: Optional[threading.Event] = None,
+    progress_callback: Callable[[int, int, float, Path], None] | None = None,
+    stop_event: threading.Event | None = None,
+    trigger_event: threading.Event | None = None,
 ) -> Path:
     """
     Watch for incoming volumes (DICOM or NIfTI) during scanner acquisition and collect them.
@@ -1274,7 +1266,7 @@ def collect_volumes(
     # main loop, scanner callback), so all access is protected by a lock.
 
     pending_heap: list[tuple[str, Path]] = []  # (filename, path) tuples sorted by filename
-    processed_files: set[str] = set()           # Track processed files to avoid duplicates
+    processed_files: set[str] = set()  # Track processed files to avoid duplicates
     collected_count = 0
     lock = threading.Lock()
 
@@ -1308,12 +1300,11 @@ def collect_volumes(
         with lock:
             existing_names = {item[0] for item in pending_heap}
             for file_path in found_files:
-                if file_path.name not in processed_files:
-                    if file_path.name not in existing_names:
-                        heapq.heappush(pending_heap, (file_path.name, file_path))
-                        existing_names.add(file_path.name)
+                if file_path.name not in processed_files and file_path.name not in existing_names:
+                    heapq.heappush(pending_heap, (file_path.name, file_path))
+                    existing_names.add(file_path.name)
 
-    def get_next_file() -> Optional[Path]:
+    def get_next_file() -> Path | None:
         """
         Get the next valid volume file to process, in alphabetical order.
 
@@ -1373,7 +1364,7 @@ def collect_volumes(
             source_dir=simulator_source_dir,
             target_dir=watch_dir,
             speed=simulator_speed,
-            clear_target=False,      # Already cleared above
+            clear_target=False,  # Already cleared above
             cleanup_on_complete=False,  # Leave files for collection
         )
 

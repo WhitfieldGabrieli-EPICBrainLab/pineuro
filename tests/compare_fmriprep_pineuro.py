@@ -27,7 +27,6 @@ import argparse
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -47,7 +46,6 @@ from setup_validation import (
     load_subjects_csv,
 )
 
-
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -62,7 +60,7 @@ class RunConfig:
     fmriprep_bold: Path
     fmriprep_confounds: Path
     pineuro_feedbacklog: Path
-    pineuro_design: Optional[Path] = None
+    pineuro_design: Path | None = None
 
 
 # =============================================================================
@@ -231,12 +229,13 @@ def transform_masks_to_fmriprep_space(
         reg = ants.registration(
             fixed=fmriprep_ref,
             moving=pineuro_ref,
-            type_of_transform='Rigid',
+            type_of_transform="Rigid",
             verbose=False,
         )
         # Save transform
         import shutil
-        shutil.copy(reg['fwdtransforms'][0], str(reg_file))
+
+        shutil.copy(reg["fwdtransforms"][0], str(reg_file))
 
     # Transform each mask
     for network, mask_path in masks.items():
@@ -253,7 +252,7 @@ def transform_masks_to_fmriprep_space(
             fixed=fmriprep_ref,
             moving=mask_img,
             transformlist=[str(reg_file)],
-            interpolator='nearestNeighbor',
+            interpolator="nearestNeighbor",
         )
 
         ants.image_write(mask_transformed, str(out_path))
@@ -282,14 +281,14 @@ def extract_fmriprep_activation(
     bold_img = load_img(bold_file)
 
     # Load confounds
-    confounds_df = pd.read_csv(confounds_file, sep='\t')
+    confounds_df = pd.read_csv(confounds_file, sep="\t")
 
     # Select relevant confounds (motion parameters)
-    motion_cols = ['trans_x', 'trans_y', 'trans_z', 'rot_x', 'rot_y', 'rot_z']
+    motion_cols = ["trans_x", "trans_y", "trans_z", "rot_x", "rot_y", "rot_z"]
     available_cols = [c for c in motion_cols if c in confounds_df.columns]
 
     if not available_cols:
-        print(f"  Warning: No motion confounds found, using raw signal")
+        print("  Warning: No motion confounds found, using raw signal")
         confounds = None
     else:
         confounds = confounds_df[available_cols].values
@@ -318,14 +317,14 @@ def extract_fmriprep_activation(
 
 def load_pineuro_activation(feedbacklog_path: Path, network: str) -> np.ndarray:
     """Load pineuro activation timeseries from feedback log."""
-    df = pd.read_csv(feedbacklog_path, sep='\t')
+    df = pd.read_csv(feedbacklog_path, sep="\t")
 
     # Find the activation column for this network
     candidates = [
-        f'activation_{network}',
-        f'activation_{network.lower()}',
-        'activation',
-        f'{network}_activation',
+        f"activation_{network}",
+        f"activation_{network.lower()}",
+        "activation",
+        f"{network}_activation",
     ]
 
     activation_col = None
@@ -336,7 +335,7 @@ def load_pineuro_activation(feedbacklog_path: Path, network: str) -> np.ndarray:
 
     if activation_col is None:
         # Use first column that contains 'activation'
-        activation_cols = [c for c in df.columns if 'activation' in c.lower()]
+        activation_cols = [c for c in df.columns if "activation" in c.lower()]
         if activation_cols:
             activation_col = activation_cols[0]
             print(f"  Using activation column: {activation_col}")
@@ -375,14 +374,14 @@ def compare_timeseries(
     rmse = np.sqrt(np.mean((fmriprep - pineuro) ** 2))
 
     return {
-        'r_full': r_full,
-        'p_full': p_full,
-        'r_task': r_task,
-        'p_task': p_task,
-        'slope': slope,
-        'intercept': intercept,
-        'rmse': rmse,
-        'n_volumes': min_len,
+        "r_full": r_full,
+        "p_full": p_full,
+        "r_task": r_task,
+        "p_task": p_task,
+        "slope": slope,
+        "intercept": intercept,
+        "rmse": rmse,
+        "n_volumes": min_len,
     }
 
 
@@ -412,12 +411,12 @@ def create_comparison_plot(
 
     # Plot 1: Timeseries overlay
     ax1 = axes[0, 0]
-    ax1.plot(time, fmriprep_z, 'b-', label='fMRIPrep', alpha=0.7)
-    ax1.plot(time, pineuro_z, 'r-', label='pineuro', alpha=0.7)
-    ax1.axvline(n_baseline * tr, color='gray', linestyle='--', label='Baseline end')
-    ax1.set_xlabel('Time (s)')
-    ax1.set_ylabel('Activation (z-score)')
-    ax1.set_title(f'{network} - {task} run {run}\nr={metrics["r_full"]:.3f}')
+    ax1.plot(time, fmriprep_z, "b-", label="fMRIPrep", alpha=0.7)
+    ax1.plot(time, pineuro_z, "r-", label="pineuro", alpha=0.7)
+    ax1.axvline(n_baseline * tr, color="gray", linestyle="--", label="Baseline end")
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel("Activation (z-score)")
+    ax1.set_title(f"{network} - {task} run {run}\nr={metrics['r_full']:.3f}")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
@@ -427,50 +426,51 @@ def create_comparison_plot(
     x_line = np.linspace(pineuro_z.min(), pineuro_z.max(), 100)
     slope_z, intercept_z, _, _, _ = stats.linregress(pineuro_z, fmriprep_z)
     y_line = slope_z * x_line + intercept_z
-    ax2.plot(x_line, y_line, 'r-', linewidth=2, label=f'slope={slope_z:.2f}')
-    ax2.plot([-3, 3], [-3, 3], 'k--', alpha=0.5, label='identity')
-    ax2.set_xlabel('pineuro (z-score)')
-    ax2.set_ylabel('fMRIPrep (z-score)')
-    ax2.set_title(f'Scatter (r={metrics["r_full"]:.3f})')
+    ax2.plot(x_line, y_line, "r-", linewidth=2, label=f"slope={slope_z:.2f}")
+    ax2.plot([-3, 3], [-3, 3], "k--", alpha=0.5, label="identity")
+    ax2.set_xlabel("pineuro (z-score)")
+    ax2.set_ylabel("fMRIPrep (z-score)")
+    ax2.set_title(f"Scatter (r={metrics['r_full']:.3f})")
     ax2.legend()
     ax2.grid(True, alpha=0.3)
-    ax2.set_aspect('equal')
+    ax2.set_aspect("equal")
 
     # Plot 3: Residuals
     ax3 = axes[1, 0]
     residuals = fmriprep_z - pineuro_z
-    ax3.plot(time, residuals, 'g-', alpha=0.7)
-    ax3.axhline(0, color='k', linestyle='--')
-    ax3.axvline(n_baseline * tr, color='gray', linestyle='--')
-    ax3.set_xlabel('Time (s)')
-    ax3.set_ylabel('Residual (fMRIPrep - pineuro)')
-    ax3.set_title(f'Residuals (RMSE={metrics["rmse"]:.3f})')
+    ax3.plot(time, residuals, "g-", alpha=0.7)
+    ax3.axhline(0, color="k", linestyle="--")
+    ax3.axvline(n_baseline * tr, color="gray", linestyle="--")
+    ax3.set_xlabel("Time (s)")
+    ax3.set_ylabel("Residual (fMRIPrep - pineuro)")
+    ax3.set_title(f"Residuals (RMSE={metrics['rmse']:.3f})")
     ax3.grid(True, alpha=0.3)
 
     # Plot 4: Metrics text
     ax4 = axes[1, 1]
-    ax4.axis('off')
+    ax4.axis("off")
     metrics_text = f"""
     Comparison Metrics
     ==================
 
-    Correlation (full):    r = {metrics['r_full']:.4f}  (p = {metrics['p_full']:.2e})
-    Correlation (task):    r = {metrics['r_task']:.4f}  (p = {metrics['p_task']:.2e})
+    Correlation (full):    r = {metrics["r_full"]:.4f}  (p = {metrics["p_full"]:.2e})
+    Correlation (task):    r = {metrics["r_task"]:.4f}  (p = {metrics["p_task"]:.2e})
 
     Regression:
-      Slope:     {metrics['slope']:.4f}
-      Intercept: {metrics['intercept']:.4f}
+      Slope:     {metrics["slope"]:.4f}
+      Intercept: {metrics["intercept"]:.4f}
 
     Error:
-      RMSE:      {metrics['rmse']:.4f}
+      RMSE:      {metrics["rmse"]:.4f}
 
-    N volumes:   {metrics['n_volumes']}
+    N volumes:   {metrics["n_volumes"]}
     """
-    ax4.text(0.1, 0.9, metrics_text, transform=ax4.transAxes, fontsize=11,
-             verticalalignment='top', fontfamily='monospace')
+    ax4.text(
+        0.1, 0.9, metrics_text, transform=ax4.transAxes, fontsize=11, verticalalignment="top", fontfamily="monospace"
+    )
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
 
 
@@ -601,7 +601,7 @@ def save_subject_summary(subject: str, results: dict, output_dir: Path) -> None:
     summary_path = output_dir / "comparison_summary.txt"
 
     with open(summary_path, "w") as f:
-        f.write(f"fMRIPrep vs pineuro Comparison Summary\n")
+        f.write("fMRIPrep vs pineuro Comparison Summary\n")
         f.write(f"Subject: {subject}\n")
         f.write("=" * 60 + "\n\n")
 
@@ -636,18 +636,20 @@ def save_group_results(all_results: list[dict], output_dir: Path) -> None:
             run_num = int(parts[1]) if len(parts) == 2 else 0
 
             for network, metrics in run_results.items():
-                rows.append({
-                    "subject": r["subject"],
-                    "task": task,
-                    "run": run_num,
-                    "network": network,
-                    "r_full": metrics.get("r_full"),
-                    "r_task": metrics.get("r_task"),
-                    "slope": metrics.get("slope"),
-                    "intercept": metrics.get("intercept"),
-                    "rmse": metrics.get("rmse"),
-                    "n_volumes": metrics.get("n_volumes"),
-                })
+                rows.append(
+                    {
+                        "subject": r["subject"],
+                        "task": task,
+                        "run": run_num,
+                        "network": network,
+                        "r_full": metrics.get("r_full"),
+                        "r_task": metrics.get("r_task"),
+                        "slope": metrics.get("slope"),
+                        "intercept": metrics.get("intercept"),
+                        "rmse": metrics.get("rmse"),
+                        "n_volumes": metrics.get("n_volumes"),
+                    }
+                )
 
     if rows:
         df = pd.DataFrame(rows)
@@ -693,6 +695,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
         except Exception as e:
             print(f"\nERROR processing {config.subject}: {e}")
             import traceback
+
             traceback.print_exc()
             continue
 
@@ -749,31 +752,35 @@ def print_summary(all_results: list[dict]) -> None:
         print(f"\n{r['subject']}:")
         for run_key, run_results in r["results"].items():
             for network, metrics in run_results.items():
-                print(f"  {run_key} {network}: r={metrics['r_full']:.4f}, "
-                      f"slope={metrics['slope']:.4f}, RMSE={metrics['rmse']:.4f}")
+                print(
+                    f"  {run_key} {network}: r={metrics['r_full']:.4f}, "
+                    f"slope={metrics['slope']:.4f}, RMSE={metrics['rmse']:.4f}"
+                )
 
                 if network not in r_by_network:
                     r_by_network[network] = []
                     slope_by_network[network] = []
                     rmse_by_network[network] = []
 
-                r_by_network[network].append(metrics['r_full'])
-                slope_by_network[network].append(metrics['slope'])
-                rmse_by_network[network].append(metrics['rmse'])
+                r_by_network[network].append(metrics["r_full"])
+                slope_by_network[network].append(metrics["slope"])
+                rmse_by_network[network].append(metrics["rmse"])
 
     # Print statistics
     print("\n" + "-" * 60)
     print("STATISTICS BY NETWORK")
     print("-" * 60)
 
-    for network in r_by_network.keys():
+    for network in r_by_network:
         r_arr = np.array(r_by_network[network])
         slope_arr = np.array(slope_by_network[network])
         rmse_arr = np.array(rmse_by_network[network])
 
         print(f"\n{network} (n={len(r_arr)} runs):")
-        print(f"  Correlation: mean={r_arr.mean():.4f}, std={r_arr.std():.4f}, "
-              f"min={r_arr.min():.4f}, max={r_arr.max():.4f}")
+        print(
+            f"  Correlation: mean={r_arr.mean():.4f}, std={r_arr.std():.4f}, "
+            f"min={r_arr.min():.4f}, max={r_arr.max():.4f}"
+        )
         print(f"  Slope:       mean={slope_arr.mean():.4f}, std={slope_arr.std():.4f}")
         print(f"  RMSE:        mean={rmse_arr.mean():.4f}, std={rmse_arr.std():.4f}")
 

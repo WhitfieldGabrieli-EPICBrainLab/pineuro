@@ -6,16 +6,14 @@ reports are opened in an external browser.
 """
 
 import logging
-import subprocess
+import platform
 import webbrowser
 from pathlib import Path
-from typing import Optional, List, Tuple
-import platform
 
 logger = logging.getLogger(__name__)
 
 
-def open_qc_report(report_path: Path, screen: Optional[int] = None) -> bool:
+def open_qc_report(report_path: Path, screen: int | None = None) -> bool:
     """Open a QC report HTML file in the default browser.
 
     Args:
@@ -40,6 +38,7 @@ def open_qc_report(report_path: Path, screen: Optional[int] = None) -> bool:
             # Use screen-aware browser opening (from pineuro.qc)
             try:
                 from pineuro.qc import _open_html_in_browser
+
                 _open_html_in_browser(abs_path)
                 return True
             except ImportError:
@@ -71,7 +70,7 @@ class QCReportManager:
         self.base_dir = Path(base_dir)
         self.participant_id = participant_id
 
-    def get_preprocessing_qc(self) -> Optional[Path]:
+    def get_preprocessing_qc(self) -> Path | None:
         """Get path to preprocessing QC report.
 
         Returns:
@@ -92,7 +91,7 @@ class QCReportManager:
 
         return None
 
-    def get_mask_extraction_qc(self) -> Optional[Path]:
+    def get_mask_extraction_qc(self) -> Path | None:
         """Get path to mask extraction QC report.
 
         Returns:
@@ -127,7 +126,7 @@ class QCReportManager:
 
         return None
 
-    def get_coregistration_qc(self, run_id: int = 1) -> Optional[Path]:
+    def get_coregistration_qc(self, run_id: int = 1) -> Path | None:
         """Get path to 2vol coregistration QC report.
 
         Args:
@@ -155,7 +154,7 @@ class QCReportManager:
 
         return None
 
-    def get_feedback_qc(self, task: str, run: int, acq: int | None = None) -> Optional[Path]:
+    def get_feedback_qc(self, task: str, run: int, acq: int | None = None) -> Path | None:
         """Get path to feedback/transfer run QC report.
 
         Args:
@@ -188,7 +187,7 @@ class QCReportManager:
 
         return None
 
-    def get_combined_qc(self) -> Optional[Path]:
+    def get_combined_qc(self) -> Path | None:
         """Get path to combined session QC report.
 
         Returns:
@@ -208,7 +207,7 @@ class QCReportManager:
 
         return None
 
-    def list_available_reports(self) -> List[dict]:
+    def list_available_reports(self) -> list[dict]:
         """List all available QC reports.
 
         Returns:
@@ -247,11 +246,13 @@ class QCReportManager:
             for run in range(1, 10):  # Check up to 9 runs
                 path = self.get_feedback_qc(task, run)
                 if path:
-                    reports.append({
-                        "name": f"{task.capitalize()} Run {run}",
-                        "type": f"{task}_run_{run}",
-                        "path": path,
-                    })
+                    reports.append(
+                        {
+                            "name": f"{task.capitalize()} Run {run}",
+                            "type": f"{task}_run_{run}",
+                            "path": path,
+                        }
+                    )
 
         # Filter to only existing reports
         return [r for r in reports if r["path"] is not None]
@@ -295,7 +296,7 @@ class QCReportManager:
     # Plot Discovery Methods (for inline QC viewing)
     # =========================================================================
 
-    def get_preprocessing_plots(self) -> List[Tuple[str, Path]]:
+    def get_preprocessing_plots(self) -> list[tuple[str, Path]]:
         """Get key preprocessing QC plots.
 
         Returns:
@@ -329,7 +330,7 @@ class QCReportManager:
 
         return plots
 
-    def get_mask_extraction_plots(self) -> List[Tuple[str, Path]]:
+    def get_mask_extraction_plots(self) -> list[tuple[str, Path]]:
         """Get key mask extraction QC plots.
 
         Returns:
@@ -378,7 +379,7 @@ class QCReportManager:
 
         return plots
 
-    def get_2vol_qc_plots(self, run_id: int = 2) -> List[Tuple[str, Path]]:
+    def get_2vol_qc_plots(self, run_id: int = 2) -> list[tuple[str, Path]]:
         """Get ONLY 2vol coregistration QC plots for a specific run.
 
         Use this for realtime coregistration approval where only
@@ -420,7 +421,7 @@ class QCReportManager:
 
         return plots
 
-    def get_feedback_plots(self, task: str, run: int) -> List[Tuple[str, Path]]:
+    def get_feedback_plots(self, task: str, run: int) -> list[tuple[str, Path]]:
         """Get key feedback QC plots.
 
         Args:

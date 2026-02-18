@@ -4,12 +4,12 @@ This module provides a polling mechanism to watch feedback log files
 and emit new data as it's written during neurofeedback sessions.
 """
 
+import csv
 import logging
 import threading
-import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable, Dict, List, Any
-import csv
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class FeedbackLogPoller:
     def __init__(
         self,
         log_path: Path,
-        on_new_data: Callable[[Dict[str, Any]], None],
+        on_new_data: Callable[[dict[str, Any]], None],
         poll_interval: float = 0.5,
     ):
         """Initialize the feedback log poller.
@@ -45,9 +45,9 @@ class FeedbackLogPoller:
         self.poll_interval = poll_interval
 
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._last_row_count = 0
-        self._headers: List[str] = []
+        self._headers: list[str] = []
 
     def start(self):
         """Start polling in a background thread."""
@@ -92,8 +92,8 @@ class FeedbackLogPoller:
             return
 
         try:
-            with open(self.log_path, 'r', newline='') as f:
-                reader = csv.reader(f, delimiter='\t')
+            with open(self.log_path, newline="") as f:
+                reader = csv.reader(f, delimiter="\t")
 
                 # Read all rows
                 rows = list(reader)
@@ -122,7 +122,7 @@ class FeedbackLogPoller:
         except Exception as e:
             logger.error(f"Error reading log file: {e}")
 
-    def _parse_row(self, row: List[str]) -> Optional[Dict[str, Any]]:
+    def _parse_row(self, row: list[str]) -> dict[str, Any] | None:
         """Parse a TSV row into a data dictionary.
 
         Args:
@@ -172,9 +172,9 @@ class FeedbackMonitor:
     def __init__(
         self,
         log_path: Path,
-        mask_names: List[str],
+        mask_names: list[str],
         n_volumes: int,
-        on_update: Callable[[int, Dict[str, float], Dict[str, float], Optional[float], Optional[float], Optional[float]], None],
+        on_update: Callable[[int, dict[str, float], dict[str, float], float | None, float | None, float | None], None],
         poll_interval: float = 0.5,
     ):
         """Initialize the feedback monitor.
@@ -191,7 +191,7 @@ class FeedbackMonitor:
         self.n_volumes = n_volumes
         self.on_update = on_update
 
-        self._poller: Optional[FeedbackLogPoller] = None
+        self._poller: FeedbackLogPoller | None = None
         self._volumes_processed = 0
 
     def start(self):
@@ -221,7 +221,7 @@ class FeedbackMonitor:
             return 0.0
         return min(1.0, self._volumes_processed / self.n_volumes)
 
-    def _on_new_row(self, data: Dict[str, Any]):
+    def _on_new_row(self, data: dict[str, Any]):
         """Handle new row from poller.
 
         Args:
@@ -249,15 +249,15 @@ class FeedbackMonitor:
                 motion_params[key] = value
 
         # Extract framewise displacement and QC metrics
-        fd: Optional[float] = data.get("fd")
-        dvars: Optional[float] = data.get("dvars")
-        tsnr: Optional[float] = data.get("tsnr")
+        fd: float | None = data.get("fd")
+        dvars: float | None = data.get("dvars")
+        tsnr: float | None = data.get("tsnr")
 
         # Call update callback
         self.on_update(volume, mask_activations, motion_params, fd, dvars, tsnr)
 
 
-def get_hits_from_psychopylog(log_path: Path) -> Dict[str, int]:
+def get_hits_from_psychopylog(log_path: Path) -> dict[str, int]:
     """Read hit counts from last row of psychopylog.tsv.
 
     The psychopylog.tsv is written per-frame by the ball task and includes
@@ -272,16 +272,16 @@ def get_hits_from_psychopylog(log_path: Path) -> Dict[str, int]:
     if not log_path.exists():
         return {}
     try:
-        with open(log_path, 'r') as f:
+        with open(log_path) as f:
             lines = f.readlines()
         if len(lines) < 2:  # Need header + at least one data row
             return {}
-        header = lines[0].strip().split('\t')
-        last_row = lines[-1].strip().split('\t')
+        header = lines[0].strip().split("\t")
+        last_row = lines[-1].strip().split("\t")
         hits = {}
         for i, col in enumerate(header):
-            if col.endswith('_hits') and i < len(last_row):
-                mask_name = col.replace('_hits', '')
+            if col.endswith("_hits") and i < len(last_row):
+                mask_name = col.replace("_hits", "")
                 hits[mask_name] = int(last_row[i])
         return hits
     except Exception:

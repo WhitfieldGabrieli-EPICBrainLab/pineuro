@@ -148,44 +148,42 @@ References
 # =============================================================================
 
 # --- Standard Library ---
-import json                 # JSON I/O for selection metadata
-import re                   # Regex for filename parsing
-from dataclasses import dataclass, asdict
-from typing import Union, Any, Dict, List, Optional, Sequence, Tuple, Callable
-from pathlib import Path
+import json  # JSON I/O for selection metadata
 import logging
+import re  # Regex for filename parsing
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Union
 
-# --- Third-Party: Neuroimaging ---
-import numpy as np
-import pandas as pd
 # NOTE: nilearn is imported lazily inside the functions that need it to avoid
 # ~8s import cost at module load time. The GUI imports this module at startup
 # but doesn't need nilearn until mask extraction actually runs.
 import nibabel as nib
+
+# --- Third-Party: Neuroimaging ---
+import numpy as np
+import pandas as pd
 from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
 from nibabel.spatialimages import SpatialImage
 from scipy.ndimage import label as ndimage_label  # Connected component labeling
-from scipy.stats import pearsonr           # Spatial correlation
 
 # --- Local Imports ---
 from pineuro import qc
 from pineuro.utils import (
-    # Registration helpers (ANTs-backed)
-    compute_mean,           # Compute temporal mean of 4D volume
-    compute_xfm,            # Compute transformation matrix
-    compute_xfm_to_mni,     # Compute transform to MNI space
-    apply_xfm,              # Apply transformation
-    apply_xfm_sform_to_mni, # Quick MNI alignment via sform
-
-    # Atlas helpers
-    get_yeo_labels,         # Get Yeo network names (7 or 17 networks)
-
-    # DICOM helpers
-    dicom_to_nifti,         # DICOM conversion (for 2vol coregistration)
-
     # Timing
-    Timer,                  # Performance timing
+    Timer,  # Performance timing
+    apply_xfm,  # Apply transformation
+    apply_xfm_sform_to_mni,  # Quick MNI alignment via sform
+    # Registration helpers (ANTs-backed)
+    compute_mean,  # Compute temporal mean of 4D volume
+    compute_xfm,  # Compute transformation matrix
+    compute_xfm_to_mni,  # Compute transform to MNI space
+    # DICOM helpers
+    dicom_to_nifti,  # DICOM conversion (for 2vol coregistration)
+    # Atlas helpers
+    get_yeo_labels,  # Get Yeo network names (7 or 17 networks)
 )
 
 # --- Module Logger ---
@@ -223,19 +221,17 @@ class MaskSelection:
     selection_reason : str
         How this selection was made: "auto", "manual", "manual_combined", or "yeo_fallback"
     """
+
     network_name: str
     source_type: str  # "ica", "ica_combined", or "yeo_atlas"
-    component_index: Optional[int]
+    component_index: int | None
     correlation: float
     selection_reason: str  # "auto", "manual", "manual_combined", "yeo_fallback"
-    secondary_component_index: Optional[int] = None
-    secondary_correlation: Optional[float] = None
+    secondary_component_index: int | None = None
+    secondary_correlation: float | None = None
 
 
-def save_mask_selections(
-    masks_dir: Union[str, Path],
-    selections: Dict[str, MaskSelection]
-) -> Path:
+def save_mask_selections(masks_dir: Union[str, Path], selections: dict[str, MaskSelection]) -> Path:
     """Save mask selections to JSON file.
 
     Parameters
@@ -256,14 +252,14 @@ def save_mask_selections(
     # Convert dataclasses to dicts for JSON serialization
     data = {name: asdict(sel) for name, sel in selections.items()}
 
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         json.dump(data, f, indent=2)
 
     logger.info(f"Saved mask selections to {output_file}")
     return output_file
 
 
-def load_mask_selections(masks_dir: Union[str, Path]) -> Dict[str, MaskSelection]:
+def load_mask_selections(masks_dir: Union[str, Path]) -> dict[str, MaskSelection]:
     """Load mask selections from JSON file.
 
     Parameters
@@ -283,7 +279,7 @@ def load_mask_selections(masks_dir: Union[str, Path]) -> Dict[str, MaskSelection
     if not selections_file.exists():
         return {}
 
-    with open(selections_file, 'r') as f:
+    with open(selections_file) as f:
         data = json.load(f)
 
     # Task-based selections are wrapped: {"type": "task", "selections": {...}}
@@ -295,20 +291,18 @@ def load_mask_selections(masks_dir: Union[str, Path]) -> Dict[str, MaskSelection
     selections = {}
     for name, sel_data in data.items():
         # Add default values for new fields if missing
-        if 'secondary_component_index' not in sel_data:
-            sel_data['secondary_component_index'] = None
-        if 'secondary_correlation' not in sel_data:
-            sel_data['secondary_correlation'] = None
+        if "secondary_component_index" not in sel_data:
+            sel_data["secondary_component_index"] = None
+        if "secondary_correlation" not in sel_data:
+            sel_data["secondary_correlation"] = None
         selections[name] = MaskSelection(**sel_data)
 
     return selections
 
 
 def get_alternative_components(
-    correlation_df: pd.DataFrame,
-    network_name: str,
-    top_n: int = 5
-) -> List[Tuple[int, float]]:
+    correlation_df: pd.DataFrame, network_name: str, top_n: int = 5
+) -> list[tuple[int, float]]:
     """Get the top N ICA components for a network, ranked by correlation.
 
     Parameters
@@ -386,7 +380,7 @@ def compute_mask_network_correlation(
 
     # Load and resample Yeo atlas to mask space
     atlas_img = load(yeo_subject_space)
-    atlas_resampled = resample_to_img(atlas_img, mask_img, interpolation='nearest')
+    atlas_resampled = resample_to_img(atlas_img, mask_img, interpolation="nearest")
     atlas_data = atlas_resampled.get_fdata().astype(int).ravel()
 
     # Create binary network mask
@@ -398,8 +392,8 @@ def compute_mask_network_correlation(
     network_dm = network_mask - network_mask.mean()
 
     # Compute correlation
-    mask_norm = np.sqrt((mask_dm ** 2).sum())
-    network_norm = np.sqrt((network_dm ** 2).sum())
+    mask_norm = np.sqrt((mask_dm**2).sum())
+    network_norm = np.sqrt((network_dm**2).sum())
 
     if mask_norm == 0 or network_norm == 0:
         return 0.0
@@ -415,7 +409,7 @@ def extract_yeo_mask_for_network(
     output_file: Union[str, Path],
     n_yeo: int = 17,
     threshold: int = 2000,
-    overwrite: bool = False
+    overwrite: bool = False,
 ) -> Path:
     """Extract and threshold a mask directly from Yeo atlas in subject space.
 
@@ -491,8 +485,8 @@ def split_mask_by_hemisphere(
     output_left: Union[str, Path],
     output_right: Union[str, Path],
     threshold: int = 2000,
-    overwrite: bool = False
-) -> Tuple[Path, Path]:
+    overwrite: bool = False,
+) -> tuple[Path, Path]:
     """Split a network mask into left and right hemisphere masks with thresholding.
 
     Takes an unthresholded ICA component mask, splits it by hemisphere using
@@ -534,7 +528,7 @@ def split_mask_by_hemisphere(
         raise FileNotFoundError(f"Input mask not found: {input_mask}")
 
     if output_left.exists() and output_right.exists() and not overwrite:
-        logger.info(f"Hemisphere masks exist and overwrite=False, skipping")
+        logger.info("Hemisphere masks exist and overwrite=False, skipping")
         return output_left, output_right
 
     # Load unthresholded mask (ICA component with continuous values)
@@ -582,8 +576,7 @@ def split_mask_by_hemisphere(
     n_right = int(right_thresholded.sum())
 
     logger.info(
-        f"Split and thresholded {input_mask.name}: "
-        f"{n_left} left voxels, {n_right} right voxels (threshold={threshold})"
+        f"Split and thresholded {input_mask.name}: {n_left} left voxels, {n_right} right voxels (threshold={threshold})"
     )
 
     # Save
@@ -604,7 +597,7 @@ def combine_ica_components(
     component_idx_2: int,
     output_file: Union[str, Path],
     threshold: int = 2000,
-    overwrite: bool = False
+    overwrite: bool = False,
 ) -> Path:
     """Combine two ICA components into a single thresholded mask.
 
@@ -664,9 +657,7 @@ def combine_ica_components(
     # Validate indices
     for idx in [component_idx_1, component_idx_2]:
         if idx < 0 or idx >= n_components:
-            raise ValueError(
-                f"Component index {idx} out of range (0 to {n_components - 1})"
-            )
+            raise ValueError(f"Component index {idx} out of range (0 to {n_components - 1})")
 
     # Extract both raw component maps
     comp1_data = components_data[..., component_idx_1]
@@ -716,7 +707,7 @@ def combine_ica_components_unthresholded(
     component_idx_1: int,
     component_idx_2: int,
     output_file: Union[str, Path],
-    overwrite: bool = False
+    overwrite: bool = False,
 ) -> Path:
     """Combine two ICA components into a single unthresholded map.
 
@@ -835,7 +826,7 @@ def regenerate_mask_from_selection(
             output_file=thr_file,
             n_yeo=n_yeo,
             threshold=threshold,
-            overwrite=True
+            overwrite=True,
         )
         # Also save an unthresholded version (full atlas region)
         labels = get_yeo_labels(n_networks=n_yeo)
@@ -862,10 +853,7 @@ def regenerate_mask_from_selection(
         components_data = components_img.get_fdata()
 
         if component_idx >= components_data.shape[3]:
-            raise ValueError(
-                f"Component index {component_idx} out of range "
-                f"(max: {components_data.shape[3] - 1})"
-            )
+            raise ValueError(f"Component index {component_idx} out of range (max: {components_data.shape[3] - 1})")
 
         # Extract component and save unthresholded
         ic_data = components_data[..., component_idx]
@@ -894,10 +882,7 @@ def regenerate_mask_from_selection(
                 f"secondary_component_index ({component_idx_2})"
             )
 
-        logger.info(
-            f"Regenerating {network_name} from combined ICA components "
-            f"{component_idx_1} + {component_idx_2}"
-        )
+        logger.info(f"Regenerating {network_name} from combined ICA components {component_idx_1} + {component_idx_2}")
 
         # Save thresholded combined mask
         combine_ica_components(
@@ -906,7 +891,7 @@ def regenerate_mask_from_selection(
             component_idx_2=component_idx_2,
             output_file=thr_file,
             threshold=threshold,
-            overwrite=True
+            overwrite=True,
         )
 
         # Save unthresholded combined map
@@ -915,7 +900,7 @@ def regenerate_mask_from_selection(
             component_idx_1=component_idx_1,
             component_idx_2=component_idx_2,
             output_file=network_file,
-            overwrite=True
+            overwrite=True,
         )
 
     else:
@@ -945,15 +930,15 @@ def regenerate_mask_from_selection(
 
 
 def run_ica(
-        input_file: Union[str, Path],
-        mask_file: Union[str, Path],
-        output_dir: Union[str, Path],
-        output_name: str,
-        n_components: int = 30,
-        smooth_fwhm: Optional[float] = None,
-        highpass: Optional[float] = None,
-        lowpass: Optional[float] = None,
-        overwrite: bool = False
+    input_file: Union[str, Path],
+    mask_file: Union[str, Path],
+    output_dir: Union[str, Path],
+    output_name: str,
+    n_components: int = 30,
+    smooth_fwhm: float | None = None,
+    highpass: float | None = None,
+    lowpass: float | None = None,
+    overwrite: bool = False,
 ) -> tuple[Path, Path]:
     """
     Run Canonical ICA (CanICA) on fMRI data using nilearn.
@@ -998,17 +983,16 @@ def run_ica(
 
     from nilearn.decomposition import CanICA
 
-    logger.info(f"CanICA...")
+    logger.info("CanICA...")
 
     output_dir = Path(output_dir)
     components_file = output_dir / f"{output_name}_components.nii.gz"
     metadata_file = output_dir / f"{output_name}_metadata.npz"
 
     outputs = [components_file, metadata_file]
-    if not overwrite:
-        if all(p.exists() for p in outputs):
-            logger.info(f"All output files exist and overwrite=False. Skipping CanICA.")
-            return components_file, metadata_file
+    if not overwrite and all(p.exists() for p in outputs):
+        logger.info("All output files exist and overwrite=False. Skipping CanICA.")
+        return components_file, metadata_file
 
     input_file = Path(input_file)
     logger.info("Inputs:")
@@ -1020,7 +1004,7 @@ def run_ica(
         raise FileNotFoundError(f"Mask file not found: {mask_file}")
     logger.info(f"  {str(mask_file)}")
 
-    logger.info(f"Output file:\n")
+    logger.info("Output file:\n")
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"  {str(components_file)}")
 
@@ -1030,10 +1014,11 @@ def run_ica(
     img = load(input_file)
     # Extract TR from 4th dimension of zooms (temporal spacing)
     # type: ignore - nibabel typing doesn't recognize header.get_zooms()[3]
-    tr = img.header.get_zooms()[3] # type: ignore
+    tr = img.header.get_zooms()[3]  # type: ignore
 
     # Convert nan to None (nilearn needs None to skip smoothing/filtering)
     import math
+
     if smooth_fwhm is not None and math.isnan(smooth_fwhm):
         smooth_fwhm = None
     if highpass is not None and math.isnan(highpass):
@@ -1046,16 +1031,16 @@ def run_ica(
     canica: Any = CanICA(
         mask=mask_file,
         n_components=n_components,
-        smoothing_fwhm=smooth_fwhm, # type: ignore - nilearn accepts None or float
+        smoothing_fwhm=smooth_fwhm,  # type: ignore - nilearn accepts None or float
         high_pass=highpass,
         low_pass=lowpass,
         threshold=None,  # type: ignore - nilearn accepts None or float
         t_r=tr,
-        n_jobs=-1, # Use all CPUs
-        random_state=0, # For reproducibility
+        n_jobs=-1,  # Use all CPUs
+        random_state=0,  # For reproducibility
         memory=str(output_dir / "cache"),
         memory_level=2,
-        verbose=1
+        verbose=1,
     )
 
     # Fit CanICA
@@ -1078,10 +1063,7 @@ def run_ica(
 
     # Save metadata
     np.savez(
-        metadata_file,
-        n_components=n_components,
-        components_shape=components_img.shape,
-        input_file=str(input_file)
+        metadata_file, n_components=n_components, components_shape=components_img.shape, input_file=str(input_file)
     )
     logger.info(f"Saved metadata to: {metadata_file}")
 
@@ -1092,13 +1074,14 @@ def run_ica(
 
     return components_file, metadata_file
 
+
 def spatial_correlation(
-        input_file: Union[str, Path],
-        parcellation_file: Union[str, Path],
-        mask_file: Union[str, Path],
-        labels: List,
-        output_file: Union[str, Path],
-        overwrite: bool = False
+    input_file: Union[str, Path],
+    parcellation_file: Union[str, Path],
+    mask_file: Union[str, Path],
+    labels: list,
+    output_file: Union[str, Path],
+    overwrite: bool = False,
 ) -> pd.DataFrame:
     """
     Spatially coreralte a NIfTI file with a parcellation using FSL's fslcc.
@@ -1118,19 +1101,19 @@ def spatial_correlation(
     overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
-    
+
      Raises
     ------
     FileNotFoundError
         If components_file does not exist
     ValueError
         If n_components parameter is invalid
-    
+
     """
 
     # Log the command
-    logger.info(f"Computing spatial correlation...")
-    
+    logger.info("Computing spatial correlation...")
+
     # Convert to Path objects
     input_file = Path(input_file)
     mask_file = Path(mask_file)
@@ -1140,13 +1123,12 @@ def spatial_correlation(
     output_file = Path(output_file)
 
     # Check if outputs exist and skip if overwrite=False
-    if not overwrite:
-        if output_file.exists():
-            logger.info(f"Output file exists and overwrite=False. Skipping spatial correlations.")
-            corr_df = pd.read_csv(output_file)
-            # Drop any auto-created index columns from prior saves
-            corr_df = corr_df.loc[:, ~corr_df.columns.str.contains("^Unnamed")]
-            return corr_df
+    if not overwrite and output_file.exists():
+        logger.info("Output file exists and overwrite=False. Skipping spatial correlations.")
+        corr_df = pd.read_csv(output_file)
+        # Drop any auto-created index columns from prior saves
+        corr_df = corr_df.loc[:, ~corr_df.columns.str.contains("^Unnamed")]
+        return corr_df
 
     # Validate files
     if not input_file.exists():
@@ -1167,8 +1149,8 @@ def spatial_correlation(
 
     # Load parcellation and resample (note: they should already be co-registered)
     logger.info(f"Loading: {parcellation_file}...")
-    img_parcellation = load(parcellation_file)  
-    img_parcellation_rs = resample_to_img(img_parcellation, img, interpolation='nearest')
+    img_parcellation = load(parcellation_file)
+    img_parcellation_rs = resample_to_img(img_parcellation, img, interpolation="nearest")
     data_parcellation = get_data(img_parcellation_rs).astype(int)
 
     # Load mask
@@ -1180,7 +1162,7 @@ def spatial_correlation(
     # Flatten components and labels inside the mask
     X = data[data_mask].reshape(V, n)
     data_parcellation = data_parcellation[data_mask]
-    
+
     # Demean
     X_dm = X - X.mean(axis=0, keepdims=True)
     x_norm = np.sqrt((X_dm**2).sum(axis=0))
@@ -1190,7 +1172,7 @@ def spatial_correlation(
     with Timer("Spatial correlation (vectorized)", "mask_extraction"):
         # Vectorized approach: compute all network correlations at once
         # Create matrix of all network masks: Y shape (m, V) where m is number of networks
-        Y = np.stack([(data_parcellation == j+1).astype(float) for j in range(len(labels))])
+        Y = np.stack([(data_parcellation == j + 1).astype(float) for j in range(len(labels))])
 
         # Demean all networks at once
         Y_dm = Y - Y.mean(axis=1, keepdims=True)
@@ -1221,25 +1203,25 @@ def spatial_correlation(
 
 
 def mask_extraction_rest(
-        participant_id: str,
-        root_dir: Union[str, Path],
-        input_file: Union[str, Path],
-        mask_file: Union[str, Path],
-        ref_file: Union[str, Path],
-        n_yeo: int = 17,
-        yeo_targets : Union[str, List[str]] = ["DefaultA", "ContA"],
-        network_atlas: str = "yeo_17",
-        n_components: int = 30,
-        threshold: int = 2000,
-        smooth_fwhm: Optional[float] = None,
-        highpass: Optional[float] = None,
-        lowpass: Optional[float] = None,
-        overwrite: bool = False,
-        qc_enabled: bool = True,
-        qc_dir: Optional[Union[str, Path]] = None,
-        progress_callback: Optional[Callable[[str, str], None]] = None,
-        sham_hemisphere_network: Optional[str] = None
-) -> List[Path]:
+    participant_id: str,
+    root_dir: Union[str, Path],
+    input_file: Union[str, Path],
+    mask_file: Union[str, Path],
+    ref_file: Union[str, Path],
+    n_yeo: int = 17,
+    yeo_targets: Union[str, list[str]] | None = None,
+    network_atlas: str = "yeo_17",
+    n_components: int = 30,
+    threshold: int = 2000,
+    smooth_fwhm: float | None = None,
+    highpass: float | None = None,
+    lowpass: float | None = None,
+    overwrite: bool = False,
+    qc_enabled: bool = True,
+    qc_dir: Union[str, Path] | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+    sham_hemisphere_network: str | None = None,
+) -> list[Path]:
     """
     Run the mask extraction pipeline for resting-state fMRI data.
 
@@ -1309,8 +1291,11 @@ def mask_extraction_rest(
 
     """
 
-    from nilearn.image import get_data
+    if yeo_targets is None:
+        yeo_targets = ["DefaultA", "ContA"]
+
     from nilearn import datasets
+    from nilearn.image import get_data
 
     # Helper to emit progress to both logger and callback
     def emit_progress(step: str, detail: str = ""):
@@ -1335,7 +1320,7 @@ def mask_extraction_rest(
     ref_file = Path(ref_file)
     if not ref_file.exists():
         raise FileNotFoundError(f"BOLD reference file not found: {ref_file}")
-    
+
     # Derive n_networks from network_atlas (overrides n_yeo for backward compat)
     if network_atlas in ATLAS_SOURCES:
         n_networks = ATLAS_SOURCES[network_atlas]["n_networks"]
@@ -1356,7 +1341,7 @@ def mask_extraction_rest(
                 f"Label '{target}' not in labels for {network_atlas} "
                 f"({n_networks}-network parcellation). Available: {labels}"
             )
-    
+
     # Step 1: ICA
     emit_progress("Step 1/3: Running ICA decomposition", f"{n_components} components")
     ica_dir = root_dir / "01_ica"
@@ -1369,7 +1354,7 @@ def mask_extraction_rest(
         smooth_fwhm=smooth_fwhm,
         highpass=highpass,
         lowpass=lowpass,
-        overwrite=overwrite
+        overwrite=overwrite,
     )
     components_img = load(components_file)
     components_data = get_data(components_img)
@@ -1385,9 +1370,7 @@ def mask_extraction_rest(
     # Uses ANTs SyN (nonlinear) registration between BOLD reference volumes
     output_prefix = mnireg_dir / Path(f"{ref_file.with_suffix('').stem}_to_MNI_boldref")
     mni_ref_file, sub2mni_fwd_xfm, sub2mni_inv_xfm = compute_xfm_to_mni(
-        input_file=ref_file,
-        output_prefix=output_prefix,
-        overwrite=overwrite
+        input_file=ref_file, output_prefix=output_prefix, overwrite=overwrite
     )
 
     atlas_display = ATLAS_SOURCES.get(network_atlas, {}).get("display_name", network_atlas)
@@ -1397,11 +1380,13 @@ def mask_extraction_rest(
         # Yeo atlas path (existing behavior)
         yeo_atlas = datasets.fetch_atlas_yeo_2011(n_networks=n_networks, thickness="thick")
         yeo = yeo_atlas.maps
-        yeo_mni = Path(yeo).with_suffix('').parent / Path(Path(yeo).with_suffix('').stem + '_interp_to_fMRIPrep_boldref.nii.gz')
+        yeo_mni = Path(yeo).with_suffix("").parent / Path(
+            Path(yeo).with_suffix("").stem + "_interp_to_fMRIPrep_boldref.nii.gz"
+        )
 
         atlas2sub = mnireg_dir / Path(f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz")
         if not yeo_mni.exists() or overwrite:
-            apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp='nearestneighbour', overwrite=overwrite)
+            apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp="nearestneighbour", overwrite=overwrite)
 
         if not atlas2sub.exists() or overwrite:
             apply_xfm(
@@ -1409,20 +1394,20 @@ def mask_extraction_rest(
                 fixed=ref_file,
                 transform_files=sub2mni_inv_xfm,
                 output_file=atlas2sub,
-                interpolator='nearestNeighbor',
+                interpolator="nearestNeighbor",
                 invert=False,
-                overwrite=overwrite
+                overwrite=overwrite,
             )
 
     elif network_atlas.startswith("schaefer"):
         # Schaefer atlas: fetch, group parcels by network, register to subject space
         info = ATLAS_SOURCES[network_atlas]
         schaefer = datasets.fetch_atlas_schaefer_2018(
-            n_rois=info["n_rois"], yeo_networks=n_networks, resolution_mm=2,
+            n_rois=info["n_rois"],
+            yeo_networks=n_networks,
+            resolution_mm=2,
         )
-        raw_labels = [
-            l.decode() if isinstance(l, bytes) else str(l) for l in schaefer.labels
-        ]
+        raw_labels = [lbl.decode() if isinstance(lbl, bytes) else str(lbl) for lbl in schaefer.labels]
 
         # Load Schaefer parcellation
         schaefer_maps = schaefer.maps
@@ -1452,7 +1437,8 @@ def mask_extraction_rest(
         if not schaefer_network_mni.exists() or overwrite:
             network_img = Nifti1Image(
                 network_parcellation.astype(np.int16),
-                schaefer_img.affine, schaefer_img.header,
+                schaefer_img.affine,
+                schaefer_img.header,
             )
             save(network_img, schaefer_network_mni)
 
@@ -1464,14 +1450,13 @@ def mask_extraction_rest(
                 fixed=ref_file,
                 transform_files=sub2mni_inv_xfm,
                 output_file=atlas2sub,
-                interpolator='nearestNeighbor',
+                interpolator="nearestNeighbor",
                 invert=False,
                 overwrite=overwrite,
             )
     else:
         raise ValueError(
-            f"Unsupported network_atlas '{network_atlas}' for resting-state extraction. "
-            f"Use a Yeo or Schaefer atlas."
+            f"Unsupported network_atlas '{network_atlas}' for resting-state extraction. Use a Yeo or Schaefer atlas."
         )
 
     emit_progress("Step 2/3", "Registration complete")
@@ -1486,12 +1471,19 @@ def mask_extraction_rest(
     # Each ICA component is correlated with each Yeo network region
     # Result is a component × network matrix showing which components match which networks
     emit_progress("Step 3/3", "Computing spatial correlations...")
-    sc_file = masks_dir / Path(f"network_IC_spatial_correlation.csv")
-    sc_df = spatial_correlation(input_file=components_file, mask_file=mask_file, parcellation_file=atlas2sub, labels=labels, output_file=sc_file, overwrite=overwrite)
+    sc_file = masks_dir / Path("network_IC_spatial_correlation.csv")
+    sc_df = spatial_correlation(
+        input_file=components_file,
+        mask_file=mask_file,
+        parcellation_file=atlas2sub,
+        labels=labels,
+        output_file=sc_file,
+        overwrite=overwrite,
+    )
     chosen_components = {target: int(sc_df[target].idxmax()) for target in yeo_targets}
 
     # Save initial mask selections (auto-selected based on correlation)
-    initial_selections: Dict[str, MaskSelection] = {}
+    initial_selections: dict[str, MaskSelection] = {}
     for target in yeo_targets:
         component_idx = chosen_components[target]
         correlation = float(sc_df[target].iloc[component_idx])
@@ -1500,7 +1492,7 @@ def mask_extraction_rest(
             source_type="ica",
             component_index=component_idx,
             correlation=correlation,
-            selection_reason="auto"
+            selection_reason="auto",
         )
     save_mask_selections(masks_dir, initial_selections)
 
@@ -1514,11 +1506,11 @@ def mask_extraction_rest(
             # Find component index with maximum correlation for this network
             ic_ind = chosen_components[target]
             # Extract that component's spatial map as the network mask
-            ic_data = components_data[..., ic_ind] # type: ignore
-            ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header) # type: ignore
+            ic_data = components_data[..., ic_ind]  # type: ignore
+            ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)  # type: ignore
             save(ic_img, network_file)
         else:
-            logger.info(f"Output file exists and overwrite=False. Skipping network extraction.")
+            logger.info("Output file exists and overwrite=False. Skipping network extraction.")
         network_files.append(network_file)
 
     # Step 3c: Threshold masks to retain only top N voxels by activation magnitude
@@ -1538,7 +1530,7 @@ def mask_extraction_rest(
             thresholded = ((data * mask) > 0).astype("uint8")
             save(Nifti1Image(thresholded, img.affine, img.header), thr_file)  # type: ignore
         else:
-            logger.info(f"Output file exists and overwrite=False. Skipping network thresholding.")
+            logger.info("Output file exists and overwrite=False. Skipping network thresholding.")
         network_thr_files.append(thr_file)
 
     emit_progress("Step 3/3", f"Complete ({len(network_thr_files)} masks extracted)")
@@ -1572,13 +1564,9 @@ def mask_extraction_rest(
         if network_file.exists():
             left_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_left_thr.nii.gz"
             right_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_right_thr.nii.gz"
-            split_mask_by_hemisphere(
-                network_file, left_file, right_file,
-                threshold=threshold, overwrite=overwrite
-            )
+            split_mask_by_hemisphere(network_file, left_file, right_file, threshold=threshold, overwrite=overwrite)
             emit_progress(
-                "Hemisphere split",
-                f"Created {left_file.name} and {right_file.name} ({threshold} voxels each)"
+                "Hemisphere split", f"Created {left_file.name} and {right_file.name} ({threshold} voxels each)"
             )
         else:
             logger.warning(f"Could not find or create mask for {sham_hemisphere_network}")
@@ -1597,7 +1585,7 @@ def mask_extraction_rest(
             output_dir=qc_output_dir,
             n_yeo=n_networks,
             overwrite=overwrite,
-            open_browser=False
+            open_browser=False,
         )
         emit_progress("QC report", f"Saved to {report_path.name}")
 
@@ -1622,10 +1610,10 @@ def mask_extraction_rest(
 from pineuro.atlas_registry import ATLAS_SOURCES
 
 # Cache for on-demand atlas label fetching
-_ATLAS_LABELS_CACHE: Dict[str, List[str]] = {}
+_ATLAS_LABELS_CACHE: dict[str, list[str]] = {}
 
 
-def get_atlas_labels(atlas_source: str) -> List[str]:
+def get_atlas_labels(atlas_source: str) -> list[str]:
     """Fetch region/network labels for an atlas from nilearn. Cached after first call.
 
     Parameters
@@ -1650,10 +1638,7 @@ def get_atlas_labels(atlas_source: str) -> List[str]:
         return _ATLAS_LABELS_CACHE[atlas_source]
 
     if atlas_source not in ATLAS_SOURCES:
-        raise ValueError(
-            f"Unknown atlas_source '{atlas_source}'. "
-            f"Available: {', '.join(sorted(ATLAS_SOURCES.keys()))}"
-        )
+        raise ValueError(f"Unknown atlas_source '{atlas_source}'. Available: {', '.join(sorted(ATLAS_SOURCES.keys()))}")
 
     if atlas_source.startswith("yeo"):
         n = ATLAS_SOURCES[atlas_source]["n_networks"]
@@ -1661,15 +1646,14 @@ def get_atlas_labels(atlas_source: str) -> List[str]:
     elif atlas_source.startswith("schaefer"):
         info = ATLAS_SOURCES[atlas_source]
         atlas = datasets.fetch_atlas_schaefer_2018(
-            n_rois=info["n_rois"], yeo_networks=info["n_networks"], resolution_mm=2,
+            n_rois=info["n_rois"],
+            yeo_networks=info["n_networks"],
+            resolution_mm=2,
         )
-        labels = [
-            l.decode() if isinstance(l, bytes) else str(l)
-            for l in atlas.labels
-        ]
+        labels = [lbl.decode() if isinstance(lbl, bytes) else str(lbl) for lbl in atlas.labels]
     elif atlas_source == "harvard_oxford":
         atlas = datasets.fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
-        labels = [l for l in atlas.labels if l != "Background"]
+        labels = [lbl for lbl in atlas.labels if lbl != "Background"]
     elif atlas_source == "aal":
         atlas = datasets.fetch_atlas_aal(version="SPM12")
         labels = list(atlas.labels)
@@ -1684,7 +1668,7 @@ def get_atlas_labels(atlas_source: str) -> List[str]:
 # Curated combined entries kept for backward compatibility with atlas_name API.
 # New code should use atlas_source + regions via fetch_atlas_mask().
 
-_ATLAS_COMBINED_ENTRIES: Dict[str, Dict[str, Any]] = {
+_ATLAS_COMBINED_ENTRIES: dict[str, dict[str, Any]] = {
     "harvard_oxford_stg": {
         "description": "Superior Temporal Gyrus (anterior + posterior)",
         "atlas_type": "harvard_oxford",
@@ -1734,7 +1718,7 @@ _ATLAS_COMBINED_ENTRIES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def get_atlas_region_registry() -> Dict[str, Dict[str, Any]]:
+def get_atlas_region_registry() -> dict[str, dict[str, Any]]:
     """Get the legacy atlas region registry (curated combined entries only).
 
     Returns the static curated combined entries without fetching any atlas
@@ -1760,9 +1744,9 @@ ATLAS_REGION_REGISTRY = _ATLAS_COMBINED_ENTRIES
 
 def fetch_atlas_mask(
     output_file: Union[str, Path],
-    atlas_name: Optional[str] = None,
-    atlas_source: Optional[str] = None,
-    regions: Optional[List[str]] = None,
+    atlas_name: str | None = None,
+    atlas_source: str | None = None,
+    regions: list[str] | None = None,
     overwrite: bool = False,
 ) -> Path:
     """Fetch an atlas from nilearn and extract specified regions as a binary mask.
@@ -1808,37 +1792,26 @@ def fetch_atlas_mask(
     # --- Resolve atlas data and target regions ---
     if atlas_source is not None and regions is not None:
         # New pathway: fetch atlas by source key
-        atlas_img, atlas_data, labels, label_indices = _fetch_atlas_and_resolve_regions(
-            atlas_source, regions
-        )
+        atlas_img, atlas_data, labels, label_indices = _fetch_atlas_and_resolve_regions(atlas_source, regions)
         atlas_label = f"{atlas_source} ({len(regions)} regions)"
     elif atlas_name is not None:
         # Legacy pathway: look up curated combined entry
         registry = get_atlas_region_registry()
         if atlas_name not in registry:
             available = ", ".join(sorted(registry.keys()))
-            raise ValueError(
-                f"Unknown atlas_name '{atlas_name}'. Available: {available}"
-            )
+            raise ValueError(f"Unknown atlas_name '{atlas_name}'. Available: {available}")
         entry = registry[atlas_name]
         target_regions = entry["regions"]
         atlas_type = entry.get("atlas_type", "harvard_oxford")
-        atlas_img, atlas_data, labels, label_indices = _fetch_atlas_and_resolve_regions(
-            atlas_type, target_regions
-        )
+        atlas_img, atlas_data, labels, label_indices = _fetch_atlas_and_resolve_regions(atlas_type, target_regions)
         atlas_label = atlas_name
     else:
-        raise ValueError(
-            "Either atlas_name or (atlas_source + regions) must be provided"
-        )
+        raise ValueError("Either atlas_name or (atlas_source + regions) must be provided")
 
     # Create binary mask: 1 where atlas label is in target regions, 0 elsewhere
     binary_mask = np.isin(atlas_data, label_indices).astype(np.uint8)
     n_voxels = int(binary_mask.sum())
-    logger.info(
-        f"Atlas '{atlas_label}': {len(label_indices)} regions, "
-        f"{n_voxels} voxels in MNI space"
-    )
+    logger.info(f"Atlas '{atlas_label}': {len(label_indices)} regions, {n_voxels} voxels in MNI space")
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     save(Nifti1Image(binary_mask, atlas_img.affine, atlas_img.header), output_file)
@@ -1847,8 +1820,8 @@ def fetch_atlas_mask(
 
 def _fetch_atlas_and_resolve_regions(
     atlas_source: str,
-    target_regions: List[str],
-) -> Tuple[nib.Nifti1Image, np.ndarray, list, List[int]]:
+    target_regions: list[str],
+) -> tuple[nib.Nifti1Image, np.ndarray, list, list[int]]:
     """Fetch an atlas image and resolve region names to integer label indices.
 
     Parameters
@@ -1883,8 +1856,8 @@ def _fetch_atlas_and_resolve_regions(
             except ValueError:
                 raise ValueError(
                     f"Region '{region}' not found in Harvard-Oxford labels. "
-                    f"Available: {[l for l in labels if l != 'Background']}"
-                )
+                    f"Available: {[lbl for lbl in labels if lbl != 'Background']}"
+                ) from None
 
     elif atlas_source == "aal":
         atlas = datasets.fetch_atlas_aal(version="SPM12")
@@ -1900,22 +1873,19 @@ def _fetch_atlas_and_resolve_regions(
                 label_pos = labels.index(region)
                 label_indices.append(indices[label_pos])
             except ValueError:
-                raise ValueError(
-                    f"Region '{region}' not found in AAL labels. "
-                    f"Available: {labels}"
-                )
+                raise ValueError(f"Region '{region}' not found in AAL labels. Available: {labels}") from None
 
     elif atlas_source.startswith("schaefer"):
         info = ATLAS_SOURCES[atlas_source]
         atlas = datasets.fetch_atlas_schaefer_2018(
-            n_rois=info["n_rois"], yeo_networks=info["n_networks"], resolution_mm=2,
+            n_rois=info["n_rois"],
+            yeo_networks=info["n_networks"],
+            resolution_mm=2,
         )
         atlas_maps = atlas.maps
         atlas_img = atlas_maps if isinstance(atlas_maps, nib.Nifti1Image) else nib.load(atlas_maps)
         atlas_data = atlas_img.get_fdata()
-        raw_labels = [
-            l.decode() if isinstance(l, bytes) else str(l) for l in atlas.labels
-        ]
+        raw_labels = [lbl.decode() if isinstance(lbl, bytes) else str(lbl) for lbl in atlas.labels]
         labels = raw_labels
         # Schaefer: 1-indexed (labels[0] → voxel value 1)
         label_indices = []
@@ -1925,9 +1895,8 @@ def _fetch_atlas_and_resolve_regions(
                 label_indices.append(label_pos + 1)
             except ValueError:
                 raise ValueError(
-                    f"Region '{region}' not found in Schaefer labels. "
-                    f"Available (first 10): {raw_labels[:10]}..."
-                )
+                    f"Region '{region}' not found in Schaefer labels. Available (first 10): {raw_labels[:10]}..."
+                ) from None
 
     else:
         raise ValueError(f"Unsupported atlas_source for mask extraction: {atlas_source}")
@@ -1942,7 +1911,7 @@ def cluster_threshold_stat_map(
     start_threshold: float = 2.0,
     step: float = 0.1,
     max_iterations: int = 200,
-) -> Tuple[np.ndarray, Dict[str, Any]]:
+) -> tuple[np.ndarray, dict[str, Any]]:
     """Find the largest contiguous cluster within an atlas-masked stat map.
 
     Iteratively raises the statistical threshold until the largest spatially
@@ -1988,10 +1957,7 @@ def cluster_threshold_stat_map(
         If ``stat_data`` and ``atlas_data`` have different shapes.
     """
     if stat_data.shape != atlas_data.shape:
-        raise ValueError(
-            f"Shape mismatch: stat_data {stat_data.shape} "
-            f"vs atlas_data {atlas_data.shape}"
-        )
+        raise ValueError(f"Shape mismatch: stat_data {stat_data.shape} vs atlas_data {atlas_data.shape}")
 
     # Restrict stat map to atlas region
     masked_stat = stat_data * atlas_data
@@ -2008,8 +1974,8 @@ def cluster_threshold_stat_map(
         }
 
     threshold = start_threshold
-    prev_labeled = None
-    prev_n_clusters = 0
+    _prev_labeled = None
+    _prev_n_clusters = 0
 
     for iteration in range(max_iterations):
         above_threshold = masked_stat >= threshold
@@ -2069,8 +2035,8 @@ def cluster_threshold_stat_map(
             }
 
         # Cluster too large — increase threshold
-        prev_labeled = labeled
-        prev_n_clusters = n_clusters
+        _prev_labeled = labeled
+        _prev_n_clusters = n_clusters
         threshold += step
 
     # Max iterations reached — return the current largest cluster
@@ -2118,6 +2084,7 @@ class TaskMaskSelection:
     cluster_outcome : str or None
         Outcome of cluster thresholding (cluster method only)
     """
+
     mask_name: str
     source_type: str = "glm_contrast"
     contrast_definition: str = ""
@@ -2127,16 +2094,13 @@ class TaskMaskSelection:
     n_voxels_thresholded: int = 0
     threshold_method: str = "top_n"
     selection_reason: str = "auto"
-    atlas_used: Optional[str] = None
-    final_cluster_threshold: Optional[float] = None
-    n_clusters_found: Optional[int] = None
-    cluster_outcome: Optional[str] = None
+    atlas_used: str | None = None
+    final_cluster_threshold: float | None = None
+    n_clusters_found: int | None = None
+    cluster_outcome: str | None = None
 
 
-def save_task_mask_selections(
-    masks_dir: Union[str, Path],
-    selections: Dict[str, TaskMaskSelection]
-) -> Path:
+def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str, TaskMaskSelection]) -> Path:
     """Save task-based mask selections to JSON file.
 
     Parameters
@@ -2154,12 +2118,9 @@ def save_task_mask_selections(
     masks_dir = Path(masks_dir)
     output_file = masks_dir / "mask_selections.json"
 
-    data = {
-        "type": "task",
-        "selections": {name: asdict(sel) for name, sel in selections.items()}
-    }
+    data = {"type": "task", "selections": {name: asdict(sel) for name, sel in selections.items()}}
 
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         json.dump(data, f, indent=2)
 
     logger.info(f"Saved task mask selections to {output_file}")
@@ -2167,32 +2128,32 @@ def save_task_mask_selections(
 
 
 def mask_extraction_task(
-        participant_id: str,
-        root_dir: Union[str, Path],
-        input_file: Union[str, Path],
-        mask_file: Union[str, Path],
-        events: Union[str, Path, pd.DataFrame],
-        contrasts: Dict[str, str],
-        tr: float,
-        threshold: int = 2000,
-        threshold_method: str = "top_n",
-        atlas_mask: Optional[Union[str, Path]] = None,
-        atlas_name: Optional[str] = None,
-        atlas_source: Optional[str] = None,
-        atlas_regions: Optional[List[str]] = None,
-        ref_file: Optional[Union[str, Path]] = None,
-        cluster_start_threshold: float = 2.0,
-        cluster_step: float = 0.1,
-        stat_type: str = "t",
-        smoothing_fwhm: Optional[float] = 5.0,
-        high_pass: float = 0.01,
-        drift_model: str = "cosine",
-        hrf_model: str = "spm",
-        overwrite: bool = False,
-        qc_enabled: bool = True,
-        qc_dir: Optional[Union[str, Path]] = None,
-        progress_callback: Optional[Callable[[str, str], None]] = None,
-) -> List[Path]:
+    participant_id: str,
+    root_dir: Union[str, Path],
+    input_file: Union[str, Path],
+    mask_file: Union[str, Path],
+    events: Union[str, Path, pd.DataFrame],
+    contrasts: dict[str, str],
+    tr: float,
+    threshold: int = 2000,
+    threshold_method: str = "top_n",
+    atlas_mask: Union[str, Path] | None = None,
+    atlas_name: str | None = None,
+    atlas_source: str | None = None,
+    atlas_regions: list[str] | None = None,
+    ref_file: Union[str, Path] | None = None,
+    cluster_start_threshold: float = 2.0,
+    cluster_step: float = 0.1,
+    stat_type: str = "t",
+    smoothing_fwhm: float | None = 5.0,
+    high_pass: float = 0.01,
+    drift_model: str = "cosine",
+    hrf_model: str = "spm",
+    overwrite: bool = False,
+    qc_enabled: bool = True,
+    qc_dir: Union[str, Path] | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+) -> list[Path]:
     """
     Run the mask extraction pipeline for task-based fMRI data using GLM contrasts.
 
@@ -2365,14 +2326,14 @@ def mask_extraction_task(
         events_path = Path(events)
         if not events_path.exists():
             raise FileNotFoundError(f"Events file not found: {events_path}")
-        events_df = pd.read_csv(events_path, sep='\t')
+        events_df = pd.read_csv(events_path, sep="\t")
     elif isinstance(events, pd.DataFrame):
         events_df = events.copy()
     else:
         raise TypeError(f"events must be a path or DataFrame, got {type(events)}")
 
     # Validate events columns
-    required_cols = {'onset', 'duration', 'trial_type'}
+    required_cols = {"onset", "duration", "trial_type"}
     missing_cols = required_cols - set(events_df.columns)
     if missing_cols:
         raise ValueError(
@@ -2382,14 +2343,12 @@ def mask_extraction_task(
     if len(events_df) == 0:
         raise ValueError("Events DataFrame is empty")
 
-    available_conditions = sorted(events_df['trial_type'].unique())
+    available_conditions = sorted(events_df["trial_type"].unique())
     emit_progress("Events loaded", f"{len(events_df)} events, conditions: {available_conditions}")
 
     # --- Validate threshold_method and cluster-specific params ---
     if threshold_method not in ("top_n", "cluster"):
-        raise ValueError(
-            f"threshold_method must be 'top_n' or 'cluster', got '{threshold_method}'"
-        )
+        raise ValueError(f"threshold_method must be 'top_n' or 'cluster', got '{threshold_method}'")
     if threshold_method == "cluster":
         if atlas_mask is None and atlas_name is None and atlas_source is None:
             raise ValueError(
@@ -2398,20 +2357,15 @@ def mask_extraction_task(
             )
         n_sources = sum(x is not None for x in [atlas_mask, atlas_name, atlas_source])
         if n_sources > 1:
-            raise ValueError(
-                "Provide only one of atlas_mask, atlas_name, or atlas_source, not multiple."
-            )
+            raise ValueError("Provide only one of atlas_mask, atlas_name, or atlas_source, not multiple.")
         if atlas_name is not None and ref_file is None:
             raise ValueError(
-                "ref_file is required when atlas_name is provided, to register "
-                "the atlas from MNI to subject space."
+                "ref_file is required when atlas_name is provided, to register the atlas from MNI to subject space."
             )
         registry = get_atlas_region_registry()
         if atlas_name is not None and atlas_name not in registry:
             available = ", ".join(sorted(registry.keys()))
-            raise ValueError(
-                f"Unknown atlas_name '{atlas_name}'. Available: {available}"
-            )
+            raise ValueError(f"Unknown atlas_name '{atlas_name}'. Available: {available}")
 
     n_steps = 3 if threshold_method == "cluster" else 2
 
@@ -2444,7 +2398,7 @@ def mask_extraction_task(
                 high_pass=high_pass,
                 drift_model=drift_model,
                 hrf_model=hrf_model,
-                noise_model='ar1',
+                noise_model="ar1",
                 minimize_memory=False,
                 n_jobs=1,
             )
@@ -2455,7 +2409,7 @@ def mask_extraction_task(
             # Save design matrix for QC and reproducibility
             design_matrix = model.design_matrices_[0]
             design_file = glm_dir / f"{participant_id}_design_matrix.tsv"
-            design_matrix.to_csv(design_file, sep='\t', index=True)
+            design_matrix.to_csv(design_file, sep="\t", index=True)
 
             # Compute and save each contrast
             for mask_name, contrast_expr in contrasts.items():
@@ -2464,7 +2418,7 @@ def mask_extraction_task(
                 stat_map = model.compute_contrast(
                     contrast_expr,
                     stat_type=stat_type,
-                    output_type='stat',
+                    output_type="stat",
                 )
                 nib.save(stat_map, str(stat_map_paths[mask_name]))
 
@@ -2484,7 +2438,7 @@ def mask_extraction_task(
                 "design_matrix_columns": list(design_matrix.columns),
             }
             info_file = glm_dir / f"{participant_id}_glm_info.json"
-            with open(info_file, 'w') as f:
+            with open(info_file, "w") as f:
                 json.dump(glm_info, f, indent=2)
 
         emit_progress(f"Step 1/{n_steps}", "GLM fit complete")
@@ -2507,13 +2461,10 @@ def mask_extraction_task(
                 raise FileNotFoundError(f"Atlas mask not found: {atlas_mask_path}")
             atlas_img = load(atlas_mask_path)
             atlas_label = atlas_mask_path.name
-            emit_progress(
-                f"Step 2/{n_steps}",
-                f"Using user-provided atlas: {atlas_label}"
-            )
+            emit_progress(f"Step 2/{n_steps}", f"Using user-provided atlas: {atlas_label}")
         else:
             # Fetch atlas and register to subject space
-            assert ref_file is not None    # validated above
+            assert ref_file is not None  # validated above
             ref_file = Path(ref_file)
 
             # Determine fetch params from atlas_source or legacy atlas_name
@@ -2536,10 +2487,7 @@ def mask_extraction_task(
                     overwrite=overwrite,
                 )
 
-            emit_progress(
-                f"Step 2/{n_steps}",
-                f"Fetched {fetch_label} atlas in MNI space"
-            )
+            emit_progress(f"Step 2/{n_steps}", f"Fetched {fetch_label} atlas in MNI space")
 
             # Sub-step: Register to subject space via ANTs
             xfm_prefix = mnireg_dir / f"{participant_id}_to_MNI_boldref"
@@ -2556,26 +2504,19 @@ def mask_extraction_task(
                 fixed=ref_file,
                 transform_files=sub2mni_inv_xfm,
                 output_file=atlas_subject_path,
-                interpolator='nearestNeighbor',
+                interpolator="nearestNeighbor",
                 invert=False,
                 overwrite=overwrite,
             )
             atlas_img = load(atlas_subject_path)
             atlas_label = fetch_label
-            emit_progress(
-                f"Step 2/{n_steps}",
-                "Atlas registered to subject space"
-            )
+            emit_progress(f"Step 2/{n_steps}", "Atlas registered to subject space")
 
         # Resample atlas to stat map resolution if needed
         first_stat_path = stat_map_paths[list(contrasts.keys())[0]]
         stat_ref_img: SpatialImage = load(first_stat_path)  # type: ignore
-        atlas_resampled_img = resample_to_img(
-            atlas_img, stat_ref_img, interpolation='nearest'
-        )
-        atlas_subject_space_data = (
-            atlas_resampled_img.get_fdata() > 0.5
-        ).astype(np.float64)
+        atlas_resampled_img = resample_to_img(atlas_img, stat_ref_img, interpolation="nearest")
+        atlas_subject_space_data = (atlas_resampled_img.get_fdata() > 0.5).astype(np.float64)
 
         # Save atlas-in-subject-space for QC
         masks_dir = root_dir / "03_masks"
@@ -2589,10 +2530,7 @@ def mask_extraction_task(
             ),
             atlas_qc_path,
         )
-        emit_progress(
-            f"Step 2/{n_steps}",
-            f"Atlas mask: {int(atlas_subject_space_data.sum())} voxels in subject space"
-        )
+        emit_progress(f"Step 2/{n_steps}", f"Atlas mask: {int(atlas_subject_space_data.sum())} voxels in subject space")
 
     # =========================================================================
     # Step {n_steps}/{n_steps}: Threshold to Binary Masks
@@ -2608,12 +2546,11 @@ def mask_extraction_task(
         emit_progress(f"{step_label}: Thresholding masks", f"{threshold} voxels per mask")
     else:
         emit_progress(
-            f"{step_label}: Cluster thresholding",
-            f"target={threshold} voxels, start_z={cluster_start_threshold}"
+            f"{step_label}: Cluster thresholding", f"target={threshold} voxels, start_z={cluster_start_threshold}"
         )
 
     network_thr_files = []
-    selections: Dict[str, TaskMaskSelection] = {}
+    selections: dict[str, TaskMaskSelection] = {}
 
     for mask_name, contrast_expr in contrasts.items():
         stat_map_path = stat_map_paths[mask_name]
@@ -2658,10 +2595,7 @@ def mask_extraction_task(
         if threshold_method == "top_n":
             # === TOP-N THRESHOLDING (existing logic) ===
             if n_positive == 0:
-                logger.warning(
-                    f"No positive voxels in contrast '{mask_name}' ({contrast_expr}). "
-                    f"Saving empty mask."
-                )
+                logger.warning(f"No positive voxels in contrast '{mask_name}' ({contrast_expr}). Saving empty mask.")
                 binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
                 n_kept = 0
             elif n_positive <= threshold:
@@ -2718,7 +2652,7 @@ def mask_extraction_task(
                     step_label,
                     f"{mask_name}: {n_kept} voxels "
                     f"(cluster at z>={cluster_info['final_threshold']:.1f}, "
-                    f"{cluster_info['n_clusters_at_final']} clusters)"
+                    f"{cluster_info['n_clusters_at_final']} clusters)",
                 )
             elif outcome in ("no_clusters_found", "empty_atlas"):
                 logger.warning(
@@ -2742,10 +2676,7 @@ def mask_extraction_task(
                     binary_mask = (mask & atlas_positive).astype(np.uint8)
                     n_kept = int(binary_mask.sum())
                 outcome = "fallback_top_n"
-                emit_progress(
-                    step_label,
-                    f"{mask_name}: {outcome} — {n_kept} voxels (fallback)"
-                )
+                emit_progress(step_label, f"{mask_name}: {outcome} — {n_kept} voxels (fallback)")
             elif outcome == "max_iterations_reached":
                 logger.warning(
                     f"Cluster thresholding for '{mask_name}' hit max iterations. "
@@ -2810,16 +2741,16 @@ def mask_extraction_task(
 
 
 def import_manual_masks(
-        participant_id: str,
-        root_dir: Union[str, Path],
-        mask_paths: List[Union[str, Path]],
-        mask_names: List[str],
-        ref_file: Union[str, Path],
-        mask_space: str = "native",
-        anat_file: Optional[Union[str, Path]] = None,
-        overwrite: bool = False,
-        progress_callback: Optional[Callable[[str, str], None]] = None,
-) -> List[Path]:
+    participant_id: str,
+    root_dir: Union[str, Path],
+    mask_paths: list[Union[str, Path]],
+    mask_names: list[str],
+    ref_file: Union[str, Path],
+    mask_space: str = "native",
+    anat_file: Union[str, Path] | None = None,
+    overwrite: bool = False,
+    progress_callback: Callable[[str, str], None] | None = None,
+) -> list[Path]:
     """Import pre-existing NIfTI masks into the feedback pipeline.
 
     Copies (and optionally registers) user-provided NIfTI masks into
@@ -2886,10 +2817,7 @@ def import_manual_masks(
 
     # ---- Validation ----
     if len(mask_paths) != len(mask_names):
-        raise ValueError(
-            f"mask_paths ({len(mask_paths)}) and mask_names ({len(mask_names)}) "
-            f"must have the same length"
-        )
+        raise ValueError(f"mask_paths ({len(mask_paths)}) and mask_names ({len(mask_names)}) must have the same length")
     if mask_space not in ("native", "anat", "mni"):
         raise ValueError(f"mask_space must be 'native', 'anat', or 'mni', got '{mask_space}'")
     if mask_space == "anat" and anat_file is None:
@@ -2906,7 +2834,7 @@ def import_manual_masks(
     masks_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- Space-specific registration ----
-    xfm_files: Optional[List[str]] = None
+    xfm_files: list[str] | None = None
 
     if mask_space == "anat":
         anat_file = Path(anat_file)  # type: ignore[arg-type]
@@ -2919,7 +2847,7 @@ def import_manual_masks(
             moving=anat_file,
             fixed=ref_file,
             output_prefix=xfm_prefix,
-            type_of_transform='Rigid',
+            type_of_transform="Rigid",
             overwrite=overwrite,
         )
         emit_progress("Registration", "T1→EPI transform computed")
@@ -2933,16 +2861,16 @@ def import_manual_masks(
         _, _fwd_xfm, inv_xfm_files = compute_xfm_to_mni(
             input_file=ref_file,
             output_prefix=xfm_prefix,
-            type_of_transform='SyN',
+            type_of_transform="SyN",
             overwrite=overwrite,
         )
         xfm_files = inv_xfm_files
         emit_progress("Registration", "EPI→MNI transform computed")
 
     # ---- Import each mask ----
-    output_files: List[Path] = []
+    output_files: list[Path] = []
 
-    for i, (mask_path, mask_name) in enumerate(zip(mask_paths, mask_names), 1):
+    for i, (mask_path, mask_name) in enumerate(zip(mask_paths, mask_names, strict=False), 1):
         mask_path = Path(mask_path)
         out_file = masks_dir / f"{participant_id}_{mask_name}_thr.nii.gz"
 
@@ -2968,7 +2896,7 @@ def import_manual_masks(
                     f"Shape mismatch for {mask_name}: mask {data.shape} vs "
                     f"ref {ref_img.shape[:3]}. Resampling to reference grid."
                 )
-                img = resample_to_img(img, ref_img, interpolation='nearest')
+                img = resample_to_img(img, ref_img, interpolation="nearest")
                 data = np.asarray(img.get_fdata())
 
             # Binarize
@@ -2985,7 +2913,7 @@ def import_manual_masks(
                 fixed=ref_file,
                 transform_files=xfm_files,
                 output_file=transformed_file,
-                interpolator='nearestNeighbor',
+                interpolator="nearestNeighbor",
                 overwrite=overwrite,
             )
 
@@ -3011,7 +2939,7 @@ def import_manual_masks(
         "mask_space": mask_space,
         "selections": {},
     }
-    for mask_name, out_file in zip(mask_names, output_files):
+    for mask_name, out_file in zip(mask_names, output_files, strict=False):
         n_vox = int(np.sum(nib.load(out_file).get_fdata() > 0))
         selections_data["selections"][mask_name] = {
             "n_voxels_thresholded": n_vox,
@@ -3019,7 +2947,7 @@ def import_manual_masks(
             "mask_space": mask_space,
         }
     selections_file = masks_dir / "mask_selections.json"
-    with open(selections_file, 'w') as f:
+    with open(selections_file, "w") as f:
         json.dump(selections_data, f, indent=2)
     logger.info(f"Saved manual mask selections to {selections_file}")
 
@@ -3045,15 +2973,15 @@ def import_manual_masks(
 
 
 def coregister_2vol(
-        participant_id: str,
-        root_dir: Union[str, Path],
-        input_dicom: Union[str, Path],
-        network_files: Union[str, Path, Sequence[Union[str, Path]]],
-        ref_file: Union[str, Path],
-        overwrite: bool = False,
-        run_id: Optional[int] = None,
-        output_subdir: str = "01_2vol"
-) -> List[Path]:
+    participant_id: str,
+    root_dir: Union[str, Path],
+    input_dicom: Union[str, Path],
+    network_files: Union[str, Path, Sequence[Union[str, Path]]],
+    ref_file: Union[str, Path],
+    overwrite: bool = False,
+    run_id: int | None = None,
+    output_subdir: str = "01_2vol",
+) -> list[Path]:
     """
     Coregister extracted networks to participant's current position in the scanner
     using a two volume (2vol) acquisition.
@@ -3096,10 +3024,10 @@ def coregister_2vol(
 
     # Log the command
     logger.info(f"Running preprocessing for {participant_id}...")
-    
+
     # Convert to Path object
     root_dir = Path(root_dir)
-    
+
     # Convert to Path objects and validate
     input_path = Path(input_dicom)
     logger.info(f"Input DICOM folder: {str(input_path)}")
@@ -3115,8 +3043,8 @@ def coregister_2vol(
         network_files = [network_files]
 
     # Convert to Path objects and validate
-    network_paths: list[Path] = [] 
-    logger.info(f"Input network files:\n")
+    network_paths: list[Path] = []
+    logger.info("Input network files:\n")
     for f in network_files:
         path = Path(f)
         if not path.exists():
@@ -3133,7 +3061,7 @@ def coregister_2vol(
     twovol_dir = root_dir / output_subdir
     twovol_dir.mkdir(parents=True, exist_ok=True)
 
-    def _extract_run_number_from_path(path: Path) -> Optional[int]:
+    def _extract_run_number_from_path(path: Path) -> int | None:
         for part in reversed(path.parts):
             match = re.search(r"run-(\d+)", part)
             if match:
@@ -3173,7 +3101,7 @@ def coregister_2vol(
         dicom_dir=input_path,
         output_dir=twovol_dir,
         output_name=f"{participant_id}_task-2vol_run-{run_str}",
-        overwrite=overwrite
+        overwrite=overwrite,
     )
 
     # Step 3: Compute mean
@@ -3183,29 +3111,38 @@ def coregister_2vol(
     # Step 4: Compute transformation (ANTs, ~28x faster than FLIRT)
     xfm_dir = twovol_dir / "xfm"
     output_prefix = xfm_dir / Path(f"{participant_id}_boldref_to_task-2vol_run-{run_str}_mean")
-    _, xfm_files = compute_xfm(moving=ref_file, fixed=mean_file, output_prefix=output_prefix, type_of_transform='Rigid', overwrite=overwrite)
+    _, xfm_files = compute_xfm(
+        moving=ref_file, fixed=mean_file, output_prefix=output_prefix, type_of_transform="Rigid", overwrite=overwrite
+    )
 
     # Step 5: Apply transformation
     mask_dir = twovol_dir / "masks"
     network_coreg_files = []
     for network in network_paths:
         output_file = mask_dir / (network.with_suffix("").stem + f"_to_task-2vol_run-{run_str}_mean.nii.gz")
-        apply_xfm(moving=network, fixed=mean_file, transform_files=xfm_files, output_file=output_file, interpolator='nearestNeighbor', overwrite=overwrite)
+        apply_xfm(
+            moving=network,
+            fixed=mean_file,
+            transform_files=xfm_files,
+            output_file=output_file,
+            interpolator="nearestNeighbor",
+            overwrite=overwrite,
+        )
         network_coreg_files.append(output_file)
 
     return network_coreg_files
 
 
 def generate_2vol_qc_overlays(
-        participant_id: str,
-        session_dir: Path,
-        ref_file: Path,
-        mask_extraction_dir: Path,
-        network_coreg_files: Sequence[Path],
-        run_str: str,
-        n_yeo: int = 17,
-        overwrite: bool = False,
-        twovol_subdir: str = "01_2vol",
+    participant_id: str,
+    session_dir: Path,
+    ref_file: Path,
+    mask_extraction_dir: Path,
+    network_coreg_files: Sequence[Path],
+    run_str: str,
+    n_yeo: int = 17,
+    overwrite: bool = False,
+    twovol_subdir: str = "01_2vol",
 ) -> None:
     """
     Generate QC overlays in 2vol space using the Yeo atlas warped to 2vol.
@@ -3261,8 +3198,8 @@ def generate_2vol_qc_overlays(
             fixed=mean_file,
             transform_files=xfm_files,
             output_file=atlas_2vol,
-            interpolator='nearestNeighbor',
-            overwrite=overwrite
+            interpolator="nearestNeighbor",
+            overwrite=overwrite,
         )
         atlas_data = load(atlas_2vol).get_fdata()
         n_labels = int(np.max(atlas_data))
@@ -3285,7 +3222,7 @@ def generate_2vol_qc_overlays(
             labels=labels,
             target_label=str(target),
             top_n_per_plane=1,
-            mask_path=network  # Use mask for slice selection
+            mask_path=network,  # Use mask for slice selection
         )
         overlay_png = overlays_dir / f"{stem}_overlay.png"
         qc.plot_mask_overlay_tripanel(
@@ -3293,7 +3230,7 @@ def generate_2vol_qc_overlays(
             ref_path=mean_file,
             out_path=overlay_png,
             slices=atlas_slices,
-            title=f"{target} (2vol run {run_str})"
+            title=f"{target} (2vol run {run_str})",
         )
         overlays.append((target, overlay_png))
 
@@ -3316,7 +3253,7 @@ def generate_2vol_qc_overlays(
             output_dir=qc_dir,
             n_yeo=n_yeo,
             overwrite=False,  # Skip existing images, just update HTML
-            open_browser=False
+            open_browser=False,
         )
     except Exception as e:
         logger.info(f"Skipping ICA QC report regeneration (task-based workflow): {e}")

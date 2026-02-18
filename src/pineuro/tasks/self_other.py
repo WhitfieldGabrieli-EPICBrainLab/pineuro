@@ -45,9 +45,9 @@ PsychoPy (sound, visual, event, core), pandas
 """
 
 import csv
-from pathlib import Path
-from typing import List, Optional, Tuple, Union
 import logging
+from pathlib import Path
+from typing import Union
 
 from .localizer_base import BaseLocalizerTask
 from .task_registry import TaskMetadata, TaskParameter, pineuro_task
@@ -170,8 +170,8 @@ class SelfOtherTask(BaseLocalizerTask):
         block_duration: float = 16.0,
         question_duration: float = 4.0,
         block_order: str = DEFAULT_BLOCK_ORDER,
-        response_keys: Optional[List[str]] = None,
-        stim_file: Optional[Union[str, Path]] = None,
+        response_keys: list[str] | None = None,
+        stim_file: Union[str, Path] | None = None,
         simulator=None,  # VolumeSimulator instance for simulation mode
         **kwargs,
     ):
@@ -191,9 +191,9 @@ class SelfOtherTask(BaseLocalizerTask):
         self.response_keys = response_keys or ["1", "2"]
 
         # Populated in _load_stim_file()
-        self._voice_blocks: List[List[dict]] = []
-        self._voice_block_types: List[str] = []  # "self" or "other" per voice block
-        self._questions: List[str] = []
+        self._voice_blocks: list[list[dict]] = []
+        self._voice_block_types: list[str] = []  # "self" or "other" per voice block
+        self._questions: list[str] = []
         self._preloaded_sounds: dict = {}  # Pre-loaded PsychoPy Sound objects
 
     def _resolve_stim_file(self) -> Path:
@@ -215,9 +215,7 @@ class SelfOtherTask(BaseLocalizerTask):
         """
         if self._stim_file_override is not None:
             if not self._stim_file_override.exists():
-                raise FileNotFoundError(
-                    f"Stimulus file not found: {self._stim_file_override}"
-                )
+                raise FileNotFoundError(f"Stimulus file not found: {self._stim_file_override}")
             return self._stim_file_override
 
         if self.stim_dir is None or not self.stim_dir.is_dir():
@@ -260,7 +258,7 @@ class SelfOtherTask(BaseLocalizerTask):
 
         rows = []
         with open(stim_path) as f:
-            reader = csv.reader(f, delimiter='\t')
+            reader = csv.reader(f, delimiter="\t")
             for row in reader:
                 # Pad to 4 columns if short (handles missing question images)
                 while len(row) < 4:
@@ -283,11 +281,13 @@ class SelfOtherTask(BaseLocalizerTask):
             block = []
             for j in range(5):
                 r = rows[start + j]
-                block.append({
-                    "path": r[0],
-                    "duration": float(r[1]),
-                    "isi": float(r[2]),
-                })
+                block.append(
+                    {
+                        "path": r[0],
+                        "duration": float(r[1]),
+                        "isi": float(r[2]),
+                    }
+                )
             self._voice_blocks.append(block)
 
             # Infer block type from first audio path
@@ -306,10 +306,7 @@ class SelfOtherTask(BaseLocalizerTask):
 
         # Log what we found
         type_summary = ", ".join(self._voice_block_types)
-        logger.info(
-            f"Loaded stimulus file: {n_voice_blocks} voice blocks [{type_summary}], "
-            f"{n_blocks} question images"
-        )
+        logger.info(f"Loaded stimulus file: {n_voice_blocks} voice blocks [{type_summary}], {n_blocks} question images")
 
     def setup(self) -> None:
         """Load stimuli and create PsychoPy window."""
@@ -348,20 +345,22 @@ class SelfOtherTask(BaseLocalizerTask):
         from psychopy import core
 
         # Instructions
-        self.show_instructions([
-            "Listen to the sentences and answer the question\n"
-            "regarding the last sentence you hear in each block.\n\n"
-            "In the silent blocks, you will be asked a\n"
-            "real-world question.\n\n"
-            "To answer, respond YES with your index finger\n"
-            "or NO with your middle finger.\n\n"
-            "Press any button to begin."
-        ])
+        self.show_instructions(
+            [
+                "Listen to the sentences and answer the question\n"
+                "regarding the last sentence you hear in each block.\n\n"
+                "In the silent blocks, you will be asked a\n"
+                "real-world question.\n\n"
+                "To answer, respond YES with your index finger\n"
+                "or NO with your middle finger.\n\n"
+                "Press any button to begin."
+            ]
+        )
 
         # Wait for scanner trigger
         self.wait_for_trigger()
         self._experiment_clock = core.Clock()
-        logger.info(f"[TIMING] Experiment clock started at trigger (t=0.00s)")
+        logger.info("[TIMING] Experiment clock started at trigger (t=0.00s)")
 
         # Baseline
         onset = self._experiment_clock.getTime()
@@ -379,13 +378,17 @@ class SelfOtherTask(BaseLocalizerTask):
             block_onset = self._experiment_clock.getTime()
 
             if block_entry == "rest":
-                logger.info(f"[TIMING] Block {block_num + 1}/12 REST START: onset={block_onset:.2f}s, duration={self.block_duration}s")
+                logger.info(
+                    f"[TIMING] Block {block_num + 1}/12 REST START: onset={block_onset:.2f}s, duration={self.block_duration}s"
+                )
                 self._run_rest_block()
                 trial_type = "rest"
             else:
                 # Get inferred type (self/other) from stim file
                 trial_type = self._voice_block_types[voice_block_idx]
-                logger.info(f"[TIMING] Block {block_num + 1}/12 VOICE ({trial_type.upper()}) START: onset={block_onset:.2f}s, duration={self.block_duration}s")
+                logger.info(
+                    f"[TIMING] Block {block_num + 1}/12 VOICE ({trial_type.upper()}) START: onset={block_onset:.2f}s, duration={self.block_duration}s"
+                )
                 self._run_voice_block(voice_block_idx, trial_type)
                 voice_block_idx += 1
 
@@ -394,12 +397,19 @@ class SelfOtherTask(BaseLocalizerTask):
 
             # Comprehension question after each block
             q_onset = self._experiment_clock.getTime()
-            logger.info(f"[TIMING] Question {block_num + 1} START: onset={q_onset:.2f}s, duration={self.question_duration}s, type={trial_type}")
+            logger.info(
+                f"[TIMING] Question {block_num + 1} START: onset={q_onset:.2f}s, duration={self.question_duration}s, type={trial_type}"
+            )
             response, rt = self._run_question(block_num)
-            logger.info(f"[TIMING] Question {block_num + 1} END: time={self._experiment_clock.getTime():.2f}s, response={response or 'none'}, rt={rt or 'n/a'}")
+            logger.info(
+                f"[TIMING] Question {block_num + 1} END: time={self._experiment_clock.getTime():.2f}s, response={response or 'none'}, rt={rt or 'n/a'}"
+            )
             self.record_event(
-                q_onset, self.question_duration, "question",
-                response=response, response_time=rt,
+                q_onset,
+                self.question_duration,
+                "question",
+                response=response,
+                response_time=rt,
                 question_type=trial_type,
             )
 
@@ -420,13 +430,10 @@ class SelfOtherTask(BaseLocalizerTask):
         block_type : str
             "self" or "other" (for logging).
         """
-        from psychopy import visual, core
+        from psychopy import core, visual
 
         block = self._voice_blocks[block_idx]
-        logger.info(
-            f"Voice block {block_idx + 1} ({block_type}): "
-            f"{len(block)} sentences"
-        )
+        logger.info(f"Voice block {block_idx + 1} ({block_type}): {len(block)} sentences")
 
         # Show fixation cross throughout the block
         fixation = visual.TextStim(self.win, text="+", height=0.3, color="white")
@@ -460,7 +467,7 @@ class SelfOtherTask(BaseLocalizerTask):
         logger.info(f"Rest block: {self.block_duration}s")
         self.show_fixation(self.block_duration)
 
-    def _run_question(self, block_num: int) -> Tuple[str, str]:
+    def _run_question(self, block_num: int) -> tuple[str, str]:
         """Show comprehension question image and collect response.
 
         If the question image path is empty, shows a fixation cross instead.
@@ -475,7 +482,7 @@ class SelfOtherTask(BaseLocalizerTask):
         tuple of (str, str)
             (response_key, response_time) or ("", "") if no response.
         """
-        from psychopy import visual, event, core
+        from psychopy import core, event, visual
 
         question_path = self._questions[block_num]
 
@@ -490,7 +497,10 @@ class SelfOtherTask(BaseLocalizerTask):
         else:
             # No question image - show fixation
             fixation = visual.TextStim(
-                self.win, text="+", height=0.3, color="white",
+                self.win,
+                text="+",
+                height=0.3,
+                color="white",
             )
             fixation.draw()
 
@@ -512,9 +522,7 @@ class SelfOtherTask(BaseLocalizerTask):
                 rt = f"{response_clock.getTime():.3f}"
             core.wait(0.01)
 
-        logger.debug(
-            f"Question {block_num + 1}: response={response or 'none'}, rt={rt or 'n/a'}"
-        )
+        logger.debug(f"Question {block_num + 1}: response={response or 'none'}, rt={rt or 'n/a'}")
         return response, rt
 
     def cleanup(self) -> None:

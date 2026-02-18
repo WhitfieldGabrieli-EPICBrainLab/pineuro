@@ -49,23 +49,15 @@ Valid TR: 1.2
 """
 
 import logging
-from pathlib import Path
-from typing import Any, Optional, Tuple
 import threading
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 # Yeo network labels
-YEO_7_LABELS = [
-    "Visual",
-    "SomMot",
-    "DorsAttn",
-    "SalVentAttn",
-    "Limbic",
-    "Cont",
-    "Default"
-]
+YEO_7_LABELS = ["Visual", "SomMot", "DorsAttn", "SalVentAttn", "Limbic", "Cont", "Default"]
 
 YEO_17_LABELS = [
     "VisCent",
@@ -84,12 +76,13 @@ YEO_17_LABELS = [
     "DefaultA",
     "DefaultB",
     "DefaultC",
-    "TempPar"
+    "TempPar",
 ]
 
 
 class ValidationError(Exception):
     """Raised when a configuration parameter fails validation."""
+
     pass
 
 
@@ -109,7 +102,7 @@ def validate_positive_number(value: Any, name: str) -> float:
     try:
         num = float(value)
     except (TypeError, ValueError):
-        raise ValidationError(f"{name} must be a number, got: {value}")
+        raise ValidationError(f"{name} must be a number, got: {value}") from None
 
     if num <= 0:
         raise ValidationError(f"{name} must be positive, got: {num}")
@@ -133,7 +126,7 @@ def validate_positive_int(value: Any, name: str) -> int:
     try:
         num = int(value)
     except (TypeError, ValueError):
-        raise ValidationError(f"{name} must be an integer, got: {value}")
+        raise ValidationError(f"{name} must be an integer, got: {value}") from None
 
     if num <= 0:
         raise ValidationError(f"{name} must be positive, got: {num}")
@@ -161,7 +154,7 @@ def validate_path(value: Any, name: str, must_exist: bool = False) -> Path:
     try:
         path = Path(value)
     except (TypeError, ValueError) as e:
-        raise ValidationError(f"{name} is not a valid path: {e}")
+        raise ValidationError(f"{name} is not a valid path: {e}") from e
 
     if must_exist and not path.exists():
         raise ValidationError(f"{name} does not exist: {path}")
@@ -169,7 +162,7 @@ def validate_path(value: Any, name: str, must_exist: bool = False) -> Path:
     return path
 
 
-def validate_yeo_networks(n_yeo: int, selected_networks: list) -> Tuple[int, list]:
+def validate_yeo_networks(n_yeo: int, selected_networks: list) -> tuple[int, list]:
     """Validate Yeo network configuration.
 
     Args:
@@ -189,14 +182,12 @@ def validate_yeo_networks(n_yeo: int, selected_networks: list) -> Tuple[int, lis
         raise ValidationError("At least one network must be selected")
 
     if len(selected_networks) < 2:
-        raise ValidationError(
-            f"At least 2 networks must be selected for feedback, got: {len(selected_networks)}"
-        )
+        raise ValidationError(f"At least 2 networks must be selected for feedback, got: {len(selected_networks)}")
 
     return n_yeo, selected_networks
 
 
-def validate_session_config(config_dict: dict) -> Tuple[bool, Optional[str]]:
+def validate_session_config(config_dict: dict) -> tuple[bool, str | None]:
     """Validate a complete session configuration.
 
     Args:
@@ -238,6 +229,7 @@ def validate_session_config(config_dict: dict) -> Tuple[bool, Optional[str]]:
         task_type = task.get("task_type", "ball")
         try:
             from ..tasks.task_registry import get_task_metadata
+
             metadata = get_task_metadata(task_type)
             metadata.validate_config(task)
         except (ValueError, ImportError):
@@ -310,7 +302,7 @@ def truncate_text(text: str, max_length: int = 100) -> str:
     """
     if len(text) <= max_length:
         return text
-    return text[:max_length - 3] + "..."
+    return text[: max_length - 3] + "..."
 
 
 def open_mask_viewer_in_browser(
@@ -341,6 +333,7 @@ def open_mask_viewer_in_browser(
         Path to the generated HTML file.
     """
     from nilearn.plotting import view_img
+
     from pineuro.gui.components.qc_viewer import open_qc_report
 
     ref_str = str(ref_file)
@@ -385,7 +378,7 @@ def open_mask_viewer_in_browser(
         f"<h1>{title}</h1>",
         f"<p>Reference: {ref_file.name} &mdash; {len(mask_files)} mask(s)</p>",
     ]
-    for name, viewer in zip(names, viewers):
+    for name, viewer in zip(names, viewers, strict=False):
         html_parts.append('<div class="mask-section">')
         html_parts.append(f"<h2>{name}</h2>")
         html_parts.append(viewer.get_iframe(width=900, height=500))

@@ -42,7 +42,45 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = []
+dev = ["ruff>=0.9.0"]
 
 [project.scripts]
 pineuro-gui = "pineuro.gui.app:main"
+
+# ---------------------------------------------------------------------------
+# Ruff — linter + formatter
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = [".git", ".venv", "__pycache__", "*.egg-info", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line too long — formatter handles this
+    "E402",   # module-level import not at top — lazy PsychoPy imports are intentional
+    "UP007",  # Use X | Y for Union — noisy to enforce retroactively
+    "B007",   # loop variable not used — common in NumPy loops (for _ in range(n))
+    "B008",   # function call in default arg — legitimate for np.array() defaults
+    "SIM108", # use ternary — hurts readability in numerical code
+]
+fixable = ["I", "UP", "E", "W", "F401"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*.py" = ["T20", "S101", "INP001", "E402"]
+"src/pineuro/gui/**/*.py" = ["B006"]
+"src/pineuro/tasks/*.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pineuro"]
+force-sort-within-sections = false
+split-on-trailing-comma = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+docstring-code-format = false

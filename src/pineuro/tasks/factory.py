@@ -16,7 +16,7 @@ Examples
 """
 
 import logging
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from .base import BaseTask
 from .task_registry import get_task_metadata
@@ -28,14 +28,14 @@ logger = logging.getLogger(__name__)
 
 # Map task_id to task class
 # This is populated when task modules are imported
-_TASK_CLASSES: Dict[str, type] = {}
+_TASK_CLASSES: dict[str, type] = {}
 
 # Runtime parameters that can be passed to any task (not defined in metadata)
 # These are runtime-specific settings that the framework provides
 RUNTIME_PARAMETERS = {
-    "mask_names",       # List of mask names to use
-    "feedback_mode",    # Whether feedback is on/off
-    "presenter_monitor", # Which monitor to use for display
+    "mask_names",  # List of mask names to use
+    "feedback_mode",  # Whether feedback is on/off
+    "presenter_monitor",  # Which monitor to use for display
 }
 
 
@@ -57,9 +57,9 @@ def register_task_class(task_id: str, task_class: type) -> None:
 def create_task(
     task_id: str,
     coordinator,
-    config: Dict[str, Any],
-    session_state: Optional['SessionState'] = None,
-    output_dir: Optional[str] = None,
+    config: dict[str, Any],
+    session_state: Optional["SessionState"] = None,
+    output_dir: str | None = None,
     simulator=None,
 ) -> BaseTask:
     """Create a task instance from registered task type.
@@ -98,10 +98,7 @@ def create_task(
 
     # Get task class
     if task_id not in _TASK_CLASSES:
-        raise ValueError(
-            f"Task class not registered for '{task_id}'. "
-            f"Ensure the task module is imported."
-        )
+        raise ValueError(f"Task class not registered for '{task_id}'. Ensure the task module is imported.")
 
     task_class = _TASK_CLASSES[task_id]
 
@@ -135,7 +132,7 @@ def create_localizer_task(
     task_id: str,
     output_dir,
     participant_id: str,
-    config: Dict[str, Any],
+    config: dict[str, Any],
     **kwargs,
 ):
     """Create a localizer task instance (no coordinator needed).
@@ -168,10 +165,7 @@ def create_localizer_task(
     metadata.validate_config(config)
 
     if task_id not in _TASK_CLASSES:
-        raise ValueError(
-            f"Task class not registered for '{task_id}'. "
-            f"Ensure the task module is imported."
-        )
+        raise ValueError(f"Task class not registered for '{task_id}'. Ensure the task module is imported.")
 
     task_class = _TASK_CLASSES[task_id]
 
@@ -197,6 +191,7 @@ def get_registered_task_ids() -> list[str]:
         Task IDs that can be created via create_task()
     """
     from .task_registry import list_available_tasks
+
     metadata_ids = set(list_available_tasks().keys())
     class_ids = set(_TASK_CLASSES.keys())
     return sorted(metadata_ids & class_ids)

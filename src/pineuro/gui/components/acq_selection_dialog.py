@@ -6,9 +6,9 @@ allows users to select which acquisition to use for each run.
 
 import logging
 import re
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
 
 import flet as ft
 
@@ -32,8 +32,8 @@ class RunAcqInfo:
 
     run_id: int
     run_name: str
-    acquisitions: List[AcqInfo]
-    selected_acq: Optional[int] = None  # Default to highest complete
+    acquisitions: list[AcqInfo]
+    selected_acq: int | None = None  # Default to highest complete
 
     def __post_init__(self):
         if self.selected_acq is None and self.acquisitions:
@@ -50,7 +50,7 @@ def scan_collection_acqs(
     task: str,
     run: int,
     expected_volumes: int,
-) -> List[AcqInfo]:
+) -> list[AcqInfo]:
     """Scan collection directory for acquisition attempts for a given run.
 
     Parameters
@@ -106,9 +106,9 @@ class AcqSelectionDialog:
     def __init__(
         self,
         page: ft.Page,
-        runs: List[RunAcqInfo],
-        on_confirm: Callable[[Dict[int, int]], None],
-        on_cancel: Optional[Callable[[], None]] = None,
+        runs: list[RunAcqInfo],
+        on_confirm: Callable[[dict[int, int]], None],
+        on_cancel: Callable[[], None] | None = None,
     ):
         """Initialize the acquisition selection dialog.
 
@@ -122,8 +122,8 @@ class AcqSelectionDialog:
         self.runs = runs
         self.on_confirm = on_confirm
         self.on_cancel = on_cancel
-        self._dialog: Optional[ft.AlertDialog] = None
-        self._radio_groups: Dict[int, ft.RadioGroup] = {}
+        self._dialog: ft.AlertDialog | None = None
+        self._radio_groups: dict[int, ft.RadioGroup] = {}
 
     def show(self):
         """Display the modal dialog."""
@@ -177,13 +177,9 @@ class AcqSelectionDialog:
                     status_color = ft.Colors.ORANGE
                     status_text = "Incomplete"
 
-                progress_value = (
-                    acq.n_volumes / acq.expected_volumes
-                    if acq.expected_volumes > 0
-                    else 0
-                )
+                progress_value = acq.n_volumes / acq.expected_volumes if acq.expected_volumes > 0 else 0
 
-                radio_label = ft.Container(
+                _radio_label = ft.Container(
                     content=ft.Column(
                         [
                             ft.Row(
@@ -261,7 +257,7 @@ class AcqSelectionDialog:
             padding=10,
         )
 
-    def _build_actions(self) -> List[ft.Control]:
+    def _build_actions(self) -> list[ft.Control]:
         """Build dialog action buttons."""
         return [
             ft.TextButton(
@@ -283,10 +279,7 @@ class AcqSelectionDialog:
                 selected_acqs[run_id] = int(rg.value)
 
         if not selected_acqs:
-            _snack = ft.SnackBar(
-                ft.Text("Please select an acquisition for each run."),
-                bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("Please select an acquisition for each run."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()

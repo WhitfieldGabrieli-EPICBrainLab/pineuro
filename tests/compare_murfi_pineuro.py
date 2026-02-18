@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import os
 import re
 import shutil
@@ -27,7 +28,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -38,7 +38,6 @@ REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from setup_validation import (
-    SubjectConfig,
     check_mask_extraction_complete,
     check_masks_approved,
     get_collection_dir,
@@ -48,7 +47,6 @@ from setup_validation import (
     get_subject_dir,
     load_subjects_csv,
 )
-
 
 # =============================================================================
 # Status Checking
@@ -141,7 +139,7 @@ def run_2vol_coregistration(
         output_subdir="01_2vol",
     )
 
-    print(f"\nCoregistration complete:")
+    print("\nCoregistration complete:")
     for mf in coreg_masks:
         print(f"  {mf}")
 
@@ -184,7 +182,7 @@ def generate_murfi_xml(
     algo_dump_path: str,
 ) -> None:
     """Generate MURFI XML configuration file."""
-    xml_content = f'''<?xml version="1.0" encoding="UTF-8"?>
+    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <study name="rtDMN">
     <option name="softwareDir"> /opt/murfi </option>
 </study>
@@ -255,7 +253,7 @@ def generate_murfi_xml(
       <option name="maxTrendOrder"> 1 </option>
 
       <option name="condition" conditionName="Regulation">
-        {' '.join(['1'] * n_volumes)}
+        {" ".join(["1"] * n_volumes)}
       </option>
 
       <option name="conditionShift">{n_baseline}</option>
@@ -303,7 +301,7 @@ def generate_murfi_xml(
   </module>
 
 </processor>
-'''
+"""
 
     xml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(xml_path, "w") as f:
@@ -369,7 +367,7 @@ def run_murfi(
     dicom_copy_dir = run_dir / "dicom_source"
     if dicom_copy_dir.exists():
         shutil.rmtree(dicom_copy_dir)
-    print(f"\nCopying DICOMs for MURFI...")
+    print("\nCopying DICOMs for MURFI...")
     print(f"  From: {dicom_dir}")
     print(f"  To: {dicom_copy_dir}")
     shutil.copytree(dicom_dir, dicom_copy_dir)
@@ -378,7 +376,7 @@ def run_murfi(
     env["MURFI_SUBJECTS_DIR"] = str(run_dir.absolute())
     env["MURFI_SUBJECT_NAME"] = subject
 
-    print(f"\nStarting MURFI...")
+    print("\nStarting MURFI...")
     print(f"  MURFI_SUBJECTS_DIR={env['MURFI_SUBJECTS_DIR']}")
     print(f"  MURFI_SUBJECT_NAME={env['MURFI_SUBJECT_NAME']}")
     print(f"  Input dir: {murfi_input_dir.absolute()}")
@@ -386,9 +384,12 @@ def run_murfi(
     murfi_cmd = [
         "apptainer",
         "exec",
-        "--bind", f"{run_dir.absolute()}:{run_dir.absolute()}",
-        "--env", f"MURFI_SUBJECTS_DIR={run_dir.absolute()}",
-        "--env", f"MURFI_SUBJECT_NAME={subject}",
+        "--bind",
+        f"{run_dir.absolute()}:{run_dir.absolute()}",
+        "--env",
+        f"MURFI_SUBJECTS_DIR={run_dir.absolute()}",
+        "--env",
+        f"MURFI_SUBJECT_NAME={subject}",
         str(murfi_sif),
         "murfi",
         "-f",
@@ -396,7 +397,7 @@ def run_murfi(
     ]
 
     murfi_log = run_dir / "murfi_stderr.log"
-    murfi_log_fh = open(murfi_log, "w")
+    murfi_log_fh = open(murfi_log, "w")  # noqa: SIM115
 
     murfi_proc = subprocess.Popen(
         murfi_cmd,
@@ -418,8 +419,10 @@ def run_murfi(
     serve_cmd = [
         "apptainer",
         "exec",
-        "--bind", f"{dicom_copy_dir.absolute()}:{dicom_copy_dir.absolute()}",
-        "--bind", f"{run_dir.absolute()}:{run_dir.absolute()}",
+        "--bind",
+        f"{dicom_copy_dir.absolute()}:{dicom_copy_dir.absolute()}",
+        "--bind",
+        f"{run_dir.absolute()}:{run_dir.absolute()}",
         str(murfi_sif),
         "servedicoms",
         str(dicom_copy_dir.absolute()),
@@ -427,7 +430,7 @@ def run_murfi(
         str(int(tr * 1000)),
     ]
 
-    print(f"\nServing DICOMs...")
+    print("\nServing DICOMs...")
     serve_proc = subprocess.Popen(
         serve_cmd,
         env=env,
@@ -444,23 +447,17 @@ def run_murfi(
     except subprocess.TimeoutExpired:
         print("  servedicoms timed out - killing")
         serve_proc.kill()
-        try:
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.killpg(os.getpgid(serve_proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
 
     print("  Waiting for MURFI to finish...")
     time.sleep(3)
 
     # Kill MURFI
-    try:
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.kill(murfi_proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-    try:
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(os.getpgid(murfi_proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
 
     subprocess.run(["pkill", "-9", "-f", "murfi -f"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "apptainer.*murfi.sif"], capture_output=True)
@@ -662,7 +659,7 @@ def compare_outputs(
 
     diff_corr = np.corrcoef(pn_diff_valid, mu_diff_valid)[0, 1] if len(pn_diff_valid) > 0 else 0.0
     results["Difference"] = {"correlation": diff_corr, "n_values": len(pn_diff_valid)}
-    print(f"\n(ContA - DefaultA) vs (cen - dmn):")
+    print("\n(ContA - DefaultA) vs (cen - dmn):")
     print(f"  Correlation: {diff_corr:.6f}")
 
     # Create comparison plot
@@ -728,7 +725,7 @@ def run_comparison_for_run(
     n_volumes: int,
     n_baseline: int,
     skip_existing: bool = True,
-) -> Optional[dict]:
+) -> dict | None:
     """Run comparison for a single feedback run."""
     collection_dir = get_collection_dir(subject_dir)
     feedback_dir = get_feedback_dir(subject_dir)
@@ -814,12 +811,14 @@ def save_group_results(all_results: list[dict], output_dir: Path) -> None:
     rows = []
     for r in all_results:
         for network, metrics in r["results"].items():
-            rows.append({
-                "subject": r["subject"],
-                "run": r["run"],
-                "network": network,
-                **{k: v for k, v in metrics.items()},
-            })
+            rows.append(
+                {
+                    "subject": r["subject"],
+                    "run": r["run"],
+                    "network": network,
+                    **{k: v for k, v in metrics.items()},
+                }
+            )
 
     if rows:
         df = pd.DataFrame(rows)
@@ -872,9 +871,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
             mask_files = sorted(mask_dir.glob("*_thr.nii.gz"))
             preproc_dir = get_preprocessing_dir(subject_dir)
             ref_file = preproc_dir / f"{config.subject}_task-rest_boldref.nii.gz"
-            run_2vol_coregistration(
-                config.subject, subject_dir, mask_files, ref_file, overwrite=False
-            )
+            run_2vol_coregistration(config.subject, subject_dir, mask_files, ref_file, overwrite=False)
 
         # Run comparison for each feedback run
         for run in range(1, len(config.feedback_runs) + 1):

@@ -27,11 +27,12 @@ Example:
     register_task(ball_metadata)
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Callable
+from typing import Any, Literal
 
 # Task registry (task_id -> metadata)
-_TASK_REGISTRY: Dict[str, 'TaskMetadata'] = {}
+_TASK_REGISTRY: dict[str, "TaskMetadata"] = {}
 
 
 @dataclass
@@ -47,6 +48,7 @@ class NetworkRole:
         label: Display label in GUI (e.g., "Top Network (upward)")
         description: Tooltip/help text explaining this network's role
     """
+
     key: str
     label: str
     description: str = ""
@@ -67,14 +69,15 @@ class TaskParameter:
         validator: Custom validation function (optional)
             Should take value and raise ValueError if invalid
     """
+
     key: str
     label: str
     type: Literal["float", "int", "bool", "str", "list[str]"]
     default: Any
     hint: str = ""
-    min_value: Optional[float] = None
-    max_value: Optional[float] = None
-    validator: Optional[Callable[[Any], None]] = None
+    min_value: float | None = None
+    max_value: float | None = None
+    validator: Callable[[Any], None] | None = None
 
     def validate(self, value: Any) -> None:
         """Validate a value for this parameter.
@@ -90,7 +93,7 @@ class TaskParameter:
             try:
                 num = float(value) if self.type == "float" else int(value)
             except (ValueError, TypeError):
-                raise ValueError(f"{self.label} must be a number")
+                raise ValueError(f"{self.label} must be a number") from None
 
             if self.min_value is not None and num < self.min_value:
                 raise ValueError(f"{self.label} must be >= {self.min_value}")
@@ -117,6 +120,7 @@ class SessionStateField:
         default: Default value when session state is first created
         description: Documentation for this field (optional)
     """
+
     key: str
     type: Literal["float", "int", "bool", "list[float]", "list[int]"]
     default: Any
@@ -139,6 +143,7 @@ class PostRunQuestion:
             - "feedback_only": Show only after feedback runs (not transfer)
             - "last_feedback_only": Show only after the final feedback run
     """
+
     text: str
     left_label: str = "Never"
     right_label: str = "Always"
@@ -180,20 +185,21 @@ class TaskMetadata:
             - "block": HRF-convolved boxcar (baseline → active). Default.
             - "nuisance_only": No task regressors (nuisance-only model).
     """
+
     task_id: str
     display_name: str
     description: str
-    parameters: List[TaskParameter]
-    cross_parameter_validator: Optional[Callable[[Dict[str, Any]], None]] = None
+    parameters: list[TaskParameter]
+    cross_parameter_validator: Callable[[dict[str, Any]], None] | None = None
     n_networks: int = 1
     roles: set[str] = field(default_factory=lambda: {"feedback"})
-    default_contrasts: Dict[str, str] = field(default_factory=dict)
-    network_roles: List[NetworkRole] = field(default_factory=list)
-    session_state_fields: List[SessionStateField] = field(default_factory=list)
-    post_run_questions: List[PostRunQuestion] = field(default_factory=list)
+    default_contrasts: dict[str, str] = field(default_factory=dict)
+    network_roles: list[NetworkRole] = field(default_factory=list)
+    session_state_fields: list[SessionStateField] = field(default_factory=list)
+    post_run_questions: list[PostRunQuestion] = field(default_factory=list)
     design_type: str = "block"
 
-    def validate_config(self, config: Dict[str, Any]) -> None:
+    def validate_config(self, config: dict[str, Any]) -> None:
         """Validate a complete task configuration.
 
         Args:
@@ -238,7 +244,7 @@ def get_task_metadata(task_id: str) -> TaskMetadata:
     return _TASK_REGISTRY[task_id]
 
 
-def list_available_tasks(role: Optional[str] = None) -> Dict[str, TaskMetadata]:
+def list_available_tasks(role: str | None = None) -> dict[str, TaskMetadata]:
     """List registered tasks, optionally filtered by role.
 
     Args:
@@ -250,11 +256,7 @@ def list_available_tasks(role: Optional[str] = None) -> Dict[str, TaskMetadata]:
     """
     if role is None:
         return _TASK_REGISTRY.copy()
-    return {
-        task_id: metadata
-        for task_id, metadata in _TASK_REGISTRY.items()
-        if role in metadata.roles
-    }
+    return {task_id: metadata for task_id, metadata in _TASK_REGISTRY.items() if role in metadata.roles}
 
 
 def pineuro_task(metadata: TaskMetadata):
@@ -294,9 +296,10 @@ def pineuro_task(metadata: TaskMetadata):
         ...
     ```
     """
+
     def decorator(cls):
         # Verify task_id matches
-        if hasattr(cls, 'task_id') and cls.task_id != metadata.task_id:
+        if hasattr(cls, "task_id") and cls.task_id != metadata.task_id:
             raise ValueError(
                 f"Task class '{cls.__name__}' has task_id='{cls.task_id}' "
                 f"but metadata has task_id='{metadata.task_id}'. They must match."
@@ -307,6 +310,7 @@ def pineuro_task(metadata: TaskMetadata):
 
         # Register class (import here to avoid circular imports)
         from .factory import register_task_class
+
         register_task_class(metadata.task_id, cls)
 
         return cls

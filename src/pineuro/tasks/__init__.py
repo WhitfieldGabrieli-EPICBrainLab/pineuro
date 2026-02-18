@@ -47,50 +47,50 @@ See examples/run_feedback_with_task.py for complete integration example.
 import importlib.util
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-from .task_base import TaskBase
 from .base import BaseTask
-from .session import SessionState
-from .utils import ActivationSmoother, ActivationNormalizer
 from .designs import (
-    TaskDesign,
     BlockDesign,
-    NuisanceOnlyDesign,
     EventRelatedDesign,
-)
-from .task_registry import (
-    TaskMetadata,
-    TaskParameter,
-    SessionStateField,
-    PostRunQuestion,
-    NetworkRole,
-    register_task,
-    pineuro_task,
-    get_task_metadata,
-    list_available_tasks,
+    NuisanceOnlyDesign,
+    TaskDesign,
 )
 from .factory import (
-    create_task,
     create_localizer_task,
-    register_task_class,
+    create_task,
     get_registered_task_ids,
+    register_task_class,
 )
 from .localizer_base import BaseLocalizerTask
+from .session import SessionState
+from .task_base import TaskBase
+from .task_registry import (
+    NetworkRole,
+    PostRunQuestion,
+    SessionStateField,
+    TaskMetadata,
+    TaskParameter,
+    get_task_metadata,
+    list_available_tasks,
+    pineuro_task,
+    register_task,
+)
 from .ui_helpers import (
+    create_circle,
     create_fixation_cross,
     create_progress_bar,
-    update_progress_bar,
-    create_circle,
     create_target_zone,
     display_text,
+    update_progress_bar,
     wait_with_escape,
 )
+from .utils import ActivationNormalizer, ActivationSmoother
 
 logger = logging.getLogger(__name__)
 
 
-def discover_tasks(plugin_dirs: Optional[List[Path]] = None) -> List[str]:
+def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
     """Discover and register tasks from plugin directories.
 
     Scans specified directories for Python modules containing task classes
@@ -143,17 +143,14 @@ def discover_tasks(plugin_dirs: Optional[List[Path]] = None) -> List[str]:
 
         for py_file in plugin_dir.glob("*.py"):
             # Skip private modules
-            if py_file.name.startswith('_'):
+            if py_file.name.startswith("_"):
                 continue
 
             module_name = py_file.stem
 
             try:
                 # Load the module
-                spec = importlib.util.spec_from_file_location(
-                    f"pineuro_plugin_{module_name}",
-                    py_file
-                )
+                spec = importlib.util.spec_from_file_location(f"pineuro_plugin_{module_name}", py_file)
                 if spec is None or spec.loader is None:
                     continue
 
@@ -179,49 +176,49 @@ def discover_tasks(plugin_dirs: Optional[List[Path]] = None) -> List[str]:
 # Import tasks to trigger auto-registration
 # Task modules register themselves via register_task() at import time
 from .ball import BallTask  # Registers "ball" task
-from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
-from .self_other import SelfOtherTask  # Registers "self_other" localizer task
 from .fixation import FixationTask  # Registers "fixation" localizer task
+from .self_other import SelfOtherTask  # Registers "self_other" localizer task
+from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
 
 __all__ = [
     # Base classes
-    'TaskBase',
-    'BaseTask',
-    'BaseLocalizerTask',
-    'BallTask',
-    'ThermometerTask',
-    'SelfOtherTask',
-    'FixationTask',
-    'SessionState',
-    'ActivationSmoother',
-    'ActivationNormalizer',
+    "TaskBase",
+    "BaseTask",
+    "BaseLocalizerTask",
+    "BallTask",
+    "ThermometerTask",
+    "SelfOtherTask",
+    "FixationTask",
+    "SessionState",
+    "ActivationSmoother",
+    "ActivationNormalizer",
     # Task designs
-    'TaskDesign',
-    'BlockDesign',
-    'NuisanceOnlyDesign',
-    'EventRelatedDesign',
+    "TaskDesign",
+    "BlockDesign",
+    "NuisanceOnlyDesign",
+    "EventRelatedDesign",
     # Task registry
-    'TaskMetadata',
-    'TaskParameter',
-    'SessionStateField',
-    'PostRunQuestion',
-    'NetworkRole',
-    'register_task',
-    'pineuro_task',
-    'get_task_metadata',
-    'list_available_tasks',
-    'discover_tasks',
+    "TaskMetadata",
+    "TaskParameter",
+    "SessionStateField",
+    "PostRunQuestion",
+    "NetworkRole",
+    "register_task",
+    "pineuro_task",
+    "get_task_metadata",
+    "list_available_tasks",
+    "discover_tasks",
     # Task factory
-    'create_task',
-    'create_localizer_task',
-    'register_task_class',
-    'get_registered_task_ids',
+    "create_task",
+    "create_localizer_task",
+    "register_task_class",
+    "get_registered_task_ids",
     # UI helpers
-    'create_fixation_cross',
-    'create_progress_bar',
-    'update_progress_bar',
-    'create_circle',
-    'create_target_zone',
-    'display_text',
-    'wait_with_escape',
+    "create_fixation_cross",
+    "create_progress_bar",
+    "update_progress_bar",
+    "create_circle",
+    "create_target_zone",
+    "display_text",
+    "wait_with_escape",
 ]

@@ -43,24 +43,24 @@ References
 # Standard library imports
 import argparse
 import logging
-from pathlib import Path
 import shutil
 import time
-from typing import Union, Optional, List, Callable
+from collections.abc import Callable
+from pathlib import Path
+from typing import Union
 
 # Third-party imports
-import pydicom
-
 # Local imports
 from .utils import (
-    get_volume_files,
-    get_tr_from_volume,
-    is_nifti_file,
     get_json_sidecar_path,
+    get_tr_from_volume,
+    get_volume_files,
+    is_nifti_file,
 )
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
+
 
 class VolumeSimulator:
     """
@@ -134,10 +134,10 @@ class VolumeSimulator:
         self,
         source_dir: Union[str, Path],
         target_dir: Union[str, Path],
-        tr: Optional[float] = None,
+        tr: float | None = None,
         speed: float = 1.0,
         clear_target: bool = True,
-        cleanup_on_complete: bool = False
+        cleanup_on_complete: bool = False,
     ):
         self.source_dir = Path(source_dir)
         self.target_dir = Path(target_dir)
@@ -147,9 +147,9 @@ class VolumeSimulator:
         self.cleanup_on_complete = cleanup_on_complete
 
         # Timing state
-        self.start_time: Optional[float] = None
-        self.volume_copied_callback: Optional[Callable[[int, float, float], None]] = None
-        self.trigger_callback: Optional[Callable[[], None]] = None
+        self.start_time: float | None = None
+        self.volume_copied_callback: Callable[[int, float, float], None] | None = None
+        self.trigger_callback: Callable[[], None] | None = None
 
         if not self.source_dir.exists():
             raise FileNotFoundError(f"Source directory not found: {self.source_dir}")
@@ -163,9 +163,9 @@ class VolumeSimulator:
 
         # Determine source type based on first file
         if is_nifti_file(self.volume_files[0]):
-            self.source_type = 'nifti'
+            self.source_type = "nifti"
         else:
-            self.source_type = 'dicom'
+            self.source_type = "dicom"
 
         logger.info(f"Found {len(self.volume_files)} {self.source_type} files in source")
 
@@ -178,7 +178,7 @@ class VolumeSimulator:
 
         # For backward compatibility, also expose as dicom_files
         self.dicom_files = self.volume_files
-    
+
     def _sleep_until_deadline(self, deadline: float, stop_event=None) -> float:
         """
         Sleep until the specified deadline time.
@@ -271,7 +271,7 @@ class VolumeSimulator:
 
         return dst_file
 
-    def copy_volumes_iter(self, n_volumes: Optional[int] = None, stop_event=None):
+    def copy_volumes_iter(self, n_volumes: int | None = None, stop_event=None):
         """
         Generator that copies volumes one at a time, yielding after each.
 
@@ -354,9 +354,9 @@ class VolumeSimulator:
 
             actual_elapsed = time.monotonic() - self.start_time
             logger.debug(
-                f"Copied volume {i+1}/{n_total}: {src_file.name} "
+                f"Copied volume {i + 1}/{n_total}: {src_file.name} "
                 f"(expected={expected_time:.3f}s, actual={actual_elapsed:.3f}s, "
-                f"copy={copy_duration*1000:.1f}ms)"
+                f"copy={copy_duration * 1000:.1f}ms)"
             )
 
             # Invoke callback if set
@@ -374,7 +374,7 @@ class VolumeSimulator:
         if self.cleanup_on_complete:
             self.cleanup()
 
-    def run(self, n_volumes: Optional[int] = None) -> None:
+    def run(self, n_volumes: int | None = None) -> None:
         """Run the volume simulation with CLI progress output.
 
         Uses deadline-based timing to ensure consistent TR intervals.
@@ -400,13 +400,13 @@ class VolumeSimulator:
         n_total = len(files_to_send)
 
         source_type_label = self.source_type.upper()
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"{source_type_label} Simulator Started")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"Volumes: {n_total}")
         print(f"TR: {self.tr}s | Speed: {self.speed}x")
         print(f"Target: {self.target_dir}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         # Set start time
         self.start_time = time.monotonic()
@@ -425,13 +425,13 @@ class VolumeSimulator:
             actual_elapsed = time.monotonic() - self.start_time
             drift = actual_elapsed - expected_time
             drift_str = f"+{drift:.3f}" if drift >= 0 else f"{drift:.3f}"
-            print(f"[{actual_elapsed:7.2f}s] Volume {i+1:4d}/{n_total}: {src_file.name} (drift: {drift_str}s)")
+            print(f"[{actual_elapsed:7.2f}s] Volume {i + 1:4d}/{n_total}: {src_file.name} (drift: {drift_str}s)")
 
         total_time = time.monotonic() - self.start_time
         expected_total = n_total * self.delay
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Simulation complete. Total time: {total_time:.1f}s (expected: {expected_total:.1f}s)")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         if self.cleanup_on_complete:
             self.cleanup()
@@ -443,20 +443,19 @@ DicomSimulator = VolumeSimulator
 
 def main():
     """Command-line entry point for volume simulator."""
-    parser = argparse.ArgumentParser(description='Simulate real-time volume acquisition (DICOM or NIfTI)')
-    parser.add_argument('--source', '-s', required=True, help='Source volume directory (DICOM or NIfTI)')
-    parser.add_argument('--target', '-t', required=True, help='Target directory')
-    parser.add_argument('--tr', type=float, default=None, help='TR in seconds')
-    parser.add_argument('--speed', type=float, default=1.0, help='Speed multiplier')
-    parser.add_argument('--n', type=int, default=None, dest='n_volumes', help='Number of volumes')
-    parser.add_argument('--no-clear', action='store_true', help='Keep existing files')
-    parser.add_argument('--cleanup', action='store_true', help='Delete target directory after completion')
-    parser.add_argument('-v', '--verbose', action='store_true')
+    parser = argparse.ArgumentParser(description="Simulate real-time volume acquisition (DICOM or NIfTI)")
+    parser.add_argument("--source", "-s", required=True, help="Source volume directory (DICOM or NIfTI)")
+    parser.add_argument("--target", "-t", required=True, help="Target directory")
+    parser.add_argument("--tr", type=float, default=None, help="TR in seconds")
+    parser.add_argument("--speed", type=float, default=1.0, help="Speed multiplier")
+    parser.add_argument("--n", type=int, default=None, dest="n_volumes", help="Number of volumes")
+    parser.add_argument("--no-clear", action="store_true", help="Keep existing files")
+    parser.add_argument("--cleanup", action="store_true", help="Delete target directory after completion")
+    parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+        level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
 
     sim = VolumeSimulator(
@@ -465,7 +464,7 @@ def main():
         tr=args.tr,
         speed=args.speed,
         clear_target=not args.no_clear,
-        cleanup_on_complete=args.cleanup
+        cleanup_on_complete=args.cleanup,
     )
 
     try:
@@ -474,5 +473,5 @@ def main():
         print("\nSimulation interrupted")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -28,11 +28,11 @@ PsychoPy tasks that need thread-safe access to live activations.
 """
 
 # Standard library imports
-from abc import abstractmethod
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 import logging
 import threading
 import time
+from abc import abstractmethod
+from typing import TYPE_CHECKING, Any, Optional
 
 from .task_base import TaskBase
 
@@ -101,7 +101,7 @@ class BaseTask(TaskBase):
     def __init__(
         self,
         coordinator,
-        mask_name: Optional[str] = None,
+        mask_name: str | None = None,
         refresh_rate: float = 60.0,
         feedback_mode: bool = True,
         session_state: Optional["SessionState"] = None,
@@ -109,7 +109,7 @@ class BaseTask(TaskBase):
         **kwargs,  # Accept additional kwargs for subclass compatibility
     ):
         super().__init__(
-            trigger_keys=kwargs.pop('trigger_keys', None),
+            trigger_keys=kwargs.pop("trigger_keys", None),
             simulator=simulator,
             **kwargs,
         )
@@ -128,11 +128,11 @@ class BaseTask(TaskBase):
         # Thread-safe access to latest data
         self._lock = threading.Lock()
         self._latest_data = {
-            'activations': {},  # All mask activations
-            'activation': 0.0,  # Primary mask (backwards compat)
-            'volume': 0,
-            'time': 0.0,
-            'is_baseline': True,
+            "activations": {},  # All mask activations
+            "activation": 0.0,  # Primary mask (backwards compat)
+            "volume": 0,
+            "time": 0.0,
+            "is_baseline": True,
         }
 
     def get_task_metadata(self):
@@ -145,6 +145,7 @@ class BaseTask(TaskBase):
             Returns None if task is not registered.
         """
         from .task_registry import get_task_metadata
+
         try:
             return get_task_metadata(self.task_id)
         except ValueError:
@@ -154,7 +155,7 @@ class BaseTask(TaskBase):
     # Mirror state (vector-based, for structured GUI rendering)
     # =========================================================================
 
-    def get_mirror_state(self) -> Dict[str, Any]:
+    def get_mirror_state(self) -> dict[str, Any]:
         """Return current visual state for GUI mirroring.
 
         Subclasses should override this to provide their visual representation.
@@ -176,7 +177,7 @@ class BaseTask(TaskBase):
             - rect: x, y, width, height, fill or stroke, stroke_width
             - text: x, y, content, size, color
         """
-        return {'background': 'black', 'shapes': []}
+        return {"background": "black", "shapes": []}
 
     def _emit_mirror_state(self) -> None:
         """Emit current visual state to mirror callback if set."""
@@ -190,14 +191,7 @@ class BaseTask(TaskBase):
     # Thread-safe Coordinator Data Access
     # =========================================================================
 
-    def _update_data(
-        self,
-        activations: dict,
-        volume: int,
-        elapsed: float,
-        is_baseline: bool,
-        is_outlier: bool
-    ):
+    def _update_data(self, activations: dict, volume: int, elapsed: float, is_baseline: bool, is_outlier: bool):
         """Internal callback to update latest data (thread-safe).
 
         Called by coordinator after each volume is processed.
@@ -205,11 +199,11 @@ class BaseTask(TaskBase):
         """
         with self._lock:
             self._latest_data = {
-                'activations': activations,  # All mask activations
-                'activation': activations.get(self.mask_name, 0.0),  # Primary mask (backwards compat)
-                'volume': volume,
-                'time': elapsed,
-                'is_baseline': is_baseline,
+                "activations": activations,  # All mask activations
+                "activation": activations.get(self.mask_name, 0.0),  # Primary mask (backwards compat)
+                "volume": volume,
+                "time": elapsed,
+                "is_baseline": is_baseline,
             }
 
     def get_latest_data(self) -> dict:
@@ -271,7 +265,7 @@ class BaseTask(TaskBase):
         int
             The user's rating
         """
-        from psychopy import visual, event, core
+        from psychopy import core, event, visual
 
         # Create slider
         slider = visual.Slider(
@@ -280,8 +274,8 @@ class BaseTask(TaskBase):
             ticks=(scale_min, scale_max),
             labels=(left_label, right_label),
             granularity=1,
-            color='white',
-            fillColor='white',
+            color="white",
+            fillColor="white",
             labelHeight=0.06,
         )
 
@@ -292,11 +286,11 @@ class BaseTask(TaskBase):
             pos=(0, 0.3),
             height=0.05,
             wrapWidth=1.5,
-            color='white',
+            color="white",
         )
 
         # Initialize slider position at center
-        event.clearEvents('keyboard')
+        event.clearEvents("keyboard")
         center = (scale_min + scale_max) // 2
         slider.markerPos = center
 
@@ -312,14 +306,14 @@ class BaseTask(TaskBase):
         # Wait for response
         while True:
             # Check for stop signal from GUI
-            if hasattr(self, 'coordinator') and self.coordinator.was_stopped():
+            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
                 logger.info("Stop signal received during slider question")
                 raise KeyboardInterrupt("Stopped by user")
 
-            keys = event.getKeys(keyList=[left_button, right_button, enter_button, 'escape'])
+            keys = event.getKeys(keyList=[left_button, right_button, enter_button, "escape"])
 
             for key in keys:
-                if key == 'escape':
+                if key == "escape":
                     raise KeyboardInterrupt("Escaped during question")
                 elif key == left_button:
                     slider.markerPos = max(scale_min, slider.markerPos - 1)
@@ -332,14 +326,16 @@ class BaseTask(TaskBase):
 
                     # Log to questions file if configured
                     if self._questions_writer is not None:
-                        self._questions_writer.writerow([
-                            getattr(self.coordinator, 'subject', 'unknown'),
-                            getattr(self.coordinator, 'run_number', 0),
-                            'feedback' if self.feedback_mode else 'transfer',
-                            question_text,
-                            rating,
-                            f'{rt:.3f}',
-                        ])
+                        self._questions_writer.writerow(
+                            [
+                                getattr(self.coordinator, "subject", "unknown"),
+                                getattr(self.coordinator, "run_number", 0),
+                                "feedback" if self.feedback_mode else "transfer",
+                                question_text,
+                                rating,
+                                f"{rt:.3f}",
+                            ]
+                        )
                         if self._questions_file is not None:
                             self._questions_file.flush()
 
@@ -361,7 +357,7 @@ class BaseTask(TaskBase):
         left_button: str = "1",
         right_button: str = "2",
         enter_button: str = "3",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Display post-run questions defined in task metadata.
 
         Called automatically by cleanup(). Tasks with no questions defined
@@ -392,7 +388,7 @@ class BaseTask(TaskBase):
             return []  # No-op for tasks without questions
 
         # Check if window exists
-        if not hasattr(self, 'win') or self.win is None:
+        if not hasattr(self, "win") or self.win is None:
             logger.warning("Cannot show questions: no PsychoPy window")
             return []
 
@@ -407,7 +403,7 @@ class BaseTask(TaskBase):
             elif question.condition == "last_feedback_only":
                 is_last = False
                 if self._session_state is not None:
-                    is_last = getattr(self._session_state, 'is_last_feedback_run', False)
+                    is_last = getattr(self._session_state, "is_last_feedback_run", False)
                 if not (self.feedback_mode and is_last):
                     continue
 
@@ -421,10 +417,12 @@ class BaseTask(TaskBase):
                 enter_button=enter_button,
             )
 
-            responses.append({
-                "question": question.text,
-                "response": response,
-            })
+            responses.append(
+                {
+                    "question": question.text,
+                    "response": response,
+                }
+            )
 
         logger.info(f"Post-run questions complete: {len(responses)} responses")
         return responses
@@ -433,7 +431,7 @@ class BaseTask(TaskBase):
     # Run Results
     # =========================================================================
 
-    def get_run_results(self) -> Dict[str, Any]:
+    def get_run_results(self) -> dict[str, Any]:
         """Return task-specific results from the completed run.
 
         The framework calls this after run() completes to extract results
@@ -447,7 +445,7 @@ class BaseTask(TaskBase):
             - 'volumes_processed': int - number of volumes processed
         """
         return {
-            'volumes_processed': getattr(self, 'current_volume', 0) or getattr(self, '_volumes_processed', 0),
+            "volumes_processed": getattr(self, "current_volume", 0) or getattr(self, "_volumes_processed", 0),
         }
 
     # =========================================================================
@@ -514,7 +512,7 @@ class BaseTask(TaskBase):
         # Show post-run questions if coordinator says to (respects stop() with show_questions flag)
         # Falls back to True if coordinator doesn't have the method (standalone task)
         should_show = True
-        if hasattr(self, 'coordinator') and hasattr(self.coordinator, 'should_show_questions'):
+        if hasattr(self, "coordinator") and hasattr(self.coordinator, "should_show_questions"):
             should_show = self.coordinator.should_show_questions()
 
         if should_show:
@@ -585,6 +583,6 @@ class BaseTask(TaskBase):
 
         self._session_state.record_run(
             run_type="feedback" if self.feedback_mode else "transfer",
-            volumes_processed=getattr(self, '_volumes_processed', 0),
-            task_state_snapshot=getattr(self, '_task_state_snapshot', {}),
+            volumes_processed=getattr(self, "_volumes_processed", 0),
+            task_state_snapshot=getattr(self, "_task_state_snapshot", {}),
         )

@@ -58,7 +58,7 @@ Examples
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Union
 
 from pineuro.mask_extraction import MaskSelection
 
@@ -70,13 +70,13 @@ def generate_mask_extraction_script(
     mask_file: Union[str, Path],
     ref_file: Union[str, Path],
     n_yeo: int = 17,
-    yeo_targets: Optional[List[str]] = None,
+    yeo_targets: list[str] | None = None,
     n_components: int = 30,
     threshold: int = 2000,
-    smooth_fwhm: Optional[float] = None,
-    highpass: Optional[float] = None,
-    lowpass: Optional[float] = None,
-    selections: Optional[Dict[str, MaskSelection]] = None,
+    smooth_fwhm: float | None = None,
+    highpass: float | None = None,
+    lowpass: float | None = None,
+    selections: dict[str, MaskSelection] | None = None,
 ) -> str:
     """Generate a Python script that reproduces the mask extraction pipeline.
 
@@ -126,9 +126,7 @@ def generate_mask_extraction_script(
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # Build mask selection code if there are manual modifications
-    mask_selection_code = _generate_selection_code(
-        selections, mask_extraction_dir, n_yeo, threshold
-    )
+    mask_selection_code = _generate_selection_code(selections, mask_extraction_dir, n_yeo, threshold)
 
     script = f'''#!/usr/bin/env python3
 """
@@ -334,7 +332,7 @@ if __name__ == "__main__":
 
 
 def _generate_selection_code(
-    selections: Optional[Dict[str, MaskSelection]],
+    selections: dict[str, MaskSelection] | None,
     mask_extraction_dir: Path,
     n_yeo: int,
     threshold: int,
@@ -358,28 +356,25 @@ def _generate_selection_code(
         Python code block as a string
     """
     if not selections:
-        return '''        # -----------------------------------------------------------------
+        return """        # -----------------------------------------------------------------
         # STEP 2: No manual mask selections to apply
         # -----------------------------------------------------------------
         # (All masks use automatic ICA component selection)
         print("  No manual mask selections to apply")
         print()
-'''
+"""
 
     # Check if any selections are non-auto
-    manual_selections = {
-        name: sel for name, sel in selections.items()
-        if sel.selection_reason != "auto"
-    }
+    manual_selections = {name: sel for name, sel in selections.items() if sel.selection_reason != "auto"}
 
     if not manual_selections:
-        return '''        # -----------------------------------------------------------------
+        return """        # -----------------------------------------------------------------
         # STEP 2: No manual mask selections to apply
         # -----------------------------------------------------------------
         # (All masks use automatic ICA component selection)
         print("  No manual mask selections to apply")
         print()
-'''
+"""
 
     # Generate code for manual selections - COMMENTED OUT by default
     # so running the script fresh gives auto-selected ICA components
@@ -408,7 +403,7 @@ def _generate_selection_code(
 
     selections_dict = "\n".join(selection_defs)
 
-    return f'''        # -----------------------------------------------------------------
+    return f"""        # -----------------------------------------------------------------
         # STEP 2: Apply manual mask selections (COMMENTED OUT)
         # -----------------------------------------------------------------
         # Uncomment the code below to re-apply your manual mask selections.
@@ -460,7 +455,7 @@ def _generate_selection_code(
         # save_mask_selections(masks_dir, existing_selections)
         #
         # print()
-'''
+"""
 
 
 def generate_task_mask_extraction_script(
@@ -469,17 +464,17 @@ def generate_task_mask_extraction_script(
     input_file: Union[str, Path],
     mask_file: Union[str, Path],
     events_file: Union[str, Path],
-    contrasts: Dict[str, str],
+    contrasts: dict[str, str],
     tr: float,
     threshold: int = 2000,
     threshold_method: str = "top_n",
-    atlas_mask: Optional[str] = None,
-    atlas_name: Optional[str] = None,
-    ref_file: Optional[Union[str, Path]] = None,
+    atlas_mask: str | None = None,
+    atlas_name: str | None = None,
+    ref_file: Union[str, Path] | None = None,
     cluster_start_threshold: float = 2.0,
     cluster_step: float = 0.1,
     stat_type: str = "t",
-    smoothing_fwhm: Optional[float] = 5.0,
+    smoothing_fwhm: float | None = 5.0,
     high_pass: float = 0.01,
     drift_model: str = "cosine",
     hrf_model: str = "spm",
@@ -548,9 +543,9 @@ def generate_task_mask_extraction_script(
 # CLUSTER THRESHOLDING PARAMETERS
 # =============================================================================
 threshold_method = "{threshold_method}"
-atlas_mask = {repr(str(atlas_mask)) if atlas_mask else 'None'}
+atlas_mask = {repr(str(atlas_mask)) if atlas_mask else "None"}
 atlas_name = {repr(atlas_name)}
-ref_file = {repr(str(ref_file)) if ref_file else 'None'}
+ref_file = {repr(str(ref_file)) if ref_file else "None"}
 cluster_start_threshold = {cluster_start_threshold}
 cluster_step = {cluster_step}
 """
@@ -713,6 +708,6 @@ def save_script(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(script_content)
     # Make executable on Unix (Windows doesn't support chmod)
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         output_path.chmod(0o755)
     return output_path

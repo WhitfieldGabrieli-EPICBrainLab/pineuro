@@ -12,9 +12,9 @@ Dependencies
 PsychoPy, pandas
 """
 
-from pathlib import Path
-from typing import Optional, Union
 import logging
+from pathlib import Path
+from typing import Union
 
 from .localizer_base import BaseLocalizerTask
 from .task_registry import TaskMetadata, TaskParameter, pineuro_task
@@ -98,17 +98,19 @@ class FixationTask(BaseLocalizerTask):
         from psychopy import core
 
         # Instructions
-        self.show_instructions([
-            "You will see a fixation cross (+) on the screen.\n\n"
-            "Please relax and keep your eyes on the cross.\n\n"
-            "Try to keep your head still and avoid moving.\n\n"
-            "Press any button to begin."
-        ])
+        self.show_instructions(
+            [
+                "You will see a fixation cross (+) on the screen.\n\n"
+                "Please relax and keep your eyes on the cross.\n\n"
+                "Try to keep your head still and avoid moving.\n\n"
+                "Press any button to begin."
+            ]
+        )
 
         # Wait for scanner trigger
         self.wait_for_trigger()
         self._experiment_clock = core.Clock()
-        logger.info(f"[TIMING] Experiment clock started at trigger (t=0.00s)")
+        logger.info("[TIMING] Experiment clock started at trigger (t=0.00s)")
 
         # Show fixation for entire duration
         onset = self._experiment_clock.getTime()

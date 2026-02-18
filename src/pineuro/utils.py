@@ -113,24 +113,26 @@ References
 # =============================================================================
 
 # --- Standard Library ---
+import json
+import logging
 import shutil
 import subprocess
 import tempfile
 import time
-import json
-import logging
-from typing import Union, List, Optional, Dict, Any, Callable, cast
-from pathlib import Path
+from collections.abc import Callable
 from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Union, cast
+
+import nibabel as nib
 
 # --- Third-Party ---
 import numpy as np
-import nibabel as nib
+import pydicom  # DICOM header reading
 from nibabel.loadsave import save
 from nibabel.nifti1 import Nifti1Image
-from templateflow import api as tflow  # Standard neuroimaging templates
-import pydicom                          # DICOM header reading
 from scipy.ndimage import binary_erosion, generate_binary_structure
+from templateflow import api as tflow  # Standard neuroimaging templates
 
 # --- Module Logger ---
 logger = logging.getLogger(__name__)
@@ -144,7 +146,7 @@ logger = logging.getLogger(__name__)
 # This is useful for identifying bottlenecks and optimizing pipeline performance.
 
 # Global timing storage - collects timing data when enabled
-_timing_data: Dict[str, Any] = {}
+_timing_data: dict[str, Any] = {}
 _timing_enabled = False
 
 
@@ -162,7 +164,7 @@ def disable_timing() -> None:
     _timing_enabled = False
 
 
-def get_timing_data() -> Dict[str, Any]:
+def get_timing_data() -> dict[str, Any]:
     """
     Get collected timing data.
 
@@ -186,7 +188,7 @@ def save_timing_report(output_path: Union[str, Path]) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(_timing_data, f, indent=2)
 
     logger.info(f"Timing report saved to {output_path}")
@@ -220,11 +222,7 @@ def Timer(name: str, category: str = "general"):
         return
 
     start_time = time.time()
-    timing_info = {
-        "name": name,
-        "category": category,
-        "start_time": start_time
-    }
+    timing_info = {"name": name, "category": category, "start_time": start_time}
 
     try:
         yield timing_info
@@ -241,9 +239,11 @@ def Timer(name: str, category: str = "general"):
 
         logger.info(f"[TIMING] {name}: {elapsed:.2f}s")
 
+
 # ==============================================================
 # Platform Compatibility Check
 # ==============================================================
+
 
 def check_platform_requirements() -> list[str]:
     """Check platform requirements and return list of warnings/errors.
@@ -272,7 +272,7 @@ def check_platform_requirements() -> list[str]:
     # MNI alignment are all handled by ANTsPy and nilearn.
 
     # Check dcm2niix availability (required for DICOM conversion)
-    if shutil.which('dcm2niix') is None:
+    if shutil.which("dcm2niix") is None:
         warnings.append(
             "dcm2niix not found in PATH. DICOM conversion requires dcm2niix. "
             "Install via: apt install dcm2niix (Linux), brew install dcm2niix (macOS), "
@@ -280,20 +280,16 @@ def check_platform_requirements() -> list[str]:
         )
 
     # Platform-specific warnings
-    if platform == 'linux' and config.is_wayland():
+    if platform == "linux" and config.is_wayland():
         warnings.append(
             "Wayland display server detected. Some X11-based features (window positioning) "
             "may not work. Consider using an X11/Xorg session for full compatibility."
         )
 
-
     return warnings
 
 
-def outputs_exist(
-    outputs: Union[Path, List[Path], str, List[str]],
-    overwrite: bool = False
-) -> bool:
+def outputs_exist(outputs: Union[Path, list[Path], str, list[str]], overwrite: bool = False) -> bool:
     """Check if all outputs exist and overwrite is False.
 
     This is a utility to standardize the common pattern of skipping
@@ -350,11 +346,7 @@ class ProgressEmitter:
     >>> emitter.emit("Step 2")  # detail is optional
     """
 
-    def __init__(
-        self,
-        callback: Optional[Callable[[str, str], None]] = None,
-        log: Optional[logging.Logger] = None
-    ):
+    def __init__(self, callback: Callable[[str, str], None] | None = None, log: logging.Logger | None = None):
         self._callback = callback
         self._logger = log or logger
 
@@ -381,6 +373,7 @@ class ProgressEmitter:
 # HRF and Task Regressor Computation
 # ==============================================================
 
+
 def _gamma_pdf_rate(t: np.ndarray, shape: float, rate: float) -> np.ndarray:
     """Gamma PDF with rate parameterization.
 
@@ -405,12 +398,7 @@ def _gamma_pdf_rate(t: np.ndarray, shape: float, rate: float) -> np.ndarray:
     # Avoid division by zero at t=0
     t_safe = np.maximum(t, 1e-10)
 
-    pdf = (
-        np.power(rate, shape)
-        / gamma_func(shape)
-        * np.power(t_safe, shape - 1)
-        * np.exp(-rate * t_safe)
-    )
+    pdf = np.power(rate, shape) / gamma_func(shape) * np.power(t_safe, shape - 1) * np.exp(-rate * t_safe)
     # Set t=0 to 0 (limit of t^(a-1) as t->0 for a>1)
     pdf[t == 0] = 0.0
 
@@ -464,10 +452,7 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     t_hires = np.arange(n_hires_samples, dtype=np.float64)
 
     # Compute high-resolution HRF
-    hrf_hires = (
-        _gamma_pdf_rate(t_hires, shape_pos, rate)
-        - _gamma_pdf_rate(t_hires, shape_neg, rate) / undershoot_ratio
-    )
+    hrf_hires = _gamma_pdf_rate(t_hires, shape_pos, rate) - _gamma_pdf_rate(t_hires, shape_neg, rate) / undershoot_ratio
 
     # Normalize to sum to 1.0
     hrf_sum = np.sum(hrf_hires)
@@ -546,10 +531,7 @@ def compute_boxcar_task_regressor(
     # Compute high-resolution HRF (16 Hz, 32 seconds = 512 samples)
     n_hrf_samples = int(hrf_duration / hires_dt)
     t_hrf = np.arange(n_hrf_samples, dtype=np.float64)
-    hrf_hires = (
-        _gamma_pdf_rate(t_hrf, shape_pos, rate)
-        - _gamma_pdf_rate(t_hrf, shape_neg, rate) / undershoot_ratio
-    )
+    hrf_hires = _gamma_pdf_rate(t_hrf, shape_pos, rate) - _gamma_pdf_rate(t_hrf, shape_neg, rate) / undershoot_ratio
 
     # Normalize HRF to sum to 1.0
     hrf_sum = np.sum(hrf_hires)
@@ -569,7 +551,7 @@ def compute_boxcar_task_regressor(
     boxcar_hires[onset_hires:] = 1.0
 
     # Convolve at high resolution
-    convolved_hires = np.convolve(boxcar_hires, hrf_hires, mode='full')
+    convolved_hires = np.convolve(boxcar_hires, hrf_hires, mode="full")
 
     # Downsample using fixed factor of 16 (MURFI: i / hrfSamplePeriod = i * 16)
     regressor = np.zeros(n_volumes, dtype=np.float64)
@@ -585,10 +567,12 @@ def compute_boxcar_task_regressor(
 # Installation Check
 # ==============================================================
 
+
 class CommandNotFoundError(Exception):
     """Raised when an FSL command is not installed or found in PATH."""
 
-def _check_command_installation(cmd: Union[str, Path] = 'fsl') -> None:
+
+def _check_command_installation(cmd: Union[str, Path] = "fsl") -> None:
     """
     Check if command is installed and available in PATH.
 
@@ -596,30 +580,29 @@ def _check_command_installation(cmd: Union[str, Path] = 'fsl') -> None:
     ----------
     cmd
         Command to look for
-    
+
     Raises
     ------
     CommandNotFoundError
         If command is not found
-        
+
     """
 
     if shutil.which(cmd) is None:
-        raise CommandNotFoundError(
-            f"{cmd} is not found in PATH."
-        )
-    
+        raise CommandNotFoundError(f"{cmd} is not found in PATH.")
+
     logger.debug(f"{cmd} installation verified")
+
 
 # ==============================================================
 #  DICOM Utilities
 # ==============================================================
 
 # DICOM file extensions to search for
-DICOM_EXTENSIONS = ['*.dcm', '*.DCM', '*.ima', '*.IMA']
+DICOM_EXTENSIONS = ["*.dcm", "*.DCM", "*.ima", "*.IMA"]
 
 
-def get_dicom_files(directory: Path) -> List[Path]:
+def get_dicom_files(directory: Path) -> list[Path]:
     """
     Get all DICOM files in a directory, sorted by filename.
 
@@ -686,12 +669,12 @@ def get_tr_from_dicom(dicom_path: Path, default: float = 2.0) -> float:
         dcm = pydicom.dcmread(dicom_path, stop_before_pixels=True)
 
         # First check top-level (standard DICOM)
-        if hasattr(dcm, 'RepetitionTime') and dcm.RepetitionTime is not None:
+        if hasattr(dcm, "RepetitionTime") and dcm.RepetitionTime is not None:
             return float(dcm.RepetitionTime) / 1000.0
 
         # Search in nested sequences (enhanced/multiframe DICOM)
         for elem in dcm.iterall():
-            if elem.keyword == 'RepetitionTime' and elem.value is not None:
+            if elem.keyword == "RepetitionTime" and elem.value is not None:
                 return float(elem.value) / 1000.0
 
         logger.warning(f"TR not found in DICOM, using default {default}s")
@@ -706,13 +689,13 @@ def get_tr_from_dicom(dicom_path: Path, default: float = 2.0) -> float:
 # ==============================================================
 
 # NIfTI file extensions to search for
-NIFTI_EXTENSIONS = ['*.nii', '*.nii.gz', '*.NII', '*.NII.GZ']
+NIFTI_EXTENSIONS = ["*.nii", "*.nii.gz", "*.NII", "*.NII.GZ"]
 
 # Combined extensions for volume files (DICOM + NIfTI)
 VOLUME_EXTENSIONS = DICOM_EXTENSIONS + NIFTI_EXTENSIONS
 
 
-def get_nifti_files(directory: Path) -> List[Path]:
+def get_nifti_files(directory: Path) -> list[Path]:
     """
     Get all NIfTI files in a directory, sorted by filename.
 
@@ -737,7 +720,7 @@ def get_nifti_files(directory: Path) -> List[Path]:
     return valid_niftis
 
 
-def get_volume_files(directory: Path) -> List[Path]:
+def get_volume_files(directory: Path) -> list[Path]:
     """
     Get all volume files in a directory, sorted by filename.
 
@@ -777,7 +760,7 @@ def is_nifti_file(file_path: Path) -> bool:
 
     """
     name = str(file_path).lower()
-    return name.endswith('.nii') or name.endswith('.nii.gz')
+    return name.endswith(".nii") or name.endswith(".nii.gz")
 
 
 def is_valid_nifti(file_path: Path) -> bool:
@@ -821,7 +804,7 @@ def is_valid_volume(file_path: Path) -> bool:
 
     """
     # Skip temporary files from atomic copy (e.g., .IM-0001.dcm.tmp)
-    if file_path.name.startswith('.') and file_path.name.endswith('.tmp'):
+    if file_path.name.startswith(".") and file_path.name.endswith(".tmp"):
         return False
 
     if is_nifti_file(file_path):
@@ -851,9 +834,9 @@ def get_json_sidecar_path(nifti_path: Path) -> Path:
     nifti_path = Path(nifti_path)
     name = nifti_path.name
     # Handle both .nii and .nii.gz
-    if name.lower().endswith('.nii.gz'):
+    if name.lower().endswith(".nii.gz"):
         base_name = name[:-7]  # Remove .nii.gz
-    elif name.lower().endswith('.nii'):
+    elif name.lower().endswith(".nii"):
         base_name = name[:-4]  # Remove .nii
     else:
         base_name = nifti_path.stem
@@ -879,12 +862,12 @@ def get_tr_from_json_sidecar(json_path: Path, default: float = 2.0) -> float:
 
     """
     try:
-        with open(json_path, 'r') as f:
+        with open(json_path) as f:
             metadata = json.load(f)
 
         # Check for RepetitionTime field (standard BIDS)
-        if 'RepetitionTime' in metadata:
-            return float(metadata['RepetitionTime'])
+        if "RepetitionTime" in metadata:
+            return float(metadata["RepetitionTime"])
 
         logger.warning(f"TR not found in JSON sidecar, using default {default}s")
         return default
@@ -935,14 +918,14 @@ def get_tr_from_volume(file_path: Path, default: float = 2.0) -> float:
 
 
 def run_command(
-        cmd_name: str,
-        cmd: List[str],
-        description: str,
-        inputs: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
-        outputs: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
-        overwrite: bool = False,
-        verbose: bool = True,
-        timing_category: str = "commands"
+    cmd_name: str,
+    cmd: list[str],
+    description: str,
+    inputs: Union[str, Path, list[Union[str, Path]]] | None = None,
+    outputs: Union[str, Path, list[Union[str, Path]]] | None = None,
+    overwrite: bool = False,
+    verbose: bool = True,
+    timing_category: str = "commands",
 ) -> None:
     """
     Run a shell command with error handling and logging
@@ -1007,7 +990,7 @@ def run_command(
     input_paths: list[Path] = []
     if inputs is not None:
         if verbose:
-            logger.info(f"Input files:")
+            logger.info("Input files:")
         for f in inputs:
             path = Path(f)
             if not path.exists():
@@ -1018,7 +1001,7 @@ def run_command(
     output_paths: list[Path] = []
     if outputs is not None:
         if verbose:
-            logger.info(f"Output files:")
+            logger.info("Output files:")
         for f in outputs:
             path = Path(f)
             (path if path.suffix == "" else path.parent).mkdir(parents=True, exist_ok=True)
@@ -1029,12 +1012,7 @@ def run_command(
     # Run command with timing
     with Timer(f"{cmd_name}: {description}", timing_category):
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
             # Log output
             if result.stdout and verbose:
@@ -1058,17 +1036,15 @@ def run_command(
 
     # Verify output files if specified
     if outputs is not None:
-        missing_files: List[Path] = []
+        missing_files: list[Path] = []
         for output_path in output_paths:
             if not output_path.exists():
                 missing_files.append(output_path)
         if len(missing_files) > 0:
-            error_msg = (
-                f"{description} completed but expected output file(s) not found:\n"
-                f"{missing_files}"
-            )
+            error_msg = f"{description} completed but expected output file(s) not found:\n{missing_files}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
+
 
 # Module-level helper for parallel_run_command (must be at module level for pickling)
 def _run_job_worker(job_spec: dict) -> dict:
@@ -1088,24 +1064,21 @@ def _run_job_worker(job_spec: dict) -> dict:
     """
     try:
         run_command(
-            cmd_name=job_spec.get('cmd_name'),
-            cmd=job_spec.get('cmd'),
-            description=job_spec.get('description'),
-            inputs=job_spec.get('inputs'),
-            outputs=job_spec.get('outputs'),
-            overwrite=job_spec.get('overwrite', False),
-            verbose=job_spec.get('verbose', True),
-            timing_category=job_spec.get('timing_category', 'parallel')
+            cmd_name=job_spec.get("cmd_name"),
+            cmd=job_spec.get("cmd"),
+            description=job_spec.get("description"),
+            inputs=job_spec.get("inputs"),
+            outputs=job_spec.get("outputs"),
+            overwrite=job_spec.get("overwrite", False),
+            verbose=job_spec.get("verbose", True),
+            timing_category=job_spec.get("timing_category", "parallel"),
         )
-        return {'success': True, 'description': job_spec.get('description')}
+        return {"success": True, "description": job_spec.get("description")}
     except Exception as e:
-        return {'success': False, 'description': job_spec.get('description'), 'error': str(e)}
+        return {"success": False, "description": job_spec.get("description"), "error": str(e)}
 
-def parallel_run_command(
-        jobs: List[dict],
-        n_jobs: int = -1,
-        timing_category: str = "parallel"
-) -> None:
+
+def parallel_run_command(jobs: list[dict], n_jobs: int = -1, timing_category: str = "parallel") -> None:
     """
     Run multiple commands in parallel using multiprocessing.
 
@@ -1158,16 +1131,15 @@ def parallel_run_command(
     jobs_with_category = []
     for job in jobs:
         job_copy = job.copy()
-        job_copy['timing_category'] = timing_category
+        job_copy["timing_category"] = timing_category
         jobs_with_category.append(job_copy)
 
     # Run jobs in parallel
-    with Timer(f"Parallel execution ({len(jobs)} jobs)", timing_category):
-        with mp.Pool(processes=n_workers) as pool:
-            results = pool.map(_run_job_worker, jobs_with_category)
+    with Timer(f"Parallel execution ({len(jobs)} jobs)", timing_category), mp.Pool(processes=n_workers) as pool:
+        results = pool.map(_run_job_worker, jobs_with_category)
 
     # Check for failures
-    failures = [r for r in results if not r['success']]
+    failures = [r for r in results if not r["success"]]
     if failures:
         error_msgs = [f"{r['description']}: {r['error']}" for r in failures]
         raise RuntimeError(f"Parallel execution failed for {len(failures)} jobs:\n" + "\n".join(error_msgs))
@@ -1183,12 +1155,12 @@ def parallel_run_command(
 
 
 def dicom_to_nifti(
-        dicom_dir: Union[str, Path],
-        output_dir: Union[str, Path],
-        output_name: str,
-        overwrite: bool = False,
-        verbose: bool = True,
-        compress: bool = True
+    dicom_dir: Union[str, Path],
+    output_dir: Union[str, Path],
+    output_name: str,
+    overwrite: bool = False,
+    verbose: bool = True,
+    compress: bool = True,
 ) -> Path:
     """
     Convert DICOM file(s) to NIfTI format using dcm2niix.
@@ -1227,8 +1199,8 @@ def dicom_to_nifti(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Compression flag: -z y for gzip, -z n for uncompressed
-    compress_flag = 'y' if compress else 'n'
-    ext = '.nii.gz' if compress else '.nii'
+    compress_flag = "y" if compress else "n"
+    ext = ".nii.gz" if compress else ".nii"
     nifti_path = output_dir / f"{output_name}{ext}"
 
     # Handle single file vs directory
@@ -1236,7 +1208,7 @@ def dicom_to_nifti(
     # all DICOMs in the same directory
     temp_dir = None
     if dicom_path.is_file():
-        temp_dir = tempfile.mkdtemp(prefix='dcm2niix_')
+        temp_dir = tempfile.mkdtemp(prefix="dcm2niix_")
         temp_dicom = Path(temp_dir) / dicom_path.name
         shutil.copy2(dicom_path, temp_dicom)
         conversion_path = Path(temp_dir)
@@ -1245,17 +1217,17 @@ def dicom_to_nifti(
 
     try:
         # Build command
-        cmd = ['dcm2niix'] + ['-z', compress_flag, '-o', str(output_dir), '-f', str(output_name), str(conversion_path)]
+        cmd = ["dcm2niix"] + ["-z", compress_flag, "-o", str(output_dir), "-f", str(output_name), str(conversion_path)]
 
         # Run dcm2niix
         run_command(
-            cmd_name='dcm2niix',
+            cmd_name="dcm2niix",
             cmd=cmd,
-            description='Converting DICOM to NIfTI',
+            description="Converting DICOM to NIfTI",
             inputs=dicom_path,
             outputs=nifti_path,
             overwrite=overwrite,
-            verbose=verbose
+            verbose=verbose,
         )
     finally:
         # Clean up temp directory if created
@@ -1264,9 +1236,8 @@ def dicom_to_nifti(
 
     return nifti_path
 
-def get_yeo_labels(
-        n_networks: int
-) -> List[str]:
+
+def get_yeo_labels(n_networks: int) -> list[str]:
     """
     Function to get the Yeo network labels.
 
@@ -1274,7 +1245,7 @@ def get_yeo_labels(
     ---------
     n_networks : int
         7 or 17 network parcellation
-    
+
     Returns
     -------
     labels : List of str
@@ -1289,20 +1260,34 @@ def get_yeo_labels(
 
     # Validate n_networks
     if n_networks != 7 and n_networks != 17:
-        raise ValueError(
-            f"Invalid number of networks: {n_networks}. "
-            f"Valid options are 7 or 17"
-        )
-    
+        raise ValueError(f"Invalid number of networks: {n_networks}. Valid options are 7 or 17")
+
     # Assign labels
     if n_networks == 7:
         labels = ["Vis", "SomMot", "DorsAttn", "SalVentAttn", "Limbic", "Cont", "Default"]
     else:
-        labels = ["VisCent", "VisPeri", "SomMotA", "SomMotB", "DorsAttnA", "DorsAttnB",
-        "SalVentAttnA", "SalVentAttnB", "LimbicA", "LimbicB", "ContC", "ContA", "ContB",
-        "TempPar", "DefaultC", "DefaultA", "DefaultB"]
+        labels = [
+            "VisCent",
+            "VisPeri",
+            "SomMotA",
+            "SomMotB",
+            "DorsAttnA",
+            "DorsAttnB",
+            "SalVentAttnA",
+            "SalVentAttnB",
+            "LimbicA",
+            "LimbicB",
+            "ContC",
+            "ContA",
+            "ContB",
+            "TempPar",
+            "DefaultC",
+            "DefaultA",
+            "DefaultB",
+        ]
 
     return labels
+
 
 # =============================================================================
 # SECTION 4: REGISTRATION AND TRANSFORMATION (ANTs-backed)
@@ -1317,11 +1302,8 @@ def get_yeo_labels(
 # nonlinear (SyN) registration. Using ANTsPy (Python bindings) avoids the
 # overhead of spawning subprocesses while maintaining identical results.
 
-def compute_mean(
-        input_file: Union[str, Path],
-        output_file: Union[str, Path],
-        overwrite: bool = False
-) -> None:
+
+def compute_mean(input_file: Union[str, Path], output_file: Union[str, Path], overwrite: bool = False) -> None:
     """
     Compute temporal mean of fMRI data using numpy.
 
@@ -1337,31 +1319,32 @@ def compute_mean(
 
     """
     output_path = Path(output_file)
-    
+
     # Check if output exists
     if not overwrite and output_path.exists():
-        logger.info(f"Output file exists and overwrite=False. Skipping compute mean.")
+        logger.info("Output file exists and overwrite=False. Skipping compute mean.")
         return
-    
+
     logger.info("Computing mean...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Load 4D image and compute mean along time axis
     img = nib.load(str(input_file))
     data = img.get_fdata()
     mean_data = data.mean(axis=-1)
-    
+
     # Save output
     out_img = Nifti1Image(mean_data, img.affine, img.header)
     save(out_img, output_path)
-    logger.info(f"Output: {output_path}") 
+    logger.info(f"Output: {output_path}")
+
 
 def compute_xfm(
-        moving: Union[str, Path],
-        fixed: Union[str, Path],
-        output_prefix: Union[str, Path],
-        type_of_transform: str = 'Rigid',
-        overwrite: bool = False
+    moving: Union[str, Path],
+    fixed: Union[str, Path],
+    output_prefix: Union[str, Path],
+    type_of_transform: str = "Rigid",
+    overwrite: bool = False,
 ) -> tuple[Path, list[str]]:
     """
     Compute a transformation using ANTsPy registration.
@@ -1410,18 +1393,15 @@ def compute_xfm(
         moving_img = ants.image_read(str(moving))
 
         registration = ants.registration(
-            fixed=fixed_img,
-            moving=moving_img,
-            type_of_transform=type_of_transform,
-            verbose=False
+            fixed=fixed_img, moving=moving_img, type_of_transform=type_of_transform, verbose=False
         )
 
-        ants.image_write(registration['warpedmovout'], str(output_file))
+        ants.image_write(registration["warpedmovout"], str(output_file))
         logger.info(f"Output: {output_file}")
 
         # Copy transform files to output directory
         transform_files: list[str] = []
-        for i, xfm in enumerate(registration['fwdtransforms']):
+        for i, xfm in enumerate(registration["fwdtransforms"]):
             suffix = Path(xfm).suffix
             new_path = xfm_dir / f"{Path(output_prefix).stem}_{i}{suffix}"
             shutil.copy(xfm, new_path)
@@ -1430,14 +1410,15 @@ def compute_xfm(
 
     return output_file, transform_files
 
+
 def apply_xfm(
-        moving: Union[str, Path],
-        fixed: Union[str, Path],
-        transform_files: Union[str, Path, list[str], tuple[str, ...]],
-        output_file: Union[str, Path],
-        interpolator: str = 'nearestNeighbor',
-        invert: bool = False,
-        overwrite: bool = False
+    moving: Union[str, Path],
+    fixed: Union[str, Path],
+    transform_files: Union[str, Path, list[str], tuple[str, ...]],
+    output_file: Union[str, Path],
+    interpolator: str = "nearestNeighbor",
+    invert: bool = False,
+    overwrite: bool = False,
 ) -> None:
     """
     Apply a transformation using ANTsPy.
@@ -1467,7 +1448,7 @@ def apply_xfm(
         logger.info("Output file exists and overwrite=False. Skipping apply transform.")
         return
 
-    valid_interps = {'nearestNeighbor', 'linear', 'bSpline', 'lanczosWindowedSinc'}
+    valid_interps = {"nearestNeighbor", "linear", "bSpline", "lanczosWindowedSinc"}
     if interpolator not in valid_interps:
         raise ValueError(f"Invalid interpolator: {interpolator}. Valid: {', '.join(sorted(valid_interps))}")
 
@@ -1494,17 +1475,18 @@ def apply_xfm(
         transformlist=transform_list,
         interpolator=interpolator,
         imagetype=imagetype,
-        whichtoinvert=whichtoinvert
+        whichtoinvert=whichtoinvert,
     )
 
     ants.image_write(transformed, str(output_path))
     logger.info(f"Output: {output_path}")
 
+
 def apply_xfm_sform_to_mni(
-        input_file: Union[str, Path],
-        output_file: Union[str, Path],
-        interp: str = 'nearestneighbour',
-        overwrite: bool = False
+    input_file: Union[str, Path],
+    output_file: Union[str, Path],
+    interp: str = "nearestneighbour",
+    overwrite: bool = False,
 ) -> None:
     """
     Resample image to MNI space using sform/qform matrices from NIfTI headers.
@@ -1537,44 +1519,36 @@ def apply_xfm_sform_to_mni(
 
     # Map FSL interpolation names to nilearn equivalents
     interp_map = {
-        'nearestneighbour': 'nearest',
-        'nn': 'nearest',
-        'trilinear': 'linear',
-        'sinc': 'linear',
-        'spline': 'linear',
+        "nearestneighbour": "nearest",
+        "nn": "nearest",
+        "trilinear": "linear",
+        "sinc": "linear",
+        "spline": "linear",
     }
     nilearn_interp = interp_map.get(interp)
     if nilearn_interp is None:
-        raise ValueError(
-            f"Invalid interpolation: {interp}. "
-            f"Valid options are: {', '.join(interp_map.keys())}"
-        )
+        raise ValueError(f"Invalid interpolation: {interp}. Valid options are: {', '.join(interp_map.keys())}")
 
     # Load MNI152 BOLD reference template from templateflow
-    epi_tpl_path = cast(Path, tflow.get(
-        "MNI152NLin2009cAsym",
-        resolution=2,
-        desc="fMRIPrep",
-        suffix="boldref"
-    ))  # type: ignore
+    epi_tpl_path = cast(Path, tflow.get("MNI152NLin2009cAsym", resolution=2, desc="fMRIPrep", suffix="boldref"))  # type: ignore
 
     logger.info(f"Resampling to MNI space: {Path(input_file).name}")
     source_img = nib.load(str(input_file))
     target_img = nib.load(str(epi_tpl_path))
 
     resampled = resample_to_img(
-        source_img, target_img, interpolation=nilearn_interp,
-        force_resample=True, copy_header=True
+        source_img, target_img, interpolation=nilearn_interp, force_resample=True, copy_header=True
     )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     nib.save(resampled, str(output_file))
 
+
 def compute_xfm_to_mni(
-        input_file: Union[str, Path],
-        output_prefix: Union[str, Path],
-        type_of_transform: str = 'SyN',
-        overwrite: bool = False
+    input_file: Union[str, Path],
+    output_prefix: Union[str, Path],
+    type_of_transform: str = "SyN",
+    overwrite: bool = False,
 ) -> tuple[Path, list[str], list[str]]:
     """
     Compute transformation to MNI space using ANTs.
@@ -1621,12 +1595,7 @@ def compute_xfm_to_mni(
         return sub2mni_file, [str(p) for p in existing_fwd], [str(p) for p in existing_inv]
 
     # Load MNI152 BOLD reference template from templateflow
-    epi_tpl_path = cast(Path, tflow.get(
-        "MNI152NLin2009cAsym",
-        resolution=2,
-        desc="fMRIPrep",
-        suffix="boldref"
-    ))  # type: ignore
+    epi_tpl_path = cast(Path, tflow.get("MNI152NLin2009cAsym", resolution=2, desc="fMRIPrep", suffix="boldref"))  # type: ignore
 
     logger.info(f"Computing MNI transformation (ANTs {type_of_transform})...")
     logger.info(f"Input: {input_file}")
@@ -1637,20 +1606,17 @@ def compute_xfm_to_mni(
         moving_img = ants.image_read(str(input_file))
 
         registration = ants.registration(
-            fixed=fixed_img,
-            moving=moving_img,
-            type_of_transform=type_of_transform,
-            verbose=False
+            fixed=fixed_img, moving=moving_img, type_of_transform=type_of_transform, verbose=False
         )
 
-        ants.image_write(registration['warpedmovout'], str(sub2mni_file))
+        ants.image_write(registration["warpedmovout"], str(sub2mni_file))
         logger.info(f"Output: {sub2mni_file}")
 
         # Copy forward transform files (subject → MNI)
         fwd_transform_files: list[str] = []
-        for i, xfm in enumerate(registration['fwdtransforms']):
+        for i, xfm in enumerate(registration["fwdtransforms"]):
             # Handle .nii.gz (two suffixes) vs .mat (one suffix)
-            suffixes = ''.join(Path(xfm).suffixes)
+            suffixes = "".join(Path(xfm).suffixes)
             new_path = sub2mni_dir / f"{prefix_stem}_fwd_{i}{suffixes}"
             shutil.copy(xfm, new_path)
             fwd_transform_files.append(str(new_path))
@@ -1658,9 +1624,9 @@ def compute_xfm_to_mni(
 
         # Copy inverse transform files (MNI → subject)
         inv_transform_files: list[str] = []
-        for i, xfm in enumerate(registration['invtransforms']):
+        for i, xfm in enumerate(registration["invtransforms"]):
             # Handle .nii.gz (two suffixes) vs .mat (one suffix)
-            suffixes = ''.join(Path(xfm).suffixes)
+            suffixes = "".join(Path(xfm).suffixes)
             new_path = sub2mni_dir / f"{prefix_stem}_inv_{i}{suffixes}"
             shutil.copy(xfm, new_path)
             inv_transform_files.append(str(new_path))
@@ -1668,11 +1634,9 @@ def compute_xfm_to_mni(
 
     return sub2mni_file, fwd_transform_files, inv_transform_files
 
+
 def apply_mask(
-        input_file: Union[str, Path],
-        mask_file: Union[str, Path],
-        output_file: Union[str, Path],
-        overwrite: bool = False
+    input_file: Union[str, Path], mask_file: Union[str, Path], output_file: Union[str, Path], overwrite: bool = False
 ) -> None:
     """
     Apply a binary mask to a NIfTI image using numpy.
@@ -1691,19 +1655,19 @@ def apply_mask(
 
     """
     output_path = Path(output_file)
-    
+
     # Check if output exists
     if not overwrite and output_path.exists():
-        logger.info(f"Output file exists and overwrite=False. Skipping apply_mask.")
+        logger.info("Output file exists and overwrite=False. Skipping apply_mask.")
         return
-    
+
     logger.info("Applying mask...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Load images
     img = nib.load(str(input_file))
     mask = nib.load(str(mask_file))
-    
+
     # Get data
     data = img.get_fdata()
     mask_data = mask.get_fdata()
@@ -1711,27 +1675,21 @@ def apply_mask(
     # Align mask for broadcasting onto the data (e.g., 3D mask over 4D time series)
     if mask_data.shape == data.shape:
         mask_aligned = mask_data
-    elif mask_data.ndim == data.ndim - 1 and data.shape[:mask_data.ndim] == mask_data.shape:
+    elif mask_data.ndim == data.ndim - 1 and data.shape[: mask_data.ndim] == mask_data.shape:
         mask_aligned = mask_data[..., np.newaxis]
     else:
-        raise ValueError(
-            f"Mask shape {mask_data.shape} is incompatible with data shape {data.shape}"
-        )
-    
+        raise ValueError(f"Mask shape {mask_data.shape} is incompatible with data shape {data.shape}")
+
     # Apply mask (multiply)
     masked = data * (mask_aligned > 0).astype(data.dtype)
-    
+
     # Save output
     out_img = Nifti1Image(masked, img.affine, img.header)
     save(out_img, output_path)
     logger.info(f"Output: {output_path}")
 
 
-def erode_mask(
-    input_file: Union[str, Path],
-    output_file: Union[str, Path],
-    overwrite: bool = False
-) -> Path:
+def erode_mask(input_file: Union[str, Path], output_file: Union[str, Path], overwrite: bool = False) -> Path:
     """Apply binary erosion (2 voxels) to a mask.
 
     Uses 6-connected structuring element (face neighbors only) for conservative
@@ -1855,7 +1813,7 @@ def parse_murfi_design(
         raise FileNotFoundError(f"MURFI design file not found: {design_path}")
 
     # Read all lines
-    with open(design_path, 'r') as f:
+    with open(design_path) as f:
         lines = f.readlines()
 
     if not lines:
@@ -1863,29 +1821,26 @@ def parse_murfi_design(
 
     # Parse header (first line starting with #)
     header_line = lines[0].strip()
-    if not header_line.startswith('#'):
-        raise ValueError(
-            f"MURFI design file must start with header comment: {design_path}"
-        )
+    if not header_line.startswith("#"):
+        raise ValueError(f"MURFI design file must start with header comment: {design_path}")
 
     # Extract column names from header
     # Format: "# ColName(contrast) ColName(contrast) ..."
     header_content = header_line[1:].strip()  # Remove leading #
     # Split on whitespace but preserve column names with parentheses
     import re
-    column_pattern = re.compile(r'(\S+\(\d+\))')
+
+    column_pattern = re.compile(r"(\S+\(\d+\))")
     column_matches = column_pattern.findall(header_content)
 
     if not column_matches:
-        raise ValueError(
-            f"Could not parse column names from header: {header_line}"
-        )
+        raise ValueError(f"Could not parse column names from header: {header_line}")
 
     # Extract base column names (without the contrast suffix)
     column_names = []
     for col in column_matches:
         # Extract name before parentheses
-        base_name = col.split('(')[0]
+        base_name = col.split("(")[0]
         column_names.append(base_name)
 
     logger.debug(f"MURFI design columns: {column_names}")
@@ -1894,15 +1849,13 @@ def parse_murfi_design(
     data_rows = []
     for i, line in enumerate(lines[1:], start=2):
         line = line.strip()
-        if not line or line.startswith('#'):
+        if not line or line.startswith("#"):
             continue
         try:
             values = [float(v) for v in line.split()]
             data_rows.append(values)
         except ValueError as e:
-            raise ValueError(
-                f"Invalid numeric data at line {i}: {line}"
-            ) from e
+            raise ValueError(f"Invalid numeric data at line {i}: {line}") from e
 
     if not data_rows:
         raise ValueError(f"No data rows found in MURFI design file: {design_path}")
@@ -1913,15 +1866,18 @@ def parse_murfi_design(
     n_cols = data.shape[1]
 
     if n_cols != len(column_names):
-        raise ValueError(
-            f"Column count mismatch: header has {len(column_names)} columns, "
-            f"data has {n_cols} columns"
-        )
+        raise ValueError(f"Column count mismatch: header has {len(column_names)} columns, data has {n_cols} columns")
 
     # Identify column indices
-    motion_cols = ['motion_diff_tx', 'motion_diff_ty', 'motion_diff_tz',
-                   'motion_diff_rx', 'motion_diff_ry', 'motion_diff_rz']
-    nuisance_cols = ['trend_order_0', 'trend_order_1'] + motion_cols
+    motion_cols = [
+        "motion_diff_tx",
+        "motion_diff_ty",
+        "motion_diff_tz",
+        "motion_diff_rx",
+        "motion_diff_ry",
+        "motion_diff_rz",
+    ]
+    nuisance_cols = ["trend_order_0", "trend_order_1"] + motion_cols
 
     # Find motion parameter columns
     motion_indices = []
@@ -1932,15 +1888,15 @@ def parse_murfi_design(
             raise ValueError(f"Required motion column '{mcol}' not found in design")
 
     # Find intercept and drift columns
-    if 'trend_order_0' in column_names:
-        intercept_idx = column_names.index('trend_order_0')
+    if "trend_order_0" in column_names:
+        intercept_idx = column_names.index("trend_order_0")
         intercept = data[:, intercept_idx]
     else:
         logger.warning("No trend_order_0 (intercept) column found, using ones")
         intercept = np.ones(n_volumes, dtype=np.float64)
 
-    if 'trend_order_1' in column_names:
-        drift_idx = column_names.index('trend_order_1')
+    if "trend_order_1" in column_names:
+        drift_idx = column_names.index("trend_order_1")
         drift = data[:, drift_idx]
     else:
         logger.warning("No trend_order_1 (drift) column found, using 1:n_volumes")
@@ -1963,16 +1919,13 @@ def parse_murfi_design(
         task_regressors = np.empty((n_volumes, 0), dtype=np.float64)
         logger.info("No task regressors found (nuisance-only design)")
 
-    logger.info(
-        f"Parsed MURFI design: {n_volumes} volumes, "
-        f"{len(task_indices)} task regressor(s), 6 motion parameters"
-    )
+    logger.info(f"Parsed MURFI design: {n_volumes} volumes, {len(task_indices)} task regressor(s), 6 motion parameters")
 
     return {
-        'task_regressors': task_regressors,
-        'motion_diff': motion_diff,
-        'intercept': intercept,
-        'drift': drift,
-        'column_names': column_names,
-        'n_volumes': n_volumes,
+        "task_regressors": task_regressors,
+        "motion_diff": motion_diff,
+        "intercept": intercept,
+        "drift": drift,
+        "column_names": column_names,
+        "n_volumes": n_volumes,
     }

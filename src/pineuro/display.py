@@ -21,7 +21,7 @@ Examples
 
 import logging
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class MonitorInfo:
     is_primary: bool
 
 
-def get_monitors() -> List[MonitorInfo]:
+def get_monitors() -> list[MonitorInfo]:
     """Get all monitors sorted by x position (left-to-right).
 
     Returns
@@ -103,9 +103,7 @@ def get_monitors() -> List[MonitorInfo]:
         return []
 
 
-def get_monitor_by_position(
-    position: Literal["left", "right"]
-) -> Optional[MonitorInfo]:
+def get_monitor_by_position(position: Literal["left", "right"]) -> MonitorInfo | None:
     """Get monitor by position label.
 
     Parameters
@@ -139,7 +137,7 @@ def get_monitor_by_position(
         return monitors[0]
 
 
-def get_monitor_by_index(index: int) -> Optional[MonitorInfo]:
+def get_monitor_by_index(index: int) -> MonitorInfo | None:
     """Get monitor by index with fallback.
 
     Parameters
@@ -160,10 +158,7 @@ def get_monitor_by_index(index: int) -> Optional[MonitorInfo]:
         return None
 
     if index < 0 or index >= len(monitors):
-        logger.warning(
-            f"Monitor index {index} out of range (0-{len(monitors)-1}), "
-            f"using monitor 0"
-        )
+        logger.warning(f"Monitor index {index} out of range (0-{len(monitors) - 1}), using monitor 0")
         return monitors[0]
 
     return monitors[index]

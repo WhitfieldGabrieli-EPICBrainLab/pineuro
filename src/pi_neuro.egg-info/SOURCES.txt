@@ -8,6 +8,7 @@ src/pi_neuro.egg-info/entry_points.txt
 src/pi_neuro.egg-info/requires.txt
 src/pi_neuro.egg-info/top_level.txt
 src/pineuro/__init__.py
+src/pineuro/atlas_registry.py
 src/pineuro/config.py
 src/pineuro/display.py
 src/pineuro/feedback.py
@@ -50,6 +51,7 @@ src/pineuro/tasks/fixation.py
 src/pineuro/tasks/localizer_base.py
 src/pineuro/tasks/self_other.py
 src/pineuro/tasks/session.py
+src/pineuro/tasks/task_base.py
 src/pineuro/tasks/task_registry.py
 src/pineuro/tasks/thermometer.py
 src/pineuro/tasks/ui_helpers.py

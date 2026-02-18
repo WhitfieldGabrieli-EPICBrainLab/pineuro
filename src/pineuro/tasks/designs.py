@@ -19,7 +19,6 @@ Examples
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -203,7 +202,7 @@ class EventRelatedDesign(TaskDesign):
     def __init__(
         self,
         event_onsets: dict[str, list[float]],
-        event_durations: Optional[dict[str, float]] = None,
+        event_durations: dict[str, float] | None = None,
     ):
         self.event_onsets = event_onsets
         self.event_durations = event_durations or {}
@@ -265,7 +264,7 @@ class EventRelatedDesign(TaskDesign):
                         stim[start_vol] = 1.0
 
             # Convolve with HRF
-            convolved = np.convolve(stim, hrf, mode='full')[:n_volumes]
+            convolved = np.convolve(stim, hrf, mode="full")[:n_volumes]
 
             # Normalize
             if np.max(np.abs(convolved)) > 0:
@@ -285,5 +284,5 @@ class EventRelatedDesign(TaskDesign):
         return self._condition_names.copy()
 
     def __repr__(self) -> str:
-        conditions = ', '.join(self._condition_names)
+        conditions = ", ".join(self._condition_names)
         return f"EventRelatedDesign(conditions=[{conditions}])"

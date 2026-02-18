@@ -27,8 +27,8 @@ in per-frame update loops.
 """
 
 # Standard library imports
-from collections import deque
 import logging
+from collections import deque
 
 # Third-party imports
 import numpy as np
@@ -102,18 +102,11 @@ class ActivationNormalizer:
     >>> norm_val = normalizer.update(0.5)  # Returns ~0.5 after warmup
     """
 
-    def __init__(
-        self,
-        window_size: int = 50,
-        lower_percentile: float = 10,
-        upper_percentile: float = 90
-    ):
+    def __init__(self, window_size: int = 50, lower_percentile: float = 10, upper_percentile: float = 90):
         if window_size < 2:
             raise ValueError("window_size must be at least 2")
         if not 0 <= lower_percentile < upper_percentile <= 100:
-            raise ValueError(
-                "percentiles must satisfy: 0 <= lower < upper <= 100"
-            )
+            raise ValueError("percentiles must satisfy: 0 <= lower < upper <= 100")
 
         self.window = deque(maxlen=window_size)
         self.lower_percentile = lower_percentile

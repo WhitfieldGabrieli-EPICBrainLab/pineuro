@@ -57,7 +57,6 @@ pineuro.session : SessionConfig class for pipeline configuration
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -70,6 +69,7 @@ class StudyMetadata:
         created: Creation timestamp
         modified: Last modification timestamp
     """
+
     name: str
     description: str = ""
     created: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -110,9 +110,10 @@ class StudyConfig:
         session_config: The actual pipeline configuration (from pineuro.session)
         file_path: Path to the YAML file (None if not yet saved)
     """
+
     metadata: StudyMetadata
     session_config: dict  # Will contain SessionConfig as dict
-    file_path: Optional[Path] = None
+    file_path: Path | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for YAML serialization."""
@@ -122,7 +123,7 @@ class StudyConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: dict, file_path: Optional[Path] = None) -> "StudyConfig":
+    def from_dict(cls, data: dict, file_path: Path | None = None) -> "StudyConfig":
         """Create from dictionary loaded from YAML."""
         metadata_dict = data.pop("_metadata", {})
         metadata = StudyMetadata.from_dict(metadata_dict)

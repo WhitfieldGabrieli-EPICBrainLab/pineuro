@@ -7,12 +7,12 @@ This dialog allows users to:
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 import flet as ft
 
-from pineuro.session import detect_existing_visits, next_visit_id, VisitConfig
+from pineuro.session import VisitConfig, detect_existing_visits, next_visit_id
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class VisitSelectionDialog:
         page: ft.Page,
         participant_id: str,
         base_dir: Path,
-        on_select: Callable[[Optional[str], Optional[VisitConfig]], None],
+        on_select: Callable[[str | None, VisitConfig | None], None],
     ):
         """Initialize the visit selection dialog.
 
@@ -43,7 +43,7 @@ class VisitSelectionDialog:
         self.base_dir = Path(base_dir)
         self.on_select = on_select
         self.existing_visits = detect_existing_visits(self.base_dir, participant_id)
-        self.dialog: Optional[ft.AlertDialog] = None
+        self.dialog: ft.AlertDialog | None = None
 
     def show(self):
         """Show the visit selection dialog."""
@@ -332,9 +332,7 @@ class VisitSelectionDialog:
                 mask_source_visit = None
 
             # Determine visit number
-            existing_multi = [
-                v for v in self.existing_visits if v["visit_id"] is not None
-            ]
+            existing_multi = [v for v in self.existing_visits if v["visit_id"] is not None]
             visit_number = len(existing_multi) + 1
 
             visit_config = VisitConfig(
@@ -346,8 +344,7 @@ class VisitSelectionDialog:
             )
 
             logger.info(
-                f"Creating new visit: {new_visit_id}, "
-                f"mask_source={mask_source}, source_visit={mask_source_visit}"
+                f"Creating new visit: {new_visit_id}, mask_source={mask_source}, source_visit={mask_source_visit}"
             )
 
             self.on_select(new_visit_id, visit_config)

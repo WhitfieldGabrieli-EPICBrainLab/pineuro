@@ -18,37 +18,42 @@ Status is automatically detected based on output file existence, allowing sessio
 to be resumed after interruption.
 """
 
+import contextlib
 import logging
 from datetime import datetime
-from pathlib import Path
-from typing import Optional, Dict, List
 from enum import Enum
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from pineuro.session import VisitConfig
 
 import flet as ft
 
+from pineuro.feedback import STEP_TO_RUN_NUMBER, get_slot_run_info
+from pineuro.session import get_localizer_run_info
+from pineuro.sham import get_condition_for_participant, load_randomization
+from pineuro.tasks.session import SessionState
+
+from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, scan_collection_acqs
+from ..components.activation_plot import ActivationPlot
+from ..components.collection_progress import CollectionProgressPanel
+from ..components.csv_poller import FeedbackMonitor
+from ..components.fd_plot import DVARSPlot, FDPlot
+from ..components.mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
+from ..components.pipeline_runner import PipelineRunner
+from ..components.qc_viewer import QCReportManager
+from ..components.run_selection_dialog import RunInfo, RunSelectionDialog
+from ..components.task_mirror import TaskMirror
 from ..config_manager import ConfigManager
 from ..models import StudyConfig
-from ..components.pipeline_runner import PipelineRunner
-from ..components.activation_plot import ActivationPlot
-from ..components.fd_plot import FDPlot, DVARSPlot
-from ..components.task_mirror import TaskMirror
-from ..components.csv_poller import FeedbackMonitor
-from ..components.qc_viewer import QCReportManager
-from ..components.collection_progress import CollectionProgressPanel
-from ..components.run_selection_dialog import RunSelectionDialog, RunInfo
-from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, scan_collection_acqs
-from ..components.mask_selection_dialog import MaskSelectionDialog, MaskReviewInfo
-from pineuro.feedback import get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
-from pineuro.session import get_localizer_run_info
-from pineuro.tasks.session import SessionState
-from pineuro.utils import get_dicom_files
-from pineuro.sham import load_randomization, get_condition_for_participant
 
 logger = logging.getLogger(__name__)
 
 
 class StepStatus(Enum):
     """Status of a pipeline step."""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETE = "complete"
@@ -65,7 +70,7 @@ class ParticipantWorkflowScreen:
         config_manager: ConfigManager,
         study_config: StudyConfig,
         participant_id: str,
-        visit_id: Optional[str] = None,
+        visit_id: str | None = None,
         visit_config: Optional["VisitConfig"] = None,
         on_back=None,
     ):
@@ -90,6 +95,7 @@ class ParticipantWorkflowScreen:
         # Create participant-specific base directory
         # Make a deep copy of study config to avoid mutating the original
         import copy
+
         self.study_config = copy.deepcopy(study_config)
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
 
@@ -131,59 +137,61 @@ class ParticipantWorkflowScreen:
 
             # Persist visit config to file
             import json
+
             with open(visit_config_file, "w") as f:
                 json.dump(visit_config_dict, f, indent=2)
 
         elif visit_config_file.exists():
             # Load existing visit config from file (continuing existing visit)
             import json
-            with open(visit_config_file, "r") as f:
+
+            with open(visit_config_file) as f:
                 visit_config_dict = json.load(f)
             self.study_config.session_config["visit"] = visit_config_dict
 
-        visit_str = f" ({visit_id})" if visit_id else ""
+        _visit_str = f" ({visit_id})" if visit_id else ""
 
         # Mask approval state (must be initialized before _detect_completed_steps)
         self._initial_qc_approved = self._check_qc_approval("initial")
 
         # Initialize step statuses
-        self.step_statuses: Dict[str, StepStatus] = {}
+        self.step_statuses: dict[str, StepStatus] = {}
         self._detect_completed_steps()
 
         # Current active panel (preview or monitoring)
-        self.active_panel: Optional[ft.Control] = None
+        self.active_panel: ft.Control | None = None
 
         # Run Next button (will be created in build)
-        self.run_next_button: Optional[ft.FilledButton] = None
+        self.run_next_button: ft.FilledButton | None = None
 
         # Right panel container (for dynamic content updates)
-        self.right_panel_container: Optional[ft.Container] = None
+        self.right_panel_container: ft.Container | None = None
 
         # Left panel container (for step list updates)
-        self.left_panel_container: Optional[ft.Container] = None
-        self.step_panel_list: Optional[ft.ExpansionPanelList] = None
+        self.left_panel_container: ft.Container | None = None
+        self.step_panel_list: ft.ExpansionPanelList | None = None
 
         # Pipeline runner for background execution
-        self.pipeline_runner: Optional[PipelineRunner] = None
+        self.pipeline_runner: PipelineRunner | None = None
 
         # Log messages (for log console)
-        self.log_messages: List[str] = []
-        self.log_listview: Optional[ft.ListView] = None  # For auto-scroll
-        self.log_console_container: Optional[ft.Container] = None  # For resizing
+        self.log_messages: list[str] = []
+        self.log_listview: ft.ListView | None = None  # For auto-scroll
+        self.log_console_container: ft.Container | None = None  # For resizing
         self.log_console_height: float = 150  # Initial height
         self._dragging: bool = False  # Track if currently dragging
         self._drag_start_y: float = 0  # Starting Y position of drag
         self._is_running: bool = False  # Track if a pipeline step is running
-        self._current_step_id: Optional[str] = None  # Track current running step
+        self._current_step_id: str | None = None  # Track current running step
 
         # File logging for export functionality
-        self._log_file_handler: Optional[logging.FileHandler] = None
+        self._log_file_handler: logging.FileHandler | None = None
 
         # Cache mask reuse mode flag for easy access
         visit_config = self.study_config.session_config.get("visit", {})
         self._is_mask_reuse_mode = visit_config.get("mask_source") == "reuse"
         self._mask_source_visit = visit_config.get("mask_source_visit")
-        self._log_file_path: Optional[Path] = None
+        self._log_file_path: Path | None = None
         self._setup_file_logging()
 
         # QC report manager for detecting and opening reports
@@ -193,9 +201,9 @@ class ParticipantWorkflowScreen:
         )
 
         # Selected rest runs for preprocessing (None = use all available)
-        self._selected_rest_runs: Optional[List[int]] = None
+        self._selected_rest_runs: list[int] | None = None
         # Selected acquisitions per run for preprocessing (None = auto-select best)
-        self._selected_acqs: Optional[Dict[int, int]] = None
+        self._selected_acqs: dict[int, int] | None = None
 
     def _check_qc_approval(self, approval_type: str) -> bool:
         """Check if masks have been approved.
@@ -246,17 +254,16 @@ class ParticipantWorkflowScreen:
         if not selections:
             return False
 
-        return any(
-            sel.selection_reason in ("manual", "yeo_fallback")
-            for sel in selections.values()
-        )
+        return any(sel.selection_reason in ("manual", "yeo_fallback") for sel in selections.values())
 
     def _show_mask_review_dialog(self):
         """Show the mask review/selection dialog."""
         from glob import glob
+
         import pandas as pd
-        from pineuro.mask_extraction import load_mask_selections, get_alternative_components
+
         from pineuro import qc
+        from pineuro.mask_extraction import get_alternative_components, load_mask_selections
 
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
         mask_extraction_dir = base_dir / "mask_extraction"
@@ -303,8 +310,7 @@ class ParticipantWorkflowScreen:
             corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
         if not corr_file.exists():
             _snack = ft.SnackBar(
-                ft.Text("Correlation matrix not found. Run mask extraction first."),
-                bgcolor=ft.Colors.ORANGE
+                ft.Text("Correlation matrix not found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -320,8 +326,7 @@ class ParticipantWorkflowScreen:
         components_files = sorted(glob(str(ica_dir / "*_components.nii.gz")))
         if not components_files:
             _snack = ft.SnackBar(
-                ft.Text("ICA components not found. Run mask extraction first."),
-                bgcolor=ft.Colors.ORANGE
+                ft.Text("ICA components not found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -331,10 +336,7 @@ class ParticipantWorkflowScreen:
 
         yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
         if not yeo2sub_files:
-            _snack = ft.SnackBar(
-                ft.Text("Yeo atlas in subject space not found."),
-                bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("Yeo atlas in subject space not found."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -412,10 +414,7 @@ class ParticipantWorkflowScreen:
             self._add_log("[SUCCESS] Masks reviewed and approved")
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(
-                ft.Text("Masks approved! You can now run coregistration."),
-                bgcolor=ft.Colors.GREEN
-            )
+            _snack = ft.SnackBar(ft.Text("Masks approved! You can now run coregistration."), bgcolor=ft.Colors.GREEN)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -469,6 +468,7 @@ class ParticipantWorkflowScreen:
         reviews the thresholded GLM contrast masks and approves or rejects.
         """
         import base64
+
         from pineuro.gui.components.qc_viewer import open_qc_report
 
         # Cluster method uses 03_masks/; top_n uses 02_masks/
@@ -483,10 +483,7 @@ class ParticipantWorkflowScreen:
             if alt.exists():
                 masks_dir = alt
         if not masks_dir.exists():
-            _snack = ft.SnackBar(
-                ft.Text("Task masks not found. Run mask extraction first."),
-                bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("Task masks not found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -495,8 +492,7 @@ class ParticipantWorkflowScreen:
         mask_files = sorted(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
         if not mask_files:
             _snack = ft.SnackBar(
-                ft.Text("No thresholded masks found. Run mask extraction first."),
-                bgcolor=ft.Colors.ORANGE
+                ft.Text("No thresholded masks found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -518,6 +514,7 @@ class ParticipantWorkflowScreen:
 
         # Load mask info from selections JSON
         import json
+
         selections_data = {}
         selections_file = masks_dir / "mask_selections.json"
         if selections_file.exists():
@@ -553,15 +550,21 @@ class ParticipantWorkflowScreen:
             overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
             if not overlay_path.exists() and ref_file.exists() and mask_file.exists():
                 try:
-                    from pineuro.qc import select_slices_from_atlas, plot_mask_overlay_tripanel, summarize_mask
+                    from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas, summarize_mask
+
                     summary = summarize_mask(mask_file, name=mask_name)
                     atlas_slices = select_slices_from_atlas(
-                        atlas_path=ref_file, labels=[], target_label="",
-                        top_n_per_plane=1, mask_path=mask_file,
+                        atlas_path=ref_file,
+                        labels=[],
+                        target_label="",
+                        top_n_per_plane=1,
+                        mask_path=mask_file,
                     )
                     plot_mask_overlay_tripanel(
-                        mask_path=mask_file, ref_path=ref_file,
-                        out_path=overlay_path, slices=atlas_slices,
+                        mask_path=mask_file,
+                        ref_path=ref_file,
+                        out_path=overlay_path,
+                        slices=atlas_slices,
                         title=f"{mask_name}: {sel.get('contrast_definition', '')} ({summary.voxels} voxels)",
                     )
                 except Exception as ex:
@@ -621,10 +624,7 @@ class ParticipantWorkflowScreen:
             self.page.update()
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(
-                ft.Text("Masks approved! You can now run coregistration."),
-                bgcolor=ft.Colors.GREEN
-            )
+            _snack = ft.SnackBar(ft.Text("Masks approved! You can now run coregistration."), bgcolor=ft.Colors.GREEN)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -649,6 +649,7 @@ class ParticipantWorkflowScreen:
 
             # Generate atlas overlay on demand
             from pineuro.qc import generate_atlas_region_overlay
+
             atlas_overlay_png = generate_atlas_region_overlay(
                 atlas_subject_path=atlas_subject_file,
                 ref_path=ref_file,
@@ -667,6 +668,7 @@ class ParticipantWorkflowScreen:
             def on_use_atlas(e):
                 """Replace cluster mask with the full atlas region mask."""
                 import shutil as _shutil
+
                 _close_dialog(stage2_dialog)
 
                 for mask_file in mask_files:
@@ -677,10 +679,7 @@ class ParticipantWorkflowScreen:
                 self._add_log("[SUCCESS] Using atlas region mask — approved")
                 self._refresh_step_list()
                 self._update_run_next_button()
-                _snack = ft.SnackBar(
-                    ft.Text("Atlas mask applied and approved."),
-                    bgcolor=ft.Colors.GREEN
-                )
+                _snack = ft.SnackBar(ft.Text("Atlas mask applied and approved."), bgcolor=ft.Colors.GREEN)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -784,20 +783,14 @@ class ParticipantWorkflowScreen:
             if qc_report and qc_report.exists():
                 open_qc_report(qc_report)
             else:
-                _snack = ft.SnackBar(
-                    ft.Text("QC report not found."),
-                    bgcolor=ft.Colors.ORANGE
-                )
+                _snack = ft.SnackBar(ft.Text("QC report not found."), bgcolor=ft.Colors.ORANGE)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
 
         def on_view_in_browser(e):
             if not ref_file.exists():
-                _snack = ft.SnackBar(
-                    ft.Text("BOLD reference file not found."),
-                    bgcolor=ft.Colors.RED
-                )
+                _snack = ft.SnackBar(ft.Text("BOLD reference file not found."), bgcolor=ft.Colors.RED)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -816,10 +809,7 @@ class ParticipantWorkflowScreen:
                 self._add_log(f"[INFO] Opened mask viewer in browser with {len(mask_files)} masks")
             except Exception as ex:
                 logger.error(f"Failed to open mask viewer: {ex}")
-                _snack = ft.SnackBar(
-                    ft.Text(f"Failed to open mask viewer: {ex}"),
-                    bgcolor=ft.Colors.RED
-                )
+                _snack = ft.SnackBar(ft.Text(f"Failed to open mask viewer: {ex}"), bgcolor=ft.Colors.RED)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -944,7 +934,7 @@ class ParticipantWorkflowScreen:
         # Has data but none complete
         return StepStatus.INTERRUPTED
 
-    def _get_rest_run_info(self) -> List[RunInfo]:
+    def _get_rest_run_info(self) -> list[RunInfo]:
         """Get information about available localizer runs (rest or task-based).
 
         Scans for acq-based folder names (task-{name}_acq-XX_run-XX).
@@ -966,11 +956,7 @@ class ParticipantWorkflowScreen:
         expected_vols = config["scan"].get("localizer_n_volumes")
         if expected_vols is None:
             rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
-            expected_vols = (
-                rest_n_volumes[0]
-                if isinstance(rest_n_volumes, list)
-                else rest_n_volumes
-            )
+            expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
         # Build run info for each configured localizer run
         for run_num in range(1, n_localizer_runs + 1):
@@ -1020,14 +1006,8 @@ class ParticipantWorkflowScreen:
         if not runs_with_data:
             return False
 
-        # All configured runs complete - no need for selection
-        if len(runs_with_data) == len(runs) and all(r.is_complete for r in runs_with_data):
-            return False
-
-        # Show selection if:
-        # - Not all runs have data
-        # - Any run is incomplete
-        return True
+        # Show selection if not all runs have data or any run is incomplete
+        return not (len(runs_with_data) == len(runs) and all(r.is_complete for r in runs_with_data))
 
     def _show_run_selection_dialog(self, on_selected):
         """Show the run selection dialog.
@@ -1037,7 +1017,7 @@ class ParticipantWorkflowScreen:
         """
         runs = self._get_rest_run_info()
 
-        def on_confirm(selected_run_ids: List[int]):
+        def on_confirm(selected_run_ids: list[int]):
             self._selected_rest_runs = selected_run_ids
             on_selected(selected_run_ids)
 
@@ -1053,7 +1033,7 @@ class ParticipantWorkflowScreen:
         )
         dialog.show()
 
-    def _needs_acq_selection(self, selected_runs: Optional[List[int]] = None) -> bool:
+    def _needs_acq_selection(self, selected_runs: list[int] | None = None) -> bool:
         """Check if acquisition selection dialog should be shown.
 
         Returns True if any selected run has multiple acquisition attempts.
@@ -1071,11 +1051,7 @@ class ParticipantWorkflowScreen:
         expected_vols = config["scan"].get("localizer_n_volumes")
         if expected_vols is None:
             rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
-            expected_vols = (
-                rest_n_volumes[0]
-                if isinstance(rest_n_volumes, list)
-                else rest_n_volumes
-            )
+            expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
         runs_to_check = selected_runs or list(range(1, n_localizer_runs + 1))
 
@@ -1091,7 +1067,7 @@ class ParticipantWorkflowScreen:
 
         return False
 
-    def _show_acq_selection_dialog(self, on_selected, selected_runs: Optional[List[int]] = None):
+    def _show_acq_selection_dialog(self, on_selected, selected_runs: list[int] | None = None):
         """Show the acquisition selection dialog.
 
         Args:
@@ -1108,11 +1084,7 @@ class ParticipantWorkflowScreen:
         expected_vols = config["scan"].get("localizer_n_volumes")
         if expected_vols is None:
             rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
-            expected_vols = (
-                rest_n_volumes[0]
-                if isinstance(rest_n_volumes, list)
-                else rest_n_volumes
-            )
+            expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
         runs_to_check = selected_runs or list(range(1, n_localizer_runs + 1))
 
@@ -1133,7 +1105,7 @@ class ParticipantWorkflowScreen:
                     )
                 )
 
-        def on_confirm(selected_acqs: Dict[int, int]):
+        def on_confirm(selected_acqs: dict[int, int]):
             self._selected_acqs = selected_acqs
             self._add_log(f"Selected acquisitions: {selected_acqs}")
             on_selected(selected_acqs)
@@ -1164,7 +1136,7 @@ class ParticipantWorkflowScreen:
 
         # Count data rows (excluding header)
         try:
-            with open(log_path, 'r') as f:
+            with open(log_path) as f:
                 row_count = sum(1 for _ in f) - 1  # subtract header
         except Exception:
             return StepStatus.PENDING
@@ -1222,7 +1194,7 @@ class ParticipantWorkflowScreen:
 
         for log_path in log_files:
             try:
-                with open(log_path, 'r') as f:
+                with open(log_path) as f:
                     row_count = sum(1 for _ in f) - 1  # subtract header
                 if row_count >= expected_volumes:
                     has_complete = True
@@ -1282,10 +1254,12 @@ class ParticipantWorkflowScreen:
             # Add rest runs dynamically
             for i in range(1, n_localizer_runs + 1):
                 steps.append(f"rest_run_{i}")
-            steps.extend([
-                "preprocessing",
-                "mask_extraction",
-            ])
+            steps.extend(
+                [
+                    "preprocessing",
+                    "mask_extraction",
+                ]
+            )
             # Add coregistration only if initial 2vol is enabled
             if twovol_initial_enabled:
                 steps.append("coregistration")
@@ -1356,7 +1330,10 @@ class ParticipantWorkflowScreen:
             # Check coregistration (2vol) outputs - initial (run-01) is in mask_extraction/04_2vol
             initial_twovol_masks_dir = mask_extraction_dir / "04_2vol" / "masks"
 
-            if initial_twovol_masks_dir.exists() and len(list(initial_twovol_masks_dir.glob("*_to_task-2vol_run-01_*.nii.gz"))) > 0:
+            if (
+                initial_twovol_masks_dir.exists()
+                and len(list(initial_twovol_masks_dir.glob("*_to_task-2vol_run-01_*.nii.gz"))) > 0
+            ):
                 self.step_statuses["coregistration"] = StepStatus.COMPLETE
 
         # Define directories needed for remaining checks
@@ -1376,7 +1353,11 @@ class ParticipantWorkflowScreen:
 
             # Check coregistration_realtime outputs - realtime is in feedback/01_2vol
             realtime_twovol_masks_dir = feedback_dir / "01_2vol" / "masks"
-            if realtime_twovol_masks_dir.exists() and len(list(realtime_twovol_masks_dir.glob(f"*_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz"))) > 0:
+            if (
+                realtime_twovol_masks_dir.exists()
+                and len(list(realtime_twovol_masks_dir.glob(f"*_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz")))
+                > 0
+            ):
                 self.step_statuses["coregistration_realtime"] = StepStatus.COMPLETE
         # Note: When 2vol realtime is disabled, those steps are not in the steps list,
         # so we don't need to mark them as complete
@@ -1409,7 +1390,7 @@ class ParticipantWorkflowScreen:
             )
             self.step_statuses[step_id] = status
 
-    def _get_session_for_next_step(self) -> Optional[str]:
+    def _get_session_for_next_step(self) -> str | None:
         """Determine which session contains the earliest incomplete step.
 
         Returns:
@@ -1509,15 +1490,22 @@ class ParticipantWorkflowScreen:
             # Gate 1: Preprocessing must be complete before mask extraction and subsequent steps
             preprocessing_complete = self.step_statuses.get("preprocessing") == StepStatus.COMPLETE
             steps_requiring_preprocessing = [
-                "mask_extraction", "coregistration", "2vol_realtime", "coregistration_realtime",
+                "mask_extraction",
+                "coregistration",
+                "2vol_realtime",
+                "coregistration_realtime",
             ]
             # Also check for feedback/transfer steps (dynamic)
             is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-            requires_preprocessing = (step_id in steps_requiring_preprocessing or is_feedback_transfer) and not preprocessing_complete
+            requires_preprocessing = (
+                step_id in steps_requiring_preprocessing or is_feedback_transfer
+            ) and not preprocessing_complete
 
             # Gate 2: Mask approval required for coregistration and all subsequent steps
             gated_steps = [
-                "coregistration", "2vol_realtime", "coregistration_realtime",
+                "coregistration",
+                "2vol_realtime",
+                "coregistration_realtime",
             ]
             # Also check for feedback/transfer steps (dynamic)
             requires_approval = (step_id in gated_steps or is_feedback_transfer) and not self._initial_qc_approved
@@ -1557,15 +1545,17 @@ class ParticipantWorkflowScreen:
 
         # Add Initial 2vol section only if enabled
         if config["scan"].get("twovol_initial_enabled", True):
-            controls.extend([
-                ft.Text("Initial 2vol", size=14, weight=ft.FontWeight.W_500),
-                self._create_step_button(
-                    "2vol_initial",
-                    "Collect",
-                    lambda e: self._on_step_clicked("2vol_initial"),
-                ),
-                ft.Divider(),
-            ])
+            controls.extend(
+                [
+                    ft.Text("Initial 2vol", size=14, weight=ft.FontWeight.W_500),
+                    self._create_step_button(
+                        "2vol_initial",
+                        "Collect",
+                        lambda e: self._on_step_clicked("2vol_initial"),
+                    ),
+                    ft.Divider(),
+                ]
+            )
 
         # Add localizer/rest runs dynamically based on localizer_n_runs
         n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
@@ -1577,6 +1567,7 @@ class ParticipantWorkflowScreen:
             # Try to get display name from task metadata
             try:
                 from pineuro.tasks import get_task_metadata
+
                 task_meta = get_task_metadata(localizer_task_type)
                 localizer_label = task_meta.display_name
             except (ValueError, ImportError):
@@ -1669,15 +1660,17 @@ class ParticipantWorkflowScreen:
         # Add coregistration section only if initial 2vol is enabled
         config = self.study_config.session_config
         if config["scan"].get("twovol_initial_enabled", True):
-            controls.extend([
-                ft.Divider(),
-                ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
-                self._create_step_button(
-                    "coregistration",
-                    "Coregister to 2vol",
-                    lambda e: self._on_step_clicked("coregistration"),
-                ),
-            ])
+            controls.extend(
+                [
+                    ft.Divider(),
+                    ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+                    self._create_step_button(
+                        "coregistration",
+                        "Coregister to 2vol",
+                        lambda e: self._on_step_clicked("coregistration"),
+                    ),
+                ]
+            )
 
             # Add optional QC view after coregistration if complete (non-essential)
             if self.step_statuses.get("coregistration") == StepStatus.COMPLETE:
@@ -1716,21 +1709,23 @@ class ParticipantWorkflowScreen:
 
         # Add Real-time 2vol section only if enabled
         if config["scan"].get("twovol_realtime_enabled", True):
-            controls.extend([
-                ft.Text("Real-time 2vol", size=14, weight=ft.FontWeight.W_500),
-                self._create_step_button(
-                    "2vol_realtime",
-                    "Collect",
-                    lambda e: self._on_step_clicked("2vol_realtime"),
-                ),
-                ft.Divider(),
-                ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
-                self._create_step_button(
-                    "coregistration_realtime",
-                    "Coregister",
-                    lambda e: self._on_step_clicked("coregistration_realtime"),
-                ),
-            ])
+            controls.extend(
+                [
+                    ft.Text("Real-time 2vol", size=14, weight=ft.FontWeight.W_500),
+                    self._create_step_button(
+                        "2vol_realtime",
+                        "Collect",
+                        lambda e: self._on_step_clicked("2vol_realtime"),
+                    ),
+                    ft.Divider(),
+                    ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+                    self._create_step_button(
+                        "coregistration_realtime",
+                        "Coregister",
+                        lambda e: self._on_step_clicked("coregistration_realtime"),
+                    ),
+                ]
+            )
 
             # Add optional QC view after coregistration_realtime if complete (non-essential)
             if self.step_statuses.get("coregistration_realtime") == StepStatus.COMPLETE:
@@ -1746,10 +1741,12 @@ class ParticipantWorkflowScreen:
                 )
 
         # Add feedback runs section
-        controls.extend([
-            ft.Divider(),
-            ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500),
-        ])
+        controls.extend(
+            [
+                ft.Divider(),
+                ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500),
+            ]
+        )
 
         # Add each feedback/transfer step with optional "View Summary" button
         # Build dynamic list based on max_feedback_runs and use_transfer_runs
@@ -1827,10 +1824,10 @@ class ParticipantWorkflowScreen:
         Returns:
             Formatted string (e.g., "2.5 GB", "500 MB")
         """
-        if size_bytes >= 1024 ** 3:
-            return f"{size_bytes / (1024 ** 3):.1f} GB"
-        elif size_bytes >= 1024 ** 2:
-            return f"{size_bytes / (1024 ** 2):.1f} MB"
+        if size_bytes >= 1024**3:
+            return f"{size_bytes / (1024**3):.1f} GB"
+        elif size_bytes >= 1024**2:
+            return f"{size_bytes / (1024**2):.1f} MB"
         elif size_bytes >= 1024:
             return f"{size_bytes / 1024:.1f} KB"
         else:
@@ -1961,9 +1958,17 @@ class ParticipantWorkflowScreen:
                                         [
                                             ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
                                             for subdir in cleanup_info["collection_subdirs"][:6]
-                                        ] + (
-                                            [ft.Text(f"  ... and {len(cleanup_info['collection_subdirs']) - 6} more", size=12, color=ft.Colors.GREY_500)]
-                                            if len(cleanup_info["collection_subdirs"]) > 6 else []
+                                        ]
+                                        + (
+                                            [
+                                                ft.Text(
+                                                    f"  ... and {len(cleanup_info['collection_subdirs']) - 6} more",
+                                                    size=12,
+                                                    color=ft.Colors.GREY_500,
+                                                )
+                                            ]
+                                            if len(cleanup_info["collection_subdirs"]) > 6
+                                            else []
                                         ),
                                         spacing=2,
                                     ),
@@ -2103,8 +2108,7 @@ class ParticipantWorkflowScreen:
 
             # Show success snackbar
             _snack = ft.SnackBar(
-                ft.Text("Cleanup complete. Temporary files have been deleted."),
-                bgcolor=ft.Colors.GREEN
+                ft.Text("Cleanup complete. Temporary files have been deleted."), bgcolor=ft.Colors.GREEN
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -2119,10 +2123,7 @@ class ParticipantWorkflowScreen:
             self._add_log(f"[ERROR] Cleanup failed: {e}")
             logger.error(f"Cleanup failed: {e}")
 
-            _snack = ft.SnackBar(
-                ft.Text(f"Cleanup failed: {e}"),
-                bgcolor=ft.Colors.RED
-            )
+            _snack = ft.SnackBar(ft.Text(f"Cleanup failed: {e}"), bgcolor=ft.Colors.RED)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -2159,7 +2160,8 @@ class ParticipantWorkflowScreen:
                 # Filter out plots with the combined mask name (e.g., "SomMotA Mask")
                 # Keep plots with left/right (e.g., "SomMotA_left Mask", "SomMotA_right Mask")
                 plots = [
-                    (label, path) for label, path in plots
+                    (label, path)
+                    for label, path in plots
                     if not (hemisphere_network in label and "_left" not in label and "_right" not in label)
                 ]
 
@@ -2168,13 +2170,14 @@ class ParticipantWorkflowScreen:
         # Initial 2vol requires approval (gates subsequent steps)
         # Realtime 2vol is view-only (initial approval already unlocked the pipeline)
         if approval_type == "initial":
+
             def on_approve():
                 self._set_qc_approved(approval_type, True)
                 self._add_log("[SUCCESS] Initial 2vol QC approved")
                 self._refresh_step_list()
                 _snack = ft.SnackBar(
                     ft.Text("Initial coregistration approved! You can now collect real-time 2vol."),
-                    bgcolor=ft.Colors.GREEN
+                    bgcolor=ft.Colors.GREEN,
                 )
                 _snack.open = True
                 self.page.overlay.append(_snack)
@@ -2183,8 +2186,7 @@ class ParticipantWorkflowScreen:
             def on_reject():
                 self._add_log("[WARNING] Initial 2vol QC rejected")
                 _snack = ft.SnackBar(
-                    ft.Text("Masks rejected. Please review and re-run coregistration."),
-                    bgcolor=ft.Colors.ORANGE
+                    ft.Text("Masks rejected. Please review and re-run coregistration."), bgcolor=ft.Colors.ORANGE
                 )
                 _snack.open = True
                 self.page.overlay.append(_snack)
@@ -2237,7 +2239,8 @@ class ParticipantWorkflowScreen:
             if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
                 hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
                 plots = [
-                    (label, path) for label, path in plots
+                    (label, path)
+                    for label, path in plots
                     if not (hemisphere_network in label and "_left" not in label and "_right" not in label)
                 ]
 
@@ -2258,11 +2261,12 @@ class ParticipantWorkflowScreen:
         Args:
             step_id: The completed step ID (transfer_1, feedback_1, feedback_2, transfer_2)
         """
+        from pineuro import qc
+
         from ..components.feedback_summary import (
             FeedbackSummaryDialog,
             compute_feedback_summary,
         )
-        from pineuro import qc
 
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
@@ -2341,7 +2345,7 @@ class ParticipantWorkflowScreen:
             sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
             if sham_mask_mode == "hemisphere_split":
                 hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                target_hemi = sham_config.get("target_hemisphere", "right")
+                _target_hemi = sham_config.get("target_hemisphere", "right")
                 for hemi in ["left", "right"]:
                     hemi_name = f"{hemisphere_network}_{hemi}"
                     if hemi_name not in mask_names:
@@ -2366,9 +2370,7 @@ class ParticipantWorkflowScreen:
         )
         dialog.show()
 
-    def _find_latest_feedback_file(
-        self, output_dir: Path, task: str, run: int, suffix: str
-    ) -> Path | None:
+    def _find_latest_feedback_file(self, output_dir: Path, task: str, run: int, suffix: str) -> Path | None:
         """Find the most recent feedback file matching the pattern.
 
         Handles both legacy (run-only) and new (acq-based) naming conventions.
@@ -2644,26 +2646,30 @@ class ParticipantWorkflowScreen:
         ]
 
         if overwrite_warning:
-            content_items.extend([
-                ft.Container(height=10),
-                overwrite_warning,
-            ])
-
-        content_items.extend([
-            ft.Container(height=20),
-            ft.Row(
+            content_items.extend(
                 [
-                    ft.TextButton("Cancel", on_click=lambda e: self._on_preview_cancel()),
-                    ft.FilledButton(
-                        "Start",
-                        icon=ft.icons.Icons.PLAY_ARROW,
-                        on_click=lambda e: self._on_preview_start(step_id),
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.END,
-                spacing=10,
-            ),
-        ])
+                    ft.Container(height=10),
+                    overwrite_warning,
+                ]
+            )
+
+        content_items.extend(
+            [
+                ft.Container(height=20),
+                ft.Row(
+                    [
+                        ft.TextButton("Cancel", on_click=lambda e: self._on_preview_cancel()),
+                        ft.FilledButton(
+                            "Start",
+                            icon=ft.icons.Icons.PLAY_ARROW,
+                            on_click=lambda e: self._on_preview_start(step_id),
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.END,
+                    spacing=10,
+                ),
+            ]
+        )
 
         return ft.Container(
             content=ft.Column(
@@ -2704,7 +2710,7 @@ class ParticipantWorkflowScreen:
 
         return network_names
 
-    def _get_blind_display_names(self, mask_names: List[str]) -> Optional[List[str]]:
+    def _get_blind_display_names(self, mask_names: list[str]) -> list[str] | None:
         """Get blinded display names if blind mode is enabled.
 
         When blind mode is enabled, returns generic labels instead of actual
@@ -2724,10 +2730,10 @@ class ParticipantWorkflowScreen:
             # Extend with generic labels for any additional masks (sham alternatives)
             for i in range(2, len(mask_names)):
                 blind_labels.append(f"Network {i + 1}")
-            return blind_labels[:len(mask_names)]
+            return blind_labels[: len(mask_names)]
         return None
 
-    def _get_blind_display_names_dict(self, mask_names: List[str]) -> Optional[Dict[str, str]]:
+    def _get_blind_display_names_dict(self, mask_names: list[str]) -> dict[str, str] | None:
         """Get blinded display names as a dict mapping for FeedbackSummaryDialog.
 
         Args:
@@ -2764,9 +2770,9 @@ class ParticipantWorkflowScreen:
                     "Smoothing": f"{config['mask'].get('smooth_fwhm', 5.0)} mm FWHM",
                     "Output": base_dir / "mask_extraction",
                 },
-                "output_path": base_dir / "mask_extraction" / (
-                    "03_masks" if config.get("mask", {}).get("threshold_method", "top_n") == "cluster" else "02_masks"
-                ),
+                "output_path": base_dir
+                / "mask_extraction"
+                / ("03_masks" if config.get("mask", {}).get("threshold_method", "top_n") == "cluster" else "02_masks"),
             }
         else:
             all_networks = self._get_all_network_targets(config)
@@ -3025,11 +3031,16 @@ class ParticipantWorkflowScreen:
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF",
-                    "MoCo": "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)",
+                    "MoCo": "Siemens (scanner)"
+                    if config["feedback"].get("moco_enabled", True)
+                    else "ANTsPy (software)",
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
-                "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-transfer_run-01_feedbacklog.tsv",
+                "output_path": base_dir
+                / "feedback"
+                / "02_feedback_output"
+                / f"{participant_id}_task-transfer_run-01_feedbacklog.tsv",
             },
             # Note: feedback_N entries are generated dynamically below
             "transfer_2": {
@@ -3040,11 +3051,16 @@ class ParticipantWorkflowScreen:
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF",
-                    "MoCo": "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)",
+                    "MoCo": "Siemens (scanner)"
+                    if config["feedback"].get("moco_enabled", True)
+                    else "ANTsPy (software)",
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
-                "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-transfer_run-02_feedbacklog.tsv",
+                "output_path": base_dir
+                / "feedback"
+                / "02_feedback_output"
+                / f"{participant_id}_task-transfer_run-02_feedbacklog.tsv",
             },
         }
 
@@ -3053,11 +3069,13 @@ class ParticipantWorkflowScreen:
             run_num = int(step_id.split("_")[-1])
             run_idx = run_num - 1  # 0-indexed for accessing lists
 
-            localizer_dicoms = config["scan"].get("localizer_source_dicoms") or config["scan"].get("rest_source_dicoms", [])
+            localizer_dicoms = config["scan"].get("localizer_source_dicoms") or config["scan"].get(
+                "rest_source_dicoms", []
+            )
             source_dicom = localizer_dicoms[run_idx] if run_idx < len(localizer_dicoms) else ""
 
-            loc_task = config['scan'].get('localizer_task_type', 'rest')
-            loc_name = loc_task if loc_task != 'rest' else 'rest'
+            loc_task = config["scan"].get("localizer_task_type", "rest")
+            loc_name = loc_task if loc_task != "rest" else "rest"
             expected_vols = config["scan"].get("localizer_n_volumes") or 200
 
             # Get acq info for this run (same pattern as feedback steps)
@@ -3096,14 +3114,14 @@ class ParticipantWorkflowScreen:
             run_num = int(step_id.split("_")[-1])
             ordinal = {1: "First", 2: "Second", 3: "Third", 4: "Fourth", 5: "Fifth"}.get(run_num, f"{run_num}th")
 
-            feedback_task_type = config.get("task", {}).get("task_type", "ball")
+            _feedback_task_type = config.get("task", {}).get("task_type", "ball")
             localizer_type = config.get("mask", {}).get("localizer_type", "rest")
             if localizer_type == "task":
                 networks_str = ", ".join(
-                    list(config["mask"].get("contrasts", {}).keys()) or config['mask']['mask_names']
+                    list(config["mask"].get("contrasts", {}).keys()) or config["mask"]["mask_names"]
                 )
             else:
-                networks_str = ", ".join(config['mask']['mask_names'])
+                networks_str = ", ".join(config["mask"]["mask_names"])
 
             params = {
                 "Task": f"feedback (run-{run_num:02d})",
@@ -3118,23 +3136,33 @@ class ParticipantWorkflowScreen:
             if state_summary != "initial":
                 params["Task State"] = state_summary
 
-            params["MoCo"] = "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)"
+            params["MoCo"] = (
+                "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)"
+            )
             params["Output"] = base_dir / "feedback" / "02_feedback_output"
-            params["Simulator Speed"] = f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x"
+            params["Simulator Speed"] = (
+                f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x"
+            )
 
             info = {
                 "label": f"Feedback Run {run_num}",
                 "description": f"{ordinal} neurofeedback run with real-time activation feedback.",
                 "parameters": params,
-                "output_path": base_dir / "feedback" / "02_feedback_output" / f"{participant_id}_task-feedback_run-{run_num:02d}_feedbacklog.tsv",
+                "output_path": base_dir
+                / "feedback"
+                / "02_feedback_output"
+                / f"{participant_id}_task-feedback_run-{run_num:02d}_feedbacklog.tsv",
             }
         else:
-            info = step_info_map.get(step_id, {
-                "label": step_id,
-                "description": "Unknown step",
-                "parameters": {},
-                "output_path": None,
-            })
+            info = step_info_map.get(
+                step_id,
+                {
+                    "label": step_id,
+                    "description": "Unknown step",
+                    "parameters": {},
+                    "output_path": None,
+                },
+            )
 
         # For feedback/transfer steps, show slot-based run info with acq entity
         # Build dynamic list of feedback/transfer steps
@@ -3208,7 +3236,7 @@ class ParticipantWorkflowScreen:
         if step_id == "preprocessing":
             if self._needs_run_selection():
                 # Show run selection dialog first, then acq selection
-                def on_runs_selected(selected_runs: List[int]):
+                def on_runs_selected(selected_runs: list[int]):
                     self._add_log(f"Selected runs for preprocessing: {selected_runs}")
                     self._maybe_show_acq_dialog(step_id, selected_runs)
 
@@ -3224,7 +3252,7 @@ class ParticipantWorkflowScreen:
         self._selected_acqs = None
         self._start_step(step_id)
 
-    def _maybe_show_acq_dialog(self, step_id: str, selected_runs: Optional[List[int]] = None):
+    def _maybe_show_acq_dialog(self, step_id: str, selected_runs: list[int] | None = None):
         """Show acq selection dialog if multiple acqs exist, otherwise start step.
 
         Args:
@@ -3232,7 +3260,8 @@ class ParticipantWorkflowScreen:
             selected_runs: Run IDs to check (None = all configured runs)
         """
         if self._needs_acq_selection(selected_runs):
-            def on_acqs_selected(selected_acqs: Dict[int, int]):
+
+            def on_acqs_selected(selected_acqs: dict[int, int]):
                 self._start_step(step_id)
 
             self._show_acq_selection_dialog(on_acqs_selected, selected_runs)
@@ -3285,7 +3314,7 @@ class ParticipantWorkflowScreen:
             config = self.study_config.session_config
             localizer_type = config.get("mask", {}).get("localizer_type", "rest")
             localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-            is_task_localizer = (localizer_type == "task" and localizer_task_type != "rest")
+            is_task_localizer = localizer_type == "task" and localizer_task_type != "rest"
 
         if is_feedback_transfer or is_task_localizer:
             self.pipeline_runner.set_task_mirror_callback(self._on_task_mirror_update)
@@ -3301,6 +3330,7 @@ class ParticipantWorkflowScreen:
         Args:
             message: Progress message
         """
+
         # This callback runs in the background thread
         async def update_ui():
             self._add_log(f"[PROGRESS] {message}")
@@ -3311,7 +3341,7 @@ class ParticipantWorkflowScreen:
         except Exception as e:
             logger.error(f"Failed to schedule progress update: {e}")
 
-    def _on_pipeline_complete(self, success: bool, result_message: Optional[str]):
+    def _on_pipeline_complete(self, success: bool, result_message: str | None):
         """Handle pipeline step completion.
 
         Args:
@@ -3359,7 +3389,9 @@ class ParticipantWorkflowScreen:
                 self._show_qc_approval_dialog("realtime")
 
             # Auto-show feedback summary dialog after feedback/transfer steps
-            is_feedback_transfer = completed_step_id.startswith("transfer_") or completed_step_id.startswith("feedback_")
+            is_feedback_transfer = completed_step_id.startswith("transfer_") or completed_step_id.startswith(
+                "feedback_"
+            )
             if is_feedback_transfer:
                 self._show_feedback_summary(completed_step_id)
 
@@ -3375,6 +3407,7 @@ class ParticipantWorkflowScreen:
         Args:
             error: Exception that occurred
         """
+
         # This callback runs in the background thread
         async def update_ui():
             self._add_log(f"[ERROR] {str(error)}")
@@ -3472,9 +3505,7 @@ class ParticipantWorkflowScreen:
         # Create file handler for the root logger to capture all pineuro logs
         self._log_file_handler = logging.FileHandler(self._log_file_path)
         self._log_file_handler.setLevel(logging.DEBUG)
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         self._log_file_handler.setFormatter(formatter)
 
         # Add handler to pineuro root logger to capture all module logs
@@ -3633,7 +3664,6 @@ class ParticipantWorkflowScreen:
                             weight=ft.FontWeight.BOLD,
                         ),
                         ft.Divider(),
-
                         # Side-by-side: Plots column and Task mirror
                         ft.Row(
                             [
@@ -3645,7 +3675,9 @@ class ParticipantWorkflowScreen:
                                             self.activation_plot.build(),
                                             ft.Row(
                                                 [
-                                                    ft.Text("Framewise Displacement", size=14, weight=ft.FontWeight.W_500),
+                                                    ft.Text(
+                                                        "Framewise Displacement", size=14, weight=ft.FontWeight.W_500
+                                                    ),
                                                     self._tsnr_text,
                                                 ],
                                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -3674,7 +3706,6 @@ class ParticipantWorkflowScreen:
                             spacing=20,
                             vertical_alignment=ft.CrossAxisAlignment.START,
                         ),
-
                         # Progress section
                         ft.Container(height=10),
                         ft.Row(
@@ -3686,7 +3717,6 @@ class ParticipantWorkflowScreen:
                             spacing=10,
                             alignment=ft.MainAxisAlignment.START,
                         ),
-
                         # Status section
                         ft.Row(
                             [
@@ -3701,7 +3731,6 @@ class ParticipantWorkflowScreen:
                             ],
                             spacing=10,
                         ),
-
                         # Stop button
                         ft.Container(height=10),
                         ft.Row(
@@ -3732,7 +3761,7 @@ class ParticipantWorkflowScreen:
             if is_rest_run_step:
                 localizer_type = config.get("mask", {}).get("localizer_type", "rest")
                 localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-                is_task_localizer = (localizer_type == "task" and localizer_task_type != "rest")
+                is_task_localizer = localizer_type == "task" and localizer_task_type != "rest"
             else:
                 is_task_localizer = False
 
@@ -3767,7 +3796,6 @@ class ParticipantWorkflowScreen:
                                 weight=ft.FontWeight.BOLD,
                             ),
                             ft.Divider(),
-
                             # Task mirror (centered)
                             ft.Container(
                                 content=ft.Column(
@@ -3779,7 +3807,6 @@ class ParticipantWorkflowScreen:
                                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                 ),
                             ),
-
                             # Progress section
                             ft.Container(height=10),
                             ft.Row(
@@ -3798,7 +3825,6 @@ class ParticipantWorkflowScreen:
                                 ],
                                 spacing=10,
                             ),
-
                             # Stop button
                             ft.Container(height=10),
                             ft.Row(
@@ -3923,6 +3949,7 @@ class ParticipantWorkflowScreen:
                 localizer_task_type = config.get("scan", {}).get("localizer_task_type", "localizer")
                 try:
                     from pineuro.tasks import get_task_metadata
+
                     task_meta = get_task_metadata(localizer_task_type)
                     task_name = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
                 except (ValueError, ImportError):
@@ -3994,17 +4021,18 @@ class ParticipantWorkflowScreen:
             elapsed_time: Time elapsed since start (seconds)
             dicom_path: Path to the latest collected DICOM file
         """
+
         # This callback runs in the background thread
         # Schedule UI update on the main thread
         async def update_ui():
-            if hasattr(self, 'collection_progress') and self.collection_progress is not None:
+            if hasattr(self, "collection_progress") and self.collection_progress is not None:
                 self.collection_progress.update(volumes_collected, elapsed_time, dicom_path)
                 self.page.update()
-            elif hasattr(self, '_progress_bar') and self._progress_bar is not None:
+            elif hasattr(self, "_progress_bar") and self._progress_bar is not None:
                 # Task-based localizer progress (using separate progress bar)
                 self._progress_bar.value = volumes_collected / n_volumes if n_volumes > 0 else 0
                 self._progress_text.value = f"{volumes_collected} / {n_volumes} volumes"
-                if hasattr(self, '_status_text') and self._status_text is not None:
+                if hasattr(self, "_status_text") and self._status_text is not None:
                     self._status_text.value = f"Collecting DICOMs... ({elapsed_time:.1f}s)"
                 self.page.update()
 
@@ -4023,7 +4051,7 @@ class ParticipantWorkflowScreen:
         base_dir = Path(config["paths"]["base_dir"])
 
         # Use the same mask_names that were set when building the monitoring panel
-        if hasattr(self, '_feedback_mask_names'):
+        if hasattr(self, "_feedback_mask_names"):
             mask_names = self._feedback_mask_names
         else:
             localizer_type = config.get("mask", {}).get("localizer_type", "rest")
@@ -4048,9 +4076,12 @@ class ParticipantWorkflowScreen:
         )
 
         # Construct log file path with acq entity (format as 2-digit number)
-        log_path = output_dir / f"{self.participant_id}_task-{task_type}_acq-{run_info['acq']:02d}_run-{run_info['run']:02d}_feedbacklog.tsv"
+        log_path = (
+            output_dir
+            / f"{self.participant_id}_task-{task_type}_acq-{run_info['acq']:02d}_run-{run_info['run']:02d}_feedbacklog.tsv"
+        )
         # Store psychopylog path for hit count reading (same pattern but psychopylog.tsv)
-        self._psychopylog_path = output_dir / log_path.name.replace('feedbacklog.tsv', 'psychopylog.tsv')
+        self._psychopylog_path = output_dir / log_path.name.replace("feedbacklog.tsv", "psychopylog.tsv")
 
         # Create and start feedback monitor
         self.feedback_monitor = FeedbackMonitor(
@@ -4064,11 +4095,11 @@ class ParticipantWorkflowScreen:
 
     def _stop_feedback_monitoring(self):
         """Stop the feedback log monitor."""
-        if hasattr(self, 'feedback_monitor') and self.feedback_monitor:
+        if hasattr(self, "feedback_monitor") and self.feedback_monitor:
             self.feedback_monitor.stop()
             self.feedback_monitor = None
 
-    def _on_task_mirror_update(self, state: Dict) -> None:
+    def _on_task_mirror_update(self, state: dict) -> None:
         """Handle task visual state update for GUI mirroring.
 
         Called from BallTask (or any task) with its current visual state.
@@ -4082,17 +4113,23 @@ class ParticipantWorkflowScreen:
 
         async def update_mirror():
             try:
-                if hasattr(self, 'task_mirror') and self.task_mirror is not None:
+                if hasattr(self, "task_mirror") and self.task_mirror is not None:
                     self.task_mirror.update_state(state_copy)
             except Exception:
                 pass
 
-        try:
+        with contextlib.suppress(Exception):
             self.page.run_task(update_mirror)
-        except Exception:
-            pass
 
-    def _on_feedback_update(self, volume: int, mask_activations: Dict[str, float], motion_params: Dict[str, float], fd: Optional[float], dvars: Optional[float] = None, tsnr: Optional[float] = None):
+    def _on_feedback_update(
+        self,
+        volume: int,
+        mask_activations: dict[str, float],
+        motion_params: dict[str, float],
+        fd: float | None,
+        dvars: float | None = None,
+        tsnr: float | None = None,
+    ):
         """Handle real-time feedback data update.
 
         Args:
@@ -4103,6 +4140,7 @@ class ParticipantWorkflowScreen:
             dvars: DVARS value (None if not available)
             tsnr: Running tSNR estimate (None if not available)
         """
+
         # Schedule UI update on main thread
         async def update_ui():
             try:
@@ -4111,15 +4149,15 @@ class ParticipantWorkflowScreen:
                     self.activation_plot.add_data(volume, mask_activations)
 
                 # Update FD plot
-                if hasattr(self, 'fd_plot') and self.fd_plot and fd is not None:
+                if hasattr(self, "fd_plot") and self.fd_plot and fd is not None:
                     self.fd_plot.add_data(volume, fd)
 
                 # Update DVARS plot
-                if hasattr(self, 'dvars_plot') and self.dvars_plot and dvars is not None:
+                if hasattr(self, "dvars_plot") and self.dvars_plot and dvars is not None:
                     self.dvars_plot.add_data(volume, dvars)
 
                 # Update tSNR text indicator
-                if hasattr(self, '_tsnr_text') and self._tsnr_text and tsnr is not None and tsnr > 0:
+                if hasattr(self, "_tsnr_text") and self._tsnr_text and tsnr is not None and tsnr > 0:
                     self._tsnr_text.value = f"tSNR: {tsnr:.1f}"
                     if tsnr >= 40:
                         self._tsnr_text.color = ft.Colors.GREEN_600
@@ -4147,8 +4185,8 @@ class ParticipantWorkflowScreen:
                         self._status_text.value = f"Baseline ({volume}/{n_baseline})"
                         self._status_text.color = ft.Colors.ORANGE_600
                     else:
-                        step_id = getattr(self, '_current_step_id', '')
-                        if 'transfer' in step_id:
+                        step_id = getattr(self, "_current_step_id", "")
+                        if "transfer" in step_id:
                             self._status_text.value = "Transfer (no feedback)"
                         else:
                             self._status_text.value = "Task Active"
@@ -4158,10 +4196,11 @@ class ParticipantWorkflowScreen:
                 # Update hits display (from psychopylog.tsv)
                 if self._hits_text:
                     from ..components.csv_poller import get_hits_from_psychopylog
+
                     hits = get_hits_from_psychopylog(self._psychopylog_path)
                     if hits:
                         # Use display names if in blind mode
-                        display_map = getattr(self, '_feedback_display_names', None)
+                        display_map = getattr(self, "_feedback_display_names", None)
                         hit_strs = []
                         for k, v in hits.items():
                             display_name = display_map.get(k, k) if display_map else k
@@ -4174,17 +4213,14 @@ class ParticipantWorkflowScreen:
             except Exception as e:
                 logger.error(f"Error updating feedback UI: {e}")
 
-        try:
+        with contextlib.suppress(Exception):
             self.page.run_task(update_ui)
-        except Exception:
-            pass
 
     def _on_stop_clicked(self):
         """Handle stop button click during execution - shows confirmation dialog."""
         # Check if this is a feedback/transfer step (which has post-run questions)
-        is_feedback_step = (
-            self._current_step_id.startswith("transfer_") or
-            self._current_step_id.startswith("feedback_")
+        is_feedback_step = self._current_step_id.startswith("transfer_") or self._current_step_id.startswith(
+            "feedback_"
         )
 
         # Checkbox for showing questions (only relevant for feedback steps)
@@ -4219,16 +4255,18 @@ class ParticipantWorkflowScreen:
         ]
 
         if is_feedback_step:
-            content_items.extend([
-                ft.Divider(),
-                show_questions_checkbox,
-                ft.Text(
-                    "If checked, the participant will still see the post-run questionnaire.",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-            ])
+            content_items.extend(
+                [
+                    ft.Divider(),
+                    show_questions_checkbox,
+                    ft.Text(
+                        "If checked, the participant will still see the post-run questionnaire.",
+                        size=12,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                ]
+            )
 
         dialog = ft.AlertDialog(
             title=ft.Text("Stop Run"),
@@ -4270,7 +4308,7 @@ class ParticipantWorkflowScreen:
         else:
             logger.warning("right_panel_container not initialized")
 
-    def _get_next_step(self) -> Optional[tuple[str, str]]:
+    def _get_next_step(self) -> tuple[str, str] | None:
         """Determine the next step to run in the workflow.
 
         Considers both pending and interrupted steps. Interrupted steps
@@ -4299,11 +4337,13 @@ class ParticipantWorkflowScreen:
                 workflow.append((step_id, self._get_step_label(step_id)))
 
             # Add mask extraction steps
-            workflow.extend([
-                ("preprocessing", "Run Preprocessing"),
-                ("mask_extraction", "Extract Masks"),
-                ("mask_approval", "Review & Approve Masks"),
-            ])
+            workflow.extend(
+                [
+                    ("preprocessing", "Run Preprocessing"),
+                    ("mask_extraction", "Extract Masks"),
+                    ("mask_approval", "Review & Approve Masks"),
+                ]
+            )
 
             # Add coregistration only if initial 2vol is enabled
             if twovol_initial_enabled:
@@ -4311,10 +4351,12 @@ class ParticipantWorkflowScreen:
 
         # Add realtime 2vol if enabled
         if twovol_realtime_enabled:
-            workflow.extend([
-                ("2vol_realtime", "Collect Real-time 2vol"),
-                ("coregistration_realtime", "Coregister to Real-time 2vol"),
-            ])
+            workflow.extend(
+                [
+                    ("2vol_realtime", "Collect Real-time 2vol"),
+                    ("coregistration_realtime", "Coregister to Real-time 2vol"),
+                ]
+            )
 
         # Add feedback runs dynamically based on max_feedback_runs and use_transfer_runs
         task_config = config.get("task", {})
@@ -4346,9 +4388,7 @@ class ParticipantWorkflowScreen:
         next_step = self._get_next_step()
 
         if next_step is None:
-            _snack = ft.SnackBar(
-                ft.Text("Session complete! All steps finished.")
-            )
+            _snack = ft.SnackBar(ft.Text("Session complete! All steps finished."))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -4428,19 +4468,15 @@ class ParticipantWorkflowScreen:
         self.step_panel_list.controls = panels
 
         # Force updates in the correct order
-        try:
+        with contextlib.suppress(Exception):
             self.step_panel_list.update()
-        except Exception:
-            pass
 
         # Update the Run Next button by rebuilding the header
         self._rebuild_header()
 
         # Force a complete page refresh
-        try:
+        with contextlib.suppress(Exception):
             self.page.update()
-        except Exception:
-            pass
 
     def build(self) -> ft.Control:
         """Build the participant workflow UI.

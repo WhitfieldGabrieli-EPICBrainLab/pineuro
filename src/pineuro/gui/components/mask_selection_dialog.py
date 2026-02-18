@@ -6,19 +6,19 @@ Provides a two-stage dialog flow:
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
 
 import flet as ft
 
 from pineuro.mask_extraction import (
     MaskSelection,
+    compute_mask_network_correlation,
     get_alternative_components,
     load_mask_selections,
-    save_mask_selections,
     regenerate_mask_from_selection,
-    compute_mask_network_correlation,
+    save_mask_selections,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,12 +31,12 @@ class MaskReviewInfo:
     network_name: str
     current_component: int
     current_correlation: float
-    alternative_components: List[Tuple[int, float]]  # [(idx, corr), ...] ranked
-    overlay_path: Optional[Path]  # Path to current mask overlay image
-    alternative_overlay_paths: Dict[int, Path]  # component_idx -> overlay path
-    yeo_overlay_path: Optional[Path]  # Path to Yeo atlas overlay
+    alternative_components: list[tuple[int, float]]  # [(idx, corr), ...] ranked
+    overlay_path: Path | None  # Path to current mask overlay image
+    alternative_overlay_paths: dict[int, Path]  # component_idx -> overlay path
+    yeo_overlay_path: Path | None  # Path to Yeo atlas overlay
     accepted: bool = True  # Default to accepted
-    combined_overlay_path: Optional[Path] = None  # Path to combined mask preview (when two components selected)
+    combined_overlay_path: Path | None = None  # Path to combined mask preview (when two components selected)
 
 
 class MaskSelectionDialog:
@@ -62,29 +62,29 @@ class MaskSelectionDialog:
     def __init__(
         self,
         page: ft.Page,
-        masks_info: List[MaskReviewInfo],
+        masks_info: list[MaskReviewInfo],
         participant_id: str,
         masks_dir: Path,
         components_file: Path,
         yeo_subject_space: Path,
         n_yeo: int = 17,
         threshold: int = 2000,
-        on_complete: Optional[Callable[[Dict[str, MaskSelection]], None]] = None,
-        on_cancel: Optional[Callable[[], None]] = None,
-        on_log: Optional[Callable[[str], None]] = None,
+        on_complete: Callable[[dict[str, MaskSelection]], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
+        on_log: Callable[[str], None] | None = None,
         # Additional context for script generation
-        mask_extraction_dir: Optional[Path] = None,
-        input_file: Optional[Path] = None,
-        brain_mask_file: Optional[Path] = None,
-        ref_file: Optional[Path] = None,
-        yeo_targets: Optional[List[str]] = None,
+        mask_extraction_dir: Path | None = None,
+        input_file: Path | None = None,
+        brain_mask_file: Path | None = None,
+        ref_file: Path | None = None,
+        yeo_targets: list[str] | None = None,
         n_components: int = 30,
-        smooth_fwhm: Optional[float] = None,
-        highpass: Optional[float] = None,
-        lowpass: Optional[float] = None,
+        smooth_fwhm: float | None = None,
+        highpass: float | None = None,
+        lowpass: float | None = None,
         # Hemisphere split (sham verification)
-        hemisphere_network: Optional[str] = None,
-        hemisphere_overlays: Optional[Dict[str, Path]] = None,
+        hemisphere_network: str | None = None,
+        hemisphere_overlays: dict[str, Path] | None = None,
         target_hemisphere: str = "right",
     ):
         """Initialize the mask selection dialog.
@@ -142,15 +142,15 @@ class MaskSelectionDialog:
         self.hemisphere_overlays = hemisphere_overlays or {}
         self.target_hemisphere = target_hemisphere
 
-        self._dialog: Optional[ft.AlertDialog] = None
+        self._dialog: ft.AlertDialog | None = None
         self._stage = 1  # 1 = Accept/Reject, 2 = Select Alternative
-        self._current_reject_network: Optional[str] = None
-        self._selections: Dict[str, MaskSelection] = {}
+        self._current_reject_network: str | None = None
+        self._selections: dict[str, MaskSelection] = {}
 
         # Combine mode state (for merging two ICA components)
         self._combine_mode = False
-        self._combine_checkboxes: Dict[int, ft.Checkbox] = {}  # comp_idx -> checkbox
-        self._combine_preview_container: Optional[ft.Container] = None
+        self._combine_checkboxes: dict[int, ft.Checkbox] = {}  # comp_idx -> checkbox
+        self._combine_preview_container: ft.Container | None = None
 
         # Load existing selections
         existing = load_mask_selections(masks_dir)
@@ -167,7 +167,7 @@ class MaskSelectionDialog:
                     selection_reason="auto",
                 )
 
-    def _create_image(self, path: Path, height: int = 150, width: Optional[int] = None) -> ft.Image:
+    def _create_image(self, path: Path, height: int = 150, width: int | None = None) -> ft.Image:
         """Create an Image widget from a local file path."""
         return ft.Image(
             src=str(path),
@@ -309,9 +309,7 @@ class MaskSelectionDialog:
                 padding=15,
                 bgcolor=ft.Colors.GREEN_50 if is_accepted else ft.Colors.GREY_100,
                 border_radius=8,
-                border=ft.border.all(
-                    2, ft.Colors.GREEN_400 if is_accepted else ft.Colors.GREY_300
-                ),
+                border=ft.border.all(2, ft.Colors.GREEN_400 if is_accepted else ft.Colors.GREY_300),
             )
             mask_cards.append(card)
 
@@ -350,7 +348,7 @@ class MaskSelectionDialog:
             padding=10,
         )
 
-    def _build_hemisphere_info_cards(self) -> List[ft.Control]:
+    def _build_hemisphere_info_cards(self) -> list[ft.Control]:
         """Build info-only cards for hemisphere-split masks (sham verification).
 
         These cards show the left and right hemisphere masks for visual verification
@@ -423,7 +421,7 @@ class MaskSelectionDialog:
 
         return cards
 
-    def _build_stage1_actions(self) -> List[ft.Control]:
+    def _build_stage1_actions(self) -> list[ft.Control]:
         """Build action buttons for Stage 1."""
         return [
             ft.OutlinedButton(
@@ -469,9 +467,7 @@ class MaskSelectionDialog:
         # We generate for all components that don't already have overlays
         missing_overlays = []
         for comp_idx, _corr in info.alternative_components:
-            if comp_idx not in info.alternative_overlay_paths:
-                missing_overlays.append(comp_idx)
-            elif not info.alternative_overlay_paths[comp_idx].exists():
+            if comp_idx not in info.alternative_overlay_paths or not info.alternative_overlay_paths[comp_idx].exists():
                 missing_overlays.append(comp_idx)
 
         if missing_overlays:
@@ -581,7 +577,7 @@ class MaskSelectionDialog:
 
         # Get the currently selected component to mark it
         current_selection = self._selections.get(network_name)
-        currently_selected_idx = current_selection.component_index if current_selection else None
+        _currently_selected_idx = current_selection.component_index if current_selection else None
 
         # Add ICA alternatives (show all, including currently selected)
         for idx, (comp_idx, corr) in enumerate(alternatives):
@@ -789,10 +785,7 @@ class MaskSelectionDialog:
         if len(selected) > 2:
             # Uncheck the one that was just checked
             self._combine_checkboxes[comp_idx].value = False
-            _snack = ft.SnackBar(
-                ft.Text("Select exactly 2 components to combine."),
-                bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("Select exactly 2 components to combine."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -800,11 +793,11 @@ class MaskSelectionDialog:
 
         self.page.update()
 
-    def _get_selected_combine_components(self) -> List[int]:
+    def _get_selected_combine_components(self) -> list[int]:
         """Get list of selected component indices in combine mode."""
         return [idx for idx, cb in self._combine_checkboxes.items() if cb.value]
 
-    def _build_stage2_actions(self) -> List[ft.Control]:
+    def _build_stage2_actions(self) -> list[ft.Control]:
         """Build action buttons for Stage 2."""
         actions = [
             ft.TextButton("Back", on_click=self._on_back_clicked),
@@ -837,10 +830,7 @@ class MaskSelectionDialog:
 
         selected = self._get_selected_combine_components()
         if len(selected) != 2:
-            _snack = ft.SnackBar(
-                ft.Text("Select exactly 2 components to preview."),
-                bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("Select exactly 2 components to preview."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -852,10 +842,7 @@ class MaskSelectionDialog:
             logger.error(error_msg)
             if self.on_log:
                 self.on_log(f"[ERROR] {error_msg}")
-            _snack = ft.SnackBar(
-                ft.Text("Cannot preview: BOLD reference file not found"),
-                bgcolor=ft.Colors.RED
-            )
+            _snack = ft.SnackBar(ft.Text("Cannot preview: BOLD reference file not found"), bgcolor=ft.Colors.RED)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -877,13 +864,15 @@ class MaskSelectionDialog:
             self.on_log(f"[INFO] Generating preview of combined IC {comp_idx_1} + IC {comp_idx_2}...")
 
         try:
-            from pineuro.mask_extraction import combine_ica_components
             from pineuro import qc
+            from pineuro.mask_extraction import combine_ica_components
 
             # Generate temporary combined mask
             temp_dir = self.mask_extraction_dir / "qc" / "temp"
             temp_dir.mkdir(parents=True, exist_ok=True)
-            temp_mask = temp_dir / f"{self.participant_id}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
+            temp_mask = (
+                temp_dir / f"{self.participant_id}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
+            )
 
             logger.info(f"Generating combined mask: {temp_mask}")
             combine_ica_components(
@@ -980,10 +969,7 @@ class MaskSelectionDialog:
 
         except Exception as ex:
             logger.error(f"Failed to generate combined preview: {ex}")
-            _snack = ft.SnackBar(
-                ft.Text(f"Failed to generate preview: {ex}"),
-                bgcolor=ft.Colors.RED
-            )
+            _snack = ft.SnackBar(ft.Text(f"Failed to generate preview: {ex}"), bgcolor=ft.Colors.RED)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1038,10 +1024,7 @@ class MaskSelectionDialog:
         if self._combine_mode:
             selected = self._get_selected_combine_components()
             if len(selected) != 2:
-                _snack = ft.SnackBar(
-                    ft.Text("Select exactly 2 components to combine."),
-                    bgcolor=ft.Colors.ORANGE
-                )
+                _snack = ft.SnackBar(ft.Text("Select exactly 2 components to combine."), bgcolor=ft.Colors.ORANGE)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1066,7 +1049,9 @@ class MaskSelectionDialog:
                 # Generate combined mask (or use existing temp one from preview)
                 temp_dir = self.mask_extraction_dir / "qc" / "temp"
                 temp_dir.mkdir(parents=True, exist_ok=True)
-                temp_mask = temp_dir / f"{self.participant_id}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
+                temp_mask = (
+                    temp_dir / f"{self.participant_id}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
+                )
 
                 if not temp_mask.exists():
                     combine_ica_components(
@@ -1111,15 +1096,14 @@ class MaskSelectionDialog:
             info.current_correlation = combined_corr
 
             if self.on_log:
-                self.on_log(f"[INFO] Selected combined IC {comp_idx_1} + IC {comp_idx_2} for {network_name} (r={combined_corr:.3f})")
+                self.on_log(
+                    f"[INFO] Selected combined IC {comp_idx_1} + IC {comp_idx_2} for {network_name} (r={combined_corr:.3f})"
+                )
 
         else:
             # Single-select mode (original logic)
             if not self._alternative_selection.value:
-                _snack = ft.SnackBar(
-                    ft.Text("Please select an alternative."),
-                    bgcolor=ft.Colors.ORANGE
-                )
+                _snack = ft.SnackBar(ft.Text("Please select an alternative."), bgcolor=ft.Colors.ORANGE)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1187,17 +1171,18 @@ class MaskSelectionDialog:
         for the hemisphere network, allowing them to verify the hemisphere split
         before final approval.
         """
-        from pineuro.mask_extraction import split_mask_by_hemisphere
-        from pineuro import qc
         from nibabel.loadsave import load, save
         from nibabel.nifti1 import Nifti1Image
+
+        from pineuro import qc
+        from pineuro.mask_extraction import split_mask_by_hemisphere
 
         selection = self._selections.get(self.hemisphere_network)
         if not selection:
             return
 
         if self.on_log:
-            self.on_log(f"[INFO] Regenerating hemisphere masks for preview...")
+            self.on_log("[INFO] Regenerating hemisphere masks for preview...")
 
         try:
             # First, regenerate the unthresholded mask from the selected component
@@ -1214,6 +1199,7 @@ class MaskSelectionDialog:
             elif selection.source_type == "yeo_atlas":
                 # Use Yeo atlas - extract the network region
                 from pineuro.utils import get_yeo_labels
+
                 labels = get_yeo_labels(n_networks=self.n_yeo)
                 network_index = labels.index(self.hemisphere_network) + 1
                 atlas_img = load(self.yeo_subject_space)
@@ -1225,10 +1211,7 @@ class MaskSelectionDialog:
             left_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_left_thr.nii.gz"
             right_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_right_thr.nii.gz"
 
-            split_mask_by_hemisphere(
-                network_file, left_file, right_file,
-                threshold=self.threshold, overwrite=True
-            )
+            split_mask_by_hemisphere(network_file, left_file, right_file, threshold=self.threshold, overwrite=True)
 
             # Regenerate hemisphere overlays
             qc_dir = self.mask_extraction_dir.parent / "qc"
@@ -1244,6 +1227,7 @@ class MaskSelectionDialog:
             # Copy overlays to component-specific paths to avoid Flet image caching
             # (Flet caches images by path, so we need unique paths for each component)
             import shutil
+
             comp_suffix = f"_IC{selection.component_index}" if selection.component_index is not None else "_yeo"
             updated_overlays = {}
             for hemi, src_path in new_overlays.items():
@@ -1260,7 +1244,7 @@ class MaskSelectionDialog:
             self.hemisphere_overlays.update(updated_overlays)
 
             if self.on_log:
-                self.on_log(f"[SUCCESS] Hemisphere masks regenerated for preview")
+                self.on_log("[SUCCESS] Hemisphere masks regenerated for preview")
 
         except Exception as ex:
             logger.error(f"Failed to regenerate hemisphere masks for preview: {ex}")
@@ -1279,10 +1263,7 @@ class MaskSelectionDialog:
         """Open interactive mask viewer in the default web browser."""
         # Check BOLD reference exists
         if not self.ref_file or not Path(self.ref_file).exists():
-            _snack = ft.SnackBar(
-                ft.Text("BOLD reference file not found."),
-                bgcolor=ft.Colors.RED
-            )
+            _snack = ft.SnackBar(ft.Text("BOLD reference file not found."), bgcolor=ft.Colors.RED)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1325,10 +1306,7 @@ class MaskSelectionDialog:
                     self.on_log(f"[INFO] Regenerated {name} mask for preview")
             except Exception as ex:
                 logger.error(f"Failed to regenerate mask for {name}: {ex}")
-                _snack = ft.SnackBar(
-                    ft.Text(f"Failed to regenerate {name} mask: {ex}"),
-                    bgcolor=ft.Colors.RED
-                )
+                _snack = ft.SnackBar(ft.Text(f"Failed to regenerate {name} mask: {ex}"), bgcolor=ft.Colors.RED)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1337,10 +1315,7 @@ class MaskSelectionDialog:
         # Collect all thresholded mask files
         mask_files = sorted(self.masks_dir.glob("*_thr.nii.gz"))
         if not mask_files:
-            _snack = ft.SnackBar(
-                ft.Text("No thresholded masks found."),
-                bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("No thresholded masks found."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1361,10 +1336,7 @@ class MaskSelectionDialog:
                 self.on_log(f"[INFO] Opened mask viewer in browser with {len(mask_files)} masks")
         except Exception as ex:
             logger.error(f"Failed to open mask viewer: {ex}")
-            _snack = ft.SnackBar(
-                ft.Text(f"Failed to open mask viewer: {ex}"),
-                bgcolor=ft.Colors.RED
-            )
+            _snack = ft.SnackBar(ft.Text(f"Failed to open mask viewer: {ex}"), bgcolor=ft.Colors.RED)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1405,7 +1377,9 @@ class MaskSelectionDialog:
                         info.current_component = sel.component_index
 
                         # Update overlay path for the current selection
-                        overlay_path = overlays_dir / f"{self.participant_id}_{name}_IC{sel.component_index}_overlay.png"
+                        overlay_path = (
+                            overlays_dir / f"{self.participant_id}_{name}_IC{sel.component_index}_overlay.png"
+                        )
                         if overlay_path.exists():
                             info.overlay_path = overlay_path
 
@@ -1454,10 +1428,10 @@ class MaskSelectionDialog:
                         ft.Icon(ft.Icons.REFRESH, color=ft.Colors.WHITE),
                         ft.Text(snack_message),
                     ],
-                    spacing=10
+                    spacing=10,
                 ),
                 bgcolor=snack_color,
-                duration=3000
+                duration=3000,
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -1465,10 +1439,7 @@ class MaskSelectionDialog:
 
         except Exception as ex:
             logger.error(f"Failed to reload from disk: {ex}")
-            _snack = ft.SnackBar(
-                ft.Text(f"Failed to reload: {ex}"),
-                bgcolor=ft.Colors.RED
-            )
+            _snack = ft.SnackBar(ft.Text(f"Failed to reload: {ex}"), bgcolor=ft.Colors.RED)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1479,10 +1450,7 @@ class MaskSelectionDialog:
 
         # Check if we have enough context for script generation
         if not self.input_file or not self.brain_mask_file or not self.ref_file:
-            _snack = ft.SnackBar(
-                ft.Text("Cannot generate script: missing input file paths."),
-                bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("Cannot generate script: missing input file paths."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1523,10 +1491,10 @@ class MaskSelectionDialog:
                         ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.WHITE),
                         ft.Text(f"Script saved to: {script_path.name}"),
                     ],
-                    spacing=10
+                    spacing=10,
                 ),
                 bgcolor=ft.Colors.GREEN,
-                duration=4000
+                duration=4000,
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -1534,10 +1502,7 @@ class MaskSelectionDialog:
 
         except Exception as ex:
             logger.error(f"Failed to generate script: {ex}")
-            _snack = ft.SnackBar(
-                ft.Text(f"Failed to generate script: {ex}"),
-                bgcolor=ft.Colors.RED
-            )
+            _snack = ft.SnackBar(ft.Text(f"Failed to generate script: {ex}"), bgcolor=ft.Colors.RED)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1586,10 +1551,7 @@ class MaskSelectionDialog:
                 )
             except Exception as ex:
                 logger.error(f"Failed to regenerate mask for {name}: {ex}")
-                _snack = ft.SnackBar(
-                    ft.Text(f"Failed to regenerate {name}: {ex}"),
-                    bgcolor=ft.Colors.RED
-                )
+                _snack = ft.SnackBar(ft.Text(f"Failed to regenerate {name}: {ex}"), bgcolor=ft.Colors.RED)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1599,8 +1561,8 @@ class MaskSelectionDialog:
         if self.hemisphere_network and self.hemisphere_network in modified_networks:
             logger.info(f"Regenerating hemisphere-split masks for {self.hemisphere_network}")
             try:
-                from pineuro.mask_extraction import split_mask_by_hemisphere
                 from pineuro import qc
+                from pineuro.mask_extraction import split_mask_by_hemisphere
 
                 # The unthresholded mask should have been regenerated above
                 network_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}.nii.gz"
@@ -1609,8 +1571,7 @@ class MaskSelectionDialog:
 
                 if network_file.exists():
                     split_mask_by_hemisphere(
-                        network_file, left_file, right_file,
-                        threshold=self.threshold, overwrite=True
+                        network_file, left_file, right_file, threshold=self.threshold, overwrite=True
                     )
                     logger.info(f"Regenerated hemisphere masks: {left_file.name}, {right_file.name}")
 

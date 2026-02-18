@@ -6,10 +6,10 @@ progress bar, and estimated time remaining.
 """
 
 import base64
+import contextlib
 import io
 import logging
 from pathlib import Path
-from typing import Optional
 
 import flet as ft
 import numpy as np
@@ -32,7 +32,7 @@ except ImportError:
     PIL_AVAILABLE = False
 
 
-def dicom_to_base64_png(dicom_path: Path) -> Optional[str]:
+def dicom_to_base64_png(dicom_path: Path) -> str | None:
     """Convert DICOM middle slice to base64 PNG for Flet display.
 
     Parameters
@@ -96,7 +96,7 @@ class CollectionProgressPanel:
     def __init__(
         self,
         n_volumes: int,
-        tr: Optional[float] = None,
+        tr: float | None = None,
     ):
         """Initialize the collection progress panel.
 
@@ -115,10 +115,10 @@ class CollectionProgressPanel:
         self._elapsed_time = 0.0
 
         # UI elements (created in build())
-        self._image: Optional[ft.Image] = None
-        self._volume_text: Optional[ft.Text] = None
-        self._progress_bar: Optional[ft.ProgressBar] = None
-        self._time_text: Optional[ft.Text] = None
+        self._image: ft.Image | None = None
+        self._volume_text: ft.Text | None = None
+        self._progress_bar: ft.ProgressBar | None = None
+        self._time_text: ft.Text | None = None
 
     def build(self) -> ft.Container:
         """Build the progress panel control.
@@ -209,7 +209,7 @@ class CollectionProgressPanel:
         self,
         volumes_collected: int,
         elapsed_time: float,
-        dicom_path: Optional[Path] = None,
+        dicom_path: Path | None = None,
     ):
         """Update the progress display.
 
@@ -228,19 +228,15 @@ class CollectionProgressPanel:
         # Update volume text
         if self._volume_text is not None:
             self._volume_text.value = f"{volumes_collected} / {self.n_volumes} volumes"
-            try:
+            with contextlib.suppress(Exception):
                 self._volume_text.update()
-            except Exception:
-                pass
 
         # Update progress bar
         if self._progress_bar is not None:
             progress = volumes_collected / self.n_volumes if self.n_volumes > 0 else 0
             self._progress_bar.value = min(1.0, progress)
-            try:
+            with contextlib.suppress(Exception):
                 self._progress_bar.update()
-            except Exception:
-                pass
 
         # Update time estimate
         if self._time_text is not None:
@@ -255,10 +251,8 @@ class CollectionProgressPanel:
                 self._time_text.value = "Complete"
             else:
                 self._time_text.value = ""
-            try:
+            with contextlib.suppress(Exception):
                 self._time_text.update()
-            except Exception:
-                pass
 
         # Update DICOM preview
         if dicom_path is not None and self._image is not None:
@@ -276,7 +270,7 @@ class CollectionProgressPanel:
             except Exception as e:
                 logger.warning(f"Failed to display DICOM: {e}")
 
-    def _estimate_time_remaining(self) -> Optional[float]:
+    def _estimate_time_remaining(self) -> float | None:
         """Estimate time remaining in seconds.
 
         Returns
@@ -309,14 +303,10 @@ class CollectionProgressPanel:
         # Reset image visibility
         if self._image is not None:
             self._image.visible = False
-            try:
+            with contextlib.suppress(Exception):
                 self._image.update()
-            except Exception:
-                pass
 
         if self._placeholder is not None:
             self._placeholder.visible = True
-            try:
+            with contextlib.suppress(Exception):
                 self._placeholder.update()
-            except Exception:
-                pass

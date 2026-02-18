@@ -5,9 +5,9 @@ when data is incomplete or partial.
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
 
 import flet as ft
 
@@ -37,9 +37,9 @@ class RunSelectionDialog:
     def __init__(
         self,
         page: ft.Page,
-        runs: List[RunInfo],
-        on_confirm: Callable[[List[int]], None],
-        on_cancel: Optional[Callable[[], None]] = None,
+        runs: list[RunInfo],
+        on_confirm: Callable[[list[int]], None],
+        on_cancel: Callable[[], None] | None = None,
     ):
         """Initialize the run selection dialog.
 
@@ -53,7 +53,7 @@ class RunSelectionDialog:
         self.runs = runs
         self.on_confirm = on_confirm
         self.on_cancel = on_cancel
-        self._dialog: Optional[ft.AlertDialog] = None
+        self._dialog: ft.AlertDialog | None = None
         self._checkboxes: dict[int, ft.Checkbox] = {}
 
     def show(self):
@@ -63,9 +63,7 @@ class RunSelectionDialog:
             title=ft.Row(
                 [
                     ft.Icon(ft.Icons.PLAYLIST_ADD_CHECK, color=ft.Colors.BLUE),
-                    ft.Text(
-                        "Select Runs for Preprocessing", weight=ft.FontWeight.BOLD
-                    ),
+                    ft.Text("Select Runs for Preprocessing", weight=ft.FontWeight.BOLD),
                 ],
                 spacing=10,
             ),
@@ -101,11 +99,7 @@ class RunSelectionDialog:
                 can_select = True
 
             # Volume progress indicator
-            progress_value = (
-                run.actual_volumes / run.expected_volumes
-                if run.expected_volumes > 0
-                else 0
-            )
+            progress_value = run.actual_volumes / run.expected_volumes if run.expected_volumes > 0 else 0
 
             checkbox = ft.Checkbox(
                 value=run.selected and can_select,
@@ -173,17 +167,13 @@ class RunSelectionDialog:
             run_controls.append(run_card)
 
         # Add info text about incomplete runs
-        has_incomplete = any(
-            not r.is_complete and r.actual_volumes > 0 for r in self.runs
-        )
+        has_incomplete = any(not r.is_complete and r.actual_volumes > 0 for r in self.runs)
         info_text = None
         if has_incomplete:
             info_text = ft.Container(
                 content=ft.Row(
                     [
-                        ft.Icon(
-                            ft.Icons.INFO_OUTLINE, color=ft.Colors.BLUE_700, size=18
-                        ),
+                        ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.BLUE_700, size=18),
                         ft.Text(
                             "Incomplete runs may still be usable but could affect mask quality.",
                             size=12,
@@ -211,7 +201,7 @@ class RunSelectionDialog:
             padding=10,
         )
 
-    def _build_actions(self) -> List[ft.Control]:
+    def _build_actions(self) -> list[ft.Control]:
         """Build dialog action buttons."""
         return [
             ft.TextButton(
@@ -236,16 +226,11 @@ class RunSelectionDialog:
     def _on_confirm_clicked(self, e):
         """Handle confirm button click."""
         # Get selected run IDs
-        selected_runs = [
-            run.run_id for run in self.runs if run.selected and run.actual_volumes > 0
-        ]
+        selected_runs = [run.run_id for run in self.runs if run.selected and run.actual_volumes > 0]
 
         if not selected_runs:
             # Show error - at least one run must be selected
-            _snack = ft.SnackBar(
-                ft.Text("Please select at least one run with data."),
-                bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("Please select at least one run with data."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()

@@ -46,7 +46,6 @@ Example:
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -108,21 +107,18 @@ class ReplayActivationProvider(ShamActivationProvider):
         self.mask_names = mask_names
 
         if not self.feedbacklog_path.exists():
-            raise FileNotFoundError(
-                f"Source feedbacklog not found: {self.feedbacklog_path}"
-            )
+            raise FileNotFoundError(f"Source feedbacklog not found: {self.feedbacklog_path}")
 
         self._data = self._load_feedbacklog()
         self._n_source_volumes = len(self._data)
 
         logger.info(
-            f"ReplayActivationProvider initialized with {self._n_source_volumes} "
-            f"volumes from {self.feedbacklog_path}"
+            f"ReplayActivationProvider initialized with {self._n_source_volumes} volumes from {self.feedbacklog_path}"
         )
 
     def _load_feedbacklog(self) -> pd.DataFrame:
         """Load and validate source feedbacklog."""
-        df = pd.read_csv(self.feedbacklog_path, sep='\t')
+        df = pd.read_csv(self.feedbacklog_path, sep="\t")
 
         # Check for required columns
         # Handle both old format (mask names directly) and new format (mask_delivered)
@@ -140,8 +136,7 @@ class ReplayActivationProvider(ShamActivationProvider):
 
         if missing_masks:
             raise ValueError(
-                f"Mask columns not found in feedbacklog: {missing_masks}. "
-                f"Available columns: {df.columns.tolist()}"
+                f"Mask columns not found in feedbacklog: {missing_masks}. Available columns: {df.columns.tolist()}"
             )
 
         return df
@@ -166,15 +161,11 @@ class ReplayActivationProvider(ShamActivationProvider):
 
         if volume > self._n_source_volumes:
             logger.debug(
-                f"Volume {volume} exceeds source length {self._n_source_volumes}, "
-                f"looping to index {source_idx}"
+                f"Volume {volume} exceeds source length {self._n_source_volumes}, looping to index {source_idx}"
             )
 
         row = self._data.iloc[source_idx]
-        return {
-            name: float(row[self._column_mapping[name]])
-            for name in self.mask_names
-        }
+        return {name: float(row[self._column_mapping[name]]) for name in self.mask_names}
 
 
 def load_randomization(file_path: Path) -> dict[str, dict]:
@@ -216,28 +207,25 @@ def load_randomization(file_path: Path) -> dict[str, dict]:
         raise FileNotFoundError(f"Randomization file not found: {file_path}")
 
     # Determine separator from extension
-    sep = '\t' if file_path.suffix.lower() in ('.tsv', '.txt') else ','
+    sep = "\t" if file_path.suffix.lower() in (".tsv", ".txt") else ","
     df = pd.read_csv(file_path, sep=sep)
 
     # Validate required columns
-    if 'subject_id' not in df.columns:
+    if "subject_id" not in df.columns:
         raise ValueError("Randomization file must have 'subject_id' column")
-    if 'condition' not in df.columns:
+    if "condition" not in df.columns:
         raise ValueError("Randomization file must have 'condition' column")
 
     result = {}
     for _, row in df.iterrows():
-        subject_id = str(row['subject_id'])
-        condition = str(row['condition']).lower()
+        subject_id = str(row["subject_id"])
+        condition = str(row["condition"]).lower()
 
-        if condition not in ('real', 'sham'):
-            raise ValueError(
-                f"Invalid condition '{condition}' for {subject_id}. "
-                f"Must be 'real' or 'sham'"
-            )
+        if condition not in ("real", "sham"):
+            raise ValueError(f"Invalid condition '{condition}' for {subject_id}. Must be 'real' or 'sham'")
 
-        matched_participant = row.get('matched_participant')
-        matched_visit = row.get('matched_visit')
+        matched_participant = row.get("matched_participant")
+        matched_visit = row.get("matched_visit")
 
         # Convert NaN to None
         if pd.isna(matched_participant):
@@ -251,9 +239,9 @@ def load_randomization(file_path: Path) -> dict[str, dict]:
             matched_visit = str(matched_visit)
 
         result[subject_id] = {
-            'condition': condition,
-            'matched_participant': matched_participant,
-            'matched_visit': matched_visit,
+            "condition": condition,
+            "matched_participant": matched_participant,
+            "matched_visit": matched_visit,
         }
 
     logger.info(f"Loaded randomization for {len(result)} participants from {file_path}")
@@ -264,9 +252,9 @@ def generate_randomization(
     participant_ids: list[str],
     n_sham: int,
     method: str = "simple",
-    matched_visit: Optional[str] = None,
-    output_path: Optional[Path] = None,
-    seed: Optional[int] = None,
+    matched_visit: str | None = None,
+    output_path: Path | None = None,
+    seed: int | None = None,
 ) -> pd.DataFrame:
     """Generate a randomization file assigning participants to real/sham conditions.
 
@@ -326,18 +314,12 @@ def generate_randomization(
         conditions[indices[i]] = "sham"
 
     # --- Build matched_participant column for replay method ---
-    matched_participants: list[Optional[str]] = [None] * len(participant_ids)
-    matched_visits: list[Optional[str]] = [None] * len(participant_ids)
+    matched_participants: list[str | None] = [None] * len(participant_ids)
+    matched_visits: list[str | None] = [None] * len(participant_ids)
 
     if method == "replay":
-        real_ids = [
-            participant_ids[i]
-            for i in range(len(participant_ids))
-            if conditions[i] == "real"
-        ]
-        sham_indices = [
-            i for i in range(len(participant_ids)) if conditions[i] == "sham"
-        ]
+        real_ids = [participant_ids[i] for i in range(len(participant_ids)) if conditions[i] == "real"]
+        sham_indices = [i for i in range(len(participant_ids)) if conditions[i] == "sham"]
 
         # Round-robin match sham → real
         for j, sham_idx in enumerate(sham_indices):
@@ -346,23 +328,22 @@ def generate_randomization(
                 matched_visits[sham_idx] = matched_visit
 
     # --- Build DataFrame ---
-    df = pd.DataFrame({
-        "subject_id": participant_ids,
-        "condition": conditions,
-        "matched_participant": matched_participants,
-        "matched_visit": matched_visits,
-        "notes": [""] * len(participant_ids),
-    })
+    df = pd.DataFrame(
+        {
+            "subject_id": participant_ids,
+            "condition": conditions,
+            "matched_participant": matched_participants,
+            "matched_visit": matched_visits,
+            "notes": [""] * len(participant_ids),
+        }
+    )
 
     # --- Write TSV if path provided ---
     if output_path is not None:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(output_path, sep="\t", index=False)
-        logger.info(
-            f"Generated randomization file: {output_path} "
-            f"({len(participant_ids)} participants, {n_sham} sham)"
-        )
+        logger.info(f"Generated randomization file: {output_path} ({len(participant_ids)} participants, {n_sham} sham)")
 
     return df
 
@@ -370,7 +351,7 @@ def generate_randomization(
 def get_condition_for_participant(
     randomization: dict[str, dict],
     participant_id: str,
-    visit_id: Optional[str] = None,
+    visit_id: str | None = None,
     default_condition: str = "real",
 ) -> dict:
     """Look up condition assignment for a participant.
@@ -394,18 +375,15 @@ def get_condition_for_participant(
     if participant_id in randomization:
         info = randomization[participant_id].copy()
         # Default matched_visit to current visit if not specified
-        if info.get('matched_visit') is None and visit_id is not None:
-            info['matched_visit'] = visit_id
+        if info.get("matched_visit") is None and visit_id is not None:
+            info["matched_visit"] = visit_id
         return info
 
-    logger.warning(
-        f"Participant {participant_id} not in randomization, "
-        f"defaulting to '{default_condition}'"
-    )
+    logger.warning(f"Participant {participant_id} not in randomization, defaulting to '{default_condition}'")
     return {
-        'condition': default_condition,
-        'matched_participant': None,
-        'matched_visit': None,
+        "condition": default_condition,
+        "matched_participant": None,
+        "matched_visit": None,
     }
 
 
@@ -415,7 +393,7 @@ def resolve_sham_masks(
     participant_id: str,
     twovol_subdir: str = "04_2vol",
     sham_mask_mode: str = "two_networks",
-    hemisphere_network: Optional[str] = None,
+    hemisphere_network: str | None = None,
     target_hemisphere: str = "right",
 ) -> list[Path]:
     """Get alternative mask paths for sham condition.
@@ -468,9 +446,7 @@ def resolve_sham_masks(
     # Build target list based on mode
     if sham_mask_mode == "hemisphere_split":
         if hemisphere_network is None:
-            raise ValueError(
-                "hemisphere_network is required for hemisphere_split mode"
-            )
+            raise ValueError("hemisphere_network is required for hemisphere_split mode")
         # Determine non-target hemisphere
         non_target_hemisphere = "left" if target_hemisphere == "right" else "right"
         # Build targets: [target_hemi, non_target_hemi]
@@ -491,8 +467,8 @@ def resolve_sham_masks(
         # Look for thresholded mask file with various naming patterns
         patterns = [
             f"{participant_id}_{target}_thr_to_*.nii.gz",  # 2vol coregistered
-            f"{participant_id}_{target}_thr.nii.gz",       # Non-coregistered
-            f"*_{target}_thr*.nii.gz",                     # Any matching pattern
+            f"{participant_id}_{target}_thr.nii.gz",  # Non-coregistered
+            f"*_{target}_thr*.nii.gz",  # Any matching pattern
         ]
 
         found = False
@@ -506,8 +482,7 @@ def resolve_sham_masks(
 
         if not found:
             raise FileNotFoundError(
-                f"Alternative mask for '{target}' not found in {masks_dir}. "
-                f"Tried patterns: {patterns}"
+                f"Alternative mask for '{target}' not found in {masks_dir}. Tried patterns: {patterns}"
             )
 
     return mask_files
@@ -516,7 +491,7 @@ def resolve_sham_masks(
 def find_feedbacklog_for_replay(
     source_dir: Path,
     matched_participant: str,
-    matched_visit: Optional[str],
+    matched_visit: str | None,
     task: str,
     run: int,
 ) -> Path:

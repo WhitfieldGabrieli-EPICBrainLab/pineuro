@@ -124,14 +124,18 @@ Generate QC report for feedback session:
 """
 
 # Standard library imports
+import logging
+import webbrowser
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Sequence, Tuple
-import webbrowser
+
+logger = logging.getLogger(__name__)
 
 # Third-party imports
 import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend (thread-safe, no GUI)
+
+matplotlib.use("Agg")  # Non-interactive backend (thread-safe, no GUI)
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -140,6 +144,7 @@ from nibabel import load
 # ============================================================================
 # SECTION 1: Core Plotting Primitives
 # ============================================================================
+
 
 def _configure_plot_style():
     """Apply consistent, publication-quality style to all plots.
@@ -159,42 +164,39 @@ def _configure_plot_style():
     Uses Agg backend which is thread-safe and doesn't require
     a display, making it suitable for server-side generation.
     """
-    plt.rcParams.update({
-        # Figure
-        'figure.dpi': 120,
-        'figure.facecolor': 'white',
-        'savefig.bbox': 'tight',
-        'savefig.dpi': 120,
-        'savefig.facecolor': 'white',
-
-        # Fonts
-        'font.family': 'sans-serif',
-        'font.sans-serif': ['Arial', 'DejaVu Sans', 'Liberation Sans'],
-        'font.size': 10,
-        'axes.titlesize': 12,
-        'axes.labelsize': 10,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 9,
-        'legend.fontsize': 9,
-
-        # Lines and colors
-        'lines.linewidth': 1.5,
-        'axes.linewidth': 0.8,
-        'grid.linewidth': 0.5,
-        'grid.alpha': 0.3,
-
-        # Axes
-        'axes.spines.top': False,
-        'axes.spines.right': False,
-        'axes.grid': True,
-        'axes.axisbelow': True,
-
-        # Colors (seaborn-like palette, colorblind-safe)
-        'axes.prop_cycle': plt.cycler('color', [
-            '#0173B2', '#DE8F05', '#029E73', '#CC78BC',
-            '#CA9161', '#949494', '#ECE133', '#56B4E9'
-        ])
-    })
+    plt.rcParams.update(
+        {
+            # Figure
+            "figure.dpi": 120,
+            "figure.facecolor": "white",
+            "savefig.bbox": "tight",
+            "savefig.dpi": 120,
+            "savefig.facecolor": "white",
+            # Fonts
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "DejaVu Sans", "Liberation Sans"],
+            "font.size": 10,
+            "axes.titlesize": 12,
+            "axes.labelsize": 10,
+            "xtick.labelsize": 9,
+            "ytick.labelsize": 9,
+            "legend.fontsize": 9,
+            # Lines and colors
+            "lines.linewidth": 1.5,
+            "axes.linewidth": 0.8,
+            "grid.linewidth": 0.5,
+            "grid.alpha": 0.3,
+            # Axes
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.grid": True,
+            "axes.axisbelow": True,
+            # Colors (seaborn-like palette, colorblind-safe)
+            "axes.prop_cycle": plt.cycler(
+                "color", ["#0173B2", "#DE8F05", "#029E73", "#CC78BC", "#CA9161", "#949494", "#ECE133", "#56B4E9"]
+            ),
+        }
+    )
 
 
 # Apply style configuration on module import
@@ -239,34 +241,29 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
 
         # On Linux X11, attempt to position browser window on specified screen
         # Skip on Wayland where xrandr/wmctrl won't work correctly
-        if (platform.system() == 'Linux' and screen != 0
-                and not config.is_wayland()):
+        if platform.system() == "Linux" and screen != 0 and not config.is_wayland():
             try:
                 # Get screen geometry using xrandr to handle different monitor setups
-                result = subprocess.run(
-                    ['xrandr', '--current'],
-                    capture_output=True,
-                    text=True,
-                    timeout=1.0
-                )
+                result = subprocess.run(["xrandr", "--current"], capture_output=True, text=True, timeout=1.0)
 
                 if result.returncode == 0:
                     # Parse xrandr output to find screen positions
                     # Format: "Screen N: connected primary WxH+X+Y"
                     import re
+
                     screens = []
-                    for line in result.stdout.split('\n'):
-                        match = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
-                        if match and ' connected' in line:
+                    for line in result.stdout.split("\n"):
+                        match = re.search(r"(\d+)x(\d+)\+(\d+)\+(\d+)", line)
+                        if match and " connected" in line:
                             width, height, x_offset, y_offset = map(int, match.groups())
-                            screens.append({'x': x_offset, 'y': y_offset, 'width': width, 'height': height})
+                            screens.append({"x": x_offset, "y": y_offset, "width": width, "height": height})
 
                     # If we found enough screens and target screen exists
                     if len(screens) > screen:
-                        target_x = screens[screen]['x']
-                        target_y = screens[screen]['y']
-                        screen_width = screens[screen]['width']
-                        screen_height = screens[screen]['height']
+                        target_x = screens[screen]["x"]
+                        target_y = screens[screen]["y"]
+                        screen_width = screens[screen]["width"]
+                        screen_height = screens[screen]["height"]
 
                         # Size window to fit screen with some margins
                         # Use 95% of screen width/height to avoid overlap and leave room for borders
@@ -281,12 +278,17 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
                         # Match browser window by title containing the filename
                         window_title = html_path.name
                         subprocess.Popen(
-                            ['bash', '-c',
-                             f'sleep 0.8 && wmctrl -r "{window_title}" -e "0,{window_x},{window_y},{window_width},{window_height}" 2>/dev/null || true'],
+                            [
+                                "bash",
+                                "-c",
+                                f'sleep 0.8 && wmctrl -r "{window_title}" -e "0,{window_x},{window_y},{window_width},{window_height}" 2>/dev/null || true',
+                            ],
                             stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
+                            stderr=subprocess.DEVNULL,
                         )
-                        logger.debug(f"Scheduled window positioning: screen {screen}, position ({window_x}, {window_y}), size {window_width}x{window_height}")
+                        logger.debug(
+                            f"Scheduled window positioning: screen {screen}, position ({window_x}, {window_y}), size {window_width}x{window_height}"
+                        )
                     else:
                         logger.debug(f"Could not detect screen {screen} geometry")
 
@@ -302,7 +304,6 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
 
     except Exception as e:
         logger.warning(f"Failed to open HTML in browser: {e}")
-
 
 
 @dataclass
@@ -344,10 +345,11 @@ class MaskSummary:
     ...     correlation=0.42
     ... )
     """
+
     name: str
     voxels: int
     volume_ml: float
-    centroid_ijk: Tuple[float, float, float]
+    centroid_ijk: tuple[float, float, float]
     chosen_component: int
     correlation: float = 0.0
 
@@ -385,12 +387,8 @@ def _pick_slices(n_slices: int, count: int = 6) -> list[int]:
 
 
 def select_slices_from_atlas(
-        atlas_path: Path,
-        labels: Sequence[str],
-        target_label: str,
-        top_n_per_plane: int = 1,
-        mask_path: Path | None = None
-) -> Dict[str, list[int]]:
+    atlas_path: Path, labels: Sequence[str], target_label: str, top_n_per_plane: int = 1, mask_path: Path | None = None
+) -> dict[str, list[int]]:
     """Choose optimal slice indices for visualizing a network mask.
 
     Selects slices that maximize network visibility by finding indices
@@ -518,19 +516,19 @@ def select_slices_from_atlas(
 
     # Axis mapping: sagittal=X(0), coronal=Y(1), axial=Z(2)
     return {
-        "axial": _top_slices(2, top_n_per_plane),      # Best Z slices
-        "coronal": _top_slices(1, top_n_per_plane),    # Best Y slices
-        "sagittal": _top_slices(0, top_n_per_plane),   # Best X slices
+        "axial": _top_slices(2, top_n_per_plane),  # Best Z slices
+        "coronal": _top_slices(1, top_n_per_plane),  # Best Y slices
+        "sagittal": _top_slices(0, top_n_per_plane),  # Best X slices
     }
 
 
 def plot_mask_overlay_tripanel(
-        mask_path: Path,
-        ref_path: Path,
-        out_path: Path,
-        slices: Dict[str, list[int]],
-        title: str | None = None,
-        cmap: str = "autumn"
+    mask_path: Path,
+    ref_path: Path,
+    out_path: Path,
+    slices: dict[str, list[int]],
+    title: str | None = None,
+    cmap: str = "autumn",
 ) -> None:
     """Create a tri-planar (sagittal, coronal, axial) mask overlay visualization.
 
@@ -620,7 +618,8 @@ def plot_mask_overlay_tripanel(
     # - Sagittal view: ANTERIOR (frontal lobe) on viewer's LEFT
     # =========================================================================
     import nibabel as nib
-    ref_orient = nib.aff2axcodes(ref_img.affine)  # e.g., ('R', 'A', 'S')
+
+    _ref_orient = nib.aff2axcodes(ref_img.affine)  # e.g., ('R', 'A', 'S')
 
     # Detect X-axis direction (affects axial and coronal flip)
     x_negative = ref_img.affine[0, 0] < 0  # True = L orientation (need flip)
@@ -646,7 +645,7 @@ def plot_mask_overlay_tripanel(
         raise ValueError(f"Unknown plane: {plane}")
 
     # --- Render each plane ---
-    for ax, (plane, axis_idx) in zip(axes, planes):
+    for ax, (plane, axis_idx) in zip(axes, planes, strict=False):
         # Get slice index, falling back to middle slice if not specified
         plane_slices = slices.get(plane, [])
         if not plane_slices:
@@ -704,7 +703,7 @@ def plot_mask_overlay_tripanel(
         )
 
         ax.set_axis_off()
-        ax.set_title(f"{plane.capitalize()} (slice {idx})", fontweight='normal')
+        ax.set_title(f"{plane.capitalize()} (slice {idx})", fontweight="normal")
 
     if title:
         fig.suptitle(title, fontsize=12)
@@ -718,11 +717,8 @@ def plot_mask_overlay_tripanel(
 # SECTION 2: Preprocessing QC
 # ============================================================================
 
-def plot_motion_timeseries(
-        motion_par_path: Path,
-        out_path: Path,
-        title: str | None = None
-) -> None:
+
+def plot_motion_timeseries(motion_par_path: Path, out_path: Path, title: str | None = None) -> None:
     """
     Plot motion parameters (6 DOF) over time.
 
@@ -747,30 +743,37 @@ def plot_motion_timeseries(
     fig, axes = plt.subplots(2, 3, figsize=(12, 6), constrained_layout=True)
     axes = axes.flatten()
 
-    labels = ['Rotation X (rad)', 'Rotation Y (rad)', 'Rotation Z (rad)',
-              'Translation X (mm)', 'Translation Y (mm)', 'Translation Z (mm)']
+    labels = [
+        "Rotation X (rad)",
+        "Rotation Y (rad)",
+        "Rotation Z (rad)",
+        "Translation X (mm)",
+        "Translation Y (mm)",
+        "Translation Z (mm)",
+    ]
 
-    for idx, (ax, label) in enumerate(zip(axes, labels)):
+    for idx, (ax, label) in enumerate(zip(axes, labels, strict=False)):
         data = params[:, idx]
 
-        ax.plot(range(n_volumes), data, linewidth=1.5, color='#0173B2')
-        ax.axhline(0, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
+        ax.plot(range(n_volumes), data, linewidth=1.5, color="#0173B2")
+        ax.axhline(0, color="gray", linestyle="--", linewidth=0.8, alpha=0.5)
 
         # Highlight outliers (> 3 SD)
         mean_val = np.mean(data)
         std_val = np.std(data)
         outliers = np.abs(data - mean_val) > 3 * std_val
         if outliers.any():
-            ax.scatter(np.where(outliers)[0], data[outliers],
-                      color='#d62728', s=30, zorder=10, label=f'Outliers (>{3}σ)')
-            ax.legend(loc='best', fontsize=8)
+            ax.scatter(
+                np.where(outliers)[0], data[outliers], color="#d62728", s=30, zorder=10, label=f"Outliers (>{3}σ)"
+            )
+            ax.legend(loc="best", fontsize=8)
 
-        ax.set_xlabel('Volume', fontweight='bold')
-        ax.set_ylabel(label, fontweight='bold')
-        ax.set_title(label.split(' ')[0] + ' ' + label.split(' ')[1], fontsize=10)
+        ax.set_xlabel("Volume", fontweight="bold")
+        ax.set_ylabel(label, fontweight="bold")
+        ax.set_title(label.split(" ")[0] + " " + label.split(" ")[1], fontsize=10)
 
     if title:
-        fig.suptitle(title, fontsize=14, fontweight='bold')
+        fig.suptitle(title, fontsize=14, fontweight="bold")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -778,10 +781,7 @@ def plot_motion_timeseries(
 
 
 def plot_motion_framewise_displacement(
-        motion_par_path: Path,
-        out_path: Path,
-        threshold: float = 0.5,
-        title: str | None = None
+    motion_par_path: Path, out_path: Path, threshold: float = 0.5, title: str | None = None
 ) -> None:
     """
     Plot framewise displacement (FD) over time.
@@ -815,42 +815,42 @@ def plot_motion_framewise_displacement(
     # Create figure
     fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
 
-    ax.plot(range(1, n_volumes + 1), fd, linewidth=1.5, color='#0173B2', label='FD')
-    ax.axhline(threshold, color='#d62728', linestyle='--', linewidth=1.5,
-               label=f'Threshold ({threshold} mm)')
+    ax.plot(range(1, n_volumes + 1), fd, linewidth=1.5, color="#0173B2", label="FD")
+    ax.axhline(threshold, color="#d62728", linestyle="--", linewidth=1.5, label=f"Threshold ({threshold} mm)")
 
     # Shade regions above threshold
     above_thresh = fd > threshold
     if above_thresh.any():
         for i in range(n_volumes):
             if above_thresh[i]:
-                ax.axvspan(i + 0.5, i + 1.5, color='#d62728', alpha=0.2)
+                ax.axvspan(i + 0.5, i + 1.5, color="#d62728", alpha=0.2)
 
     # Summary statistics
     mean_fd = np.mean(fd)
     pct_above = (above_thresh.sum() / n_volumes) * 100
-    ax.text(0.02, 0.98, f'Mean FD: {mean_fd:.3f} mm\n{pct_above:.1f}% volumes > {threshold} mm',
-            transform=ax.transAxes, fontsize=10, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    ax.text(
+        0.02,
+        0.98,
+        f"Mean FD: {mean_fd:.3f} mm\n{pct_above:.1f}% volumes > {threshold} mm",
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+    )
 
-    ax.set_xlabel('Volume', fontweight='bold')
-    ax.set_ylabel('Framewise Displacement (mm)', fontweight='bold')
-    ax.legend(loc='upper right')
+    ax.set_xlabel("Volume", fontweight="bold")
+    ax.set_ylabel("Framewise Displacement (mm)", fontweight="bold")
+    ax.legend(loc="upper right")
 
     if title:
-        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
     plt.close(fig)
 
 
-def plot_brain_mask_coverage(
-        mask_path: Path,
-        ref_path: Path,
-        out_path: Path,
-        title: str | None = None
-) -> None:
+def plot_brain_mask_coverage(mask_path: Path, ref_path: Path, out_path: Path, title: str | None = None) -> None:
     """
     Plot brain mask overlay on BOLD reference to verify extraction quality.
 
@@ -874,7 +874,7 @@ def plot_brain_mask_coverage(
     slices = {
         "axial": [mask_data.shape[2] // 2],
         "coronal": [mask_data.shape[1] // 2],
-        "sagittal": [mask_data.shape[0] // 2]
+        "sagittal": [mask_data.shape[0] // 2],
     }
 
     plot_mask_overlay_tripanel(
@@ -883,16 +883,11 @@ def plot_brain_mask_coverage(
         out_path=out_path,
         slices=slices,
         title=title or "Brain Mask Coverage",
-        cmap="autumn"
+        cmap="autumn",
     )
 
 
-def plot_registration_overlay(
-        ref_path: Path,
-        moving_path: Path,
-        out_path: Path,
-        title: str | None = None
-) -> None:
+def plot_registration_overlay(ref_path: Path, moving_path: Path, out_path: Path, title: str | None = None) -> None:
     """
     Plot edge overlay to verify registration quality.
 
@@ -919,20 +914,15 @@ def plot_registration_overlay(
         raise ValueError(f"Shape mismatch: ref {ref.shape} vs moving {moving.shape}")
 
     # Check orientation for radiological convention
-    import nibabel as nib
     x_negative = ref_img.affine[0, 0] < 0  # True for L orientation
     y_negative = ref_img.affine[1, 1] < 0  # True for A orientation
 
     # Detect edges using Sobel filter
-    ref_edges = ndimage.sobel(ref)
+    _ref_edges = ndimage.sobel(ref)
     moving_edges = ndimage.sobel(moving)
 
     # Select middle slices
-    slices_idx = {
-        "axial": ref.shape[2] // 2,
-        "coronal": ref.shape[1] // 2,
-        "sagittal": ref.shape[0] // 2
-    }
+    slices_idx = {"axial": ref.shape[2] // 2, "coronal": ref.shape[1] // 2, "sagittal": ref.shape[0] // 2}
 
     def _get_slice(data: np.ndarray, plane: str) -> np.ndarray:
         idx = slices_idx[plane]
@@ -948,7 +938,7 @@ def plot_registration_overlay(
 
     ref_min, ref_max = np.percentile(ref, [2, 98])
 
-    for ax, plane in zip(axes, ["sagittal", "coronal", "axial"]):
+    for ax, plane in zip(axes, ["sagittal", "coronal", "axial"], strict=False):
         ref_slice = _get_slice(ref, plane)
         moving_edge_slice = _get_slice(moving_edges, plane)
 
@@ -978,13 +968,13 @@ def plot_registration_overlay(
         # Overlay edges from moving image in red
         edge_thresh = np.percentile(moving_edge_slice[moving_edge_slice > 0], 75)
         edge_mask = moving_edge_slice > edge_thresh
-        ax.contour(edge_mask, levels=[0.5], colors=['#d62728'], linewidths=1.2, alpha=0.8)
+        ax.contour(edge_mask, levels=[0.5], colors=["#d62728"], linewidths=1.2, alpha=0.8)
 
         ax.set_axis_off()
-        ax.set_title(f"{plane.capitalize()} (slice {slices_idx[plane]})", fontweight='normal')
+        ax.set_title(f"{plane.capitalize()} (slice {slices_idx[plane]})", fontweight="normal")
 
     if title:
-        fig.suptitle(title, fontsize=12, fontweight='bold')
+        fig.suptitle(title, fontsize=12, fontweight="bold")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -992,11 +982,7 @@ def plot_registration_overlay(
 
 
 def generate_preprocessing_report(
-        preprocessing_dir: Path,
-        participant_id: str,
-        task: str,
-        output_dir: Path | None = None,
-        overwrite: bool = False
+    preprocessing_dir: Path, participant_id: str, task: str, output_dir: Path | None = None, overwrite: bool = False
 ) -> Path:
     """
     Generate comprehensive QC report for preprocessing outputs.
@@ -1038,14 +1024,14 @@ def generate_preprocessing_report(
     logger = logging.getLogger(__name__)
 
     preprocessing_dir = Path(preprocessing_dir)
-    output_dir = Path(output_dir) if output_dir is not None else preprocessing_dir / 'qc'
+    output_dir = Path(output_dir) if output_dir is not None else preprocessing_dir / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Generating preprocessing QC report for {participant_id}, task={task}")
 
     # Auto-discover outputs
     mcf_dir = preprocessing_dir / "02_motion_correction"
-    brain_dir = preprocessing_dir / "03_brain_extraction"
+    _brain_dir = preprocessing_dir / "03_brain_extraction"
     coreg_dir = preprocessing_dir / "04_coregistered"
 
     # Find motion parameter files (.par files from mcflirt -plots)
@@ -1068,86 +1054,81 @@ def generate_preprocessing_report(
 
     # Summary box
     summary_data = {
-        'Participant': participant_id,
-        'Task': task,
-        'Number of runs': str(len(par_files)) if par_files else 'N/A',
-        'Multi-run coregistration': 'Yes' if coreg_files else 'No'
+        "Participant": participant_id,
+        "Task": task,
+        "Number of runs": str(len(par_files)) if par_files else "N/A",
+        "Multi-run coregistration": "Yes" if coreg_files else "No",
     }
-    sections.append({'type': 'summary', 'content': summary_data})
+    sections.append({"type": "summary", "content": summary_data})
 
     # Generate motion plots
     if par_files:
-        sections.append({'type': 'heading', 'content': 'Motion Parameters'})
+        sections.append({"type": "heading", "content": "Motion Parameters"})
 
         motion_plots = []
         fd_plots = []
 
         for par_file in par_files:
             par_path = Path(par_file)
-            run_name = par_path.stem.replace('.par', '')
+            run_name = par_path.stem.replace(".par", "")
 
             # Motion timeseries
             motion_out = output_dir / f"motion_timeseries_{run_name}.png"
             if overwrite or not motion_out.exists():
                 logger.info(f"Generating motion timeseries for {run_name}")
                 plot_motion_timeseries(
-                    motion_par_path=par_path,
-                    out_path=motion_out,
-                    title=f"Motion Parameters - {run_name}"
+                    motion_par_path=par_path, out_path=motion_out, title=f"Motion Parameters - {run_name}"
                 )
-            motion_plots.append({
-                'title': f'{run_name}',
-                'path': motion_out.relative_to(output_dir).as_posix(),
-                'alt': f'Motion parameters for {run_name}'
-            })
+            motion_plots.append(
+                {
+                    "title": f"{run_name}",
+                    "path": motion_out.relative_to(output_dir).as_posix(),
+                    "alt": f"Motion parameters for {run_name}",
+                }
+            )
 
             # Framewise displacement
             fd_out = output_dir / f"framewise_displacement_{run_name}.png"
             if overwrite or not fd_out.exists():
                 logger.info(f"Generating framewise displacement for {run_name}")
                 plot_motion_framewise_displacement(
-                    motion_par_path=par_path,
-                    out_path=fd_out,
-                    title=f"Framewise Displacement - {run_name}"
+                    motion_par_path=par_path, out_path=fd_out, title=f"Framewise Displacement - {run_name}"
                 )
-            fd_plots.append({
-                'title': f'{run_name}',
-                'path': fd_out.relative_to(output_dir).as_posix(),
-                'alt': f'Framewise displacement for {run_name}'
-            })
+            fd_plots.append(
+                {
+                    "title": f"{run_name}",
+                    "path": fd_out.relative_to(output_dir).as_posix(),
+                    "alt": f"Framewise displacement for {run_name}",
+                }
+            )
 
-        sections.append({'type': 'grid', 'content': motion_plots})
+        sections.append({"type": "grid", "content": motion_plots})
 
-        sections.append({'type': 'heading', 'content': 'Framewise Displacement'})
-        sections.append({'type': 'grid', 'content': fd_plots})
+        sections.append({"type": "heading", "content": "Framewise Displacement"})
+        sections.append({"type": "grid", "content": fd_plots})
     else:
         logger.warning(f"No motion parameter files found in {mcf_dir}")
 
     # Brain mask coverage
     if mask_file.exists() and ref_file.exists():
-        sections.append({'type': 'heading', 'content': 'Brain Mask Coverage'})
+        sections.append({"type": "heading", "content": "Brain Mask Coverage"})
 
         mask_out = output_dir / "brain_mask_coverage.png"
         if overwrite or not mask_out.exists():
             logger.info("Generating brain mask coverage plot")
             plot_brain_mask_coverage(
-                mask_path=mask_file,
-                ref_path=ref_file,
-                out_path=mask_out,
-                title="Brain Mask on BOLD Reference"
+                mask_path=mask_file, ref_path=ref_file, out_path=mask_out, title="Brain Mask on BOLD Reference"
             )
 
-        sections.append({
-            'type': 'single_image',
-            'path': mask_out.relative_to(output_dir).as_posix(),
-            'alt': 'Brain mask coverage'
-        })
+        sections.append(
+            {"type": "single_image", "path": mask_out.relative_to(output_dir).as_posix(), "alt": "Brain mask coverage"}
+        )
     else:
         logger.warning(f"Brain mask or reference not found: {mask_file}, {ref_file}")
 
     # Multi-run coregistration overlays
     if len(coreg_files) > 1:
-        sections.append({'type': 'heading', 'content': 'Multi-Run Coregistration'})
+        sections.append({"type": "heading", "content": "Multi-Run Coregistration"})
 
         reg_plots = []
         # Compare run 2+ to run 1
@@ -1163,16 +1144,18 @@ def generate_preprocessing_report(
                     ref_path=ref_run,
                     moving_path=moving_path,
                     out_path=reg_out,
-                    title=f"Registration: {run_name} → run-01"
+                    title=f"Registration: {run_name} → run-01",
                 )
 
-            reg_plots.append({
-                'title': f'{run_name} → run-01',
-                'path': reg_out.relative_to(output_dir).as_posix(),
-                'alt': f'Registration overlay for {run_name}'
-            })
+            reg_plots.append(
+                {
+                    "title": f"{run_name} → run-01",
+                    "path": reg_out.relative_to(output_dir).as_posix(),
+                    "alt": f"Registration overlay for {run_name}",
+                }
+            )
 
-        sections.append({'type': 'grid', 'content': reg_plots})
+        sections.append({"type": "grid", "content": reg_plots})
 
     # Generate HTML report
     html_report = output_dir / f"{participant_id}_task-{task}_preprocessing_qc.html"
@@ -1180,7 +1163,7 @@ def generate_preprocessing_report(
         title=f"Preprocessing QC - {participant_id}",
         participant_id=participant_id,
         stage=f"Preprocessing (task: {task})",
-        sections=sections
+        sections=sections,
     )
     html_report.write_text(html)
 
@@ -1192,11 +1175,8 @@ def generate_preprocessing_report(
 # SECTION 3: Mask Extraction QC
 # ============================================================================
 
-def plot_corr_heatmap(
-        corr_df: pd.DataFrame,
-        chosen_components: Mapping[str, int],
-        out_path: Path
-) -> None:
+
+def plot_corr_heatmap(corr_df: pd.DataFrame, chosen_components: Mapping[str, int], out_path: Path) -> None:
     """
     Render ICA component × network correlation heatmap.
 
@@ -1212,8 +1192,8 @@ def plot_corr_heatmap(
     fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
 
     im = ax.imshow(corr_df.values, aspect="auto", cmap="viridis", vmin=0, vmax=0.5)
-    ax.set_xlabel("Yeo Networks", fontweight='bold')
-    ax.set_ylabel("ICA Component Index", fontweight='bold')
+    ax.set_xlabel("Yeo Networks", fontweight="bold")
+    ax.set_ylabel("ICA Component Index", fontweight="bold")
     ax.set_xticks(range(corr_df.shape[1]))
     ax.set_xticklabels(corr_df.columns, rotation=45, ha="right")
     ax.set_yticks(range(corr_df.shape[0]))
@@ -1229,7 +1209,7 @@ def plot_corr_heatmap(
             ax.scatter(j, comp_idx, marker="o", color="#d62728", s=50, edgecolors="white", linewidths=1.5, zorder=11)
 
     cbar = fig.colorbar(im, ax=ax, shrink=0.85, label="Spatial Correlation (r)")
-    cbar.ax.set_ylabel("Spatial Correlation (r)", rotation=270, labelpad=20, fontweight='bold')
+    cbar.ax.set_ylabel("Spatial Correlation (r)", rotation=270, labelpad=20, fontweight="bold")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -1237,11 +1217,7 @@ def plot_corr_heatmap(
 
 
 def plot_ica_component_grid(
-        components_path: Path,
-        ref_path: Path,
-        out_path: Path,
-        n_components: int = 10,
-        title: str | None = None
+    components_path: Path, ref_path: Path, out_path: Path, n_components: int = 10, title: str | None = None
 ) -> None:
     """
     Plot ICA components in a grid layout (5x2 for 10 components).
@@ -1266,9 +1242,8 @@ def plot_ica_component_grid(
     ref_data = ref_img.get_fdata()
 
     # Check orientation
-    import nibabel as nib
     x_negative = ref_img.affine[0, 0] < 0
-    y_negative = ref_img.affine[1, 1] < 0
+    _y_negative = ref_img.affine[1, 1] < 0
 
     # Determine grid layout
     n_cols = 2
@@ -1314,30 +1289,25 @@ def plot_ica_component_grid(
                 origin="lower",
                 vmin=-comp_max,
                 vmax=comp_max,
-                alpha=0.8
+                alpha=0.8,
             )
 
         ax.set_axis_off()
-        ax.set_title(f"IC {idx}", fontsize=10, fontweight='normal')
+        ax.set_title(f"IC {idx}", fontsize=10, fontweight="normal")
 
     # Hide unused subplots
     for idx in range(n_components, len(axes)):
         axes[idx].set_visible(False)
 
     if title:
-        fig.suptitle(title, fontsize=12, fontweight='bold')
+        fig.suptitle(title, fontsize=12, fontweight="bold")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
     plt.close(fig)
 
 
-def summarize_mask(
-        mask_path: Path,
-        name: str,
-        chosen_component: int = -1,
-        correlation: float = 0.0
-) -> MaskSummary:
+def summarize_mask(mask_path: Path, name: str, chosen_component: int = -1, correlation: float = 0.0) -> MaskSummary:
     """Compute basic metrics for a network mask.
 
     Loads a thresholded mask NIfTI and computes summary statistics
@@ -1401,18 +1371,18 @@ def summarize_mask(
         volume_ml=volume_ml,
         centroid_ijk=tuple(round(c, 2) for c in centroid),
         chosen_component=chosen_component,
-        correlation=correlation
+        correlation=correlation,
     )
 
 
 def generate_mask_extraction_report(
-        mask_extraction_dir: Path,
-        participant_id: str,
-        network_names: Sequence[str],
-        output_dir: Path | None = None,
-        n_yeo: int | None = None,
-        overwrite: bool = False,
-        open_browser: bool = False
+    mask_extraction_dir: Path,
+    participant_id: str,
+    network_names: Sequence[str],
+    output_dir: Path | None = None,
+    n_yeo: int | None = None,
+    overwrite: bool = False,
+    open_browser: bool = False,
 ) -> Path:
     """
     Generate comprehensive QC report for mask extraction outputs.
@@ -1460,7 +1430,7 @@ def generate_mask_extraction_report(
     logger = logging.getLogger(__name__)
 
     mask_extraction_dir = Path(mask_extraction_dir)
-    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Generating mask extraction QC report for {participant_id}")
@@ -1501,12 +1471,12 @@ def generate_mask_extraction_report(
 
     # Summary box
     summary_data = {
-        'Participant': participant_id,
-        'ICA components': str(components_file.exists()),
-        'Networks extracted': f"{len(network_masks)} / {len(network_names)}",
-        'Correlation matrix': str(corr_file.exists())
+        "Participant": participant_id,
+        "ICA components": str(components_file.exists()),
+        "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
+        "Correlation matrix": str(corr_file.exists()),
     }
-    sections.append({'type': 'summary', 'content': summary_data})
+    sections.append({"type": "summary", "content": summary_data})
 
     # Load correlation data if available
     corr_df = None
@@ -1519,7 +1489,7 @@ def generate_mask_extraction_report(
 
     # ICA component grid
     if components_file.exists() and ref_file and ref_file.exists():
-        sections.append({'type': 'heading', 'content': 'ICA Components'})
+        sections.append({"type": "heading", "content": "ICA Components"})
 
         ica_grid_out = output_dir / "ica_component_grid.png"
         if overwrite or not ica_grid_out.exists():
@@ -1529,32 +1499,37 @@ def generate_mask_extraction_report(
                 ref_path=ref_file,
                 out_path=ica_grid_out,
                 n_components=min(10, corr_df.shape[0] if corr_df is not None else 10),
-                title="ICA Components (axial view)"
+                title="ICA Components (axial view)",
             )
 
-        sections.append({
-            'type': 'single_image',
-            'path': ica_grid_out.relative_to(output_dir).as_posix(),
-            'alt': 'ICA component grid'
-        })
+        sections.append(
+            {
+                "type": "single_image",
+                "path": ica_grid_out.relative_to(output_dir).as_posix(),
+                "alt": "ICA component grid",
+            }
+        )
 
     # Correlation heatmap
     if corr_df is not None:
-        sections.append({'type': 'heading', 'content': 'ICA × Yeo Network Correlations'})
+        sections.append({"type": "heading", "content": "ICA × Yeo Network Correlations"})
 
         heatmap_out = output_dir / "correlation_heatmap.png"
         if overwrite or not heatmap_out.exists():
             logger.info("Generating correlation heatmap")
             plot_corr_heatmap(corr_df, chosen_components, heatmap_out)
 
-        sections.append({
-            'type': 'single_image',
-            'path': heatmap_out.relative_to(output_dir).as_posix(),
-            'alt': 'Correlation heatmap'
-        })
+        sections.append(
+            {
+                "type": "single_image",
+                "path": heatmap_out.relative_to(output_dir).as_posix(),
+                "alt": "Correlation heatmap",
+            }
+        )
 
     # Determine number of networks and get Yeo labels (needed for both subject and MNI overlays)
     from pineuro.utils import get_yeo_labels
+
     if n_yeo is not None:
         n_networks = n_yeo
     else:
@@ -1589,7 +1564,7 @@ def generate_mask_extraction_report(
                     labels=labels,
                     target_label=network,
                     top_n_per_plane=1,
-                    mask_path=mask_path
+                    mask_path=mask_path,
                 )
 
                 plot_mask_overlay_tripanel(
@@ -1597,7 +1572,7 @@ def generate_mask_extraction_report(
                     ref_path=ref_file,
                     out_path=overlay_png,
                     slices=atlas_slices,
-                    title=f"{network} ({summary.voxels} voxels)"
+                    title=f"{network} ({summary.voxels} voxels)",
                 )
 
     # MNI space overlays removed for performance optimization
@@ -1636,7 +1611,9 @@ def generate_mask_extraction_report(
 
                 for network, mask_path in network_masks.items():
                     # Find warped mask for this run
-                    mask_2vol = twovol_masks_dir / f"{participant_id}_{network}_thr_to_task-2vol_run-{run_str}_mean.nii.gz"
+                    mask_2vol = (
+                        twovol_masks_dir / f"{participant_id}_{network}_thr_to_task-2vol_run-{run_str}_mean.nii.gz"
+                    )
 
                     if not mask_2vol.exists():
                         logger.warning(f"2vol mask not found for {network}, run {run_str}: {mask_2vol}")
@@ -1655,7 +1632,7 @@ def generate_mask_extraction_report(
                             labels=labels,
                             target_label=network,
                             top_n_per_plane=1,
-                            mask_path=mask_2vol
+                            mask_path=mask_2vol,
                         )
 
                         plot_mask_overlay_tripanel(
@@ -1663,20 +1640,17 @@ def generate_mask_extraction_report(
                             ref_path=mean_path,
                             out_path=overlay_png,
                             slices=atlas_slices_2vol,
-                            title=f"{network} (2vol run {run_str}, {summary.voxels} voxels)"
+                            title=f"{network} (2vol run {run_str}, {summary.voxels} voxels)",
                         )
 
     # Display overlays in report (subject and 2vol - MNI removed for performance)
-    overlay_spaces = [
-        ("BOLD reference", subject_overlay_dir),
-        ("2vol feedback", overlays_dir / "2vol")
-    ]
+    overlay_spaces = [("BOLD reference", subject_overlay_dir), ("2vol feedback", overlays_dir / "2vol")]
 
     for space_name, overlay_dir in overlay_spaces:
         if overlay_dir.exists():
             overlays = sorted(glob(str(overlay_dir / f"{participant_id}_*_overlay.png")))
             if overlays:
-                sections.append({'type': 'heading', 'content': f'Mask Overlays ({space_name})'})
+                sections.append({"type": "heading", "content": f"Mask Overlays ({space_name})"})
                 grid_items = []
                 for overlay_path in overlays:
                     overlay_file = Path(overlay_path)
@@ -1684,42 +1658,52 @@ def generate_mask_extraction_report(
                     if space_name == "2vol feedback":
                         # Extract network_run-XX from filename
                         stem = overlay_file.stem.replace(f"{participant_id}_", "").replace("_overlay", "")
-                        grid_items.append({
-                            'title': stem,
-                            'path': overlay_file.relative_to(output_dir).as_posix(),
-                            'alt': f'{stem} overlay ({space_name})'
-                        })
+                        grid_items.append(
+                            {
+                                "title": stem,
+                                "path": overlay_file.relative_to(output_dir).as_posix(),
+                                "alt": f"{stem} overlay ({space_name})",
+                            }
+                        )
                     else:
                         network_name = overlay_file.stem.replace(f"{participant_id}_", "").replace("_overlay", "")
-                        grid_items.append({
-                            'title': network_name,
-                            'path': overlay_file.relative_to(output_dir).as_posix(),
-                            'alt': f'{network_name} overlay ({space_name})'
-                        })
-                sections.append({'type': 'grid', 'content': grid_items})
+                        grid_items.append(
+                            {
+                                "title": network_name,
+                                "path": overlay_file.relative_to(output_dir).as_posix(),
+                                "alt": f"{network_name} overlay ({space_name})",
+                            }
+                        )
+                sections.append({"type": "grid", "content": grid_items})
 
     # Mask summary table
     if network_masks:
-        sections.append({'type': 'heading', 'content': 'Mask Summary'})
+        sections.append({"type": "heading", "content": "Mask Summary"})
         table_rows = []
         for network, mask_path in network_masks.items():
             chosen_comp = chosen_components.get(network, -1)
-            correlation = float(corr_df.loc[chosen_comp, network]) if corr_df is not None and network in corr_df.columns else 0.0
+            correlation = (
+                float(corr_df.loc[chosen_comp, network]) if corr_df is not None and network in corr_df.columns else 0.0
+            )
             summary = summarize_mask(mask_path, name=network, chosen_component=chosen_comp, correlation=correlation)
-            table_rows.append([
-                summary.name,
-                str(summary.voxels),
-                f"{summary.volume_ml:.2f}",
-                str(summary.centroid_ijk),
-                str(summary.chosen_component),
-                f"{summary.correlation:.3f}"
-            ])
+            table_rows.append(
+                [
+                    summary.name,
+                    str(summary.voxels),
+                    f"{summary.volume_ml:.2f}",
+                    str(summary.centroid_ijk),
+                    str(summary.chosen_component),
+                    f"{summary.correlation:.3f}",
+                ]
+            )
 
-        sections.append({
-            'type': 'table',
-            'headers': ['Name', 'Voxels', 'Volume (mL)', 'Centroid (i,j,k)', 'Chosen component', 'Correlation (r)'],
-            'rows': table_rows
-        })
+        sections.append(
+            {
+                "type": "table",
+                "headers": ["Name", "Voxels", "Volume (mL)", "Centroid (i,j,k)", "Chosen component", "Correlation (r)"],
+                "rows": table_rows,
+            }
+        )
 
     # Generate HTML report
     html_report = output_dir / f"{participant_id}_mask_extraction_qc.html"
@@ -1727,7 +1711,7 @@ def generate_mask_extraction_report(
         title=f"Mask Extraction QC - {participant_id}",
         participant_id=participant_id,
         stage="Mask Extraction",
-        sections=sections
+        sections=sections,
     )
     html_report.write_text(html)
 
@@ -1740,14 +1724,14 @@ def generate_mask_extraction_report(
 
 
 def generate_task_mask_extraction_report(
-        mask_extraction_dir: Path,
-        participant_id: str,
-        mask_names: Sequence[str],
-        contrasts: dict[str, str],
-        stat_type: str = "t",
-        output_dir: Path | None = None,
-        overwrite: bool = False,
-        open_browser: bool = False
+    mask_extraction_dir: Path,
+    participant_id: str,
+    mask_names: Sequence[str],
+    contrasts: dict[str, str],
+    stat_type: str = "t",
+    output_dir: Path | None = None,
+    overwrite: bool = False,
+    open_browser: bool = False,
 ) -> Path:
     """
     Generate QC report for task-based (GLM) mask extraction outputs.
@@ -1785,7 +1769,7 @@ def generate_task_mask_extraction_report(
     logger = logging.getLogger(__name__)
 
     mask_extraction_dir = Path(mask_extraction_dir)
-    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Generating task-based mask extraction QC report for {participant_id}")
@@ -1809,7 +1793,8 @@ def generate_task_mask_extraction_report(
     glm_info = None
     if glm_info_file.exists():
         import json
-        with open(glm_info_file, 'r') as f:
+
+        with open(glm_info_file) as f:
             glm_info = json.load(f)
 
     # Find network masks
@@ -1824,41 +1809,35 @@ def generate_task_mask_extraction_report(
 
     # Summary box
     summary_data = {
-        'Participant': participant_id,
-        'Extraction method': 'GLM contrast (task localizer)',
-        'Stat type': stat_type,
-        'Masks extracted': f"{len(network_masks)} / {len(mask_names)}",
+        "Participant": participant_id,
+        "Extraction method": "GLM contrast (task localizer)",
+        "Stat type": stat_type,
+        "Masks extracted": f"{len(network_masks)} / {len(mask_names)}",
     }
     if glm_info:
-        summary_data['Conditions'] = ', '.join(glm_info.get('conditions', []))
-        summary_data['N volumes'] = str(glm_info.get('n_volumes', '?'))
-        summary_data['HRF model'] = glm_info.get('hrf_model', '?')
-    sections.append({'type': 'summary', 'content': summary_data})
+        summary_data["Conditions"] = ", ".join(glm_info.get("conditions", []))
+        summary_data["N volumes"] = str(glm_info.get("n_volumes", "?"))
+        summary_data["HRF model"] = glm_info.get("hrf_model", "?")
+    sections.append({"type": "summary", "content": summary_data})
 
     # Contrast definitions
-    sections.append({'type': 'heading', 'content': 'Contrast Definitions'})
+    sections.append({"type": "heading", "content": "Contrast Definitions"})
     contrast_rows = [[name, expr] for name, expr in contrasts.items()]
-    sections.append({
-        'type': 'table',
-        'headers': ['Mask Name', 'Contrast Expression'],
-        'rows': contrast_rows
-    })
+    sections.append({"type": "table", "headers": ["Mask Name", "Contrast Expression"], "rows": contrast_rows})
 
     # Design matrix visualization
     design_file = glm_dir / f"{participant_id}_design_matrix.tsv"
     if design_file.exists():
-        sections.append({'type': 'heading', 'content': 'Design Matrix'})
+        sections.append({"type": "heading", "content": "Design Matrix"})
 
         design_png = output_dir / "design_matrix.png"
         if overwrite or not design_png.exists():
             logger.info("Generating design matrix plot")
             _plot_task_design_matrix(design_file, design_png)
 
-        sections.append({
-            'type': 'single_image',
-            'path': design_png.relative_to(output_dir).as_posix(),
-            'alt': 'GLM design matrix'
-        })
+        sections.append(
+            {"type": "single_image", "path": design_png.relative_to(output_dir).as_posix(), "alt": "GLM design matrix"}
+        )
 
     # Contrast stat map overlays
     if ref_file and ref_file.exists():
@@ -1866,7 +1845,7 @@ def generate_task_mask_extraction_report(
         subject_overlay_dir.mkdir(parents=True, exist_ok=True)
 
         for mask_name in mask_names:
-            stat_map_path = glm_dir / f"{participant_id}_{mask_name}_{stat_type}map.nii.gz"
+            _stat_map_path = glm_dir / f"{participant_id}_{mask_name}_{stat_type}map.nii.gz"
             mask_path = network_masks.get(mask_name)
 
             if mask_path and mask_path.exists():
@@ -1878,11 +1857,7 @@ def generate_task_mask_extraction_report(
 
                     # Use mask itself for slice selection (no atlas needed)
                     atlas_slices = select_slices_from_atlas(
-                        atlas_path=ref_file,
-                        labels=[],
-                        target_label="",
-                        top_n_per_plane=1,
-                        mask_path=mask_path
+                        atlas_path=ref_file, labels=[], target_label="", top_n_per_plane=1, mask_path=mask_path
                     )
 
                     plot_mask_overlay_tripanel(
@@ -1890,7 +1865,7 @@ def generate_task_mask_extraction_report(
                         ref_path=ref_file,
                         out_path=overlay_png,
                         slices=atlas_slices,
-                        title=f"{mask_name}: {contrasts.get(mask_name, '')} ({summary.voxels} voxels)"
+                        title=f"{mask_name}: {contrasts.get(mask_name, '')} ({summary.voxels} voxels)",
                     )
 
     # Display overlays
@@ -1898,37 +1873,43 @@ def generate_task_mask_extraction_report(
     if subject_overlay_dir.exists():
         overlays = sorted(glob(str(subject_overlay_dir / f"{participant_id}_*_overlay.png")))
         if overlays:
-            sections.append({'type': 'heading', 'content': 'Mask Overlays (BOLD reference)'})
+            sections.append({"type": "heading", "content": "Mask Overlays (BOLD reference)"})
             grid_items = []
             for overlay_path in overlays:
                 overlay_file = Path(overlay_path)
                 mask_name = overlay_file.stem.replace(f"{participant_id}_", "").replace("_overlay", "")
-                grid_items.append({
-                    'title': mask_name,
-                    'path': overlay_file.relative_to(output_dir).as_posix(),
-                    'alt': f'{mask_name} overlay'
-                })
-            sections.append({'type': 'grid', 'content': grid_items})
+                grid_items.append(
+                    {
+                        "title": mask_name,
+                        "path": overlay_file.relative_to(output_dir).as_posix(),
+                        "alt": f"{mask_name} overlay",
+                    }
+                )
+            sections.append({"type": "grid", "content": grid_items})
 
     # Mask summary table
     if network_masks:
-        sections.append({'type': 'heading', 'content': 'Mask Summary'})
+        sections.append({"type": "heading", "content": "Mask Summary"})
         table_rows = []
         for mask_name, mask_path in network_masks.items():
             summary = summarize_mask(mask_path, name=mask_name)
-            table_rows.append([
-                summary.name,
-                contrasts.get(mask_name, ''),
-                str(summary.voxels),
-                f"{summary.volume_ml:.2f}",
-                str(summary.centroid_ijk),
-            ])
+            table_rows.append(
+                [
+                    summary.name,
+                    contrasts.get(mask_name, ""),
+                    str(summary.voxels),
+                    f"{summary.volume_ml:.2f}",
+                    str(summary.centroid_ijk),
+                ]
+            )
 
-        sections.append({
-            'type': 'table',
-            'headers': ['Name', 'Contrast', 'Voxels', 'Volume (mL)', 'Centroid (i,j,k)'],
-            'rows': table_rows
-        })
+        sections.append(
+            {
+                "type": "table",
+                "headers": ["Name", "Contrast", "Voxels", "Volume (mL)", "Centroid (i,j,k)"],
+                "rows": table_rows,
+            }
+        )
 
     # Generate HTML report
     html_report = output_dir / f"{participant_id}_mask_extraction_qc.html"
@@ -1936,7 +1917,7 @@ def generate_task_mask_extraction_report(
         title=f"Task Mask Extraction QC - {participant_id}",
         participant_id=participant_id,
         stage="Mask Extraction (GLM)",
-        sections=sections
+        sections=sections,
     )
     html_report.write_text(html)
 
@@ -1959,34 +1940,35 @@ def _plot_task_design_matrix(design_file: Path, out_path: Path) -> None:
         Output path for the PNG plot
     """
     import matplotlib
-    matplotlib.use('Agg')
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    design_df = pd.read_csv(design_file, sep='\t', index_col=0)
+    design_df = pd.read_csv(design_file, sep="\t", index_col=0)
 
     fig, ax = plt.subplots(figsize=(max(6, len(design_df.columns) * 0.8), 8))
-    im = ax.imshow(design_df.values, aspect='auto', cmap='RdBu_r', interpolation='nearest')
-    ax.set_xlabel('Regressors')
-    ax.set_ylabel('Volume')
+    im = ax.imshow(design_df.values, aspect="auto", cmap="RdBu_r", interpolation="nearest")
+    ax.set_xlabel("Regressors")
+    ax.set_ylabel("Volume")
     ax.set_xticks(range(len(design_df.columns)))
-    ax.set_xticklabels(design_df.columns, rotation=45, ha='right', fontsize=8)
-    ax.set_title('GLM Design Matrix')
+    ax.set_xticklabels(design_df.columns, rotation=45, ha="right", fontsize=8)
+    ax.set_title("GLM Design Matrix")
     fig.colorbar(im, ax=ax, shrink=0.6)
 
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
 def generate_alternative_overlays(
-        mask_extraction_dir: Path,
-        participant_id: str,
-        network_names: Sequence[str],
-        n_alternatives: int = 3,
-        output_dir: Path | None = None,
-        n_yeo: int | None = None,
-        overwrite: bool = False
-) -> Dict[str, Dict[int, Path]]:
+    mask_extraction_dir: Path,
+    participant_id: str,
+    network_names: Sequence[str],
+    n_alternatives: int = 3,
+    output_dir: Path | None = None,
+    n_yeo: int | None = None,
+    overwrite: bool = False,
+) -> dict[str, dict[int, Path]]:
     """
     Generate overlay images for alternative ICA components.
 
@@ -2018,15 +2000,16 @@ def generate_alternative_overlays(
     """
     import logging
     from glob import glob
-    from nibabel.nifti1 import Nifti1Image
+
     from nibabel.loadsave import save
+    from nibabel.nifti1 import Nifti1Image
 
     from pineuro.utils import get_yeo_labels
 
     logger = logging.getLogger(__name__)
 
     mask_extraction_dir = Path(mask_extraction_dir)
-    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / "qc"
     alternatives_dir = output_dir / "overlays" / "alternatives"
     alternatives_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2085,9 +2068,9 @@ def generate_alternative_overlays(
     # Load ICA components
     components_img = load(components_file)
     components_data = components_img.get_fdata()
-    n_components = components_data.shape[3]
+    _n_components = components_data.shape[3]
 
-    result: Dict[str, Dict[int, Path]] = {}
+    result: dict[str, dict[int, Path]] = {}
 
     for network in network_names:
         if network not in corr_df.columns:
@@ -2132,7 +2115,7 @@ def generate_alternative_overlays(
                     labels=labels,
                     target_label=network,
                     top_n_per_plane=1,
-                    mask_path=temp_mask
+                    mask_path=temp_mask,
                 )
 
                 # Generate overlay
@@ -2141,7 +2124,7 @@ def generate_alternative_overlays(
                     ref_path=ref_file,
                     out_path=overlay_png,
                     slices=atlas_slices,
-                    title=f"{network} IC {comp_idx} (r={corr_val:.2f})"
+                    title=f"{network} IC {comp_idx} (r={corr_val:.2f})",
                 )
 
                 result[network][comp_idx] = overlay_png
@@ -2154,12 +2137,12 @@ def generate_alternative_overlays(
 
 
 def generate_yeo_network_overlay(
-        mask_extraction_dir: Path,
-        participant_id: str,
-        network_name: str,
-        output_dir: Path | None = None,
-        n_yeo: int = 17,
-        overwrite: bool = False
+    mask_extraction_dir: Path,
+    participant_id: str,
+    network_name: str,
+    output_dir: Path | None = None,
+    n_yeo: int = 17,
+    overwrite: bool = False,
 ) -> Path | None:
     """
     Generate overlay image for a Yeo atlas network (fallback option).
@@ -2186,15 +2169,16 @@ def generate_yeo_network_overlay(
     """
     import logging
     from glob import glob
-    from nibabel.nifti1 import Nifti1Image
+
     from nibabel.loadsave import save
+    from nibabel.nifti1 import Nifti1Image
 
     from pineuro.utils import get_yeo_labels
 
     logger = logging.getLogger(__name__)
 
     mask_extraction_dir = Path(mask_extraction_dir)
-    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / "qc"
     alternatives_dir = output_dir / "overlays" / "alternatives"
     alternatives_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2245,11 +2229,7 @@ def generate_yeo_network_overlay(
     try:
         # Select slices
         atlas_slices = select_slices_from_atlas(
-            atlas_path=yeo2sub,
-            labels=labels,
-            target_label=network_name,
-            top_n_per_plane=1,
-            mask_path=temp_mask
+            atlas_path=yeo2sub, labels=labels, target_label=network_name, top_n_per_plane=1, mask_path=temp_mask
         )
 
         n_voxels = int(network_mask.sum())
@@ -2260,7 +2240,7 @@ def generate_yeo_network_overlay(
             ref_path=ref_file,
             out_path=overlay_png,
             slices=atlas_slices,
-            title=f"{network_name} Yeo Atlas ({n_voxels} voxels)"
+            title=f"{network_name} Yeo Atlas ({n_voxels} voxels)",
         )
 
         return overlay_png
@@ -2271,12 +2251,12 @@ def generate_yeo_network_overlay(
 
 
 def generate_atlas_region_overlay(
-        atlas_subject_path: Path,
-        ref_path: Path,
-        output_dir: Path,
-        participant_id: str,
-        atlas_name: str,
-        overwrite: bool = False,
+    atlas_subject_path: Path,
+    ref_path: Path,
+    output_dir: Path,
+    participant_id: str,
+    atlas_name: str,
+    overwrite: bool = False,
 ) -> Path | None:
     """Generate overlay of an atlas region (e.g. Harvard-Oxford) in subject space.
 
@@ -2354,13 +2334,13 @@ def generate_atlas_region_overlay(
 
 
 def generate_mask_overlay(
-        mask_path: Path,
-        ref_path: Path,
-        output_dir: Path,
-        network_name: str,
-        atlas_path: Path | None = None,
-        n_yeo: int = 17,
-        overwrite: bool = False
+    mask_path: Path,
+    ref_path: Path,
+    output_dir: Path,
+    network_name: str,
+    atlas_path: Path | None = None,
+    n_yeo: int = 17,
+    overwrite: bool = False,
 ) -> Path | None:
     """
     Generate a simple overlay image for any mask file.
@@ -2433,11 +2413,7 @@ def generate_mask_overlay(
 
         if atlas_path and atlas_path.exists():
             slices = select_slices_from_atlas(
-                atlas_path=atlas_path,
-                labels=labels,
-                target_label=target_label,
-                top_n_per_plane=1,
-                mask_path=mask_path
+                atlas_path=atlas_path, labels=labels, target_label=target_label, top_n_per_plane=1, mask_path=mask_path
             )
         else:
             # Select slices directly from mask
@@ -2446,7 +2422,7 @@ def generate_mask_overlay(
                 labels=labels,
                 target_label=target_label,
                 top_n_per_plane=1,
-                mask_path=mask_path  # This will be used for selection
+                mask_path=mask_path,  # This will be used for selection
             )
 
         # Generate overlay
@@ -2455,7 +2431,7 @@ def generate_mask_overlay(
             ref_path=ref_path,
             out_path=overlay_png,
             slices=slices,
-            title=f"{network_name} ({n_voxels} voxels)"
+            title=f"{network_name} ({n_voxels} voxels)",
         )
 
         return overlay_png
@@ -2466,13 +2442,13 @@ def generate_mask_overlay(
 
 
 def generate_hemisphere_overlays(
-        mask_extraction_dir: Path,
-        participant_id: str,
-        hemisphere_network: str,
-        output_dir: Path | None = None,
-        n_yeo: int = 17,
-        overwrite: bool = False
-) -> Dict[str, Path]:
+    mask_extraction_dir: Path,
+    participant_id: str,
+    hemisphere_network: str,
+    output_dir: Path | None = None,
+    n_yeo: int = 17,
+    overwrite: bool = False,
+) -> dict[str, Path]:
     """
     Generate overlay images for hemisphere-split masks (for sham verification).
 
@@ -2508,7 +2484,7 @@ def generate_hemisphere_overlays(
     logger = logging.getLogger(__name__)
 
     mask_extraction_dir = Path(mask_extraction_dir)
-    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / 'qc'
+    output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / "qc"
     overlays_dir = output_dir / "overlays" / "hemisphere_split"
     overlays_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2520,8 +2496,7 @@ def generate_hemisphere_overlays(
 
     if not left_mask.exists() or not right_mask.exists():
         logger.warning(
-            f"Hemisphere-split masks not found for {hemisphere_network}. "
-            f"Expected: {left_mask.name}, {right_mask.name}"
+            f"Hemisphere-split masks not found for {hemisphere_network}. Expected: {left_mask.name}, {right_mask.name}"
         )
         return {}
 
@@ -2545,7 +2520,7 @@ def generate_hemisphere_overlays(
 
     labels = get_yeo_labels(n_yeo)
 
-    result: Dict[str, Path] = {}
+    result: dict[str, Path] = {}
 
     for hemisphere, mask_path in [("left", left_mask), ("right", right_mask)]:
         overlay_png = overlays_dir / f"{participant_id}_{hemisphere_network}_{hemisphere}_overlay.png"
@@ -2568,7 +2543,7 @@ def generate_hemisphere_overlays(
                 labels=labels,
                 target_label=hemisphere_network,
                 top_n_per_plane=1,
-                mask_path=mask_path
+                mask_path=mask_path,
             )
 
             # Generate overlay
@@ -2577,7 +2552,7 @@ def generate_hemisphere_overlays(
                 ref_path=ref_file,
                 out_path=overlay_png,
                 slices=atlas_slices,
-                title=f"{hemisphere_network} {hemisphere.upper()} ({n_voxels} voxels)"
+                title=f"{hemisphere_network} {hemisphere.upper()} ({n_voxels} voxels)",
             )
 
             result[hemisphere] = overlay_png
@@ -2591,11 +2566,9 @@ def generate_hemisphere_overlays(
 # SECTION 4: Feedback QC
 # ============================================================================
 
+
 def plot_activation_timeseries(
-        feedback_log_path: Path,
-        out_path: Path,
-        n_baseline: int | None = None,
-        title: str | None = None
+    feedback_log_path: Path, out_path: Path, n_baseline: int | None = None, title: str | None = None
 ) -> None:
     """
     Plot per-mask activation timeseries from feedback log.
@@ -2612,17 +2585,17 @@ def plot_activation_timeseries(
         Figure title
     """
     # Load feedback log
-    df = pd.read_csv(feedback_log_path, sep='\t')
+    df = pd.read_csv(feedback_log_path, sep="\t")
 
     # Get mask columns (all columns except metadata)
-    meta_cols = ['volume', 'time', 'is_baseline', 'is_outlier', 'fd', 'condition']
+    meta_cols = ["volume", "time", "is_baseline", "is_outlier", "fd", "condition"]
     mask_cols = [col for col in df.columns if col not in meta_cols]
 
     # Ensure numeric columns are properly typed (handles edge cases where pandas infers object dtype)
-    numeric_cols = ['volume', 'time', 'fd'] + mask_cols
+    numeric_cols = ["volume", "time", "fd"] + mask_cols
     for col in numeric_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     n_volumes = len(df)
 
@@ -2631,37 +2604,33 @@ def plot_activation_timeseries(
 
     # Plot each mask's activation
     for mask_name in mask_cols:
-        ax.plot(df['volume'], df[mask_name], linewidth=1.5, label=mask_name, alpha=0.8)
+        ax.plot(df["volume"], df[mask_name], linewidth=1.5, label=mask_name, alpha=0.8)
 
     # Shade baseline period
     if n_baseline is not None and n_baseline > 0:
-        ax.axvspan(-0.5, n_baseline - 0.5, color='gray', alpha=0.1, label='Baseline')
-        ax.axvline(n_baseline - 0.5, color='gray', linestyle='--', linewidth=1.0, alpha=0.5)
+        ax.axvspan(-0.5, n_baseline - 0.5, color="gray", alpha=0.1, label="Baseline")
+        ax.axvline(n_baseline - 0.5, color="gray", linestyle="--", linewidth=1.0, alpha=0.5)
 
     # Add zero reference line
-    ax.axhline(0, color='gray', linestyle='-', linewidth=0.8, alpha=0.3)
+    ax.axhline(0, color="gray", linestyle="-", linewidth=0.8, alpha=0.3)
 
     # Labels and legend
-    ax.set_xlabel('Volume Index', fontweight='bold')
-    ax.set_ylabel('Activation (normalized)', fontweight='bold')
-    ax.legend(loc='best', fontsize=9)
+    ax.set_xlabel("Volume Index", fontweight="bold")
+    ax.set_ylabel("Activation (normalized)", fontweight="bold")
+    ax.legend(loc="best", fontsize=9)
     ax.set_xlim(-0.5, n_volumes - 0.5)
 
     if title:
-        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
     else:
-        ax.set_title('Mask Activation Timeseries', fontsize=12, fontweight='bold', pad=10)
+        ax.set_title("Mask Activation Timeseries", fontsize=12, fontweight="bold", pad=10)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
     plt.close(fig)
 
 
-def plot_design_matrix(
-        design_path: Path,
-        out_path: Path,
-        title: str | None = None
-) -> None:
+def plot_design_matrix(design_path: Path, out_path: Path, title: str | None = None) -> None:
     """
     Plot design matrix heatmap showing regressors × volumes.
 
@@ -2678,14 +2647,14 @@ def plot_design_matrix(
         Figure title
     """
     # Load design matrix
-    df = pd.read_csv(design_path, sep='\t')
+    df = pd.read_csv(design_path, sep="\t")
 
     # Ensure all columns are numeric (handles edge cases where pandas infers object dtype)
-    df = df.apply(pd.to_numeric, errors='coerce')
+    df = df.apply(pd.to_numeric, errors="coerce")
 
     # Remove volume_idx if present
-    if 'volume_idx' in df.columns:
-        df = df.drop(columns=['volume_idx'])
+    if "volume_idx" in df.columns:
+        df = df.drop(columns=["volume_idx"])
 
     # Normalize each regressor to [0, 1] to prevent drift from dominating color scale
     # This allows all regressors to be visible regardless of their magnitude
@@ -2703,23 +2672,22 @@ def plot_design_matrix(
     fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
 
     # Plot heatmap with normalized data
-    im = ax.imshow(df_normalized.T.values, aspect='auto', cmap='viridis',
-                   vmin=0, vmax=1, interpolation='nearest')
+    im = ax.imshow(df_normalized.T.values, aspect="auto", cmap="viridis", vmin=0, vmax=1, interpolation="nearest")
 
     # Set ticks and labels
-    ax.set_xlabel('Volume Index', fontweight='bold')
-    ax.set_ylabel('Regressor', fontweight='bold')
+    ax.set_xlabel("Volume Index", fontweight="bold")
+    ax.set_ylabel("Regressor", fontweight="bold")
     ax.set_yticks(range(len(df_normalized.columns)))
     ax.set_yticklabels(df_normalized.columns, fontsize=9)
 
     # Add colorbar
     cbar = fig.colorbar(im, ax=ax, shrink=0.8)
-    cbar.set_label('Normalized Regressor Value [0-1]', rotation=270, labelpad=20, fontweight='bold')
+    cbar.set_label("Normalized Regressor Value [0-1]", rotation=270, labelpad=20, fontweight="bold")
 
     if title:
-        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
     else:
-        ax.set_title('Design Matrix (normalized per regressor)', fontsize=12, fontweight='bold', pad=10)
+        ax.set_title("Design Matrix (normalized per regressor)", fontsize=12, fontweight="bold", pad=10)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -2727,11 +2695,11 @@ def plot_design_matrix(
 
 
 def plot_fd_timeseries(
-        feedback_log_path: Path,
-        out_path: Path,
-        n_baseline: int | None = None,
-        threshold: float = 0.5,
-        title: str | None = None
+    feedback_log_path: Path,
+    out_path: Path,
+    n_baseline: int | None = None,
+    threshold: float = 0.5,
+    title: str | None = None,
 ) -> None:
     """
     Plot framewise displacement timeseries from feedback log.
@@ -2750,56 +2718,61 @@ def plot_fd_timeseries(
         Figure title
     """
     # Load feedback log
-    df = pd.read_csv(feedback_log_path, sep='\t')
+    df = pd.read_csv(feedback_log_path, sep="\t")
 
     # Check if FD column exists
-    if 'fd' not in df.columns:
+    if "fd" not in df.columns:
         logger.warning("No 'fd' column in feedback log, skipping FD plot")
         return
 
     # Ensure numeric
-    df['fd'] = pd.to_numeric(df['fd'], errors='coerce')
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df["fd"] = pd.to_numeric(df["fd"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
 
-    fd = df['fd'].values
-    volumes = df['volume'].values
+    fd = df["fd"].values
+    volumes = df["volume"].values
     n_volumes = len(fd)
 
     # Create figure
     fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
 
-    ax.plot(volumes, fd, linewidth=1.5, color='#0173B2', label='FD')
-    ax.axhline(threshold, color='#d62728', linestyle='--', linewidth=1.5,
-               label=f'Threshold ({threshold} mm)')
+    ax.plot(volumes, fd, linewidth=1.5, color="#0173B2", label="FD")
+    ax.axhline(threshold, color="#d62728", linestyle="--", linewidth=1.5, label=f"Threshold ({threshold} mm)")
 
     # Shade baseline period
     if n_baseline is not None and n_baseline > 0:
-        ax.axvspan(-0.5, n_baseline - 0.5, color='gray', alpha=0.1, label='Baseline')
-        ax.axvline(n_baseline - 0.5, color='gray', linestyle='--', linewidth=1.0, alpha=0.5)
+        ax.axvspan(-0.5, n_baseline - 0.5, color="gray", alpha=0.1, label="Baseline")
+        ax.axvline(n_baseline - 0.5, color="gray", linestyle="--", linewidth=1.0, alpha=0.5)
 
     # Shade regions above threshold
     above_thresh = fd > threshold
     if above_thresh.any():
         for i in range(n_volumes):
             if above_thresh[i]:
-                ax.axvspan(volumes[i] - 0.5, volumes[i] + 0.5, color='#d62728', alpha=0.2)
+                ax.axvspan(volumes[i] - 0.5, volumes[i] + 0.5, color="#d62728", alpha=0.2)
 
     # Summary statistics
     mean_fd = np.nanmean(fd)
     pct_above = (np.sum(above_thresh) / n_volumes) * 100
-    ax.text(0.02, 0.98, f'Mean FD: {mean_fd:.3f} mm\n{pct_above:.1f}% volumes > {threshold} mm',
-            transform=ax.transAxes, fontsize=10, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    ax.text(
+        0.02,
+        0.98,
+        f"Mean FD: {mean_fd:.3f} mm\n{pct_above:.1f}% volumes > {threshold} mm",
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+    )
 
-    ax.set_xlabel('Volume Index', fontweight='bold')
-    ax.set_ylabel('Framewise Displacement (mm)', fontweight='bold')
-    ax.legend(loc='upper right')
+    ax.set_xlabel("Volume Index", fontweight="bold")
+    ax.set_ylabel("Framewise Displacement (mm)", fontweight="bold")
+    ax.legend(loc="upper right")
     ax.set_xlim(-0.5, n_volumes - 0.5)
 
     if title:
-        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
     else:
-        ax.set_title('Framewise Displacement', fontsize=12, fontweight='bold', pad=10)
+        ax.set_title("Framewise Displacement", fontsize=12, fontweight="bold", pad=10)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -2807,10 +2780,10 @@ def plot_fd_timeseries(
 
 
 def plot_dvars_timeseries(
-        feedback_log_path: Path,
-        out_path: Path,
-        n_baseline: int | None = None,
-        title: str | None = None,
+    feedback_log_path: Path,
+    out_path: Path,
+    n_baseline: int | None = None,
+    title: str | None = None,
 ) -> None:
     """
     Plot DVARS timeseries from feedback log.
@@ -2826,44 +2799,50 @@ def plot_dvars_timeseries(
     title : str, optional
         Figure title
     """
-    df = pd.read_csv(feedback_log_path, sep='\t')
+    df = pd.read_csv(feedback_log_path, sep="\t")
 
-    if 'dvars' not in df.columns:
+    if "dvars" not in df.columns:
         logger.warning("No 'dvars' column in feedback log, skipping DVARS plot")
         return
 
-    df['dvars'] = pd.to_numeric(df['dvars'], errors='coerce')
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df["dvars"] = pd.to_numeric(df["dvars"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
 
-    dvars = df['dvars'].values
-    volumes = df['volume'].values
+    dvars = df["dvars"].values
+    volumes = df["volume"].values
     n_volumes = len(dvars)
 
     fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
 
-    ax.plot(volumes, dvars, linewidth=1.5, color='#009E73', label='DVARS')
+    ax.plot(volumes, dvars, linewidth=1.5, color="#009E73", label="DVARS")
 
     # Shade baseline period
     if n_baseline is not None and n_baseline > 0:
-        ax.axvspan(-0.5, n_baseline - 0.5, color='gray', alpha=0.1, label='Baseline')
-        ax.axvline(n_baseline - 0.5, color='gray', linestyle='--', linewidth=1.0, alpha=0.5)
+        ax.axvspan(-0.5, n_baseline - 0.5, color="gray", alpha=0.1, label="Baseline")
+        ax.axvline(n_baseline - 0.5, color="gray", linestyle="--", linewidth=1.0, alpha=0.5)
 
     # Summary statistics
     mean_dvars = np.nanmean(dvars)
     max_dvars = np.nanmax(dvars)
-    ax.text(0.02, 0.98, f'Mean DVARS: {mean_dvars:.1f}\nMax DVARS: {max_dvars:.1f}',
-            transform=ax.transAxes, fontsize=10, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    ax.text(
+        0.02,
+        0.98,
+        f"Mean DVARS: {mean_dvars:.1f}\nMax DVARS: {max_dvars:.1f}",
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+    )
 
-    ax.set_xlabel('Volume Index', fontweight='bold')
-    ax.set_ylabel('DVARS', fontweight='bold')
-    ax.legend(loc='upper right')
+    ax.set_xlabel("Volume Index", fontweight="bold")
+    ax.set_ylabel("DVARS", fontweight="bold")
+    ax.legend(loc="upper right")
     ax.set_xlim(-0.5, n_volumes - 0.5)
 
     if title:
-        ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
     else:
-        ax.set_title('DVARS (Temporal Derivative of RMS Variance)', fontsize=12, fontweight='bold', pad=10)
+        ax.set_title("DVARS (Temporal Derivative of RMS Variance)", fontsize=12, fontweight="bold", pad=10)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -2871,16 +2850,16 @@ def plot_dvars_timeseries(
 
 
 def generate_feedback_report(
-        feedback_dir: Path,
-        subject: str,
-        task: str,
-        run: int,
-        output_dir: Path | None = None,
-        overwrite: bool = False,
-        open_browser: bool = False,
-        expected_volumes: int | None = None,
-        acq: str | None = None,
-        fd_threshold: float = 0.5,
+    feedback_dir: Path,
+    subject: str,
+    task: str,
+    run: int,
+    output_dir: Path | None = None,
+    overwrite: bool = False,
+    open_browser: bool = False,
+    expected_volumes: int | None = None,
+    acq: str | None = None,
+    fd_threshold: float = 0.5,
 ) -> Path:
     """
     Generate comprehensive QC report for feedback session outputs.
@@ -2933,12 +2912,11 @@ def generate_feedback_report(
     >>> print(f"QC report: {report}")
     """
     import logging
-    from glob import glob
 
     logger = logging.getLogger(__name__)
 
     feedback_dir = Path(feedback_dir)
-    output_dir = Path(output_dir) if output_dir is not None else feedback_dir / 'qc'
+    output_dir = Path(output_dir) if output_dir is not None else feedback_dir / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Generating feedback QC report for {subject}, task={task}, run={run}, acq={acq}")
@@ -2961,73 +2939,73 @@ def generate_feedback_report(
 
     # Summary box
     summary_data = {
-        'Subject': subject,
-        'Task': task,
-        'Run': f'{run:02d}',
-        'Acquisition': f'{acq:02d}' if isinstance(acq, int) else (acq if acq else 'N/A'),
-        'Feedback log': str(feedback_log.exists()),
-        'Design matrix': str(design_file.exists())
+        "Subject": subject,
+        "Task": task,
+        "Run": f"{run:02d}",
+        "Acquisition": f"{acq:02d}" if isinstance(acq, int) else (acq if acq else "N/A"),
+        "Feedback log": str(feedback_log.exists()),
+        "Design matrix": str(design_file.exists()),
     }
 
     # Extract additional info from feedback log if available
     n_volumes_recorded = 0
     if feedback_log.exists():
-        df = pd.read_csv(feedback_log, sep='\t')
-        meta_cols = ['volume', 'time', 'is_baseline', 'is_outlier', 'fd', 'condition']
+        df = pd.read_csv(feedback_log, sep="\t")
+        meta_cols = ["volume", "time", "is_baseline", "is_outlier", "fd", "condition"]
         mask_cols = [col for col in df.columns if col not in meta_cols]
         n_volumes_recorded = len(df)
-        summary_data['Volumes recorded'] = str(n_volumes_recorded)
-        summary_data['Masks'] = str(len(mask_cols))
+        summary_data["Volumes recorded"] = str(n_volumes_recorded)
+        summary_data["Masks"] = str(len(mask_cols))
 
         # Determine status based on expected vs recorded volumes
         if expected_volumes is not None:
-            summary_data['Expected volumes'] = str(expected_volumes)
+            summary_data["Expected volumes"] = str(expected_volumes)
             if n_volumes_recorded >= expected_volumes:
-                summary_data['Status'] = 'COMPLETE'
+                summary_data["Status"] = "COMPLETE"
             else:
                 pct = (n_volumes_recorded / expected_volumes) * 100
-                summary_data['Status'] = f'PARTIAL ({n_volumes_recorded}/{expected_volumes} = {pct:.1f}%)'
+                summary_data["Status"] = f"PARTIAL ({n_volumes_recorded}/{expected_volumes} = {pct:.1f}%)"
         else:
             # No expected_volumes provided - check for sequential volumes
-            if 'volume' in df.columns and len(df) > 0:
-                last_vol = df['volume'].iloc[-1]
+            if "volume" in df.columns and len(df) > 0:
+                last_vol = df["volume"].iloc[-1]
                 if last_vol == n_volumes_recorded:
-                    summary_data['Status'] = 'PARTIAL (target volume count unknown)'
+                    summary_data["Status"] = "PARTIAL (target volume count unknown)"
                 else:
-                    summary_data['Status'] = 'PARTIAL (missing volumes detected)'
+                    summary_data["Status"] = "PARTIAL (missing volumes detected)"
 
         # Compute FD statistics
-        if 'fd' in df.columns:
-            fd_values = pd.to_numeric(df['fd'], errors='coerce').values
+        if "fd" in df.columns:
+            fd_values = pd.to_numeric(df["fd"], errors="coerce").values
             fd_mean = np.nanmean(fd_values)
             fd_max = np.nanmax(fd_values)
             fd_above = np.sum(fd_values > fd_threshold)
             fd_pct = (fd_above / len(fd_values)) * 100 if len(fd_values) > 0 else 0
-            summary_data['Mean FD'] = f'{fd_mean:.3f} mm'
-            summary_data['Max FD'] = f'{fd_max:.3f} mm'
-            summary_data[f'Volumes > {fd_threshold}mm'] = f'{fd_above} ({fd_pct:.1f}%)'
+            summary_data["Mean FD"] = f"{fd_mean:.3f} mm"
+            summary_data["Max FD"] = f"{fd_max:.3f} mm"
+            summary_data[f"Volumes > {fd_threshold}mm"] = f"{fd_above} ({fd_pct:.1f}%)"
             # Motion quality rating
             if fd_pct < 5:
-                summary_data['Motion quality'] = 'Good'
+                summary_data["Motion quality"] = "Good"
             elif fd_pct < 15:
-                summary_data['Motion quality'] = 'Moderate'
+                summary_data["Motion quality"] = "Moderate"
             else:
-                summary_data['Motion quality'] = 'High motion'
+                summary_data["Motion quality"] = "High motion"
 
         # DVARS statistics
-        dvars_values = pd.to_numeric(df['dvars'], errors='coerce').values
+        dvars_values = pd.to_numeric(df["dvars"], errors="coerce").values
         dvars_mean = np.nanmean(dvars_values)
         dvars_max = np.nanmax(dvars_values)
-        summary_data['Mean DVARS'] = f'{dvars_mean:.1f}'
-        summary_data['Max DVARS'] = f'{dvars_max:.1f}'
+        summary_data["Mean DVARS"] = f"{dvars_mean:.1f}"
+        summary_data["Max DVARS"] = f"{dvars_max:.1f}"
 
         # tSNR: use last value (most stable estimate)
-        tsnr_values = pd.to_numeric(df['tsnr'], errors='coerce').values
+        tsnr_values = pd.to_numeric(df["tsnr"], errors="coerce").values
         valid_tsnr = tsnr_values[np.isfinite(tsnr_values) & (tsnr_values > 0)]
         if len(valid_tsnr) > 0:
-            summary_data['Final tSNR'] = f'{valid_tsnr[-1]:.1f}'
+            summary_data["Final tSNR"] = f"{valid_tsnr[-1]:.1f}"
     else:
-        summary_data['Status'] = 'NO DATA'
+        summary_data["Status"] = "NO DATA"
 
     # Try to find and parse PsychoPy log for hit counts
     if acq is not None:
@@ -3039,41 +3017,41 @@ def generate_feedback_report(
 
     if psychopy_log.exists():
         try:
-            psych_df = pd.read_csv(psychopy_log, sep='\t')
-            hit_cols = [col for col in psych_df.columns if col.endswith('_hits')]
+            psych_df = pd.read_csv(psychopy_log, sep="\t")
+            hit_cols = [col for col in psych_df.columns if col.endswith("_hits")]
             total_hits = 0
             hit_strs = []
             for col in hit_cols:
-                network_name = col.replace('_hits', '')
+                network_name = col.replace("_hits", "")
                 hits = int(psych_df[col].max())
                 total_hits += hits
-                hit_strs.append(f'{network_name}: {hits}')
+                hit_strs.append(f"{network_name}: {hits}")
             if hit_strs:
-                summary_data['Network hits'] = ', '.join(hit_strs)
-                summary_data['Total hits'] = str(total_hits)
+                summary_data["Network hits"] = ", ".join(hit_strs)
+                summary_data["Total hits"] = str(total_hits)
         except Exception as e:
             logger.warning(f"Failed to parse PsychoPy log for hits: {e}")
 
-    sections.append({'type': 'summary', 'content': summary_data})
+    sections.append({"type": "summary", "content": summary_data})
 
     # Determine n_baseline from feedback log or design matrix
     n_baseline = None
-    if feedback_log.exists() and 'is_baseline' in df.columns:
+    if feedback_log.exists() and "is_baseline" in df.columns:
         # Count volumes where is_baseline == True
-        n_baseline = int((df['is_baseline'] == True).sum())
+        n_baseline = int((df["is_baseline"]).sum())
     elif design_file.exists():
-        design_df = pd.read_csv(design_file, sep='\t')
+        design_df = pd.read_csv(design_file, sep="\t")
         # Check if there's a 'baseline' or 'intercept' column
-        if 'baseline' in design_df.columns:
+        if "baseline" in design_df.columns:
             # Count volumes where baseline == 1
-            n_baseline = int((design_df['baseline'] == 1).sum())
+            n_baseline = int((design_df["baseline"] == 1).sum())
         elif feedback_log.exists():
             # Estimate from first ~20% of volumes
             n_baseline = max(1, int(0.2 * len(df)))
 
     # Activation timeseries
     if feedback_log.exists():
-        sections.append({'type': 'heading', 'content': 'Activation Timeseries'})
+        sections.append({"type": "heading", "content": "Activation Timeseries"})
 
         timeseries_out = output_dir / "activation_timeseries.png"
         if overwrite or not timeseries_out.exists():
@@ -3082,18 +3060,20 @@ def generate_feedback_report(
                 feedback_log_path=feedback_log,
                 out_path=timeseries_out,
                 n_baseline=n_baseline,
-                title=f"Activation Timeseries - {subject} (task: {task}, run: {run})"
+                title=f"Activation Timeseries - {subject} (task: {task}, run: {run})",
             )
 
-        sections.append({
-            'type': 'single_image',
-            'path': timeseries_out.relative_to(output_dir).as_posix(),
-            'alt': 'Activation timeseries'
-        })
+        sections.append(
+            {
+                "type": "single_image",
+                "path": timeseries_out.relative_to(output_dir).as_posix(),
+                "alt": "Activation timeseries",
+            }
+        )
 
     # FD timeseries
     if feedback_log.exists():
-        sections.append({'type': 'heading', 'content': 'Framewise Displacement'})
+        sections.append({"type": "heading", "content": "Framewise Displacement"})
 
         fd_out = output_dir / "fd_timeseries.png"
         if overwrite or not fd_out.exists():
@@ -3103,19 +3083,21 @@ def generate_feedback_report(
                 out_path=fd_out,
                 n_baseline=n_baseline,
                 threshold=fd_threshold,
-                title=f"Framewise Displacement - {subject} (task: {task}, run: {run})"
+                title=f"Framewise Displacement - {subject} (task: {task}, run: {run})",
             )
 
         if fd_out.exists():
-            sections.append({
-                'type': 'single_image',
-                'path': fd_out.relative_to(output_dir).as_posix(),
-                'alt': 'Framewise displacement timeseries'
-            })
+            sections.append(
+                {
+                    "type": "single_image",
+                    "path": fd_out.relative_to(output_dir).as_posix(),
+                    "alt": "Framewise displacement timeseries",
+                }
+            )
 
     # DVARS timeseries
-    if feedback_log.exists() and 'dvars' in df.columns:
-        sections.append({'type': 'heading', 'content': 'DVARS'})
+    if feedback_log.exists() and "dvars" in df.columns:
+        sections.append({"type": "heading", "content": "DVARS"})
 
         dvars_out = output_dir / "dvars_timeseries.png"
         if overwrite or not dvars_out.exists():
@@ -3124,19 +3106,21 @@ def generate_feedback_report(
                 feedback_log_path=feedback_log,
                 out_path=dvars_out,
                 n_baseline=n_baseline,
-                title=f"DVARS - {subject} (task: {task}, run: {run})"
+                title=f"DVARS - {subject} (task: {task}, run: {run})",
             )
 
         if dvars_out.exists():
-            sections.append({
-                'type': 'single_image',
-                'path': dvars_out.relative_to(output_dir).as_posix(),
-                'alt': 'DVARS timeseries'
-            })
+            sections.append(
+                {
+                    "type": "single_image",
+                    "path": dvars_out.relative_to(output_dir).as_posix(),
+                    "alt": "DVARS timeseries",
+                }
+            )
 
     # Design matrix
     if design_file.exists():
-        sections.append({'type': 'heading', 'content': 'Design Matrix'})
+        sections.append({"type": "heading", "content": "Design Matrix"})
 
         design_out = output_dir / "design_matrix.png"
         if overwrite or not design_out.exists():
@@ -3144,14 +3128,12 @@ def generate_feedback_report(
             plot_design_matrix(
                 design_path=design_file,
                 out_path=design_out,
-                title=f"Design Matrix - {subject} (task: {task}, run: {run})"
+                title=f"Design Matrix - {subject} (task: {task}, run: {run})",
             )
 
-        sections.append({
-            'type': 'single_image',
-            'path': design_out.relative_to(output_dir).as_posix(),
-            'alt': 'Design matrix'
-        })
+        sections.append(
+            {"type": "single_image", "path": design_out.relative_to(output_dir).as_posix(), "alt": "Design matrix"}
+        )
 
     # Generate HTML report with acq entity if provided
     if acq is not None:
@@ -3162,10 +3144,7 @@ def generate_feedback_report(
         html_report = output_dir / f"{subject}_task-{task}_run-{run:02d}_feedback_qc.html"
         stage_str = f"Feedback (task: {task}, run: {run})"
     html = _generate_html_template(
-        title=f"Feedback QC - {subject}",
-        participant_id=subject,
-        stage=stage_str,
-        sections=sections
+        title=f"Feedback QC - {subject}", participant_id=subject, stage=stage_str, sections=sections
     )
     html_report.write_text(html)
 
@@ -3181,12 +3160,8 @@ def generate_feedback_report(
 # SECTION 5: HTML Generation
 # ============================================================================
 
-def _generate_html_template(
-        title: str,
-        participant_id: str,
-        stage: str,
-        sections: list[dict]
-) -> str:
+
+def _generate_html_template(title: str, participant_id: str, stage: str, sections: list[dict]) -> str:
     """Generate a professional HTML QC report with consistent styling.
 
     Creates a complete, self-contained HTML document with embedded CSS
@@ -3259,42 +3234,42 @@ def _generate_html_template(
     # Build HTML sections
     html_sections = []
     for section in sections:
-        section_type = section.get('type')
+        section_type = section.get("type")
 
-        if section_type == 'heading':
+        if section_type == "heading":
             html_sections.append(f"<h2>{section['content']}</h2>")
 
-        elif section_type == 'summary':
+        elif section_type == "summary":
             html_sections.append('<div class="summary-box">')
-            for key, value in section['content'].items():
+            for key, value in section["content"].items():
                 html_sections.append(f"<p><strong>{key}:</strong> {value}</p>")
-            html_sections.append('</div>')
+            html_sections.append("</div>")
 
-        elif section_type == 'grid':
+        elif section_type == "grid":
             html_sections.append('<div class="grid">')
-            for item in section['content']:
+            for item in section["content"]:
                 html_sections.append('<div class="plot-container">')
-                if 'title' in item:
+                if "title" in item:
                     html_sections.append(f"<h3>{item['title']}</h3>")
                 html_sections.append(f'<img src="{item["path"]}" alt="{item.get("alt", "")}">')
-                html_sections.append('</div>')
-            html_sections.append('</div>')
+                html_sections.append("</div>")
+            html_sections.append("</div>")
 
-        elif section_type == 'single_image':
+        elif section_type == "single_image":
             html_sections.append(f'<img src="{section["path"]}" alt="{section.get("alt", "")}">')
 
-        elif section_type == 'table':
-            html_sections.append('<table>')
-            html_sections.append('<tr>')
-            for header in section['headers']:
-                html_sections.append(f'<th>{header}</th>')
-            html_sections.append('</tr>')
-            for row in section['rows']:
-                html_sections.append('<tr>')
+        elif section_type == "table":
+            html_sections.append("<table>")
+            html_sections.append("<tr>")
+            for header in section["headers"]:
+                html_sections.append(f"<th>{header}</th>")
+            html_sections.append("</tr>")
+            for row in section["rows"]:
+                html_sections.append("<tr>")
                 for cell in row:
-                    html_sections.append(f'<td>{cell}</td>')
-                html_sections.append('</tr>')
-            html_sections.append('</table>')
+                    html_sections.append(f"<td>{cell}</td>")
+                html_sections.append("</tr>")
+            html_sections.append("</table>")
 
     # Complete HTML document
     html = f"""<!DOCTYPE html>
@@ -3395,7 +3370,7 @@ def _generate_html_template(
     {chr(10).join(html_sections)}
 
     <div class="footer">
-        <p>Generated by pineuro on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p>Generated by pineuro on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
     </div>
 </body>
 </html>"""
@@ -3403,11 +3378,11 @@ def _generate_html_template(
 
 
 def write_html_report(
-        out_path: Path,
-        participant_id: str,
-        overlays_by_space: Iterable[Tuple[str, Iterable[Tuple[str, Path]]]],
-        heatmap_png: Path | None,
-        summaries: Iterable[MaskSummary]
+    out_path: Path,
+    participant_id: str,
+    overlays_by_space: Iterable[tuple[str, Iterable[tuple[str, Path]]]],
+    heatmap_png: Path | None,
+    summaries: Iterable[MaskSummary],
 ) -> None:
     """Create an HTML QC report for mask extraction (legacy API).
 
@@ -3477,45 +3452,45 @@ def write_html_report(
 
     # ICA × Yeo correlation heatmap
     if heatmap_png and heatmap_png.exists():
-        sections.append({'type': 'heading', 'content': 'ICA × Yeo Correlation'})
-        sections.append({'type': 'single_image', 'path': _rel(heatmap_png), 'alt': 'Correlation heatmap'})
+        sections.append({"type": "heading", "content": "ICA × Yeo Correlation"})
+        sections.append({"type": "single_image", "path": _rel(heatmap_png), "alt": "Correlation heatmap"})
 
     # Mask overlays by space
     for space_name, overlays in overlays_by_space:
-        sections.append({'type': 'heading', 'content': f'Mask Overlays ({space_name})'})
+        sections.append({"type": "heading", "content": f"Mask Overlays ({space_name})"})
         grid_items = []
         for name, img_path in overlays:
-            grid_items.append({
-                'title': name,
-                'path': _rel(img_path),
-                'alt': f'Mask overlay: {name} ({space_name})'
-            })
-        sections.append({'type': 'grid', 'content': grid_items})
+            grid_items.append({"title": name, "path": _rel(img_path), "alt": f"Mask overlay: {name} ({space_name})"})
+        sections.append({"type": "grid", "content": grid_items})
 
     # Mask summary table
-    sections.append({'type': 'heading', 'content': 'Mask Summary'})
+    sections.append({"type": "heading", "content": "Mask Summary"})
     table_rows = []
     for s in summaries:
-        table_rows.append([
-            s.name,
-            str(s.voxels),
-            f"{s.volume_ml:.2f}",
-            str(s.centroid_ijk),
-            str(s.chosen_component),
-            f"{s.correlation:.3f}"
-        ])
-    sections.append({
-        'type': 'table',
-        'headers': ['Name', 'Voxels', 'Volume (mL)', 'Centroid (i,j,k)', 'Chosen component', 'Correlation (r)'],
-        'rows': table_rows
-    })
+        table_rows.append(
+            [
+                s.name,
+                str(s.voxels),
+                f"{s.volume_ml:.2f}",
+                str(s.centroid_ijk),
+                str(s.chosen_component),
+                f"{s.correlation:.3f}",
+            ]
+        )
+    sections.append(
+        {
+            "type": "table",
+            "headers": ["Name", "Voxels", "Volume (mL)", "Centroid (i,j,k)", "Chosen component", "Correlation (r)"],
+            "rows": table_rows,
+        }
+    )
 
     # Generate HTML using template
     html = _generate_html_template(
         title=f"pineuro QC - {participant_id}",
         participant_id=participant_id,
         stage="Mask Extraction",
-        sections=sections
+        sections=sections,
     )
 
     out_path.write_text(html)
