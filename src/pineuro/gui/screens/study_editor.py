@@ -10,19 +10,19 @@ The editor supports both creating new studies and editing existing ones, with
 real-time validation and user-friendly file browsing via tkinter dialogs.
 """
 
+import contextlib
 import logging
-from typing import Optional, Dict
 
 import flet as ft
 
-from pineuro.tasks import get_task_metadata, list_available_tasks, TaskParameter
+from pineuro.tasks import TaskParameter, get_task_metadata, list_available_tasks
+
 from ..config_manager import ConfigManager
 from ..models import StudyConfig, StudyMetadata
 from ..utils import (
     ValidationError,
-    validate_positive_number,
     validate_positive_int,
-    validate_yeo_networks,
+    validate_positive_number,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,8 +32,8 @@ class StudyEditorScreen:
     """Study editor screen with tabbed parameter sections."""
 
     # Uniform widths for visual consistency across all tabs
-    FIELD_W = 400   # standalone fields (text, dropdown, number)
-    PAIR_W = 195    # side-by-side paired fields (two per row)
+    FIELD_W = 400  # standalone fields (text, dropdown, number)
+    PAIR_W = 195  # side-by-side paired fields (two per row)
 
     @staticmethod
     def _f(control):
@@ -44,10 +44,10 @@ class StudyEditorScreen:
         self,
         page: ft.Page,
         config_manager: ConfigManager,
-        study_config: Optional[StudyConfig] = None,
+        study_config: StudyConfig | None = None,
         on_cancel=None,
         on_save=None,
-        on_start_session=None
+        on_start_session=None,
     ):
         """Initialize the study editor.
 
@@ -75,9 +75,9 @@ class StudyEditorScreen:
         self.validation_errors = {}
 
         # Dynamic task parameter fields (populated based on task type)
-        self.task_param_fields: Dict[str, ft.Control] = {}
+        self.task_param_fields: dict[str, ft.Control] = {}
         # Dynamic localizer task parameter fields
-        self.localizer_task_param_fields: Dict[str, ft.Control] = {}
+        self.localizer_task_param_fields: dict[str, ft.Control] = {}
 
         # Create form fields
         self._create_form_fields()
@@ -88,10 +88,7 @@ class StudyEditorScreen:
         Returns:
             Default StudyConfig
         """
-        metadata = StudyMetadata(
-            name="New Study",
-            description=""
-        )
+        metadata = StudyMetadata(name="New Study", description="")
 
         session_config = {
             "paths": {
@@ -153,13 +150,14 @@ class StudyEditorScreen:
                 "smooth_fwhm": None,
                 "differential_pair": None,
                 "feedback_interval": None,
+                "connectivity_pairs": None,
+                "connectivity_window": 15,
             },
             "localizer_task": {
                 # Localizer task parameters (when not rest)
                 "ball": {
                     "use_transfer_runs": False,
                     "initial_scale_factor": 10.0,
-
                     "trigger_keys": ["t", "+", "5", "equal"],
                     "left_button": "1",
                     "right_button": "2",
@@ -185,7 +183,7 @@ class StudyEditorScreen:
                 "randomization_file": "",
             },
             "display": {
-                "control_monitor": "left",    # Where GUI opens (left/right)
+                "control_monitor": "left",  # Where GUI opens (left/right)
                 "presenter_monitor": "right",  # Where PsychoPy tasks open (left/right)
             },
         }
@@ -261,10 +259,12 @@ class StudyEditorScreen:
         # Localizer task type (rest or registered task)
         available_tasks = list_available_tasks()
         localizer_task_options = [ft.dropdown.Option(key="rest", text="Rest (ICA Network Extraction)")]
-        localizer_task_options.extend([
-            ft.dropdown.Option(key=task_id, text=f"{metadata.display_name} (GLM Contrast)")
-            for task_id, metadata in available_tasks.items()
-        ])
+        localizer_task_options.extend(
+            [
+                ft.dropdown.Option(key=task_id, text=f"{metadata.display_name} (GLM Contrast)")
+                for task_id, metadata in available_tasks.items()
+            ]
+        )
         self.localizer_task_type_dropdown = ft.Dropdown(
             width=600,
             label="Localizer Type",
@@ -286,7 +286,9 @@ class StudyEditorScreen:
             label="Volumes per localizer run",
             value=str(config["scan"].get("localizer_n_volumes", 200)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            on_change=lambda _: self._validate_field("localizer_n_volumes", self.localizer_n_volumes_field, validate_positive_int),
+            on_change=lambda _: self._validate_field(
+                "localizer_n_volumes", self.localizer_n_volumes_field, validate_positive_int
+            ),
         )
 
         self.localizer_n_runs_field = ft.TextField(
@@ -328,18 +330,21 @@ class StudyEditorScreen:
             label="Volumes per feedback run",
             value=str(config["scan"].get("feedback_n_volumes", 150)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            on_change=lambda _: self._validate_field("feedback_n_volumes", self.feedback_n_volumes_field, validate_positive_int),
+            on_change=lambda _: self._validate_field(
+                "feedback_n_volumes", self.feedback_n_volumes_field, validate_positive_int
+            ),
         )
-
 
         # Network atlas dropdown (replaces n_yeo_radio)
         from pineuro.mask_extraction import ATLAS_SOURCES
+
         self.network_atlas_dropdown = ft.Dropdown(
             width=600,
             label="Network atlas",
             options=[
                 ft.dropdown.Option(key=k, text=v["display_name"])
-                for k, v in ATLAS_SOURCES.items() if v["type"] == "network"
+                for k, v in ATLAS_SOURCES.items()
+                if v["type"] == "network"
             ],
             value=config["mask"].get("network_atlas", "yeo_17"),
             on_select=self._on_network_atlas_changed,
@@ -490,8 +495,9 @@ class StudyEditorScreen:
         # Baseline volumes - task-specific but shown in Session Structure
         # Get from task config (ball.n_baseline) or feedback config as fallback
         task_type = config["task"].get("task_type", "ball")
-        n_baseline_default = config["task"].get(task_type, {}).get("n_baseline",
-                             config.get("feedback", {}).get("n_baseline", 25))
+        n_baseline_default = (
+            config["task"].get(task_type, {}).get("n_baseline", config.get("feedback", {}).get("n_baseline", 25))
+        )
         self.n_baseline_field = ft.TextField(
             width=600,
             label="Baseline volumes",
@@ -545,22 +551,28 @@ class StudyEditorScreen:
             width=250,
             label="Positive mask",
             options=diff_options,
-            value=diff_pair[0] if diff_pair and len(diff_pair) == 2 else (mask_names_for_diff[0] if mask_names_for_diff else None),
+            value=diff_pair[0]
+            if diff_pair and len(diff_pair) == 2
+            else (mask_names_for_diff[0] if mask_names_for_diff else None),
         )
         self.differential_negative_dropdown = ft.Dropdown(
             width=250,
             label="Negative mask",
             options=diff_options,
-            value=diff_pair[1] if diff_pair and len(diff_pair) == 2 else (mask_names_for_diff[1] if has_multi_mask else None),
+            value=diff_pair[1]
+            if diff_pair and len(diff_pair) == 2
+            else (mask_names_for_diff[1] if has_multi_mask else None),
         )
         self.differential_row = ft.Column(
             [
                 ft.Text("Differential Signal", size=14, weight=ft.FontWeight.W_500),
-                ft.Row([
-                    self.differential_positive_dropdown,
-                    ft.Text("minus", size=14),
-                    self.differential_negative_dropdown,
-                ]),
+                ft.Row(
+                    [
+                        self.differential_positive_dropdown,
+                        ft.Text("minus", size=14),
+                        self.differential_negative_dropdown,
+                    ]
+                ),
             ],
             visible=has_multi_mask,
         )
@@ -579,6 +591,66 @@ class StudyEditorScreen:
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Deliver mean activation every N volumes after baseline",
             visible=interval_val is not None,
+        )
+
+        # Connectivity feedback mode (checkbox + window size + pair selection)
+        conn_config = config.get("feedback", {})
+        conn_pairs = conn_config.get("connectivity_pairs")
+        conn_window = conn_config.get("connectivity_window", 15)
+        has_conn = conn_pairs is not None and len(conn_pairs) > 0
+
+        self.connectivity_enabled_checkbox = ft.Checkbox(
+            label="Enable connectivity feedback",
+            value=has_conn,
+            on_change=self._on_connectivity_enabled_changed,
+            tooltip="Compute sliding-window Pearson correlation between ROI pairs",
+            visible=has_multi_mask,
+        )
+        self.connectivity_window_field = ft.TextField(
+            width=600,
+            label="Sliding window size (volumes)",
+            value=str(conn_window),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Number of volumes in correlation window (e.g., 10-30)",
+            visible=has_conn,
+        )
+
+        conn_pair_options = [ft.dropdown.Option(key=name, text=name) for name in mask_names_for_diff]
+        conn_pair_a = (
+            conn_pairs[0][0]
+            if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2
+            else (mask_names_for_diff[0] if mask_names_for_diff else None)
+        )
+        conn_pair_b = (
+            conn_pairs[0][1]
+            if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2
+            else (mask_names_for_diff[1] if has_multi_mask else None)
+        )
+
+        self.connectivity_pair_a_dropdown = ft.Dropdown(
+            width=250,
+            label="ROI A",
+            options=conn_pair_options,
+            value=conn_pair_a,
+        )
+        self.connectivity_pair_b_dropdown = ft.Dropdown(
+            width=250,
+            label="ROI B",
+            options=conn_pair_options,
+            value=conn_pair_b,
+        )
+        self.connectivity_pair_row = ft.Column(
+            [
+                ft.Text("Connectivity Pair", size=14, weight=ft.FontWeight.W_500),
+                ft.Row(
+                    [
+                        self.connectivity_pair_a_dropdown,
+                        ft.Text("corr", size=14),
+                        self.connectivity_pair_b_dropdown,
+                    ]
+                ),
+            ],
+            visible=has_conn,
         )
 
         # Create dynamic task parameter fields for current feedback task type
@@ -602,7 +674,7 @@ class StudyEditorScreen:
         for i in range(10):
             field = ft.TextField(
                 width=540,
-                label=f"Localizer run {i+1} source DICOMs",
+                label=f"Localizer run {i + 1} source DICOMs",
                 value=localizer_dicoms[i] if i < len(localizer_dicoms) else "",
                 hint_text="Path to DICOM directory for simulator (optional)",
             )
@@ -636,7 +708,7 @@ class StudyEditorScreen:
         for i in range(10):
             field = ft.TextField(
                 width=540,
-                label=f"Feedback run {i+1} source DICOMs",
+                label=f"Feedback run {i + 1} source DICOMs",
                 value=feedback_dicoms[i] if i < len(feedback_dicoms) else "",
                 hint_text="Path to DICOM directory for simulator (optional)",
             )
@@ -656,7 +728,7 @@ class StudyEditorScreen:
         for i in range(2):
             field = ft.TextField(
                 width=540,
-                label=f"Transfer run {i+1} source DICOMs",
+                label=f"Transfer run {i + 1} source DICOMs",
                 value=transfer_dicoms[i] if i < len(transfer_dicoms) else "",
                 hint_text="Path to DICOM directory for simulator (optional)",
             )
@@ -674,10 +746,12 @@ class StudyEditorScreen:
         # Determine initial mode based on whether mapping file is set
         has_mapping = bool(config["scan"].get("simulator_source_mapping", "").strip())
         self.simulator_source_mode_radio = ft.RadioGroup(
-            content=ft.Row([
-                ft.Radio(value="individual", label="Same paths for all participants"),
-                ft.Radio(value="mapping", label="Per-subject mapping file"),
-            ]),
+            content=ft.Row(
+                [
+                    ft.Radio(value="individual", label="Same paths for all participants"),
+                    ft.Radio(value="mapping", label="Per-subject mapping file"),
+                ]
+            ),
             value="mapping" if has_mapping else "individual",
             on_change=self._on_simulator_source_mode_changed,
         )
@@ -705,20 +779,24 @@ class StudyEditorScreen:
         )
 
         self.sham_delivery_method_radio = ft.RadioGroup(
-            content=ft.Column([
-                ft.Radio(value="alternative_masks", label="Alternative Masks"),
-                ft.Radio(value="replay", label="Replay Previous Participant"),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Radio(value="alternative_masks", label="Alternative Masks"),
+                    ft.Radio(value="replay", label="Replay Previous Participant"),
+                ]
+            ),
             value=sham_config.get("delivery_method", "alternative_masks"),
             on_change=self._on_sham_method_changed,
         )
 
         # Sham mask mode radio (hemisphere_split vs two_networks)
         self.sham_mask_mode_radio = ft.RadioGroup(
-            content=ft.Column([
-                ft.Radio(value="hemisphere_split", label="Hemisphere Split (single network)"),
-                ft.Radio(value="two_networks", label="Two Distinct Networks"),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Radio(value="hemisphere_split", label="Hemisphere Split (single network)"),
+                    ft.Radio(value="two_networks", label="Two Distinct Networks"),
+                ]
+            ),
             value=sham_config.get("sham_mask_mode", "hemisphere_split"),
             on_change=self._on_sham_mask_mode_changed,
         )
@@ -731,10 +809,12 @@ class StudyEditorScreen:
             value=sham_config.get("hemisphere_network", "SomMotA"),
         )
         self.sham_target_hemisphere_radio = ft.RadioGroup(
-            content=ft.Row([
-                ft.Radio(value="right", label="Right (target)"),
-                ft.Radio(value="left", label="Left (target)"),
-            ]),
+            content=ft.Row(
+                [
+                    ft.Radio(value="right", label="Right (target)"),
+                    ft.Radio(value="left", label="Left (target)"),
+                ]
+            ),
             value=sham_config.get("target_hemisphere", "right"),
         )
 
@@ -784,11 +864,11 @@ class StudyEditorScreen:
             value=display_config.get("presenter_monitor", "right"),
         )
 
-
     def _build_monitor_preview(self) -> ft.Container:
         """Build a preview showing detected monitors."""
         try:
             from pineuro.display import get_monitors
+
             monitors = get_monitors()
 
             if not monitors:
@@ -817,7 +897,8 @@ class StudyEditorScreen:
                 content=ft.Column(
                     [
                         ft.Text("Detected monitors:", size=12, weight=ft.FontWeight.BOLD),
-                    ] + monitor_texts,
+                    ]
+                    + monitor_texts,
                     spacing=2,
                 ),
                 bgcolor=ft.Colors.GREY_100,
@@ -852,6 +933,7 @@ class StudyEditorScreen:
     def _on_network_atlas_changed(self, e):
         """Handle network atlas change - update all network dropdowns."""
         from pineuro.mask_extraction import ATLAS_SOURCES
+
         atlas_key = self.network_atlas_dropdown.value
         n_networks = ATLAS_SOURCES.get(atlas_key, {}).get("n_networks", 17)
         new_options = self._get_yeo_network_options(n_networks)
@@ -865,12 +947,21 @@ class StudyEditorScreen:
             self.sham_hemisphere_network_dropdown,
             self.differential_positive_dropdown,
             self.differential_negative_dropdown,
+            self.connectivity_pair_a_dropdown,
+            self.connectivity_pair_b_dropdown,
         ]:
             old_value = dropdown.value
             dropdown.options = new_options
             valid_keys = [opt.key for opt in new_options]
             if old_value not in valid_keys:
                 dropdown.value = None
+
+        # Update connectivity visibility based on mask count
+        n_networks = len(new_options)
+        self.connectivity_enabled_checkbox.visible = n_networks >= 2
+        if n_networks < 2:
+            self.connectivity_window_field.visible = False
+            self.connectivity_pair_row.visible = False
 
         self.page.update()
 
@@ -883,31 +974,24 @@ class StudyEditorScreen:
             return
 
         # Show loading state
-        self.atlas_region_dropdown.options = [
-            ft.dropdown.Option(key="__loading__", text="Loading regions...")
-        ]
+        self.atlas_region_dropdown.options = [ft.dropdown.Option(key="__loading__", text="Loading regions...")]
         self.atlas_region_dropdown.value = "__loading__"
-        try:
+        with contextlib.suppress(Exception):
             self.page.update()
-        except Exception:
-            pass
 
         def _fetch_and_update():
             try:
                 from pineuro.mask_extraction import get_atlas_labels
+
                 labels = get_atlas_labels(atlas_source)
-                self.atlas_region_dropdown.options = [
-                    ft.dropdown.Option(key=l, text=l) for l in labels
-                ]
+                self.atlas_region_dropdown.options = [ft.dropdown.Option(key=lbl, text=lbl) for lbl in labels]
                 self.atlas_region_dropdown.value = labels[0] if labels else None
             except Exception as ex:
                 logger.warning(f"Failed to load atlas labels for {atlas_source}: {ex}")
                 self.atlas_region_dropdown.options = []
                 self.atlas_region_dropdown.value = None
-            try:
+            with contextlib.suppress(Exception):
                 self.page.update()
-            except Exception:
-                pass
 
         # Fetch labels in background thread to avoid blocking UI
         threading.Thread(target=_fetch_and_update, daemon=True).start()
@@ -954,14 +1038,18 @@ class StudyEditorScreen:
         self.scanner_dicom_dir_browse_btn.visible = not is_simulator
 
         # Update simulator instruction text
-        if hasattr(self, 'simulator_instruction_text'):
+        if hasattr(self, "simulator_instruction_text"):
             if is_simulator:
-                self.simulator_instruction_text.value = "Simulator replays volumes from source directories at configurable speed for offline testing."
+                self.simulator_instruction_text.value = (
+                    "Simulator replays volumes from source directories at configurable speed for offline testing."
+                )
             else:
-                self.simulator_instruction_text.value = "Scanner DICOM directory will be monitored for real-time acquisition."
+                self.simulator_instruction_text.value = (
+                    "Scanner DICOM directory will be monitored for real-time acquisition."
+                )
 
         # Update simulator paths container visibility
-        if hasattr(self, 'simulator_paths_container'):
+        if hasattr(self, "simulator_paths_container"):
             self.simulator_paths_container.visible = is_simulator
 
         self.page.update()
@@ -974,10 +1062,10 @@ class StudyEditorScreen:
         """Update visibility of simulator source sections based on selected mode."""
         mode = self.simulator_source_mode_radio.value
 
-        if hasattr(self, 'simulator_mapping_container'):
-            self.simulator_mapping_container.visible = (mode == "mapping")
-        if hasattr(self, 'simulator_individual_container'):
-            self.simulator_individual_container.visible = (mode == "individual")
+        if hasattr(self, "simulator_mapping_container"):
+            self.simulator_mapping_container.visible = mode == "mapping"
+        if hasattr(self, "simulator_individual_container"):
+            self.simulator_individual_container.visible = mode == "individual"
 
         self.page.update()
 
@@ -989,6 +1077,13 @@ class StudyEditorScreen:
     def _on_intermittent_enabled_changed(self, e):
         """Toggle visibility of the intermittent feedback interval field."""
         self.feedback_interval_field.visible = self.intermittent_enabled_checkbox.value
+        self.page.update()
+
+    def _on_connectivity_enabled_changed(self, e):
+        """Toggle visibility of connectivity feedback fields."""
+        visible = self.connectivity_enabled_checkbox.value
+        self.connectivity_window_field.visible = visible
+        self.connectivity_pair_row.visible = visible
         self.page.update()
 
     def _on_sham_enabled_changed(self, e):
@@ -1006,19 +1101,24 @@ class StudyEditorScreen:
     def _on_generate_randomization(self, e):
         """Open dialog to generate a randomization file."""
         prefix_field = ft.TextField(
-            label="Participant ID prefix", value="sub-", width=200,
+            label="Participant ID prefix",
+            value="sub-",
+            width=200,
             hint_text="e.g. sub- → sub-01, sub-rtchr0 → sub-rtchr001",
         )
         n_participants_field = ft.TextField(
-            label="Number of participants", width=200,
+            label="Number of participants",
+            width=200,
             keyboard_type=ft.KeyboardType.NUMBER,
         )
         n_sham_field = ft.TextField(
-            label="Number of sham", width=200,
+            label="Number of sham",
+            width=200,
             keyboard_type=ft.KeyboardType.NUMBER,
         )
         method_dropdown = ft.Dropdown(
-            label="Method", width=200,
+            label="Method",
+            width=200,
             options=[
                 ft.dropdown.Option(key="simple", text="Simple"),
                 ft.dropdown.Option(key="replay", text="Replay"),
@@ -1026,20 +1126,25 @@ class StudyEditorScreen:
             value="simple",
         )
         seed_field = ft.TextField(
-            label="Seed (optional)", width=200,
+            label="Seed (optional)",
+            width=200,
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
         dialog = ft.AlertDialog(
             title=ft.Text("Generate Randomization File"),
             content=ft.Container(
-                content=ft.Column([
-                    prefix_field,
-                    n_participants_field,
-                    n_sham_field,
-                    method_dropdown,
-                    seed_field,
-                ], tight=True, spacing=10),
+                content=ft.Column(
+                    [
+                        prefix_field,
+                        n_participants_field,
+                        n_sham_field,
+                        method_dropdown,
+                        seed_field,
+                    ],
+                    tight=True,
+                    spacing=10,
+                ),
                 width=300,
             ),
         )
@@ -1067,7 +1172,9 @@ class StudyEditorScreen:
                 if n_sham < 1 or n_sham >= n_total:
                     raise ValueError
             except (TypeError, ValueError):
-                n_sham_field.error_text = f"Must be between 1 and {n_total - 1}" if 'n_total' in dir() else "Must be a positive integer"
+                n_sham_field.error_text = (
+                    f"Must be between 1 and {n_total - 1}" if "n_total" in dir() else "Must be a positive integer"
+                )
                 n_sham_field.update()
                 return
             n_sham_field.error_text = None
@@ -1104,6 +1211,7 @@ class StudyEditorScreen:
 
             # Generate
             from pineuro.sham import generate_randomization
+
             participant_ids = [f"{prefix}{i:02d}" for i in range(1, n_total + 1)]
             method = method_dropdown.value
 
@@ -1120,9 +1228,7 @@ class StudyEditorScreen:
             self.sham_randomization_file_field.update()
             self.page.pop_dialog()
 
-            _snack = ft.SnackBar(
-                ft.Text(f"Randomization file saved: {save_path}")
-            )
+            _snack = ft.SnackBar(ft.Text(f"Randomization file saved: {save_path}"))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1143,21 +1249,21 @@ class StudyEditorScreen:
         mask_mode = self.sham_mask_mode_radio.value
 
         # Update visibility of sham configuration fields
-        if hasattr(self, 'sham_config_container'):
+        if hasattr(self, "sham_config_container"):
             self.sham_config_container.visible = is_enabled
-        if hasattr(self, 'sham_alternative_section'):
+        if hasattr(self, "sham_alternative_section"):
             self.sham_alternative_section.visible = is_enabled and (method == "alternative_masks")
-        if hasattr(self, 'sham_hemisphere_split_section'):
+        if hasattr(self, "sham_hemisphere_split_section"):
             self.sham_hemisphere_split_section.visible = (
                 is_enabled and method == "alternative_masks" and mask_mode == "hemisphere_split"
             )
-        if hasattr(self, 'sham_two_networks_section'):
+        if hasattr(self, "sham_two_networks_section"):
             self.sham_two_networks_section.visible = (
                 is_enabled and method == "alternative_masks" and mask_mode == "two_networks"
             )
-        if hasattr(self, 'sham_replay_section'):
+        if hasattr(self, "sham_replay_section"):
             self.sham_replay_section.visible = is_enabled and (method == "replay")
-        if hasattr(self, 'sham_randomization_section'):
+        if hasattr(self, "sham_randomization_section"):
             self.sham_randomization_section.visible = is_enabled
 
         self.page.update()
@@ -1254,7 +1360,7 @@ class StudyEditorScreen:
         Updates network dropdown visibility and task-specific parameters
         without rebuilding tabs (which would corrupt field values).
         """
-        task_type = e.control.value if e and hasattr(e, 'control') else self.task_type_dropdown.value
+        task_type = e.control.value if e and hasattr(e, "control") else self.task_type_dropdown.value
         logger.info(f"Feedback task type changed to: {task_type}")
 
         # Store task type in config as source of truth
@@ -1269,39 +1375,37 @@ class StudyEditorScreen:
             n_networks = 2
 
         # Update network dropdown visibility in Localizer tab
-        if hasattr(self, 'second_network_dropdown'):
-            self.second_network_dropdown.visible = (n_networks >= 2)
+        if hasattr(self, "second_network_dropdown"):
+            self.second_network_dropdown.visible = n_networks >= 2
 
         # Update differential row visibility (only for 2+ masks)
-        if hasattr(self, 'differential_row'):
-            self.differential_row.visible = (n_networks >= 2)
+        if hasattr(self, "differential_row"):
+            self.differential_row.visible = n_networks >= 2
 
         # Update target networks label in Localizer tab
-        if hasattr(self, 'target_networks_label'):
+        if hasattr(self, "target_networks_label"):
             self.target_networks_label.value = f"Target Networks (select {n_networks})"
 
         # Update task info text in Study tab
-        if hasattr(self, 'task_info_text'):
+        if hasattr(self, "task_info_text"):
             task_info = f"Requires {n_networks} {'network' if n_networks == 1 else 'networks'}"
             self.task_info_text.value = task_info
 
         # Rebuild network dropdowns row based on n_networks
-        if hasattr(self, 'network_dropdowns_row'):
+        if hasattr(self, "network_dropdowns_row"):
             network_dropdowns = [self.first_network_dropdown]
             if n_networks >= 2:
                 network_dropdowns.append(self.second_network_dropdown)
             self.network_dropdowns_row.controls.clear()
             self.network_dropdowns_row.controls.extend(network_dropdowns)
-            try:
+            with contextlib.suppress(Exception):
                 self.network_dropdowns_row.update()
-            except Exception:
-                pass  # Row not on page yet
 
         # Recreate task parameter fields for new task type
         self._create_task_parameter_fields()
 
         # Update task-specific section content in Feedback tab
-        if hasattr(self, 'task_specific_section'):
+        if hasattr(self, "task_specific_section"):
             task_specific_controls = self._build_task_specific_params()
             self.task_specific_section.content = ft.Column(task_specific_controls)
             # Update visibility based on whether task has parameters
@@ -1325,7 +1429,9 @@ class StudyEditorScreen:
         Updates network section visibility without rebuilding tabs
         (which would corrupt field values).
         """
-        localizer_task_type = e.control.value if e and hasattr(e, 'control') else self.localizer_task_type_dropdown.value
+        localizer_task_type = (
+            e.control.value if e and hasattr(e, "control") else self.localizer_task_type_dropdown.value
+        )
         logger.info(f"Localizer task type changed to: {localizer_task_type}")
 
         # Store in config as source of truth
@@ -1333,28 +1439,28 @@ class StudyEditorScreen:
 
         # Toggle network extraction section visibility
         is_rest = localizer_task_type == "rest"
-        if hasattr(self, 'networks_section'):
+        if hasattr(self, "networks_section"):
             self.networks_section.visible = is_rest
-            try:
+            with contextlib.suppress(Exception):
                 self.networks_section.update()
-            except Exception:
-                pass  # Section not on page yet
 
         # Recreate localizer task parameter fields
         self._create_localizer_task_parameter_fields()
 
         # Update localizer task parameters section
-        if hasattr(self, 'localizer_task_params_section'):
+        if hasattr(self, "localizer_task_params_section"):
             task_params = self._build_localizer_task_specific_params()
             self.localizer_task_params_section.controls.clear()
             self.localizer_task_params_section.controls.extend(task_params)
-            try:
+            with contextlib.suppress(Exception):
                 self.localizer_task_params_section.update()
-            except Exception:
-                pass  # Section not on page yet
 
         # Show snackbar feedback
-        msg = "Localizer: Rest (ICA-based network extraction)" if is_rest else f"Localizer: {localizer_task_type} (GLM-based coming soon)"
+        msg = (
+            "Localizer: Rest (ICA-based network extraction)"
+            if is_rest
+            else f"Localizer: {localizer_task_type} (GLM-based coming soon)"
+        )
         _snack = ft.SnackBar(ft.Text(msg))
         _snack.open = True
         self.page.overlay.append(_snack)
@@ -1362,14 +1468,12 @@ class StudyEditorScreen:
 
     def _on_threshold_method_changed(self, e):
         """Handle threshold method dropdown change."""
-        method = e.control.value if e and hasattr(e, 'control') else self.threshold_method_dropdown.value
+        method = e.control.value if e and hasattr(e, "control") else self.threshold_method_dropdown.value
         is_cluster = method == "cluster"
-        if hasattr(self, 'cluster_settings_section'):
+        if hasattr(self, "cluster_settings_section"):
             self.cluster_settings_section.visible = is_cluster
-            try:
+            with contextlib.suppress(Exception):
                 self.cluster_settings_section.update()
-            except Exception:
-                pass
 
     def _on_localizer_n_runs_changed(self, e):
         """Handle localizer n_runs field change - update paths tab visibility."""
@@ -1377,14 +1481,14 @@ class StudyEditorScreen:
         self._validate_field("localizer_n_runs", self.localizer_n_runs_field, validate_positive_int)
 
         # Update localizer source field visibility if paths tab has been built
-        if hasattr(self, 'localizer_source_rows'):
+        if hasattr(self, "localizer_source_rows"):
             try:
                 n_runs = int(self.localizer_n_runs_field.value)
             except (ValueError, TypeError):
                 n_runs = 2
 
             for i, row in enumerate(self.localizer_source_rows):
-                row.visible = (i < n_runs)
+                row.visible = i < n_runs
                 row.update()
 
     def _on_twovol_initial_enabled_changed(self, e):
@@ -1392,7 +1496,7 @@ class StudyEditorScreen:
         enabled = self.twovol_initial_enabled_checkbox.value
 
         # Update paths tab row visibility if it has been built
-        if hasattr(self, 'twovol_initial_row'):
+        if hasattr(self, "twovol_initial_row"):
             self.twovol_initial_row.visible = enabled
             self.twovol_initial_row.update()
 
@@ -1401,12 +1505,12 @@ class StudyEditorScreen:
         enabled = self.twovol_realtime_enabled_checkbox.value
 
         # Update paths tab row visibility if it has been built
-        if hasattr(self, 'twovol_realtime_row'):
+        if hasattr(self, "twovol_realtime_row"):
             self.twovol_realtime_row.visible = enabled
             self.twovol_realtime_row.update()
 
         # Show/hide note when disabled
-        if hasattr(self, 'twovol_realtime_note'):
+        if hasattr(self, "twovol_realtime_note"):
             self.twovol_realtime_note.visible = not enabled
             self.twovol_realtime_note.update()
 
@@ -1416,27 +1520,27 @@ class StudyEditorScreen:
         self._validate_field("max_feedback_runs", self.max_feedback_runs_field, validate_positive_int)
 
         # Update feedback source field visibility if paths tab has been built
-        if hasattr(self, 'feedback_source_rows'):
+        if hasattr(self, "feedback_source_rows"):
             try:
                 n_runs = int(self.max_feedback_runs_field.value)
             except (ValueError, TypeError):
                 n_runs = 2
 
             for i, row in enumerate(self.feedback_source_rows):
-                row.visible = (i < n_runs)
+                row.visible = i < n_runs
                 row.update()
 
     def _on_use_transfer_runs_changed(self, e):
         """Handle use_transfer_runs checkbox change - update paths tab visibility."""
-        enabled = e.control.value if e and hasattr(e, 'control') else False
+        enabled = e.control.value if e and hasattr(e, "control") else False
 
         # Update transfer source rows and header visibility if paths tab has been built
-        if hasattr(self, 'transfer_source_rows'):
+        if hasattr(self, "transfer_source_rows"):
             for row in self.transfer_source_rows:
                 row.visible = enabled
                 row.update()
 
-        if hasattr(self, 'transfer_section_header'):
+        if hasattr(self, "transfer_section_header"):
             self.transfer_section_header.visible = enabled
             self.transfer_section_header.update()
 
@@ -1449,6 +1553,7 @@ class StudyEditorScreen:
         Returns:
             IconButton that opens directory picker
         """
+
         def pick_directory(e):
             """Handle directory picker click event."""
             logger.info(f"Directory picker clicked for field: {field.label}")
@@ -1459,9 +1564,7 @@ class StudyEditorScreen:
                 from tkinter import filedialog
             except ImportError:
                 logger.error("tkinter is not available")
-                _snack = ft.SnackBar(
-                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk")
-                )
+                _snack = ft.SnackBar(ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1471,12 +1574,11 @@ class StudyEditorScreen:
                 # Create a temporary tkinter root window
                 root = tk.Tk()
                 root.withdraw()  # Hide the main window
-                root.attributes('-topmost', True)  # Bring to front
+                root.attributes("-topmost", True)  # Bring to front
 
                 # Open directory picker
                 path = filedialog.askdirectory(
-                    title=f"Select {field.label}",
-                    initialdir=field.value if field.value else None
+                    title=f"Select {field.label}", initialdir=field.value if field.value else None
                 )
 
                 # Clean up
@@ -1490,9 +1592,7 @@ class StudyEditorScreen:
             except Exception as ex:
                 logger.error(f"Error opening directory picker: {ex}")
                 # Show error to user
-                _snack = ft.SnackBar(
-                    ft.Text(f"Error opening file browser: {ex}")
-                )
+                _snack = ft.SnackBar(ft.Text(f"Error opening file browser: {ex}"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1531,9 +1631,7 @@ class StudyEditorScreen:
                 from tkinter import filedialog
             except ImportError:
                 logger.error("tkinter is not available")
-                _snack = ft.SnackBar(
-                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk")
-                )
+                _snack = ft.SnackBar(ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1543,10 +1641,11 @@ class StudyEditorScreen:
                 # Create a temporary tkinter root window
                 root = tk.Tk()
                 root.withdraw()  # Hide the main window
-                root.attributes('-topmost', True)  # Bring to front
+                root.attributes("-topmost", True)  # Bring to front
 
                 # Get initial directory from current value
                 import os
+
                 initial_dir = None
                 if field.value:
                     if os.path.isfile(field.value):
@@ -1572,9 +1671,7 @@ class StudyEditorScreen:
             except Exception as ex:
                 logger.error(f"Error opening file picker: {ex}")
                 # Show error to user
-                _snack = ft.SnackBar(
-                    ft.Text(f"Error opening file browser: {ex}")
-                )
+                _snack = ft.SnackBar(ft.Text(f"Error opening file browser: {ex}"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1596,6 +1693,7 @@ class StudyEditorScreen:
         Returns:
             IconButton that opens file picker
         """
+
         def pick_file(e):
             """Handle file picker click event."""
             logger.info(f"File picker clicked for field: {field.label}")
@@ -1606,9 +1704,7 @@ class StudyEditorScreen:
                 from tkinter import filedialog
             except ImportError:
                 logger.error("tkinter is not available")
-                _snack = ft.SnackBar(
-                    ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk")
-                )
+                _snack = ft.SnackBar(ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1618,13 +1714,14 @@ class StudyEditorScreen:
                 # Create a temporary tkinter root window
                 root = tk.Tk()
                 root.withdraw()  # Hide the main window
-                root.attributes('-topmost', True)  # Bring to front
+                root.attributes("-topmost", True)  # Bring to front
 
                 # Set up file types filter
                 ftypes = filetypes if filetypes else [("All files", "*.*")]
 
                 # Get initial directory from current value
                 import os
+
                 initialdir = None
                 if field.value:
                     dirname = os.path.dirname(field.value)
@@ -1633,9 +1730,7 @@ class StudyEditorScreen:
 
                 # Open file picker
                 path = filedialog.askopenfilename(
-                    title=f"Select {field.label}",
-                    initialdir=initialdir,
-                    filetypes=ftypes
+                    title=f"Select {field.label}", initialdir=initialdir, filetypes=ftypes
                 )
 
                 # Clean up
@@ -1649,9 +1744,7 @@ class StudyEditorScreen:
             except Exception as ex:
                 logger.error(f"Error opening file picker: {ex}")
                 # Show error to user
-                _snack = ft.SnackBar(
-                    ft.Text(f"Error opening file browser: {ex}")
-                )
+                _snack = ft.SnackBar(ft.Text(f"Error opening file browser: {ex}"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1778,7 +1871,9 @@ class StudyEditorScreen:
         task_type = self.task_type_dropdown.value
         try:
             task_metadata = get_task_metadata(task_type)
-            task_info = f"Requires {task_metadata.n_networks} {'network' if task_metadata.n_networks == 1 else 'networks'}"
+            task_info = (
+                f"Requires {task_metadata.n_networks} {'network' if task_metadata.n_networks == 1 else 'networks'}"
+            )
         except ValueError:
             task_info = ""
 
@@ -1792,7 +1887,9 @@ class StudyEditorScreen:
 
         # Create simulator mode instruction text (will be updated dynamically)
         self.simulator_instruction_text = ft.Text(
-            "Simulator replays volumes from source directories at configurable speed for offline testing." if is_simulator else "Scanner DICOM directory will be monitored for real-time acquisition.",
+            "Simulator replays volumes from source directories at configurable speed for offline testing."
+            if is_simulator
+            else "Scanner DICOM directory will be monitored for real-time acquisition.",
             size=11,
             color=ft.Colors.GREY_600,
             italic=True,
@@ -1836,21 +1933,27 @@ class StudyEditorScreen:
                     ft.Divider(),
                     ft.Text("Acquisition Mode", size=16, weight=ft.FontWeight.BOLD),
                     self.simulator_enabled_checkbox,
-                    ft.Row([
-                        self.collection_speed_field,
-                        self.feedback_simulator_speed_field,
-                    ]),
-                    ft.Row([
-                        self.scanner_dicom_dir_field,
-                        self.scanner_dicom_dir_browse_btn,
-                    ]),
+                    ft.Row(
+                        [
+                            self.collection_speed_field,
+                            self.feedback_simulator_speed_field,
+                        ]
+                    ),
+                    ft.Row(
+                        [
+                            self.scanner_dicom_dir_field,
+                            self.scanner_dicom_dir_browse_btn,
+                        ]
+                    ),
                     self.simulator_instruction_text,
                     ft.Divider(),
                     ft.Text("Display Settings", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Row([
-                        self.control_monitor_dropdown,
-                        self.presenter_monitor_dropdown,
-                    ]),
+                    ft.Row(
+                        [
+                            self.control_monitor_dropdown,
+                            self.presenter_monitor_dropdown,
+                        ]
+                    ),
                     self._build_monitor_preview(),
                     ft.Text(
                         "Configure which monitor shows the control GUI vs the participant task display.",
@@ -1894,7 +1997,7 @@ class StudyEditorScreen:
         )
 
         # Set second network dropdown visibility based on n_networks
-        self.second_network_dropdown.visible = (n_networks >= 2)
+        self.second_network_dropdown.visible = n_networks >= 2
 
         # Build network dropdowns row dynamically based on n_networks
         network_dropdowns = [self.first_network_dropdown]
@@ -1905,33 +2008,35 @@ class StudyEditorScreen:
 
         # Network Configuration section (only visible when localizer is rest)
         self.networks_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Network Extraction", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "ICA-based network extraction from resting-state localizer",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                ft.Divider(),
-                ft.Text("Network Atlas", size=14, weight=ft.FontWeight.BOLD),
-                self.network_atlas_dropdown,
-                ft.Divider(),
-                self.target_networks_label,
-                ft.Text(
-                    "Select target networks for neurofeedback training.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                self.network_dropdowns_row,
-                ft.Divider(),
-                ft.Text("ICA Settings", size=14, weight=ft.FontWeight.BOLD),
-                self.n_components_field,
-                self.smooth_fwhm_field,
-                self.highpass_field,
-                ft.Divider(),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("Network Extraction", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "ICA-based network extraction from resting-state localizer",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    ft.Divider(),
+                    ft.Text("Network Atlas", size=14, weight=ft.FontWeight.BOLD),
+                    self.network_atlas_dropdown,
+                    ft.Divider(),
+                    self.target_networks_label,
+                    ft.Text(
+                        "Select target networks for neurofeedback training.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self.network_dropdowns_row,
+                    ft.Divider(),
+                    ft.Text("ICA Settings", size=14, weight=ft.FontWeight.BOLD),
+                    self.n_components_field,
+                    self.smooth_fwhm_field,
+                    self.highpass_field,
+                    ft.Divider(),
+                ]
+            ),
             visible=is_rest_localizer,
         )
 
@@ -2075,25 +2180,30 @@ class StudyEditorScreen:
 
         # Session structure - generic for all tasks
         self.session_structure_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
-                self.max_feedback_runs_field,
-                self.n_baseline_field,
-                self._f(self.fd_threshold_field),
-                self.moco_enabled_checkbox,
-                ft.Text(
-                    "Use Siemens MoCo JSON sidecar if available; falls back to ANTsPy registration (~400-500ms/volume).",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                self.rt_smooth_enabled_checkbox,
-                self.rt_smooth_fwhm_field,
-                self.differential_row,
-                self.intermittent_enabled_checkbox,
-                self.feedback_interval_field,
-                ft.Divider(),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
+                    self.max_feedback_runs_field,
+                    self.n_baseline_field,
+                    self._f(self.fd_threshold_field),
+                    self.moco_enabled_checkbox,
+                    ft.Text(
+                        "Use Siemens MoCo JSON sidecar if available; falls back to ANTsPy registration (~400-500ms/volume).",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self.rt_smooth_enabled_checkbox,
+                    self.rt_smooth_fwhm_field,
+                    self.differential_row,
+                    self.intermittent_enabled_checkbox,
+                    self.feedback_interval_field,
+                    self.connectivity_enabled_checkbox,
+                    self.connectivity_window_field,
+                    self.connectivity_pair_row,
+                    ft.Divider(),
+                ]
+            ),
             visible=True,  # Always visible for all tasks
         )
 
@@ -2136,11 +2246,11 @@ class StudyEditorScreen:
 
         return ft.Container(
             content=ft.Column(
-                scanner_section +
-                [self.session_structure_section] +
-                twovol_section +
-                [self.task_specific_section] +
-                [sham_section],
+                scanner_section
+                + [self.session_structure_section]
+                + twovol_section
+                + [self.task_specific_section]
+                + [sham_section],
                 scroll=ft.ScrollMode.AUTO,
             ),
             padding=20,
@@ -2154,70 +2264,80 @@ class StudyEditorScreen:
 
         # Hemisphere split section (single network split into left/right)
         self.sham_hemisphere_split_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Hemisphere Split", size=13, weight=ft.FontWeight.BOLD),
-                self.sham_hemisphere_network_dropdown,
-                ft.Text("Target Hemisphere:", size=12),
-                self.sham_target_hemisphere_radio,
-                ft.Text(
-                    "Split the selected network into left and right hemispheres. "
-                    "One hemisphere is target, the other is non-target.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("Hemisphere Split", size=13, weight=ft.FontWeight.BOLD),
+                    self.sham_hemisphere_network_dropdown,
+                    ft.Text("Target Hemisphere:", size=12),
+                    self.sham_target_hemisphere_radio,
+                    ft.Text(
+                        "Split the selected network into left and right hemispheres. "
+                        "One hemisphere is target, the other is non-target.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                ]
+            ),
             visible=is_enabled and method == "alternative_masks" and mask_mode == "hemisphere_split",
         )
 
         # Two networks section (legacy: use two distinct networks)
         self.sham_two_networks_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Alternative Networks", size=13, weight=ft.FontWeight.BOLD),
-                ft.Row([
-                    self.sham_first_network_dropdown,
-                    self.sham_second_network_dropdown,
-                ]),
-                ft.Text(
-                    "Use two distinct networks for sham (e.g., motor networks instead of default mode)",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("Alternative Networks", size=13, weight=ft.FontWeight.BOLD),
+                    ft.Row(
+                        [
+                            self.sham_first_network_dropdown,
+                            self.sham_second_network_dropdown,
+                        ]
+                    ),
+                    ft.Text(
+                        "Use two distinct networks for sham (e.g., motor networks instead of default mode)",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                ]
+            ),
             visible=is_enabled and method == "alternative_masks" and mask_mode == "two_networks",
         )
 
         # Alternative masks section (contains mask mode radio and subsections)
         self.sham_alternative_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Alternative Mask Mode", size=14, weight=ft.FontWeight.BOLD),
-                self.sham_mask_mode_radio,
-                self.sham_hemisphere_split_section,
-                self.sham_two_networks_section,
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("Alternative Mask Mode", size=14, weight=ft.FontWeight.BOLD),
+                    self.sham_mask_mode_radio,
+                    self.sham_hemisphere_split_section,
+                    self.sham_two_networks_section,
+                ]
+            ),
             visible=is_enabled and (method == "alternative_masks"),
         )
 
         # Replay info section (replay uses base_dir + randomization file)
         self.sham_replay_section = ft.Container(
-            content=ft.Column([
-                ft.Text("Replay Configuration", size=14, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "Replay mode uses the matched_participant column from the randomization file "
-                    "to find feedbacklog.tsv files in the study's base data directory.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                ft.Text(
-                    "Ensure the matched participant's feedback session has completed before "
-                    "running the sham participant.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("Replay Configuration", size=14, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Replay mode uses the matched_participant column from the randomization file "
+                        "to find feedbacklog.tsv files in the study's base data directory.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    ft.Text(
+                        "Ensure the matched participant's feedback session has completed before "
+                        "running the sham participant.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                ]
+            ),
             visible=is_enabled and (method == "replay"),
         )
 
@@ -2237,18 +2357,20 @@ class StudyEditorScreen:
             [
                 ft.Divider(),
                 ft.Text("Randomization", size=14, weight=ft.FontWeight.BOLD),
-                ft.Row([
-                    self.sham_randomization_file_field,
-                    self._create_file_browse_button(
+                ft.Row(
+                    [
                         self.sham_randomization_file_field,
-                        filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")]
-                    ),
-                    ft.IconButton(
-                        icon=ft.Icons.SHUFFLE,
-                        tooltip="Generate randomization file",
-                        on_click=self._on_generate_randomization,
-                    ),
-                ]),
+                        self._create_file_browse_button(
+                            self.sham_randomization_file_field,
+                            filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")],
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.SHUFFLE,
+                            tooltip="Generate randomization file",
+                            on_click=self._on_generate_randomization,
+                        ),
+                    ]
+                ),
                 ft.Text(
                     "TSV file with columns: subject_id, condition (real/sham), "
                     "matched_participant (for replay), matched_visit",
@@ -2261,28 +2383,30 @@ class StudyEditorScreen:
         )
 
         return ft.Container(
-            content=ft.Column([
-                ft.Text("Sham/Control Conditions", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "Configure real/sham neurofeedback for controlled studies. "
-                    "All masks are extracted for all participants to maintain blinding.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                self.sham_enabled_checkbox,
-                self.blind_mode_checkbox,
-                ft.Text(
-                    "Shows Target/Non-Target instead of network names in the task display.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                self.sham_config_container,
-                self.sham_alternative_section,
-                self.sham_replay_section,
-                self.sham_randomization_section,
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("Sham/Control Conditions", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Configure real/sham neurofeedback for controlled studies. "
+                        "All masks are extracted for all participants to maintain blinding.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self.sham_enabled_checkbox,
+                    self.blind_mode_checkbox,
+                    ft.Text(
+                        "Shows Target/Non-Target instead of network names in the task display.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self.sham_config_container,
+                    self.sham_alternative_section,
+                    self.sham_replay_section,
+                    self.sham_randomization_section,
+                ]
+            ),
         )
 
     def _build_task_specific_params(self) -> list:
@@ -2415,13 +2539,15 @@ class StudyEditorScreen:
         ]
 
         # Per-subject mapping container
-        self.simulator_source_mapping_row = ft.Row([
-            self.simulator_source_mapping_field,
-            self._create_file_browse_button(
+        self.simulator_source_mapping_row = ft.Row(
+            [
                 self.simulator_source_mapping_field,
-                filetypes=[("CSV/TSV files", "*.csv *.tsv"), ("All files", "*.*")],
-            ),
-        ])
+                self._create_file_browse_button(
+                    self.simulator_source_mapping_field,
+                    filetypes=[("CSV/TSV files", "*.csv *.tsv"), ("All files", "*.*")],
+                ),
+            ]
+        )
         self.simulator_mapping_container = ft.Column(
             [
                 ft.Text(
@@ -2466,13 +2592,15 @@ class StudyEditorScreen:
         )
 
         # MURFI design file section (always visible in simulator mode)
-        self.murfi_design_row = ft.Row([
-            self.murfi_design_path_field,
-            self._create_file_browse_button(
+        self.murfi_design_row = ft.Row(
+            [
                 self.murfi_design_path_field,
-                filetypes=[("MURFI Design Files", "*.mat"), ("All Files", "*.*")],
-            ),
-        ])
+                self._create_file_browse_button(
+                    self.murfi_design_path_field,
+                    filetypes=[("MURFI Design Files", "*.mat"), ("All Files", "*.*")],
+                ),
+            ]
+        )
         murfi_section = [
             ft.Divider(),
             ft.Text("External Design (optional)", size=14, weight=ft.FontWeight.W_500),
@@ -2499,10 +2627,12 @@ class StudyEditorScreen:
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
-                    ft.Row([
-                        self.base_dir_field,
-                        self._create_browse_button(self.base_dir_field),
-                    ]),
+                    ft.Row(
+                        [
+                            self.base_dir_field,
+                            self._create_browse_button(self.base_dir_field),
+                        ]
+                    ),
                     self.simulator_paths_container,
                 ],
                 scroll=ft.ScrollMode.AUTO,
@@ -2519,9 +2649,7 @@ class StudyEditorScreen:
     def _on_save(self, e):
         """Handle save button click."""
         if self.validation_errors:
-            _snack = ft.SnackBar(
-                ft.Text("Please fix validation errors before saving")
-            )
+            _snack = ft.SnackBar(ft.Text("Please fix validation errors before saving"))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -2533,9 +2661,7 @@ class StudyEditorScreen:
         # Save
         try:
             path = self.config_manager.save_study(self.study_config, overwrite=True)
-            _snack = ft.SnackBar(
-                ft.Text(f"Study saved: {self.study_config.metadata.name}")
-            )
+            _snack = ft.SnackBar(ft.Text(f"Study saved: {self.study_config.metadata.name}"))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -2548,9 +2674,7 @@ class StudyEditorScreen:
 
         except Exception as ex:
             logger.error(f"Failed to save study: {ex}")
-            _snack = ft.SnackBar(
-                ft.Text(f"Error saving study: {ex}")
-            )
+            _snack = ft.SnackBar(ft.Text(f"Error saving study: {ex}"))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -2604,9 +2728,7 @@ class StudyEditorScreen:
                 path = self.config_manager.save_study(self.study_config, overwrite=False)
                 self.page.pop_dialog()
 
-                _snack = ft.SnackBar(
-                    ft.Text(f"Study saved as: {new_name}")
-                )
+                _snack = ft.SnackBar(ft.Text(f"Study saved as: {new_name}"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -2636,6 +2758,7 @@ class StudyEditorScreen:
     def _on_start_session(self, e):
         """Handle start session button click."""
         from pathlib import Path
+
         from ..components.visit_selection_dialog import VisitSelectionDialog
 
         logger.info("Start Session clicked")
@@ -2779,12 +2902,13 @@ class StudyEditorScreen:
                 config["scan"]["simulator_source_mapping"] = ""
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid scanner parameter: {e}")
-            raise ValidationError(f"Invalid scanner parameter: {e}")
+            raise ValidationError(f"Invalid scanner parameter: {e}") from e
 
         # Update network config with validation
         try:
             # Network atlas
             from pineuro.mask_extraction import ATLAS_SOURCES
+
             network_atlas_val = self.network_atlas_dropdown.value or "yeo_17"
             n_networks = ATLAS_SOURCES.get(network_atlas_val, {}).get("n_networks", 17)
 
@@ -2822,15 +2946,13 @@ class StudyEditorScreen:
                 atlas_source = self.atlas_source_dropdown.value
                 atlas_region = self.atlas_region_dropdown.value
                 config["mask"]["atlas_source"] = atlas_source
-                config["mask"]["atlas_regions"] = [atlas_region] if atlas_region and atlas_region != "__loading__" else None
+                config["mask"]["atlas_regions"] = (
+                    [atlas_region] if atlas_region and atlas_region != "__loading__" else None
+                )
                 config["mask"]["atlas_name"] = None
                 config["mask"]["atlas_mask"] = None
-                config["mask"]["cluster_start_threshold"] = float(
-                    self.cluster_start_threshold_field.value or 2.0
-                )
-                config["mask"]["cluster_step"] = float(
-                    self.cluster_step_field.value or 0.1
-                )
+                config["mask"]["cluster_start_threshold"] = float(self.cluster_start_threshold_field.value or 2.0)
+                config["mask"]["cluster_step"] = float(self.cluster_step_field.value or 0.1)
             else:
                 config["mask"]["atlas_source"] = None
                 config["mask"]["atlas_regions"] = None
@@ -2838,7 +2960,7 @@ class StudyEditorScreen:
                 config["mask"]["atlas_mask"] = None
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid network parameter: {e}")
-            raise ValidationError(f"Invalid network parameter: {e}")
+            raise ValidationError(f"Invalid network parameter: {e}") from e
 
         # Update selected networks from dropdowns
         # Only save as many networks as the task requires (n_networks)
@@ -2892,6 +3014,19 @@ class StudyEditorScreen:
                 config["feedback"]["feedback_interval"] = int(interval_str) if interval_str else 5
             else:
                 config["feedback"]["feedback_interval"] = None
+            # Connectivity feedback
+            if self.connectivity_enabled_checkbox.value:
+                a = self.connectivity_pair_a_dropdown.value
+                b = self.connectivity_pair_b_dropdown.value
+                if a and b and a != b:
+                    config["feedback"]["connectivity_pairs"] = [[a, b]]
+                else:
+                    config["feedback"]["connectivity_pairs"] = None
+                window_str = self.connectivity_window_field.value.strip()
+                config["feedback"]["connectivity_window"] = int(window_str) if window_str else 15
+            else:
+                config["feedback"]["connectivity_pairs"] = None
+                config["feedback"]["connectivity_window"] = 15
             # Also save to task-specific config for reference
             if task_type not in config["task"]:
                 config["task"][task_type] = {}
@@ -2920,16 +3055,14 @@ class StudyEditorScreen:
                     config["task"][task_type][param.key] = field.value
                 elif param.type == "list[str]":
                     # Parse comma-separated string to list
-                    config["task"][task_type][param.key] = [
-                        s.strip() for s in field.value.split(",") if s.strip()
-                    ]
+                    config["task"][task_type][param.key] = [s.strip() for s in field.value.split(",") if s.strip()]
 
             # Validate task config
             metadata.validate_config(config["task"][task_type])
 
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid task parameter: {e}")
-            raise ValidationError(f"Invalid task parameter: {e}")
+            raise ValidationError(f"Invalid task parameter: {e}") from e
 
         # Save network assignment for current task type using its network_roles
         task_type = config["task"].get("task_type", "ball")
@@ -2977,7 +3110,7 @@ class StudyEditorScreen:
 
             except (ValueError, TypeError) as e:
                 logger.error(f"Invalid localizer task parameter: {e}")
-                raise ValidationError(f"Invalid localizer task parameter: {e}")
+                raise ValidationError(f"Invalid localizer task parameter: {e}") from e
 
         # Update paths
         config["paths"]["base_dir"] = self.base_dir_field.value.strip()
@@ -3003,9 +3136,7 @@ class StudyEditorScreen:
         ]
 
         # Update transfer source paths (always 2)
-        config["scan"]["transfer_source_dicoms"] = [
-            field.value.strip() for field in self.transfer_source_fields[:2]
-        ]
+        config["scan"]["transfer_source_dicoms"] = [field.value.strip() for field in self.transfer_source_fields[:2]]
 
         # Remove legacy single-path feedback_dicoms if present
         config["scan"].pop("feedback_dicoms", None)

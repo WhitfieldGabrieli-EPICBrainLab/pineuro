@@ -128,19 +128,19 @@ References
 # =============================================================================
 
 # --- Standard Library ---
-import csv                  # TSV logging for feedback results
+import contextlib  # Suppress exceptions cleanly
+import csv  # TSV logging for feedback results
+import heapq  # Priority queue for ordered volume processing
+import json  # JSON sidecar parsing for NIfTI metadata
+import logging  # Structured logging
+import re  # Regex for motion parameter extraction
+import shutil  # File operations during collection
+import threading  # Multi-threading for volume watching
+import time  # Timing for volume collection
+from collections.abc import Callable, Sequence
 from datetime import datetime
-import json                 # JSON sidecar parsing for NIfTI metadata
-import logging              # Structured logging
 from pathlib import Path
-import shutil               # File operations during collection
-import threading            # Multi-threading for volume watching
-import time                 # Timing for volume collection
-from typing import Callable, Optional, Sequence, TextIO, TYPE_CHECKING
-from collections import OrderedDict
-import heapq                # Priority queue for ordered volume processing
-import re                   # Regex for motion parameter extraction
-import tempfile             # Temporary directory for fallback
+from typing import TYPE_CHECKING, Optional, TextIO
 
 # Type-checking only imports (avoid circular dependencies)
 if TYPE_CHECKING:
@@ -151,24 +151,22 @@ if TYPE_CHECKING:
 # to avoid its ~9-second import cost at module load time. The GUI imports
 # feedback.py at startup but doesn't need ANTsPy until a pipeline runs.
 import nibabel as nib
-from nibabel.nifti1 import Nifti1Image
 import numpy as np
+from nibabel.nifti1 import Nifti1Image
 from numpy.typing import NDArray
-import pydicom              # DICOM header reading for motion parameters
-from scipy.stats import gamma as gamma_dist  # HRF computation
+from watchdog.events import DirCreatedEvent, FileCreatedEvent, FileSystemEventHandler
 
 # --- Third-Party: Filesystem Monitoring ---
 # Watchdog provides cross-platform filesystem event monitoring for detecting
 # new volume files as they arrive from the scanner
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileCreatedEvent, DirCreatedEvent
 
 # --- Local Imports ---
 from .utils import (
-    is_valid_volume,        # Validate DICOM/NIfTI files
-    is_nifti_file,          # Check if file is NIfTI format
     get_json_sidecar_path,  # Get path to JSON sidecar
-    get_tr_from_volume,     # Extract TR from volume metadata
+    get_tr_from_volume,  # Extract TR from volume metadata
+    is_nifti_file,  # Check if file is NIfTI format
+    is_valid_volume,  # Validate DICOM/NIfTI files
 )
 
 # --- Module Logger ---
@@ -201,7 +199,7 @@ def _rotation_matrix_to_euler(R: NDArray[np.float64]) -> NDArray[np.float64]:
     # Use scipy for robust conversion
     rot = Rotation.from_matrix(R)
     # XYZ intrinsic = xyz extrinsic, matches FSL convention
-    return rot.as_euler('xyz')
+    return rot.as_euler("xyz")
 
 
 def _ants_register_volume(
@@ -250,23 +248,25 @@ def _ants_register_volume(
     result = ants.registration(
         fixed=ref_ants,
         moving=mov_ants,
-        type_of_transform='Rigid',
+        type_of_transform="Rigid",
         aff_iterations=(5, 2),
         aff_shrink_factors=(2, 1),
         aff_smoothing_sigmas=(1, 0),
         verbose=False,
     )
 
-    corrected_vol = result['warpedmovout'].numpy()
+    corrected_vol = result["warpedmovout"].numpy()
 
     # Extract motion parameters from transform
-    tx_path = result['fwdtransforms'][0]
+    tx_path = result["fwdtransforms"][0]
     tx = ants.read_transform(tx_path)
 
     params = np.array(tx.parameters)
-    fixed_params = (np.array(tx.fixed_parameters)
-                    if tx.fixed_parameters is not None and len(tx.fixed_parameters) > 0
-                    else np.zeros(3))
+    fixed_params = (
+        np.array(tx.fixed_parameters)
+        if tx.fixed_parameters is not None and len(tx.fixed_parameters) > 0
+        else np.zeros(3)
+    )
 
     # ANTs Rigid returns Euler3DTransform with 6 parameters:
     # [angleX, angleY, angleZ, transX, transY, transZ]
@@ -274,10 +274,17 @@ def _ants_register_volume(
         euler_rad = params[:3]
         translation = params[3:6]
         euler_deg = np.degrees(euler_rad)
-        motion_params = np.array([
-            translation[0], translation[1], translation[2],
-            euler_deg[0], euler_deg[1], euler_deg[2],
-        ], dtype=np.float64)
+        motion_params = np.array(
+            [
+                translation[0],
+                translation[1],
+                translation[2],
+                euler_deg[0],
+                euler_deg[1],
+                euler_deg[2],
+            ],
+            dtype=np.float64,
+        )
 
     elif len(params) == 12:
         # Affine/MatrixOffsetTransform format: [M00..M22, tx, ty, tz]
@@ -293,10 +300,17 @@ def _ants_register_volume(
 
         euler_rad = _rotation_matrix_to_euler(matrix)
         euler_deg = np.degrees(euler_rad)
-        motion_params = np.array([
-            effective_translation[0], effective_translation[1], effective_translation[2],
-            euler_deg[0], euler_deg[1], euler_deg[2],
-        ], dtype=np.float64)
+        motion_params = np.array(
+            [
+                effective_translation[0],
+                effective_translation[1],
+                effective_translation[2],
+                euler_deg[0],
+                euler_deg[1],
+                euler_deg[2],
+            ],
+            dtype=np.float64,
+        )
 
     else:
         logger.warning(f"Unexpected ANTs transform params length: {len(params)}")
@@ -401,9 +415,7 @@ class IncrementalGLM:
         if n_regressors < 1:
             raise ValueError("n_regressors must be at least 1")
         if n_nuisance < 1 or n_nuisance > n_regressors:
-            raise ValueError(
-                f"n_nuisance ({n_nuisance}) must be between 1 and n_regressors ({n_regressors})"
-            )
+            raise ValueError(f"n_nuisance ({n_nuisance}) must be between 1 and n_regressors ({n_regressors})")
 
         self.n_regressors = n_regressors
         self.n_nuisance = n_nuisance
@@ -412,9 +424,7 @@ class IncrementalGLM:
         self.n_obs = 0
 
         # R matrix from QR decomposition: upper triangular, augmented with y cross-product
-        self._R: NDArray[np.float64] = np.zeros(
-            (n_regressors, n_regressors + n_outputs), dtype=np.float64
-        )
+        self._R: NDArray[np.float64] = np.zeros((n_regressors, n_regressors + n_outputs), dtype=np.float64)
 
         # Track d[] for debugging (approximated from R[j,j]^2 in normal operation)
         # This tracks what d[] would be if we computed it properly
@@ -428,9 +438,9 @@ class IncrementalGLM:
         self._last_weight: float = 0.0
 
         # Steady-state statistics (frozen after baseline for stable normalization)
-        self._steady_state_rss: Optional[NDArray[np.float64]] = None
-        self._steady_state_residual_mse: Optional[NDArray[np.float64]] = None
-        self._steady_state_timepoint: Optional[int] = None
+        self._steady_state_rss: NDArray[np.float64] | None = None
+        self._steady_state_residual_mse: NDArray[np.float64] | None = None
+        self._steady_state_timepoint: int | None = None
 
     def _apply_givens_rotation(
         self,
@@ -596,7 +606,7 @@ class IncrementalGLM:
         self,
         X: NDArray[np.float64],
         y: NDArray[np.float64],
-    ) -> Optional[NDArray[np.float64]]:
+    ) -> NDArray[np.float64] | None:
         """Incorporate a new observation and return normalized activation.
 
         Parameters
@@ -618,13 +628,9 @@ class IncrementalGLM:
         p = self.n_regressors
 
         if X.shape[0] != self.n_regressors:
-            raise ValueError(
-                f"X has {X.shape[0]} elements, expected {self.n_regressors}"
-            )
+            raise ValueError(f"X has {X.shape[0]} elements, expected {self.n_regressors}")
         if y.shape[0] != self.n_outputs:
-            raise ValueError(
-                f"y has {y.shape[0]} elements, expected {self.n_outputs}"
-            )
+            raise ValueError(f"y has {y.shape[0]} elements, expected {self.n_outputs}")
 
         # Increment observation counter
         self.n_obs += 1
@@ -642,7 +648,7 @@ class IncrementalGLM:
         # weight converges to ~1.0 as d[] accumulates over observations.
         # To match MURFI's behavior, we accumulate RSS without the weight factor.
         transformed_y = aug_row[p:]
-        self._rss += transformed_y ** 2
+        self._rss += transformed_y**2
 
         # Store last weight for debugging
         self._last_weight = weight
@@ -704,11 +710,9 @@ class IncrementalGLM:
             self._steady_state_rss = self._rss.copy()
             self._steady_state_residual_mse = self._residual_mse.copy()
             self._steady_state_timepoint = self.n_obs
-            logger.info(
-                f"Steady state frozen at observation {self.n_obs}"
-            )
+            logger.info(f"Steady state frozen at observation {self.n_obs}")
 
-    def dump_algo_vars(self, voxel_indices: Optional[list[int]] = None) -> dict:
+    def dump_algo_vars(self, voxel_indices: list[int] | None = None) -> dict:
         """Dump algorithm variables for debugging/comparison with MURFI.
 
         Parameters
@@ -817,7 +821,7 @@ class FeedbackEstimator:
 
     N_NUISANCE_REGRESSORS = 8  # intercept + drift + 6 motion
     # Pre-compiled regex for motion parameter extraction (avoids re-compilation per volume)
-    _MOTION_PATTERN = re.compile(r'Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)')
+    _MOTION_PATTERN = re.compile(r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)")
 
     def __init__(
         self,
@@ -825,13 +829,13 @@ class FeedbackEstimator:
         n_baseline: int,
         n_volumes: int,
         tr: float,
-        task_regressors: Optional[NDArray[np.float64]] = None,
-        mask_names: Optional[list[str]] = None,
+        task_regressors: NDArray[np.float64] | None = None,
+        mask_names: list[str] | None = None,
         use_efficiency_weights: bool = True,
         sham_provider: Optional["ShamActivationProvider"] = None,
-        external_motion_diff: Optional[NDArray[np.float64]] = None,
-        dump_algo_vars_path: Optional[Path | str] = None,
-        smooth_fwhm: Optional[float] = None,
+        external_motion_diff: NDArray[np.float64] | None = None,
+        dump_algo_vars_path: Path | str | None = None,
+        smooth_fwhm: float | None = None,
     ) -> None:
         if len(mask_paths) == 0:
             raise ValueError("At least one mask path required")
@@ -849,12 +853,12 @@ class FeedbackEstimator:
         self.use_efficiency_weights = use_efficiency_weights
         self._smooth_fwhm = smooth_fwhm
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
-        self._algo_dump_fh: Optional[TextIO] = None
+        self._algo_dump_fh: TextIO | None = None
 
         # Validate and store task regressors
         if task_regressors is not None:
             # Check if it's a TaskDesign object (has compute_regressors method)
-            if hasattr(task_regressors, 'compute_regressors'):
+            if hasattr(task_regressors, "compute_regressors"):
                 # It's a TaskDesign - compute regressors from it
                 task_regressors = task_regressors.compute_regressors(n_volumes, tr)
 
@@ -864,8 +868,7 @@ class FeedbackEstimator:
                 task_regressors = task_regressors.reshape(-1, 1)
             if task_regressors.shape[0] != n_volumes:
                 raise ValueError(
-                    f"task_regressors has {task_regressors.shape[0]} rows, "
-                    f"expected {n_volumes} to match n_volumes"
+                    f"task_regressors has {task_regressors.shape[0]} rows, expected {n_volumes} to match n_volumes"
                 )
             self._task_regressors = task_regressors
             self._n_task_regressors = task_regressors.shape[1]
@@ -898,20 +901,20 @@ class FeedbackEstimator:
         )
 
         # Motion parameter tracking for differential motion
-        self._prev_motion: Optional[NDArray[np.float64]] = None
+        self._prev_motion: NDArray[np.float64] | None = None
 
         # Framewise displacement tracking (computed each volume)
         self._latest_fd: float = 0.0
 
         # DVARS tracking (per-volume metric: RMS of temporal derivative across voxels)
         self._latest_dvars: float = 0.0
-        self._prev_voxel_values: Optional[NDArray[np.float64]] = None
+        self._prev_voxel_values: NDArray[np.float64] | None = None
 
         # tSNR tracking (running aggregate via Welford's online algorithm)
         self._latest_tsnr: float = 0.0
         self._welford_count: int = 0
-        self._welford_mean: Optional[NDArray[np.float64]] = None
-        self._welford_m2: Optional[NDArray[np.float64]] = None
+        self._welford_mean: NDArray[np.float64] | None = None
+        self._welford_m2: NDArray[np.float64] | None = None
 
         # Dict to store efficiency weights per mask: {mask_name: weights_array}
         # Weights are computed from residual MSE for inverse-variance weighting
@@ -932,8 +935,7 @@ class FeedbackEstimator:
             external_motion_diff = np.asarray(external_motion_diff, dtype=np.float64)
             if external_motion_diff.ndim != 2 or external_motion_diff.shape[1] != 6:
                 raise ValueError(
-                    f"external_motion_diff must have shape (n_volumes, 6), "
-                    f"got {external_motion_diff.shape}"
+                    f"external_motion_diff must have shape (n_volumes, 6), got {external_motion_diff.shape}"
                 )
             if external_motion_diff.shape[0] != n_volumes:
                 raise ValueError(
@@ -956,9 +958,7 @@ class FeedbackEstimator:
             f"sham={sham_status}, motion={motion_status}"
         )
 
-    def _load_single_mask(
-        self, path: Path, name: str
-    ) -> tuple[NDArray[np.intp], set[tuple[int, int, int]]]:
+    def _load_single_mask(self, path: Path, name: str) -> tuple[NDArray[np.intp], set[tuple[int, int, int]]]:
         """Load a single mask file and extract voxel coordinates.
 
         Parameters
@@ -981,13 +981,11 @@ class FeedbackEstimator:
 
         # Verify compatible shape
         if data.shape[:3] != self._shape:
-            raise ValueError(
-                f"Mask {name} shape {data.shape[:3]} != reference {self._shape}"
-            )
+            raise ValueError(f"Mask {name} shape {data.shape[:3]} != reference {self._shape}")
 
         # Get indices where mask > 0
         indices = np.where(data > 0)
-        coords = set(zip(indices[0], indices[1], indices[2]))
+        coords = set(zip(indices[0], indices[1], indices[2], strict=False))
 
         # Store flat indices for this mask
         flat_indices = np.ravel_multi_index(indices, self._shape)
@@ -1027,9 +1025,7 @@ class FeedbackEstimator:
 
         return n_voxels, voxel_indices
 
-    def _map_masks_to_master(
-        self, mask_indices: dict[str, NDArray[np.intp]]
-    ) -> dict[str, NDArray[np.intp]]:
+    def _map_masks_to_master(self, mask_indices: dict[str, NDArray[np.intp]]) -> dict[str, NDArray[np.intp]]:
         """Map each mask's flat indices to positions in master voxel array.
 
         Parameters
@@ -1049,9 +1045,7 @@ class FeedbackEstimator:
         # Map each mask's flat indices to master array positions
         mask_voxel_idx: dict[str, NDArray[np.intp]] = {}
         for name, flat_indices in mask_indices.items():
-            master_idx = np.array(
-                [flat_to_master[f] for f in flat_indices], dtype=np.intp
-            )
+            master_idx = np.array([flat_to_master[f] for f in flat_indices], dtype=np.intp)
             mask_voxel_idx[name] = master_idx
 
         return mask_voxel_idx
@@ -1071,7 +1065,7 @@ class FeedbackEstimator:
         mask_indices: dict[str, NDArray[np.intp]] = {}
         all_coords: set[tuple[int, int, int]] = set()
 
-        for path, name in zip(mask_paths, self.mask_names):
+        for path, name in zip(mask_paths, self.mask_names, strict=False):
             flat_indices, coords = self._load_single_mask(path, name)
             mask_indices[name] = flat_indices
             all_coords.update(coords)
@@ -1082,9 +1076,7 @@ class FeedbackEstimator:
         # Map masks to master index
         self._mask_voxel_idx = self._map_masks_to_master(mask_indices)
 
-    def _extract_motion_params_from_json(
-        self, json_path: Path
-    ) -> NDArray[np.float64]:
+    def _extract_motion_params_from_json(self, json_path: Path) -> NDArray[np.float64]:
         """Extract motion parameters from dcm2niix JSON sidecar.
 
         Reads motion parameters from the ImageComments field in dcm2niix output:
@@ -1103,13 +1095,13 @@ class FeedbackEstimator:
         """
 
         try:
-            with open(json_path, 'r') as f:
+            with open(json_path) as f:
                 metadata = json.load(f)
 
-            image_comments = metadata.get('ImageComments', '')
+            image_comments = metadata.get("ImageComments", "")
 
             # Check if this is the reference volume (all zeros)
-            if 'Reference volume for motion correction' in image_comments:
+            if "Reference volume for motion correction" in image_comments:
                 logger.debug(f"Reference volume detected in {json_path}")
                 return np.zeros(6, dtype=np.float64)
 
@@ -1183,7 +1175,7 @@ class FeedbackEstimator:
         if self._prev_voxel_values is None:
             return 0.0
         diff = voxel_values - self._prev_voxel_values
-        return float(np.sqrt(np.mean(diff ** 2)))
+        return float(np.sqrt(np.mean(diff**2)))
 
     def _update_tsnr(self, voxel_values: NDArray[np.float64]) -> float:
         """Update running tSNR estimate using Welford's online algorithm.
@@ -1224,9 +1216,7 @@ class FeedbackEstimator:
         voxel_tsnr = self._welford_mean[valid] / std[valid]
         return float(np.median(voxel_tsnr))
 
-    def _build_design_row(
-        self, motion_params: NDArray[np.float64]
-    ) -> NDArray[np.float64]:
+    def _build_design_row(self, motion_params: NDArray[np.float64]) -> NDArray[np.float64]:
         """Build design matrix row for current volume.
 
         Parameters
@@ -1274,16 +1264,16 @@ class FeedbackEstimator:
         # Fill in task regressors (if any)
         if self._task_regressors is not None:
             if vol_idx < len(self._task_regressors):
-                X[:self._n_task_regressors] = self._task_regressors[vol_idx, :]
+                X[: self._n_task_regressors] = self._task_regressors[vol_idx, :]
             else:
                 # Extrapolate with last row if we exceed design length
-                X[:self._n_task_regressors] = self._task_regressors[-1, :]
+                X[: self._n_task_regressors] = self._task_regressors[-1, :]
 
         # Fill in nuisance regressors (after task columns)
         nuisance_idx = self._nuisance_start_idx
         X[nuisance_idx] = 1.0  # intercept
         X[nuisance_idx + 1] = float(vol_idx + 1)  # linear drift (1-indexed volume number)
-        X[nuisance_idx + 2:nuisance_idx + 8] = motion_diff  # differential motion
+        X[nuisance_idx + 2 : nuisance_idx + 8] = motion_diff  # differential motion
 
         return X
 
@@ -1325,11 +1315,11 @@ class FeedbackEstimator:
         self,
         X: NDArray[np.float64],
         y: NDArray[np.float64],
-        activation: Optional[NDArray[np.float64]],
+        activation: NDArray[np.float64] | None,
     ) -> None:
         """Dump algorithm variables to file for debugging/comparison with MURFI."""
         if self._algo_dump_fh is None:
-            self._algo_dump_fh = open(self._dump_algo_vars_path, "w")
+            self._algo_dump_fh = open(self._dump_algo_vars_path, "w")  # noqa: SIM115
             self._algo_dump_fh.write("# pineuro algo dump\n")
 
         algo_vars = self._glm.dump_algo_vars(list(range(min(10, self._n_voxels))))
@@ -1380,15 +1370,14 @@ class FeedbackEstimator:
         # Apply spatial smoothing if configured
         if self._smooth_fwhm is not None:
             from nilearn.image import smooth_img
+
             img = smooth_img(img, fwhm=self._smooth_fwhm)
 
         data = np.asarray(img.dataobj, dtype=np.float64)
 
         # Verify shape matches masks
         if data.shape[:3] != self._shape:
-            raise ValueError(
-                f"Volume shape {data.shape[:3]} != mask shape {self._shape}"
-            )
+            raise ValueError(f"Volume shape {data.shape[:3]} != mask shape {self._shape}")
 
         # Extract voxel values using direct fancy indexing (faster than reshape + ravel)
         # self._voxel_indices is a tuple of (i, j, k) arrays
@@ -1478,12 +1467,81 @@ class FeedbackEstimator:
         if self._sham_provider is not None:
             # Get sham activations to deliver to task
             elapsed_time = self.n_volumes * self._tr
-            sham_activations = self._sham_provider.get_activation(
-                self.n_volumes, elapsed_time
-            )
+            sham_activations = self._sham_provider.get_activation(self.n_volumes, elapsed_time)
             return sham_activations
 
         return real_activations
+
+
+class ConnectivityEstimator:
+    """Sliding-window Pearson correlation between ROI pairs.
+
+    Computes functional connectivity as Pearson r between the mean
+    activation timeseries of configured ROI pairs. Uses a sliding
+    window of configurable length. Returns 0.0 during the warm-up
+    period (before the window is full).
+
+    Parameters
+    ----------
+    pairs : list of tuple[str, str]
+        Pairs of mask names to compute correlation between.
+    window : int
+        Sliding window size in volumes. Default is 15.
+
+    Notes
+    -----
+    This class does not store timeseries itself. It operates on
+    externally-provided timeseries data (from FeedbackEstimator.timeseries).
+    """
+
+    def __init__(
+        self,
+        pairs: list[tuple[str, str]],
+        window: int = 15,
+    ) -> None:
+        if window < 3:
+            raise ValueError(f"connectivity_window must be >= 3 (got {window})")
+        if not pairs:
+            raise ValueError("At least one connectivity pair required")
+        self.pairs = pairs
+        self.window = window
+        self.names: list[str] = [f"corr_{m0}_{m1}" for m0, m1 in pairs]
+
+    def compute(
+        self,
+        timeseries: dict[str, list[float]],
+    ) -> dict[str, float]:
+        """Compute sliding-window Pearson correlation for all pairs.
+
+        Parameters
+        ----------
+        timeseries : dict of str to list of float
+            Per-mask mean activation timeseries from FeedbackEstimator.
+
+        Returns
+        -------
+        correlations : dict of str to float
+            Correlation value for each pair. Keys are ``corr_{m0}_{m1}``.
+            Returns 0.0 for pairs where the window is not yet full.
+        """
+        results: dict[str, float] = {}
+        for (m0, m1), name in zip(self.pairs, self.names, strict=False):
+            ts0 = timeseries.get(m0, [])
+            ts1 = timeseries.get(m1, [])
+            n = min(len(ts0), len(ts1))
+            if n < self.window:
+                results[name] = 0.0
+                continue
+            x = np.array(ts0[-self.window :])
+            y = np.array(ts1[-self.window :])
+            std_x = np.std(x)
+            std_y = np.std(y)
+            if std_x < 1e-10 or std_y < 1e-10:
+                results[name] = 0.0
+            else:
+                r = np.corrcoef(x, y)[0, 1]
+                results[name] = float(r) if np.isfinite(r) else 0.0
+        return results
 
 
 class _DicomEventHandler(FileSystemEventHandler):
@@ -1515,7 +1573,7 @@ def _detect_interrupted_run(
     run: int,
     n_volumes: int,
     acq: str = None,
-) -> Optional[dict]:
+) -> dict | None:
     """Check if a previous interrupted run exists for this task/run combination.
 
     A run is considered interrupted if:
@@ -1566,7 +1624,7 @@ def _detect_interrupted_run(
 
     # Count data rows (excluding header)
     try:
-        with open(feedbacklog_path, 'r') as f:
+        with open(feedbacklog_path) as f:
             row_count = sum(1 for _ in f) - 1  # Subtract header
     except Exception:
         return None
@@ -1578,10 +1636,10 @@ def _detect_interrupted_run(
     # Interrupted if has some data but not all
     if row_count > 0:
         return {
-            'feedbacklog_path': feedbacklog_path,
-            'design_path': design_path,
-            'nifti_dir': nifti_dir,
-            'volumes_completed': row_count,
+            "feedbacklog_path": feedbacklog_path,
+            "design_path": design_path,
+            "nifti_dir": nifti_dir,
+            "volumes_completed": row_count,
         }
 
     return None
@@ -1660,7 +1718,7 @@ def _generate_partial_qc(
     task: str,
     run: int,
     acq: str = None,
-) -> Optional[Path]:
+) -> Path | None:
     """Generate QC report for interrupted session before archiving.
 
     Uses existing QC infrastructure with current partial data.
@@ -1740,7 +1798,7 @@ def get_next_run_number(
 
     # Check main output directory
     for f in output_dir.glob(pattern):
-        match = re.search(r'run-(\d+)_feedbacklog', f.name)
+        match = re.search(r"run-(\d+)_feedbacklog", f.name)
         if match:
             existing_runs.add(int(match.group(1)))
 
@@ -1748,7 +1806,7 @@ def get_next_run_number(
     for archive_dir in output_dir.glob("interrupted_*"):
         if archive_dir.is_dir():
             for f in archive_dir.glob(pattern):
-                match = re.search(r'run-(\d+)_feedbacklog', f.name)
+                match = re.search(r"run-(\d+)_feedbacklog", f.name)
                 if match:
                     existing_runs.add(int(match.group(1)))
 
@@ -1832,7 +1890,7 @@ def get_slot_run_info(
 
     # Check main output directory
     for f in output_dir.glob(pattern):
-        match = re.search(r'acq-(\d+)_run-', f.name)
+        match = re.search(r"acq-(\d+)_run-", f.name)
         if match:
             existing_acqs.append(int(match.group(1)))
 
@@ -1840,7 +1898,7 @@ def get_slot_run_info(
     for archive_dir in output_dir.glob("interrupted_*"):
         if archive_dir.is_dir():
             for f in archive_dir.glob(pattern):
-                match = re.search(r'acq-(\d+)_run-', f.name)
+                match = re.search(r"acq-(\d+)_run-", f.name)
                 if match:
                     existing_acqs.append(int(match.group(1)))
 
@@ -1983,22 +2041,24 @@ class NeurofeedbackCoordinator:
         n_baseline: int,
         n_volumes: int,
         tr: float,
-        task_regressors: Optional[NDArray[np.float64]] = None,
-        mask_names: Optional[list[str]] = None,
+        task_regressors: NDArray[np.float64] | None = None,
+        mask_names: list[str] | None = None,
         use_efficiency_weights: bool = True,
-        activation_callback: Optional[Callable[[dict[str, float], int, float, bool, bool], None]] = None,
-        error_callback: Optional[Callable[[Exception], None]] = None,
+        activation_callback: Callable[[dict[str, float], int, float, bool, bool], None] | None = None,
+        error_callback: Callable[[Exception], None] | None = None,
         qc_enabled: bool = True,  # Generate QC report after session completes
         fd_threshold: float = 0.5,  # FD threshold in mm for QC plots
         acq: str = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
         sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
         condition: str = "real",  # Participant condition: "real" or "sham"
         moco_enabled: bool = True,  # Whether Siemens MoCo is enabled on scanner
-        external_motion_diff: Optional[NDArray[np.float64]] = None,  # Pre-loaded motion diff (e.g., MURFI)
-        dump_algo_vars_path: Optional[Path | str] = None,  # Path to dump GLM algo vars for debugging
-        smooth_fwhm: Optional[float] = None,  # Gaussian spatial smoothing FWHM in mm per volume
-        differential_pair: Optional[list[str]] = None,  # Ordered pair [positive, negative] for differential signal
-        feedback_interval: Optional[int] = None,  # Intermittent mode: deliver mean every N volumes
+        external_motion_diff: NDArray[np.float64] | None = None,  # Pre-loaded motion diff (e.g., MURFI)
+        dump_algo_vars_path: Path | str | None = None,  # Path to dump GLM algo vars for debugging
+        smooth_fwhm: float | None = None,  # Gaussian spatial smoothing FWHM in mm per volume
+        differential_pair: list[str] | None = None,  # Ordered pair [positive, negative] for differential signal
+        feedback_interval: int | None = None,  # Intermittent mode: deliver mean every N volumes
+        connectivity_pairs: list[list[str]] | None = None,  # ROI pairs for sliding-window correlation
+        connectivity_window: int = 15,  # Sliding window size in volumes
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -2017,9 +2077,9 @@ class NeurofeedbackCoordinator:
 
         # Motion correction fallback (when Siemens MoCo disabled)
         self._moco_enabled = moco_enabled
-        self._moco_reference_vol: Optional[NDArray[np.float64]] = None
-        self._moco_reference_affine: Optional[NDArray[np.float64]] = None
-        self._moco_prev_vol: Optional[NDArray[np.float64]] = None  # For incremental registration
+        self._moco_reference_vol: NDArray[np.float64] | None = None
+        self._moco_reference_affine: NDArray[np.float64] | None = None
+        self._moco_prev_vol: NDArray[np.float64] | None = None  # For incremental registration
         if not moco_enabled:
             logger.info("MoCo fallback enabled - will use ANTsPy multi-resolution rigid registration")
 
@@ -2051,8 +2111,8 @@ class NeurofeedbackCoordinator:
         self.mask_names = mask_names
 
         # Differential signal: explicit pair, or auto from first two masks
-        self._differential_name: Optional[str] = None
-        self._differential_pair: Optional[tuple[str, str]] = None
+        self._differential_name: str | None = None
+        self._differential_pair: tuple[str, str] | None = None
         if differential_pair is not None and len(differential_pair) == 2:
             m0, m1 = differential_pair
             if m0 in self.mask_names and m1 in self.mask_names:
@@ -2076,6 +2136,29 @@ class NeurofeedbackCoordinator:
             if feedback_interval < 2:
                 raise ValueError(f"feedback_interval must be >= 2 (got {feedback_interval})")
             logger.info(f"Intermittent feedback: delivering mean every {feedback_interval} volumes")
+
+        # Connectivity feedback mode (sliding-window Pearson correlation)
+        self._connectivity_estimator: ConnectivityEstimator | None = None
+        self._connectivity_names: list[str] = []
+        if connectivity_pairs is not None and len(connectivity_pairs) > 0:
+            validated_pairs: list[tuple[str, str]] = []
+            for pair in connectivity_pairs:
+                if len(pair) == 2 and pair[0] in self.mask_names and pair[1] in self.mask_names:
+                    validated_pairs.append((pair[0], pair[1]))
+                else:
+                    logger.warning(
+                        f"connectivity_pair {pair} references unknown mask names "
+                        f"(available: {self.mask_names}). Skipping."
+                    )
+            if validated_pairs:
+                self._connectivity_estimator = ConnectivityEstimator(
+                    pairs=validated_pairs,
+                    window=connectivity_window,
+                )
+                self._connectivity_names = self._connectivity_estimator.names
+                logger.info(
+                    f"Connectivity feedback: {len(validated_pairs)} pair(s), window={connectivity_window} volumes"
+                )
 
         # Sham mode configuration
         self._sham_provider = sham_provider
@@ -2102,21 +2185,21 @@ class NeurofeedbackCoordinator:
         self._processed_files: set[str] = set()
         self._pending_files: list[Path] = []
         self._pending_heap: list[tuple[str, Path]] = []  # Priority queue: (filename, path)
-        self._next_expected_filename: Optional[str] = None  # Filename we're waiting for
+        self._next_expected_filename: str | None = None  # Filename we're waiting for
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()  # Signal when coordinator is ready
         self._trigger_event = threading.Event()  # Signal when trigger received (starts acquisition)
-        self._error: Optional[Exception] = None  # Store any error that occurs
-        self._start_time: Optional[float] = None
+        self._error: Exception | None = None  # Store any error that occurs
+        self._start_time: float | None = None
         self.design_matrix: list[NDArray[np.float64]] = []
-        
+
         # Timing diagnostics
         self._timing_stats: dict[str, list[float]] = {
-            'dcm2niix_ms': [],
-            'glm_ms': [],
-            'total_ms': [],
-            'queue_depth': [],
+            "dcm2niix_ms": [],
+            "glm_ms": [],
+            "total_ms": [],
+            "queue_depth": [],
         }
 
         # DICOM collection directory (for unified collection with rest/2vol)
@@ -2139,12 +2222,9 @@ class NeurofeedbackCoordinator:
         # CSV log setup with BIDS-style naming (use acq entity if provided)
         self._csv_path = self.output_dir / f"{self.subject}_task-{self.task}_{self._run_acq_str}_feedbacklog.tsv"
         self._design_matrix_path = self.output_dir / f"{self.subject}_task-{self.task}_{self._run_acq_str}_design.tsv"
-        self._design_file: Optional[TextIO] = None  # File handle for incremental design matrix writes
+        self._design_file: TextIO | None = None  # File handle for incremental design matrix writes
 
-        logger.info(
-            f"NeurofeedbackCoordinator initialized: "
-            f"watching {self.watch_dir}, {n_volumes} volumes expected"
-        )
+        logger.info(f"NeurofeedbackCoordinator initialized: watching {self.watch_dir}, {n_volumes} volumes expected")
 
     def _init_csv(self) -> None:
         """Initialize CSV log file and design matrix file with headers.
@@ -2156,20 +2236,23 @@ class NeurofeedbackCoordinator:
         In sham mode, additional {mask}_real columns are added to log
         the actual computed activations alongside the delivered (sham) values.
         """
-        self._csv_file = open(self._csv_path, "w", newline="")
-        self._csv_writer = csv.writer(self._csv_file, delimiter='\t')
+        self._csv_file = open(self._csv_path, "w", newline="")  # noqa: SIM115
+        self._csv_writer = csv.writer(self._csv_file, delimiter="\t")
 
         # Simple header: one column per mask (no _delivered/_real suffix)
         header = ["volume", "time", "is_baseline", "is_outlier", "fd", "dvars", "tsnr", "condition"]
         header.extend(self.mask_names)
         if self._differential_name:
             header.append(self._differential_name)
+        # Connectivity columns
+        header.extend(self._connectivity_names)
 
         # In sham mode, add {mask}_real columns for the actual computed activations
         if self._is_sham_mode:
             header.extend([f"{name}_real" for name in self.mask_names])
             if self._differential_name:
                 header.append(f"{self._differential_name}_real")
+            header.extend([f"{name}_real" for name in self._connectivity_names])
 
         self._csv_writer.writerow(header)
         self._csv_file.flush()
@@ -2193,26 +2276,34 @@ class NeurofeedbackCoordinator:
             logger.warning("No design matrix data to save")
             return
 
-        column_names = ['task', 'intercept', 'drift',
-                       'motion_x', 'motion_y', 'motion_z',
-                       'motion_rx', 'motion_ry', 'motion_rz']
+        column_names = [
+            "task",
+            "intercept",
+            "drift",
+            "motion_x",
+            "motion_y",
+            "motion_z",
+            "motion_rx",
+            "motion_ry",
+            "motion_rz",
+        ]
 
         # Convert design matrix list to numpy array
         design_array = np.array(self.design_matrix)
 
         # Save to TSV file
-        with open(self._design_matrix_path, 'w') as f:
+        with open(self._design_matrix_path, "w") as f:
             # Write header
-            f.write('\t'.join(column_names) + '\n')
+            f.write("\t".join(column_names) + "\n")
 
             # Write data rows
             for row in design_array:
-                row_str = '\t'.join(f'{val:.6f}' for val in row)
-                f.write(row_str + '\n')
+                row_str = "\t".join(f"{val:.6f}" for val in row)
+                f.write(row_str + "\n")
 
     def _init_design_matrix(self) -> None:
         """Initialize design matrix TSV file with header for incremental writes."""
-        self._design_file = open(self._design_matrix_path, "w", newline="")
+        self._design_file = open(self._design_matrix_path, "w", newline="")  # noqa: SIM115
 
         # Build column names based on actual number of task regressors
         column_names = []
@@ -2220,18 +2311,16 @@ class NeurofeedbackCoordinator:
         # Task regressor columns (if any)
         n_task = self._estimator._n_task_regressors if self._estimator else 0
         if n_task == 1:
-            column_names.append('task')
+            column_names.append("task")
         elif n_task > 1:
-            column_names.extend([f'task_{i}' for i in range(n_task)])
+            column_names.extend([f"task_{i}" for i in range(n_task)])
 
         # Nuisance regressor columns
-        column_names.extend([
-            'intercept', 'drift',
-            'motion_x', 'motion_y', 'motion_z',
-            'motion_rx', 'motion_ry', 'motion_rz'
-        ])
+        column_names.extend(
+            ["intercept", "drift", "motion_x", "motion_y", "motion_z", "motion_rx", "motion_ry", "motion_rz"]
+        )
 
-        self._design_file.write('\t'.join(column_names) + '\n')
+        self._design_file.write("\t".join(column_names) + "\n")
         self._design_file.flush()
 
     def _append_design_row(self, row: NDArray[np.float64]) -> None:
@@ -2243,8 +2332,8 @@ class NeurofeedbackCoordinator:
             Design matrix row to append (9 values: task, intercept, drift, 6 motion params)
         """
         if self._design_file is not None:
-            row_str = '\t'.join(f'{val:.6f}' for val in row)
-            self._design_file.write(row_str + '\n')
+            row_str = "\t".join(f"{val:.6f}" for val in row)
+            self._design_file.write(row_str + "\n")
             self._design_file.flush()
 
     def _close_design_matrix(self) -> None:
@@ -2400,11 +2489,7 @@ class NeurofeedbackCoordinator:
         ...     # Process task updates
         ...     pass
         """
-        return (
-            self.n_processed >= self.n_volumes
-            or self._stop_event.is_set()
-            or self._error is not None
-        )
+        return self.n_processed >= self.n_volumes or self._stop_event.is_set() or self._error is not None
 
     def was_stopped(self) -> bool:
         """
@@ -2431,7 +2516,7 @@ class NeurofeedbackCoordinator:
 
     def _on_new_file(self, file_path: Path) -> None:
         """Callback when a new file is detected.
-        
+
         Adds file to priority queue (heap) sorted by filename.
         """
         with self._lock:
@@ -2453,12 +2538,11 @@ class NeurofeedbackCoordinator:
         with self._lock:
             existing_names = {item[0] for item in self._pending_heap}
             for file_path in found_files:
-                if file_path.name not in self._processed_files:
-                    if file_path.name not in existing_names:
-                        heapq.heappush(self._pending_heap, (file_path.name, file_path))
-                        existing_names.add(file_path.name)
-    
-    def _get_next_file_to_process(self) -> Optional[Path]:
+                if file_path.name not in self._processed_files and file_path.name not in existing_names:
+                    heapq.heappush(self._pending_heap, (file_path.name, file_path))
+                    existing_names.add(file_path.name)
+
+    def _get_next_file_to_process(self) -> Path | None:
         """Get the next file to process in strict order, skipping invalid files."""
         with self._lock:
             while self._pending_heap:
@@ -2477,7 +2561,7 @@ class NeurofeedbackCoordinator:
                     logger.debug(f"Skipping invalid volume: {filename}")
 
             return None
-    
+
     def _get_queue_depth(self) -> int:
         """Get current queue depth (files waiting to be processed)."""
         with self._lock:
@@ -2490,6 +2574,7 @@ class NeurofeedbackCoordinator:
         For NIfTI, copies directly to the output directory along with JSON sidecar.
         """
         import shutil
+
         from .utils import dicom_to_nifti
 
         process_start = time.monotonic()
@@ -2521,10 +2606,10 @@ class NeurofeedbackCoordinator:
         if is_nifti_file(volume_path):
             # Input is already NIfTI - copy directly to output directory
             # Determine extension (.nii or .nii.gz)
-            if str(volume_path).lower().endswith('.nii.gz'):
-                ext = '.nii.gz'
+            if str(volume_path).lower().endswith(".nii.gz"):
+                ext = ".nii.gz"
             else:
-                ext = '.nii'
+                ext = ".nii"
             nifti_path = self.nifti_dir / f"{output_name}{ext}"
             try:
                 shutil.copy2(volume_path, nifti_path)
@@ -2552,7 +2637,7 @@ class NeurofeedbackCoordinator:
             except Exception as e:
                 logger.error(f"Failed to convert DICOM {volume_path}: {e}")
                 return
-            json_path = Path(str(nifti_path).replace('.nii.gz', '.json').replace('.nii', '.json'))
+            json_path = Path(str(nifti_path).replace(".nii.gz", ".json").replace(".nii", ".json"))
 
         dcm2niix_duration = (time.monotonic() - dcm2niix_start) * 1000  # ms
 
@@ -2571,7 +2656,9 @@ class NeurofeedbackCoordinator:
 
                 # Ensure we have a 3D volume, not 4D
                 if vol_data.ndim == 4:
-                    logger.warning(f"MoCo fallback: volume {volume_num} is 4D with shape {vol_data.shape}, extracting first volume")
+                    logger.warning(
+                        f"MoCo fallback: volume {volume_num} is 4D with shape {vol_data.shape}, extracting first volume"
+                    )
                     vol_data = vol_data[..., 0]
 
                 if self._moco_reference_vol is None:
@@ -2607,6 +2694,10 @@ class NeurofeedbackCoordinator:
             if self._differential_name is not None:
                 m0, m1 = self._differential_pair
                 activations[self._differential_name] = activations.get(m0, 0.0) - activations.get(m1, 0.0)
+            # Compute connectivity (sliding-window Pearson correlation)
+            if self._connectivity_estimator is not None:
+                conn_values = self._connectivity_estimator.compute(self._estimator.timeseries)
+                activations.update(conn_values)
             self.design_matrix.append(self._estimator._last_design_row)
             # Write design row incrementally (so it's not lost on interrupt)
             self._append_design_row(self._estimator._last_design_row)
@@ -2617,16 +2708,16 @@ class NeurofeedbackCoordinator:
 
         total_duration = (time.monotonic() - process_start) * 1000  # ms
         queue_depth = self._get_queue_depth()
-        
-        self._timing_stats['dcm2niix_ms'].append(dcm2niix_duration)
-        self._timing_stats['glm_ms'].append(glm_duration)
-        self._timing_stats['total_ms'].append(total_duration)
-        self._timing_stats['queue_depth'].append(queue_depth)
+
+        self._timing_stats["dcm2niix_ms"].append(dcm2niix_duration)
+        self._timing_stats["glm_ms"].append(glm_duration)
+        self._timing_stats["total_ms"].append(total_duration)
+        self._timing_stats["queue_depth"].append(queue_depth)
 
         self.n_processed += 1
         elapsed_time = time.monotonic() - self._start_time if self._start_time else 0.0
         is_baseline = self.n_processed <= self.n_baseline
-        
+
         expected_time = self.n_processed * (self._tr if self._tr else 1.2)  # fallback TR
         timing_drift = elapsed_time - expected_time
 
@@ -2648,18 +2739,16 @@ class NeurofeedbackCoordinator:
                     if len(self._intermittent_buffer) >= self._feedback_interval:
                         mean_activations = {}
                         for key in self._intermittent_buffer[0]:
-                            mean_activations[key] = sum(
-                                buf.get(key, 0.0) for buf in self._intermittent_buffer
-                            ) / len(self._intermittent_buffer)
+                            mean_activations[key] = sum(buf.get(key, 0.0) for buf in self._intermittent_buffer) / len(
+                                self._intermittent_buffer
+                            )
                         self._intermittent_buffer.clear()
                         self._activation_callback(mean_activations, self.n_processed, elapsed_time, False, False)
             except Exception as e:
                 logger.error(f"Error in activation callback: {e}")
                 if self._error_callback is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         self._error_callback(e)
-                    except Exception:
-                        pass
 
         # Read outlier status (may have been set by callback via report_outlier())
         with self._lock:
@@ -2687,14 +2776,24 @@ class NeurofeedbackCoordinator:
         row.extend([f"{activations.get(name, 0.0):.4f}" for name in self.mask_names])
         if self._differential_name:
             row.append(f"{activations.get(self._differential_name, 0.0):.4f}")
+        # Connectivity values
+        for conn_name in self._connectivity_names:
+            row.append(f"{activations.get(conn_name, 0.0):.4f}")
 
         # In sham mode, also log the real computed activations
         if self._is_sham_mode:
             real_activations = self._estimator._last_real_activations
             row.extend([f"{real_activations.get(name, 0.0):.4f}" for name in self.mask_names])
             if self._differential_name:
-                real_diff = real_activations.get(self._differential_pair[0], 0.0) - real_activations.get(self._differential_pair[1], 0.0)
+                real_diff = real_activations.get(self._differential_pair[0], 0.0) - real_activations.get(
+                    self._differential_pair[1], 0.0
+                )
                 row.append(f"{real_diff:.4f}")
+            # Real connectivity values (timeseries always stores real values)
+            if self._connectivity_estimator is not None:
+                real_conn = self._connectivity_estimator.compute(self._estimator.timeseries)
+                for conn_name in self._connectivity_names:
+                    row.append(f"{real_conn.get(conn_name, 0.0):.4f}")
 
         if self._csv_writer is not None:
             self._csv_writer.writerow(row)
@@ -2703,11 +2802,12 @@ class NeurofeedbackCoordinator:
 
         # Log concise timing: proc = dcm2niix+GLM for this volume; drift = (elapsed - expected)
         status = "BASELINE" if is_baseline else "ACTIVE"
-        activation_str = "  ".join(
-            f"{name}={activations[name]:+.3f}" for name in self.mask_names
-        )
+        activation_str = "  ".join(f"{name}={activations[name]:+.3f}" for name in self.mask_names)
         if self._differential_name and self._differential_name in activations:
             activation_str += f"  diff={activations[self._differential_name]:+.3f}"
+        for conn_name in self._connectivity_names:
+            if conn_name in activations:
+                activation_str += f"  {conn_name}={activations[conn_name]:+.3f}"
 
         queue_warning = f" [QUEUE:{queue_depth}]" if queue_depth > 0 else ""
         timing_drift_ms = timing_drift * 1000  # Convert to ms for consistency
@@ -2750,11 +2850,7 @@ class NeurofeedbackCoordinator:
 
             self._start_time = time.monotonic()
 
-            while (
-                not self._stop_event.is_set()
-                and self.n_processed < self.n_volumes
-                and not self._stop_event.is_set()
-            ):
+            while not self._stop_event.is_set() and self.n_processed < self.n_volumes and not self._stop_event.is_set():
                 # If stop was requested before trigger, skip processing entirely
                 if self._stop_event.is_set():
                     break
@@ -2783,9 +2879,7 @@ class NeurofeedbackCoordinator:
             self._close_design_matrix()  # Design matrix was written incrementally
 
             elapsed = time.monotonic() - self._start_time if self._start_time else 0.0
-            logger.info(
-                f"Session complete: {self.n_processed} volumes in {elapsed:.1f}s"
-            )
+            logger.info(f"Session complete: {self.n_processed} volumes in {elapsed:.1f}s")
             logger.info(f"Log saved to: {self._csv_path}")
             logger.info(f"Design matrix saved to: {self._design_matrix_path}")
 
@@ -2798,44 +2892,48 @@ class NeurofeedbackCoordinator:
 
             # Cleanup temporary directories if requested
             self._cleanup_directories()
-    
+
     def _log_timing_summary(self) -> None:
         """Log summary of processing timing statistics."""
-        if not self._timing_stats['total_ms']:
+        if not self._timing_stats["total_ms"]:
             return
-        
-        total_ms = np.array(self._timing_stats['total_ms'])
-        dcm2niix_ms = np.array(self._timing_stats['dcm2niix_ms'])
-        glm_ms = np.array(self._timing_stats['glm_ms'])
-        queue_depth = np.array(self._timing_stats['queue_depth'])
-        
+
+        total_ms = np.array(self._timing_stats["total_ms"])
+        dcm2niix_ms = np.array(self._timing_stats["dcm2niix_ms"])
+        glm_ms = np.array(self._timing_stats["glm_ms"])
+        queue_depth = np.array(self._timing_stats["queue_depth"])
+
         tr_ms = (self._tr or 1.2) * 1000  # TR in ms
-        
+
         logger.info("=" * 60)
         logger.info("TIMING SUMMARY")
         logger.info("=" * 60)
         logger.info(f"TR: {self._tr:.3f}s ({tr_ms:.0f}ms)")
         logger.info(f"Volumes processed: {len(total_ms)}")
         logger.info("-" * 40)
-        logger.info(f"Total processing:  mean={total_ms.mean():.1f}ms, "
-                   f"std={total_ms.std():.1f}ms, max={total_ms.max():.1f}ms")
-        logger.info(f"  dcm2niix:        mean={dcm2niix_ms.mean():.1f}ms, "
-                   f"std={dcm2niix_ms.std():.1f}ms, max={dcm2niix_ms.max():.1f}ms")
-        logger.info(f"  GLM update:      mean={glm_ms.mean():.1f}ms, "
-                   f"std={glm_ms.std():.1f}ms, max={glm_ms.max():.1f}ms")
+        logger.info(
+            f"Total processing:  mean={total_ms.mean():.1f}ms, std={total_ms.std():.1f}ms, max={total_ms.max():.1f}ms"
+        )
+        logger.info(
+            f"  dcm2niix:        mean={dcm2niix_ms.mean():.1f}ms, "
+            f"std={dcm2niix_ms.std():.1f}ms, max={dcm2niix_ms.max():.1f}ms"
+        )
+        logger.info(
+            f"  GLM update:      mean={glm_ms.mean():.1f}ms, std={glm_ms.std():.1f}ms, max={glm_ms.max():.1f}ms"
+        )
         logger.info("-" * 40)
-        
+
         # Check if processing typically exceeded TR
         pct_exceeds_tr = (total_ms > tr_ms).mean() * 100
         max_queue = queue_depth.max()
-        
+
         if pct_exceeds_tr > 10:
             logger.warning(f"Processing exceeded TR in {pct_exceeds_tr:.1f}% of volumes!")
             logger.warning(f"Max queue depth: {max_queue} (volumes waiting)")
         else:
-            logger.info(f"Processing within TR budget: {100-pct_exceeds_tr:.1f}% of volumes")
+            logger.info(f"Processing within TR budget: {100 - pct_exceeds_tr:.1f}% of volumes")
             logger.info(f"Max queue depth: {max_queue}")
-        
+
         logger.info("=" * 60)
 
     def _generate_qc_report(self) -> None:
@@ -2850,7 +2948,7 @@ class NeurofeedbackCoordinator:
                 task=self.task,
                 run=self.run_number,
                 acq=self.acq,
-                output_dir=self.output_dir / 'qc',
+                output_dir=self.output_dir / "qc",
                 overwrite=True,
                 open_browser=False,
                 fd_threshold=self._fd_threshold,
@@ -2862,7 +2960,7 @@ class NeurofeedbackCoordinator:
 
     def get_timing_stats(self) -> dict:
         """Get timing statistics for analysis.
-        
+
         Returns
         -------
         dict
@@ -2952,7 +3050,7 @@ class NeurofeedbackCoordinator:
         """
         if not self.was_stopped():
             return True
-        return getattr(self, '_show_questions_on_stop', False)
+        return getattr(self, "_show_questions_on_stop", False)
 
     def get_latest_activations(self) -> dict:
         """Get latest activation values in thread-safe manner.
@@ -2968,10 +3066,10 @@ class NeurofeedbackCoordinator:
         """
         with self._lock:
             return {
-                'activations': self._latest_activations.copy(),
-                'volume': self._latest_volume,
-                'time': self._latest_time,
-                'is_baseline': self._latest_is_baseline,
+                "activations": self._latest_activations.copy(),
+                "volume": self._latest_volume,
+                "time": self._latest_time,
+                "is_baseline": self._latest_is_baseline,
             }
 
 
@@ -3001,27 +3099,29 @@ def run_feedback_session(
     n_baseline: int,
     n_volumes: int,
     tr: float,
-    task_regressors: Optional[NDArray[np.float64]] = None,
-    incoming_dir: Optional[Path | str] = None,
-    mask_names: Optional[list[str]] = None,
+    task_regressors: NDArray[np.float64] | None = None,
+    incoming_dir: Path | str | None = None,
+    mask_names: list[str] | None = None,
     use_efficiency_weights: bool = True,
-    simulator_source_dir: Optional[Path | str] = None,
+    simulator_source_dir: Path | str | None = None,
     simulator_speed: float = 1.0,
     simulator_clear_target: bool = True,
     simulator_cleanup: bool = True,
-    activation_callback: Optional[Callable[[dict[str, float], int, float, bool, bool], None]] = None,
-    error_callback: Optional[Callable[[Exception], None]] = None,
+    activation_callback: Callable[[dict[str, float], int, float, bool, bool], None] | None = None,
+    error_callback: Callable[[Exception], None] | None = None,
     qc_enabled: bool = True,
     fd_threshold: float = 0.5,
-    step_id: Optional[str] = None,
+    step_id: str | None = None,
     sham_provider: Optional["ShamActivationProvider"] = None,
     condition: str = "real",
     moco_enabled: bool = True,
-    murfi_design_path: Optional[Path | str] = None,
-    dump_algo_vars_path: Optional[Path | str] = None,
-    smooth_fwhm: Optional[float] = None,
-    differential_pair: Optional[list[str]] = None,
-    feedback_interval: Optional[int] = None,
+    murfi_design_path: Path | str | None = None,
+    dump_algo_vars_path: Path | str | None = None,
+    smooth_fwhm: float | None = None,
+    differential_pair: list[str] | None = None,
+    feedback_interval: int | None = None,
+    connectivity_pairs: list[list[str]] | None = None,
+    connectivity_window: int = 15,
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -3130,6 +3230,14 @@ def run_feedback_session(
         When set, activations are accumulated and the mean is delivered to
         the task every N volumes after baseline. None (default) delivers
         feedback every volume (continuous mode).
+    connectivity_pairs : list of list of str, optional
+        Pairs of mask names for sliding-window Pearson correlation.
+        Each pair is [mask_a, mask_b]. None (default) disables connectivity.
+        Example: [["ContA", "DefaultA"]] computes correlation between
+        ContA and DefaultA, logged as corr_ContA_DefaultA.
+    connectivity_window : int, optional
+        Sliding window size in volumes for connectivity computation.
+        Default is 15. Must be >= 3.
 
     Returns
     -------
@@ -3207,8 +3315,9 @@ def run_feedback_session(
 
     Results are logged to CSV and the design matrix is saved to TSV.
     """
-    from .simulator import VolumeSimulator
     import threading
+
+    from .simulator import VolumeSimulator
 
     # Convert paths
     output_dir = Path(output_dir)
@@ -3238,10 +3347,7 @@ def run_feedback_session(
         acq=acq,
     )
     if interrupted is not None:
-        logger.warning(
-            f"Found interrupted run with {interrupted['volumes_completed']} volumes "
-            f"(expected {n_volumes})"
-        )
+        logger.warning(f"Found interrupted run with {interrupted['volumes_completed']} volumes (expected {n_volumes})")
         # Generate partial QC before archiving
         _generate_partial_qc(output_dir, subject, task, run, acq=acq)
         # Archive interrupted data
@@ -3262,33 +3368,33 @@ def run_feedback_session(
     dicom_collection_dir.mkdir(parents=True, exist_ok=True)
     # Default incoming_dir to collection_dir/incoming if not specified
     if incoming_dir is None:
-        incoming_dir = collection_dir / 'incoming'
+        incoming_dir = collection_dir / "incoming"
 
     # Determine mode and set up incoming directory
     if simulator_source_dir is not None:
-        mode = 'simulated'
+        mode = "simulated"
         incoming_dir = Path(incoming_dir)
         incoming_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Running in SIMULATION mode")
+        logger.info("Running in SIMULATION mode")
         logger.info(f"Source DICOMs: {simulator_source_dir}")
         logger.info(f"Target incoming: {incoming_dir}")
         logger.info(f"DICOM collection: {dicom_collection_dir}")
     else:
-        mode = 'real-time'
+        mode = "real-time"
         incoming_dir = Path(incoming_dir)
         if not incoming_dir.exists():
             raise FileNotFoundError(
                 f"Incoming directory not found: {incoming_dir}. "
                 "For real-time mode, this should be the directory where the scanner writes DICOMs."
             )
-        logger.info(f"Running in REAL-TIME mode")
+        logger.info("Running in REAL-TIME mode")
         logger.info(f"Watching: {incoming_dir}")
         logger.info(f"DICOM collection: {dicom_collection_dir}")
 
     # Set up simulator if in simulation mode
     simulator = None
-    if mode == 'simulated':
+    if mode == "simulated":
         # Type checker: simulator_source_dir is guaranteed non-None here
         # because mode='simulated' only when simulator_source_dir is not None
         assert simulator_source_dir is not None
@@ -3314,27 +3420,27 @@ def run_feedback_session(
     external_motion_diff = None
     if murfi_design_path is not None:
         from .utils import parse_murfi_design
+
         murfi_design_path = Path(murfi_design_path)
         logger.info(f"Loading MURFI design file: {murfi_design_path}")
         murfi_design = parse_murfi_design(murfi_design_path)
 
         # Validate volume count matches
-        if murfi_design['n_volumes'] != n_volumes:
+        if murfi_design["n_volumes"] != n_volumes:
             raise ValueError(
-                f"MURFI design has {murfi_design['n_volumes']} volumes, "
-                f"but n_volumes={n_volumes}. These must match."
+                f"MURFI design has {murfi_design['n_volumes']} volumes, but n_volumes={n_volumes}. These must match."
             )
 
         # Override task_regressors with MURFI design
-        if murfi_design['task_regressors'].shape[1] > 0:
-            task_regressors = murfi_design['task_regressors']
+        if murfi_design["task_regressors"].shape[1] > 0:
+            task_regressors = murfi_design["task_regressors"]
             logger.info(f"Using {task_regressors.shape[1]} task regressor(s) from MURFI design")
         else:
             task_regressors = None
             logger.info("MURFI design has no task regressors (nuisance-only)")
 
         # Extract external motion diff (used instead of computing from volumes)
-        external_motion_diff = murfi_design['motion_diff']
+        external_motion_diff = murfi_design["motion_diff"]
         logger.info(f"Using pre-loaded motion diff from MURFI design ({n_volumes} rows)")
 
     # Initialize coordinator with simulator and sham configuration
@@ -3365,26 +3471,24 @@ def run_feedback_session(
         smooth_fwhm=smooth_fwhm,
         differential_pair=differential_pair,
         feedback_interval=feedback_interval,
+        connectivity_pairs=connectivity_pairs,
+        connectivity_window=connectivity_window,
     )
 
     # Set cleanup flags for simulation mode
-    if mode == 'simulated':
+    if mode == "simulated":
         coordinator._cleanup_incoming = simulator_cleanup
         coordinator._cleanup_nifti = simulator_cleanup
 
     # Start coordinator in background thread (always)
-    coordinator_thread = threading.Thread(
-        target=coordinator.run,
-        daemon=False,
-        name="FeedbackCoordinator"
-    )
+    coordinator_thread = threading.Thread(target=coordinator.run, daemon=False, name="FeedbackCoordinator")
     coordinator_thread.start()
     logger.info("Coordinator thread started")
 
     return {
-        'coordinator': coordinator,
-        'thread': coordinator_thread,
-        'mode': mode,
-        'started': True,
-        'simulator': simulator,
+        "coordinator": coordinator,
+        "thread": coordinator_thread,
+        "mode": mode,
+        "started": True,
+        "simulator": simulator,
     }

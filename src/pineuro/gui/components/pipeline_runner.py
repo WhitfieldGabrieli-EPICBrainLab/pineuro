@@ -6,22 +6,23 @@ allowing the GUI to remain responsive during long-running operations.
 
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any, List
+from typing import Any
 
+from pineuro.feedback import get_slot_run_info, run_feedback_session
+from pineuro.mask_extraction import coregister_2vol, generate_2vol_qc_overlays, mask_extraction_rest
 from pineuro.preprocessing import collect_dicoms, preprocessing
-from pineuro.mask_extraction import mask_extraction_rest, coregister_2vol, generate_2vol_qc_overlays
-from pineuro.feedback import run_feedback_session, get_next_run_number, get_slot_run_info
 from pineuro.session import get_localizer_run_info
+from pineuro.sham import (
+    ReplayActivationProvider,
+    find_feedbacklog_for_replay,
+    get_condition_for_participant,
+    load_randomization,
+)
 from pineuro.tasks import get_task_metadata
 from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
 from pineuro.tasks.session import SessionState
-from pineuro.sham import (
-    load_randomization,
-    get_condition_for_participant,
-    find_feedbacklog_for_replay,
-    ReplayActivationProvider,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,12 @@ class PipelineRunner:
 
     def __init__(
         self,
-        config: Dict[str, Any],
+        config: dict[str, Any],
         participant_id: str,
-        on_progress: Optional[Callable[[str], None]] = None,
-        on_complete: Optional[Callable[[bool, Optional[str]], None]] = None,
-        on_error: Optional[Callable[[Exception], None]] = None,
-        on_collection_progress: Optional[Callable[[int, int, float, Path], None]] = None,
+        on_progress: Callable[[str], None] | None = None,
+        on_complete: Callable[[bool, str | None], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+        on_collection_progress: Callable[[int, int, float, Path], None] | None = None,
     ):
         """Initialize pipeline runner.
 
@@ -56,15 +57,15 @@ class PipelineRunner:
         self.on_error = on_error
         self.on_collection_progress = on_collection_progress
 
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._current_coordinator = None  # Track coordinator for feedback tasks
         self._current_localizer_task = None  # Track localizer task for stop support
-        self._task_mirror_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-        self._selected_rest_runs: Optional[list] = None  # Selected runs for preprocessing
-        self._selected_acqs: Optional[Dict[int, int]] = None  # {run_id: acq_num} for preprocessing
+        self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
+        self._selected_rest_runs: list | None = None  # Selected runs for preprocessing
+        self._selected_acqs: dict[int, int] | None = None  # {run_id: acq_num} for preprocessing
 
-    def set_selected_acqs(self, acqs: Optional[Dict[int, int]]) -> None:
+    def set_selected_acqs(self, acqs: dict[int, int] | None) -> None:
         """Set which acquisition to use for each run.
 
         Args:
@@ -72,7 +73,7 @@ class PipelineRunner:
         """
         self._selected_acqs = acqs
 
-    def set_selected_rest_runs(self, runs: Optional[list]) -> None:
+    def set_selected_rest_runs(self, runs: list | None) -> None:
         """Set which rest runs to use for preprocessing.
 
         Args:
@@ -80,9 +81,7 @@ class PipelineRunner:
         """
         self._selected_rest_runs = runs
 
-    def set_task_mirror_callback(
-        self, callback: Optional[Callable[[Dict[str, Any]], None]]
-    ) -> None:
+    def set_task_mirror_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
         """Set callback for task visual state mirroring.
 
         The callback receives visual state dictionaries from tasks
@@ -96,12 +95,7 @@ class PipelineRunner:
         self._task_mirror_callback = callback
 
     @staticmethod
-    def find_available_collections(
-        collection_dir: Path,
-        task: str,
-        run: int,
-        expected_volumes: int
-    ) -> list[dict]:
+    def find_available_collections(collection_dir: Path, task: str, run: int, expected_volumes: int) -> list[dict]:
         """Find all complete collection folders for a run.
 
         Parameters
@@ -136,18 +130,20 @@ class PipelineRunner:
 
         for folder in collection_dir.glob(pattern):
             if folder.is_dir():
-                match = re.search(r'acq-(\d+)_run-', folder.name)
+                match = re.search(r"acq-(\d+)_run-", folder.name)
                 if match:
                     acq_num = int(match.group(1))
                     n_files = len([f for f in folder.iterdir() if f.is_file()])
                     is_complete = n_files >= expected_volumes
 
-                    collections.append({
-                        "acq": acq_num,
-                        "path": folder,
-                        "n_volumes": n_files,
-                        "is_complete": is_complete,
-                    })
+                    collections.append(
+                        {
+                            "acq": acq_num,
+                            "path": folder,
+                            "n_volumes": n_files,
+                            "is_complete": is_complete,
+                        }
+                    )
 
         # Sort by acq number (highest first)
         collections.sort(key=lambda x: x["acq"], reverse=True)
@@ -270,18 +266,13 @@ class PipelineRunner:
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(
-            collection_dir=collection_dir,
-            task="task-2vol",
-            run=1,
-            expected_volumes=n_volumes
+            collection_dir=collection_dir, task="task-2vol", run=1, expected_volumes=n_volumes
         )
         acq = run_info["acq"]
 
         self._emit_progress(f"Collecting initial 2vol DICOMs (acq-{acq:02d})...")
         if run_info["existing_acqs"]:
-            self._emit_progress(
-                f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}"
-            )
+            self._emit_progress(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
 
         output_dir = collection_dir / f"task-2vol_acq-{acq:02d}_run-01"
 
@@ -346,18 +337,13 @@ class PipelineRunner:
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(
-            collection_dir=collection_dir,
-            task=f"task-{task_name}",
-            run=run_num,
-            expected_volumes=n_volumes
+            collection_dir=collection_dir, task=f"task-{task_name}", run=run_num, expected_volumes=n_volumes
         )
         acq = run_info["acq"]
 
         self._emit_progress(f"Collecting {task_name} run {run_num} (acq-{acq:02d}) DICOMs...")
         if run_info["existing_acqs"]:
-            self._emit_progress(
-                f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}"
-            )
+            self._emit_progress(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
 
         output_dir = collection_dir / f"task-{task_name}_acq-{acq:02d}_run-{run_num:02d}"
 
@@ -394,6 +380,7 @@ class PipelineRunner:
         simulator = None
         if simulator_enabled and source_dir:
             from pineuro.simulator import VolumeSimulator
+
             simulator = VolumeSimulator(
                 source_dir=source_dir,
                 target_dir=watch_dir,
@@ -415,7 +402,11 @@ class PipelineRunner:
 
         # Always launch a localizer task - it controls simulator start timing
         localizer_thread = self._launch_localizer_task(
-            run_num, actual_task_id, watch_dir, acq=acq, simulator=simulator,
+            run_num,
+            actual_task_id,
+            watch_dir,
+            acq=acq,
+            simulator=simulator,
             trigger_event=trigger_event,
         )
 
@@ -442,7 +433,9 @@ class PipelineRunner:
             localizer_thread.join(timeout=60)
             self._current_localizer_task = None
 
-    def _launch_localizer_task(self, run_num: int, task_id: str, watch_dir: Path, acq: int = 1, simulator=None, trigger_event=None) -> threading.Thread:
+    def _launch_localizer_task(
+        self, run_num: int, task_id: str, watch_dir: Path, acq: int = 1, simulator=None, trigger_event=None
+    ) -> threading.Thread:
         """Launch a localizer PsychoPy task in a separate thread.
 
         The task runs concurrently with DICOM collection, presenting stimuli
@@ -512,19 +505,12 @@ class PipelineRunner:
                 logger.error(f"Localizer task error: {e}", exc_info=True)
                 self._emit_progress(f"Localizer task error: {e}")
 
-        thread = threading.Thread(
-            target=run_localizer, daemon=False, name=f"LocalizerTask-{task_id}-run{run_num}"
-        )
+        thread = threading.Thread(target=run_localizer, daemon=False, name=f"LocalizerTask-{task_id}-run{run_num}")
         thread.start()
         logger.info(f"Launched localizer task '{task_id}' in thread")
         return thread
 
-    def _resolve_acq_paths(
-        self,
-        task_name: str,
-        runs_to_process: List[int],
-        rest_volumes: List[int]
-    ) -> List[Path]:
+    def _resolve_acq_paths(self, task_name: str, runs_to_process: list[int], rest_volumes: list[int]) -> list[Path]:
         """Resolve collection folder paths using selected acqs.
 
         Uses self._selected_acqs if set (from GUI dialog), otherwise
@@ -565,10 +551,7 @@ class PipelineRunner:
 
             # Auto-select: find highest complete acq
             collections = self.find_available_collections(
-                collection_dir=collection_dir,
-                task=f"task-{task_name}",
-                run=run_num,
-                expected_volumes=expected_vols
+                collection_dir=collection_dir, task=f"task-{task_name}", run=run_num, expected_volumes=expected_vols
             )
 
             if not collections:
@@ -577,10 +560,7 @@ class PipelineRunner:
 
             complete = [c for c in collections if c["is_complete"]]
             selected = complete[0] if complete else collections[0]
-            self._emit_progress(
-                f"Run {run_num}: Using acq-{selected['acq']:02d} "
-                f"({selected['n_volumes']} volumes)"
-            )
+            self._emit_progress(f"Run {run_num}: Using acq-{selected['acq']:02d} ({selected['n_volumes']} volumes)")
             selected_paths.append(selected["path"])
 
         return selected_paths
@@ -611,19 +591,14 @@ class PipelineRunner:
             for run_num in [1, 2]:
                 expected_vols = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
                 collections = self.find_available_collections(
-                    collection_dir=collection_dir,
-                    task=f"task-{task_name}",
-                    run=run_num,
-                    expected_volumes=expected_vols
+                    collection_dir=collection_dir, task=f"task-{task_name}", run=run_num, expected_volumes=expected_vols
                 )
                 if collections:
                     runs_to_process.append(run_num)
 
         # Select acquisitions (uses GUI selections if set, else auto-selects)
         input_dicoms = self._resolve_acq_paths(
-            task_name=task_name,
-            runs_to_process=runs_to_process,
-            rest_volumes=rest_volumes
+            task_name=task_name, runs_to_process=runs_to_process, rest_volumes=rest_volumes
         )
 
         if not input_dicoms:
@@ -683,9 +658,7 @@ class PipelineRunner:
             # Auto-resolve events file from localizer task output
             localizer_task_type = config["scan"].get("localizer_task_type", "")
             events_dir = base_dir / "collection"
-            events_glob = sorted(events_dir.glob(
-                f"*_task-{localizer_task_type}_*_events.tsv"
-            ))
+            events_glob = sorted(events_dir.glob(f"*_task-{localizer_task_type}_*_events.tsv"))
             if events_glob:
                 # If acqs were selected, prefer events file matching selected acq
                 events_file = None
@@ -719,7 +692,7 @@ class PipelineRunner:
             cluster_start_threshold = config.get("mask", {}).get("cluster_start_threshold", 2.0)
             cluster_step = config.get("mask", {}).get("cluster_step", 0.1)
 
-            mask_files = mask_extraction_task(
+            _mask_files = mask_extraction_task(
                 participant_id=self.participant_id,
                 root_dir=mask_extraction_dir,
                 input_file=preproc_file,
@@ -771,7 +744,7 @@ class PipelineRunner:
                             yeo_targets.append(target)
                             self._emit_progress(f"Including sham alternative network: {target}")
 
-            mask_files = mask_extraction_rest(
+            _mask_files = mask_extraction_rest(
                 participant_id=self.participant_id,
                 root_dir=mask_extraction_dir,
                 input_file=preproc_file,
@@ -866,10 +839,7 @@ class PipelineRunner:
         # Find the most recent complete 2vol collection for this run
         n_volumes = config["scan"].get("twovol_n_volumes", 2)
         collections = self.find_available_collections(
-            collection_dir=base_dir / "collection",
-            task="task-2vol",
-            run=actual_2vol_run,
-            expected_volumes=n_volumes
+            collection_dir=base_dir / "collection", task="task-2vol", run=actual_2vol_run, expected_volumes=n_volumes
         )
         if not collections:
             raise ValueError(f"No 2vol collection found for run {actual_2vol_run}")
@@ -880,9 +850,7 @@ class PipelineRunner:
         twovol_dicom = selected["path"]
 
         if not selected["is_complete"]:
-            logger.warning(
-                f"Using incomplete 2vol collection: {selected['n_volumes']}/{n_volumes} volumes"
-            )
+            logger.warning(f"Using incomplete 2vol collection: {selected['n_volumes']}/{n_volumes} volumes")
 
         # Get network mask files (thresholded only)
         network_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
@@ -977,18 +945,13 @@ class PipelineRunner:
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(
-            collection_dir=collection_dir,
-            task="task-2vol",
-            run=run_id,
-            expected_volumes=n_volumes
+            collection_dir=collection_dir, task="task-2vol", run=run_id, expected_volumes=n_volumes
         )
         acq = run_info["acq"]
 
         self._emit_progress(f"Collecting real-time 2vol DICOMs (acq-{acq:02d}, run-{run_id:02d})...")
         if run_info["existing_acqs"]:
-            self._emit_progress(
-                f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}"
-            )
+            self._emit_progress(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
 
         output_dir = collection_dir / f"task-2vol_acq-{acq:02d}_run-{run_id:02d}"
 
@@ -1035,7 +998,7 @@ class PipelineRunner:
         else:
             raise ValueError(f"Invalid feedback task step_id: {step_id}")
 
-        feedback_mode = (task_type == "feedback")
+        feedback_mode = task_type == "feedback"
 
         # Get output directory for slot-based run info
         config = self.config
@@ -1118,8 +1081,7 @@ class PipelineRunner:
             matches = list(masks_dir.glob(pattern))
             if not matches:
                 raise ValueError(
-                    f"Could not find mask file for '{mask_name}' in {masks_dir}. "
-                    f"Expected pattern: {pattern}"
+                    f"Could not find mask file for '{mask_name}' in {masks_dir}. Expected pattern: {pattern}"
                 )
             if len(matches) > 1:
                 logger.warning(f"Multiple mask files found for '{mask_name}', using first: {matches[0]}")
@@ -1170,7 +1132,9 @@ class PipelineRunner:
                     if not simulator_source_dir and feedback_sources:
                         simulator_source_dir = feedback_sources[0]
 
-            simulator_speed = config["scan"].get("feedback_simulator_speed", config["scan"].get("collection_speed", 10.0))
+            simulator_speed = config["scan"].get(
+                "feedback_simulator_speed", config["scan"].get("collection_speed", 10.0)
+            )
         else:
             # Real-time mode: watch scanner DICOM directory
             watch_dir = Path(config["scan"]["scanner_dicom_dir"])
@@ -1209,9 +1173,7 @@ class PipelineRunner:
                 if randomization_path.exists():
                     try:
                         randomization = load_randomization(randomization_path)
-                        condition_info = get_condition_for_participant(
-                            randomization, self.participant_id
-                        )
+                        condition_info = get_condition_for_participant(randomization, self.participant_id)
                         condition = condition_info["condition"]
                         self._emit_progress(f"Participant condition: {condition}")
 
@@ -1344,17 +1306,19 @@ class PipelineRunner:
                 smooth_fwhm=config["feedback"].get("smooth_fwhm"),  # Real-time spatial smoothing
                 differential_pair=config["feedback"].get("differential_pair"),  # Configurable differential signal
                 feedback_interval=config["feedback"].get("feedback_interval"),  # Intermittent feedback mode
+                connectivity_pairs=config["feedback"].get("connectivity_pairs"),  # Sliding-window correlation pairs
+                connectivity_window=config["feedback"].get("connectivity_window", 15),  # Correlation window size
             )
 
             # Wait for the coordinator thread to complete
-            coordinator = session_info['coordinator']
-            coordinator_thread = session_info['thread']
+            coordinator = session_info["coordinator"]
+            coordinator_thread = session_info["thread"]
 
             # Track coordinator for stop signal
             self._current_coordinator = coordinator
 
             # Launch PsychoPy task in separate thread
-            self._emit_progress(f"Launching PsychoPy task...")
+            self._emit_progress("Launching PsychoPy task...")
 
             # Import task factory
             from pineuro.tasks import create_task
@@ -1388,7 +1352,7 @@ class PipelineRunner:
             }
 
             # Create task via factory (validates config against task metadata)
-            simulator = session_info.get('simulator')
+            simulator = session_info.get("simulator")
             task = create_task(
                 task_id=feedback_task_type,
                 coordinator=coordinator,
@@ -1408,9 +1372,9 @@ class PipelineRunner:
             # Run task in separate thread (task will call coordinator.send_trigger())
             def run_task():
                 try:
-                    self._emit_progress(f"Task thread started...")
+                    self._emit_progress("Task thread started...")
                     task.run()
-                    self._emit_progress(f"Task completed successfully")
+                    self._emit_progress("Task completed successfully")
                 except Exception as e:
                     logger.error(f"Task error: {e}", exc_info=True)
                     self._emit_progress(f"Task error: {e}")
@@ -1418,7 +1382,7 @@ class PipelineRunner:
             task_thread = threading.Thread(target=run_task, daemon=False, name="PsychoPyTask")
             task_thread.start()
 
-            self._emit_progress(f"Session running, waiting for completion...")
+            self._emit_progress("Session running, waiting for completion...")
 
             # Wait for both threads to complete
             coordinator_thread.join()  # Wait for coordinator to finish
@@ -1426,10 +1390,12 @@ class PipelineRunner:
 
             # Extract results generically via task contract
             results = task.get_run_results()
-            volumes_processed = results.get('volumes_processed', coordinator.n_processed)
+            volumes_processed = results.get("volumes_processed", coordinator.n_processed)
 
-            result_msg = f"{task_type.capitalize()} run {task_run_number} complete! Processed {volumes_processed} volumes."
-            extra = {k: v for k, v in results.items() if k != 'volumes_processed'}
+            result_msg = (
+                f"{task_type.capitalize()} run {task_run_number} complete! Processed {volumes_processed} volumes."
+            )
+            extra = {k: v for k, v in results.items() if k != "volumes_processed"}
             if extra:
                 result_msg += f" {extra}"
 
