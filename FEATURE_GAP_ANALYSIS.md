@@ -28,11 +28,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 ### ~~1.4 Differential Feedback at Pipeline Level~~ ✅
 - **Done**: Computes differential signal in `NeurofeedbackCoordinator` whenever 2+ masks are used. Direction explicitly configurable via `differential_pair` in `FeedbackConfig` (e.g., `["ContA", "DefaultA"]` = ContA - DefaultA). GUI shows two dropdowns in feedback tab when 2+ masks configured. Logged as dedicated column in `feedbacklog.tsv`. Included in activations dict delivered to tasks and in console output. In sham mode, both delivered and real differentials are logged. Falls back to first two masks if no pair configured.
 
-### 1.5 Manual ROI Import (NIfTI Masks)
-- **Gap**: No streamlined path to import pre-defined NIfTI masks (FreeSurfer, fMRIPrep, hand-drawn) directly into the feedback pipeline.
-- **Why**: Turbo-BrainVoyager supports VOI import. Fundamental flexibility requirement for researchers with existing ROIs.
-- **Scope**: Small
-- **Module**: `mask_extraction.py`, `session.py`
+### ~~1.5 Manual ROI Import (NIfTI Masks)~~ ✅
+- **Done**: Added `import_manual_masks()` to `mask_extraction.py` supporting three input spaces: native (functional/EPI), anatomical (T1→EPI via ANTs Rigid), and MNI152 (SyN registration). Masks are validated, optionally thresholded (top-N voxels), binarized, and saved to `03_masks/` with standard naming. `MaskConfig` dataclass extended with `manual_mask_paths`, `manual_ref_file`, `manual_anat_file`, `manual_mask_space` fields. `localizer_type="manual"` accepted throughout pipeline. GUI: "Manual ROI Import" option in study editor localizer dropdown with mask space selection and optional study-wide mask paths. Participant workflow shows per-participant file pickers (mask files, BOLD reference, T1 structural) with "Import Masks" button. Localizer/preprocessing steps automatically skipped. Pipeline runner and coregistration handle manual ref_file resolution. Exported from `__init__.py`.
 
 ### ~~1.6 Broader Atlas Support (AAL, Schaefer, Harvard-Oxford)~~ ✅
 - **Done**: Added `ATLAS_SOURCES` registry with Yeo 7/17, Schaefer 100/400 (7/17-network), Harvard-Oxford Cortical, and AAL (SPM12). On-demand label fetching via `get_atlas_labels()` with caching (eliminates GUI startup lag). Schaefer atlas supported in resting-state ICA pathway (parcels grouped by network for spatial correlation). Generalized `fetch_atlas_mask()` supports all atlas types. Two-tier atlas selection in GUI (atlas → region/network). `network_atlas` param added to `mask_extraction_rest()`, `atlas_source`/`atlas_regions` params added to `mask_extraction_task()` and `MaskConfig`.
@@ -129,7 +126,7 @@ These items are deferred for later consideration:
 |------|---------|
 | `src/pineuro/feedback.py` | 1.1 vendor parsing, 1.2 WM/CSF regressors, 1.3 QC metrics, ~~1.4 differential feedback~~ ✅, ~~2.1 smoothing~~ ✅, 2.2 connectivity estimator, ~~2.3 intermittent mode~~ ✅ |
 | `src/pineuro/session.py` | Config dataclass extensions for all new features |
-| `src/pineuro/mask_extraction.py` | 1.5 manual ROI import, ~~1.6 atlas registry expansion~~ ✅ |
+| `src/pineuro/mask_extraction.py` | ~~1.5 manual ROI import~~ ✅, ~~1.6 atlas registry expansion~~ ✅ |
 | `src/pineuro/preprocessing.py` | 1.1 vendor auto-detection, 1.2 WM/CSF mask extraction |
 | `src/pineuro/qc.py` | 1.3 tSNR/DVARS reporting |
 | `src/pineuro/gui/components/fd_plot.py` | 1.3 motion alerts in GUI |
