@@ -789,11 +789,12 @@ class MaskSelectionDialog:
         if len(selected) > 2:
             # Uncheck the one that was just checked
             self._combine_checkboxes[comp_idx].value = False
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Select exactly 2 components to combine."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -836,11 +837,12 @@ class MaskSelectionDialog:
 
         selected = self._get_selected_combine_components()
         if len(selected) != 2:
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Select exactly 2 components to preview."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -850,11 +852,12 @@ class MaskSelectionDialog:
             logger.error(error_msg)
             if self.on_log:
                 self.on_log(f"[ERROR] {error_msg}")
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Cannot preview: BOLD reference file not found"),
-                bgcolor=ft.Colors.RED,
+                bgcolor=ft.Colors.RED
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -977,11 +980,12 @@ class MaskSelectionDialog:
 
         except Exception as ex:
             logger.error(f"Failed to generate combined preview: {ex}")
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text(f"Failed to generate preview: {ex}"),
-                bgcolor=ft.Colors.RED,
+                bgcolor=ft.Colors.RED
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
     def _on_accept_clicked(self, network_name: str):
@@ -1034,11 +1038,12 @@ class MaskSelectionDialog:
         if self._combine_mode:
             selected = self._get_selected_combine_components()
             if len(selected) != 2:
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text("Select exactly 2 components to combine."),
-                    bgcolor=ft.Colors.ORANGE,
+                    bgcolor=ft.Colors.ORANGE
                 )
-                self.page.snack_bar.open = True
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
                 return
 
@@ -1111,11 +1116,12 @@ class MaskSelectionDialog:
         else:
             # Single-select mode (original logic)
             if not self._alternative_selection.value:
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text("Please select an alternative."),
-                    bgcolor=ft.Colors.ORANGE,
+                    bgcolor=ft.Colors.ORANGE
                 )
-                self.page.snack_bar.open = True
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
                 return
 
@@ -1273,11 +1279,12 @@ class MaskSelectionDialog:
         """Open interactive mask viewer in the default web browser."""
         # Check BOLD reference exists
         if not self.ref_file or not Path(self.ref_file).exists():
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("BOLD reference file not found."),
-                bgcolor=ft.Colors.RED,
+                bgcolor=ft.Colors.RED
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -1318,22 +1325,24 @@ class MaskSelectionDialog:
                     self.on_log(f"[INFO] Regenerated {name} mask for preview")
             except Exception as ex:
                 logger.error(f"Failed to regenerate mask for {name}: {ex}")
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text(f"Failed to regenerate {name} mask: {ex}"),
-                    bgcolor=ft.Colors.RED,
+                    bgcolor=ft.Colors.RED
                 )
-                self.page.snack_bar.open = True
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
                 return
 
         # Collect all thresholded mask files
         mask_files = sorted(self.masks_dir.glob("*_thr.nii.gz"))
         if not mask_files:
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("No thresholded masks found."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -1352,11 +1361,12 @@ class MaskSelectionDialog:
                 self.on_log(f"[INFO] Opened mask viewer in browser with {len(mask_files)} masks")
         except Exception as ex:
             logger.error(f"Failed to open mask viewer: {ex}")
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text(f"Failed to open mask viewer: {ex}"),
-                bgcolor=ft.Colors.RED,
+                bgcolor=ft.Colors.RED
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
     def _on_reload_clicked(self, e):
@@ -1438,27 +1448,29 @@ class MaskSelectionDialog:
                 snack_message = "Reloaded selections and images from disk"
                 snack_color = ft.Colors.BLUE
 
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Row(
                     [
                         ft.Icon(ft.Icons.REFRESH, color=ft.Colors.WHITE),
                         ft.Text(snack_message),
                     ],
-                    spacing=10,
+                    spacing=10
                 ),
                 bgcolor=snack_color,
-                duration=3000,
+                duration=3000
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
         except Exception as ex:
             logger.error(f"Failed to reload from disk: {ex}")
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text(f"Failed to reload: {ex}"),
-                bgcolor=ft.Colors.RED,
+                bgcolor=ft.Colors.RED
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
     def _on_generate_script_clicked(self, e):
@@ -1467,11 +1479,12 @@ class MaskSelectionDialog:
 
         # Check if we have enough context for script generation
         if not self.input_file or not self.brain_mask_file or not self.ref_file:
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Cannot generate script: missing input file paths."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -1504,27 +1517,29 @@ class MaskSelectionDialog:
                 self.on_log(f"[SUCCESS] Script generated: {script_path}")
 
             # Show success message
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Row(
                     [
                         ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.WHITE),
                         ft.Text(f"Script saved to: {script_path.name}"),
                     ],
-                    spacing=10,
+                    spacing=10
                 ),
                 bgcolor=ft.Colors.GREEN,
-                duration=4000,
+                duration=4000
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
         except Exception as ex:
             logger.error(f"Failed to generate script: {ex}")
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text(f"Failed to generate script: {ex}"),
-                bgcolor=ft.Colors.RED,
+                bgcolor=ft.Colors.RED
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
 
     def _refresh_stage1(self):
@@ -1571,11 +1586,12 @@ class MaskSelectionDialog:
                 )
             except Exception as ex:
                 logger.error(f"Failed to regenerate mask for {name}: {ex}")
-                self.page.snack_bar = ft.SnackBar(
+                _snack = ft.SnackBar(
                     ft.Text(f"Failed to regenerate {name}: {ex}"),
-                    bgcolor=ft.Colors.RED,
+                    bgcolor=ft.Colors.RED
                 )
-                self.page.snack_bar.open = True
+                _snack.open = True
+                self.page.overlay.append(_snack)
                 self.page.update()
                 return
 

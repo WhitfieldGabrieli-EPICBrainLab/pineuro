@@ -47,11 +47,19 @@ logger = logging.getLogger(__name__)
 # HRF and Task Regressor Computation
 # ==============================================================================
 
-# Import from utils for backward compatibility (these were originally defined here)
-from pineuro.utils import compute_hrf, compute_boxcar_task_regressor
-
-# Re-export for backward compatibility with existing imports from this module
+# Re-export for backward compatibility with existing imports from this module.
+# compute_hrf and compute_boxcar_task_regressor are imported lazily via __getattr__
+# to avoid pulling in pineuro.utils (and its heavy deps) at import time.
 __all__ = ['BallTask', 'compute_hrf', 'compute_boxcar_task_regressor']
+
+
+def __getattr__(name):
+    if name in ('compute_hrf', 'compute_boxcar_task_regressor'):
+        from pineuro.utils import compute_hrf, compute_boxcar_task_regressor
+        globals()['compute_hrf'] = compute_hrf
+        globals()['compute_boxcar_task_regressor'] = compute_boxcar_task_regressor
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # Instruction text constants

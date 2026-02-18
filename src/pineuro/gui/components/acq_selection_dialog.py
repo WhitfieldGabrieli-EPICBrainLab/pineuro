@@ -283,11 +283,12 @@ class AcqSelectionDialog:
                 selected_acqs[run_id] = int(rg.value)
 
         if not selected_acqs:
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Please select an acquisition for each run."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 

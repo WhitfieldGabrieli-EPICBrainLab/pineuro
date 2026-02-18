@@ -61,85 +61,111 @@ Examples
 ... )
 """
 
+import importlib as _importlib
+
 __version__ = "0.1.0"
 
-from .feedback import run_feedback_session, get_next_run_number, get_slot_run_info, STEP_TO_RUN_NUMBER
-from .preprocessing import preprocessing, collect_volumes, collect_dicoms
-from .mask_extraction import (
-    mask_extraction_rest,
-    mask_extraction_task,
-    coregister_2vol,
-    ATLAS_SOURCES,
-    get_atlas_labels,
-)
-from .tasks import (
-    BaseTask,
-    BaseLocalizerTask,
-    BallTask,
-    ThermometerTask,
-    ActivationSmoother,
-    ActivationNormalizer,
-    NetworkRole,
-    create_task,
-    create_localizer_task,
-)
-from .tasks.session import SessionState, RunInfo
-from .session import (
-    # Configuration dataclasses
-    SessionConfig,
-    PathConfig,
-    ScanConfig,
-    MaskConfig,
-    FeedbackConfig,
-    TaskConfig,
-    VisitConfig,
-    ShamConfig,
-    SimulatorSourceMapping,
-    # Orchestration functions
-    setup_session,
-    run_single_task,
-    run_full_session,
-    run_next_task,
-    reset_session_state,
-    # Multi-visit support functions
-    resolve_mask_source,
-    detect_existing_visits,
-    next_visit_id,
-    is_single_visit_data,
-    migrate_to_multi_visit,
-    setup_visit_with_reused_masks,
-)
-from .sham import (
-    ShamActivationProvider,
-    ReplayActivationProvider,
-    load_randomization,
-    generate_randomization,
-    get_condition_for_participant,
-    resolve_sham_masks,
-    find_feedbacklog_for_replay,
-)
-from .utils import (
-    # Timing functions
-    enable_timing,
-    disable_timing,
-    get_timing_data,
-    save_timing_report,
-    Timer,
-    # Platform checks
-    check_platform_requirements,
-    # Utilities
-    outputs_exist,
-    ProgressEmitter,
-    # Task regressor computation
-    compute_hrf,
-    compute_boxcar_task_regressor,
-)
-from .script_generator import (
-    generate_mask_extraction_script,
-    generate_task_mask_extraction_script,
-    save_script,
-)
-from . import config
+# ---------------------------------------------------------------------------
+# Lazy import system (PEP 562)
+#
+# Heavy neuroimaging libraries (ANTsPy, nilearn, scipy, nibabel) take 8-17s
+# to import on cold start. By deferring submodule imports until first access,
+# the GUI starts instantly and scripts only pay for what they actually use.
+# ---------------------------------------------------------------------------
+
+# Mapping: attribute_name -> (submodule_path, attribute_name_in_submodule)
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    # --- feedback.py (heavy: nibabel, scipy, watchdog, pydicom) ---
+    'run_feedback_session': ('.feedback', 'run_feedback_session'),
+    'get_next_run_number': ('.feedback', 'get_next_run_number'),
+    'get_slot_run_info': ('.feedback', 'get_slot_run_info'),
+    'STEP_TO_RUN_NUMBER': ('.feedback', 'STEP_TO_RUN_NUMBER'),
+    # --- preprocessing.py (heavy: nibabel, scipy) ---
+    'preprocessing': ('.preprocessing', 'preprocessing'),
+    'collect_volumes': ('.preprocessing', 'collect_volumes'),
+    'collect_dicoms': ('.preprocessing', 'collect_dicoms'),
+    # --- mask_extraction.py (heavy: nibabel, scipy, pandas) ---
+    'mask_extraction_rest': ('.mask_extraction', 'mask_extraction_rest'),
+    'mask_extraction_task': ('.mask_extraction', 'mask_extraction_task'),
+    'import_manual_masks': ('.mask_extraction', 'import_manual_masks'),
+    'coregister_2vol': ('.mask_extraction', 'coregister_2vol'),
+    'ATLAS_SOURCES': ('.atlas_registry', 'ATLAS_SOURCES'),
+    'get_atlas_labels': ('.mask_extraction', 'get_atlas_labels'),
+    # --- tasks (lightweight but deferred to avoid loading task modules) ---
+    'BaseTask': ('.tasks', 'BaseTask'),
+    'BaseLocalizerTask': ('.tasks', 'BaseLocalizerTask'),
+    'BallTask': ('.tasks', 'BallTask'),
+    'ThermometerTask': ('.tasks', 'ThermometerTask'),
+    'ActivationSmoother': ('.tasks', 'ActivationSmoother'),
+    'ActivationNormalizer': ('.tasks', 'ActivationNormalizer'),
+    'NetworkRole': ('.tasks', 'NetworkRole'),
+    'create_task': ('.tasks', 'create_task'),
+    'create_localizer_task': ('.tasks', 'create_localizer_task'),
+    # --- tasks.session ---
+    'SessionState': ('.tasks.session', 'SessionState'),
+    'RunInfo': ('.tasks.session', 'RunInfo'),
+    # --- session.py (lightweight: stdlib only) ---
+    'SessionConfig': ('.session', 'SessionConfig'),
+    'PathConfig': ('.session', 'PathConfig'),
+    'ScanConfig': ('.session', 'ScanConfig'),
+    'MaskConfig': ('.session', 'MaskConfig'),
+    'FeedbackConfig': ('.session', 'FeedbackConfig'),
+    'TaskConfig': ('.session', 'TaskConfig'),
+    'VisitConfig': ('.session', 'VisitConfig'),
+    'ShamConfig': ('.session', 'ShamConfig'),
+    'SimulatorSourceMapping': ('.session', 'SimulatorSourceMapping'),
+    'setup_session': ('.session', 'setup_session'),
+    'run_single_task': ('.session', 'run_single_task'),
+    'run_full_session': ('.session', 'run_full_session'),
+    'run_next_task': ('.session', 'run_next_task'),
+    'reset_session_state': ('.session', 'reset_session_state'),
+    'resolve_mask_source': ('.session', 'resolve_mask_source'),
+    'detect_existing_visits': ('.session', 'detect_existing_visits'),
+    'next_visit_id': ('.session', 'next_visit_id'),
+    'is_single_visit_data': ('.session', 'is_single_visit_data'),
+    'migrate_to_multi_visit': ('.session', 'migrate_to_multi_visit'),
+    'setup_visit_with_reused_masks': ('.session', 'setup_visit_with_reused_masks'),
+    # --- sham.py ---
+    'ShamActivationProvider': ('.sham', 'ShamActivationProvider'),
+    'ReplayActivationProvider': ('.sham', 'ReplayActivationProvider'),
+    'load_randomization': ('.sham', 'load_randomization'),
+    'generate_randomization': ('.sham', 'generate_randomization'),
+    'get_condition_for_participant': ('.sham', 'get_condition_for_participant'),
+    'resolve_sham_masks': ('.sham', 'resolve_sham_masks'),
+    'find_feedbacklog_for_replay': ('.sham', 'find_feedbacklog_for_replay'),
+    # --- utils.py (heavy: numpy, nibabel, scipy, templateflow) ---
+    'enable_timing': ('.utils', 'enable_timing'),
+    'disable_timing': ('.utils', 'disable_timing'),
+    'get_timing_data': ('.utils', 'get_timing_data'),
+    'save_timing_report': ('.utils', 'save_timing_report'),
+    'Timer': ('.utils', 'Timer'),
+    'check_platform_requirements': ('.utils', 'check_platform_requirements'),
+    'outputs_exist': ('.utils', 'outputs_exist'),
+    'ProgressEmitter': ('.utils', 'ProgressEmitter'),
+    'compute_hrf': ('.utils', 'compute_hrf'),
+    'compute_boxcar_task_regressor': ('.utils', 'compute_boxcar_task_regressor'),
+    # --- script_generator.py ---
+    'generate_mask_extraction_script': ('.script_generator', 'generate_mask_extraction_script'),
+    'generate_task_mask_extraction_script': ('.script_generator', 'generate_task_mask_extraction_script'),
+    'save_script': ('.script_generator', 'save_script'),
+    # --- config module ---
+    'config': ('.config', None),  # Module import, not attribute
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_IMPORTS:
+        module_path, attr_name = _LAZY_IMPORTS[name]
+        module = _importlib.import_module(module_path, __name__)
+        if attr_name is None:
+            # Module-level import (e.g., config)
+            val = module
+        else:
+            val = getattr(module, attr_name)
+        globals()[name] = val  # Cache for subsequent access
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Version
@@ -154,6 +180,7 @@ __all__ = [
     'collect_dicoms',
     'mask_extraction_rest',
     'mask_extraction_task',
+    'import_manual_masks',
     'coregister_2vol',
     'ATLAS_SOURCES',
     'get_atlas_labels',

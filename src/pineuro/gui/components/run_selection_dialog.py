@@ -242,11 +242,12 @@ class RunSelectionDialog:
 
         if not selected_runs:
             # Show error - at least one run must be selected
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text("Please select at least one run with data."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=ft.Colors.ORANGE
             )
-            self.page.snack_bar.open = True
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 

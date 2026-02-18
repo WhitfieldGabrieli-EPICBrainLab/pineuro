@@ -60,11 +60,12 @@ class QCPlotViewer:
         """Display the modal dialog."""
         if not self.plots:
             # Show a message if no plots available
-            self.page.snack_bar = ft.SnackBar(
+            _snack = ft.SnackBar(
                 ft.Text(f"No QC plots available for {self.title}"),
-                open=True,
                 bgcolor=ft.Colors.ORANGE,
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 

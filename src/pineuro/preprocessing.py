@@ -110,9 +110,10 @@ import numpy as np
 import nibabel as nib
 from nibabel.loadsave import load, save
 from nibabel.nifti1 import Nifti1Image
-from nilearn.image import smooth_img        # Gaussian spatial smoothing
 from scipy.signal import butter, filtfilt   # Butterworth temporal filtering
-import ants                                  # Brain extraction via get_mask()
+# NOTE: nilearn and ANTsPy are imported lazily inside the functions that need
+# them to avoid ~17s combined import cost at module load time. The GUI imports
+# this module at startup but doesn't need these until a pipeline actually runs.
 
 # --- Third-Party: Filesystem Monitoring ---
 # Watchdog provides cross-platform filesystem event monitoring for detecting
@@ -204,6 +205,7 @@ def motion_correction(
     --------
     preprocessing : Main pipeline function that calls this.
     """
+    import ants
     from scipy.spatial.transform import Rotation
 
     input_file = Path(input_file)
@@ -421,6 +423,7 @@ def spatial_smoothing(
 
     # --- Apply Gaussian smoothing via nilearn ---
     # nilearn handles 3D and 4D inputs automatically
+    from nilearn.image import smooth_img
     smoothed = smooth_img(str(input_file), fwhm=fwhm)
     smoothed.to_filename(str(output_path))
     logger.info(f"Output: {output_path}")
@@ -607,6 +610,8 @@ def brain_extraction(
         return brain_file, mask_file
 
     # --- Run brain extraction with ANTsPy ---
+    import ants
+
     with Timer('brain_extraction', category='preprocessing'):
         logger.info(f"Running brain extraction: {input_file.name}")
 

@@ -365,6 +365,7 @@ def open_mask_viewer_in_browser(
             colorbar=True,
             dim=-0.5,
             opacity=0.6,
+            resampling_interpolation="nearest",
         )
         viewers.append(viewer)
 

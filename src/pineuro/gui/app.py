@@ -295,10 +295,11 @@ class PyrtnfApp:
         # Load study to get example participant ID
         study_config = self.config_manager.load_study(study_name)
         if not study_config:
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text(f"Failed to load study: {study_name}"),
-                open=True,
+            _snack = ft.SnackBar(
+                ft.Text(f"Failed to load study: {study_name}")
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
             self.page.update()
             return
 
@@ -388,10 +389,12 @@ class PyrtnfApp:
         new_study = self.config_manager.duplicate_study(study_name)
 
         if new_study:
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text(f"Study duplicated: {new_study.metadata.name}"),
-                open=True,
+            _snack = ft.SnackBar(
+                ft.Text(f"Study duplicated: {new_study.metadata.name}")
             )
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
             self.show_study_manager()  # Refresh
 
     def _confirm_delete_study(self, study_name: str):
@@ -405,10 +408,12 @@ class PyrtnfApp:
 
             success = self.config_manager.delete_study(study_name)
             if success:
-                self.page.snack_bar = ft.SnackBar(
-                    ft.Text(f"Study deleted: {study_name}"),
-                    open=True,
+                _snack = ft.SnackBar(
+                    ft.Text(f"Study deleted: {study_name}")
                 )
+                _snack.open = True
+                self.page.overlay.append(_snack)
+                self.page.update()
                 self.show_study_manager()  # Refresh
 
         def cancel_delete(e):

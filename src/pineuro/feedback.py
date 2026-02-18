@@ -147,7 +147,9 @@ if TYPE_CHECKING:
     from .sham import ShamActivationProvider
 
 # --- Third-Party: Neuroimaging ---
-import ants                 # ANTsPy for fast rigid registration
+# NOTE: ANTsPy (ants) is imported lazily inside _ants_rigid_registration()
+# to avoid its ~9-second import cost at module load time. The GUI imports
+# feedback.py at startup but doesn't need ANTsPy until a pipeline runs.
 import nibabel as nib
 from nibabel.nifti1 import Nifti1Image
 import numpy as np
@@ -232,6 +234,8 @@ def _ants_register_volume(
         [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z]
         Translations in mm, rotations in degrees.
     """
+    import ants  # Lazy import: ~9s cold start, only needed when running pipeline
+
     # Extract voxel spacing from affine (diagonal elements give scale)
     spacing = np.sqrt(np.sum(affine[:3, :3] ** 2, axis=0))
 
