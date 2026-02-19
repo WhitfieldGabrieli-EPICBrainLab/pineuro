@@ -35,6 +35,8 @@ _TASK_CLASSES: dict[str, type] = {}
 RUNTIME_PARAMETERS = {
     "mask_names",  # List of mask names to use
     "feedback_mode",  # Whether feedback is on/off
+    "signal_mode",  # "activation" or "connectivity"
+    "connectivity_target",  # "increase" or "decrease" (ball direction for connectivity)
     "presenter_monitor",  # Which monitor to use for display
 }
 

@@ -48,12 +48,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 ### ~~2.1 Spatial Smoothing (Real-Time)~~ ✅
 - **Done**: Added optional `smooth_fwhm` parameter to `FeedbackConfig`, threaded through `FeedbackEstimator` → `NeurofeedbackCoordinator` → `run_feedback_session()`. Uses `nilearn.image.smooth_img()` per volume. GUI field in Study Editor Feedback tab. Default `None` (disabled).
 
-### 2.2 Connectivity-Based Feedback (Sliding-Window Correlation)
-- **Gap**: No functional connectivity feedback. Only activation-based (univariate).
-- **Why**: OpenNFT supports DCM, FRIEND supports dual-ROI correlation. Growing clinical area.
-- **Approach**: Sliding-window Pearson correlation only (no DCM).
-- **Scope**: Medium
-- **Module**: `feedback.py` (new `ConnectivityEstimator` class)
+### ~~2.2 Connectivity-Based Feedback (Sliding-Window Correlation)~~ ✅
+- **Done**: Added `ConnectivityEstimator` class to `feedback.py` with configurable window size and ROI pairs. GUI dropdown (Activation vs Connectivity) replaces old differential/connectivity checkboxes. Ball task supports `signal_mode` and `connectivity_target` (increase/decrease) for direction control. Psychopylog logs connectivity value + target/nontarget hits. Monitoring plot shows correlation line(s) with y-axis [-1, 1], sham-aware (alt_masks shows both pairs), blind-aware (generic label). Sham support: alternative_masks swaps both masks and adds sham connectivity pair; replay accumulates replayed values via `_sham_timeseries`. GUI hides "Target Hemisphere" in connectivity mode (correlation is symmetric).
 
 ### ~~2.3 Intermittent Feedback Mode~~ ✅
 - **Done**: Added `feedback_interval` to `FeedbackConfig`. When set, coordinator accumulates activations and delivers the mean every N volumes after baseline. CSV logging retains per-volume resolution. GUI checkbox + interval field in Study Editor feedback tab. Baseline always delivered continuously.
@@ -127,7 +123,7 @@ These items are deferred for later consideration:
 
 | File | Changes |
 |------|---------|
-| `src/pineuro/feedback.py` | 1.1 vendor parsing, 1.2 WM/CSF regressors, 1.3 QC metrics, ~~1.4 differential feedback~~ ✅, ~~2.1 smoothing~~ ✅, 2.2 connectivity estimator, ~~2.3 intermittent mode~~ ✅ |
+| `src/pineuro/feedback.py` | 1.1 vendor parsing, 1.2 WM/CSF regressors, 1.3 QC metrics, ~~1.4 differential feedback~~ ✅, ~~2.1 smoothing~~ ✅, ~~2.2 connectivity estimator~~ ✅, ~~2.3 intermittent mode~~ ✅ |
 | `src/pineuro/session.py` | Config dataclass extensions for all new features |
 | `src/pineuro/mask_extraction.py` | ~~1.5 manual ROI import~~ ✅, ~~1.6 atlas registry expansion~~ ✅ |
 | `src/pineuro/preprocessing.py` | 1.1 vendor auto-detection, 1.2 WM/CSF mask extraction |

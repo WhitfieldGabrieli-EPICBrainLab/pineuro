@@ -1265,12 +1265,31 @@ class PipelineRunner:
 
         # Determine which masks control the task based on condition
         # For real: use real_mask_names
-        # For sham: substitute first real mask with first sham mask
+        # For sham: substitute masks based on signal mode
+        signal_mode = config["feedback"].get("feedback_mode", "activation")
         if condition == "sham" and sham_mask_names:
-            task_mask_names = [sham_mask_names[0], real_mask_names[1]]
+            if signal_mode == "connectivity" and len(sham_mask_names) >= 2:
+                # Connectivity: use both sham masks as the pair
+                task_mask_names = sham_mask_names[:2]
+            else:
+                # Activation: swap first mask only
+                task_mask_names = [sham_mask_names[0], real_mask_names[1]]
             self._emit_progress(f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})")
         else:
             task_mask_names = real_mask_names
+
+        # Build connectivity_pairs, adding sham pair if needed
+        connectivity_pairs = config["feedback"].get("connectivity_pairs")
+        if (
+            signal_mode == "connectivity"
+            and connectivity_pairs
+            and sham_mask_names
+            and len(sham_mask_names) >= 2
+            and sham_config.get("delivery_method") == "alternative_masks"
+        ):
+            sham_pair = [sham_mask_names[0], sham_mask_names[1]]
+            if sham_pair not in connectivity_pairs:
+                connectivity_pairs = list(connectivity_pairs) + [sham_pair]
 
         # Run feedback session (this will handle DICOM collection + processing)
         # Pass ALL masks so all activations are computed and logged
@@ -1306,8 +1325,9 @@ class PipelineRunner:
                 smooth_fwhm=config["feedback"].get("smooth_fwhm"),  # Real-time spatial smoothing
                 differential_pair=config["feedback"].get("differential_pair"),  # Configurable differential signal
                 feedback_interval=config["feedback"].get("feedback_interval"),  # Intermittent feedback mode
-                connectivity_pairs=config["feedback"].get("connectivity_pairs"),  # Sliding-window correlation pairs
+                connectivity_pairs=connectivity_pairs,  # Sliding-window correlation pairs (may include sham pair)
                 connectivity_window=config["feedback"].get("connectivity_window", 15),  # Correlation window size
+                connectivity_target=config["feedback"].get("connectivity_target", "increase"),  # Target direction
             )
 
             # Wait for the coordinator thread to complete
@@ -1344,10 +1364,16 @@ class PipelineRunner:
             self._emit_progress(f"Session state: task={feedback_task_type}, runs={len(session_state.completed_runs)}")
 
             # Build factory config with task parameters plus runtime settings
+            signal_mode = config["feedback"].get("feedback_mode", "activation")
+
+            connectivity_target = config["feedback"].get("connectivity_target", "increase")
+
             factory_config = {
                 **task_specific_config,
                 "mask_names": task_mask_names,
                 "feedback_mode": feedback_mode,
+                "signal_mode": signal_mode,
+                "connectivity_target": connectivity_target,
                 "presenter_monitor": presenter_monitor,
             }
 

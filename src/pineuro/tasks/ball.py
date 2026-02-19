@@ -189,12 +189,17 @@ class BallTask(BaseTask):
         scale_adjust_factor: float = 0.25,
         circle_shrink_factor: float = 0.9,
         presenter_monitor: str = "right",
+        signal_mode: str = "activation",
+        connectivity_target: str = "increase",
         **kwargs,  # Accept additional kwargs for factory compatibility
     ):
         self.coordinator = coordinator
         self._session_state = session_state
         self.run_number = run_number
         self.is_first_of_type = is_first_of_type
+        self._signal_mode = signal_mode
+        self._connectivity_target = connectivity_target
+        self._last_connectivity = 0.0
 
         self._min_hits_threshold = min_hits_threshold
         self._max_hits_threshold = max_hits_threshold
@@ -320,9 +325,11 @@ class BallTask(BaseTask):
             "scale_factor",
             f"{self.mask_names[0]}_activation",
             f"{self.mask_names[1]}_activation",
-            f"{self.mask_names[0]}_hits",
-            f"{self.mask_names[1]}_hits",
         ]
+        if self._signal_mode == "connectivity":
+            header.extend(["connectivity", "target_hits", "nontarget_hits"])
+        else:
+            header.extend([f"{self.mask_names[0]}_hits", f"{self.mask_names[1]}_hits"])
         self._psychopy_log_writer.writerow(header)
         self._psychopy_log_file.flush()
 
@@ -502,6 +509,23 @@ class BallTask(BaseTask):
         activations : dict
             Dictionary with activation values for both networks
         """
+        # Connectivity mode: use sliding-window correlation value directly
+        if self._signal_mode == "connectivity":
+            key = f"corr_{self.mask_names[0]}_{self.mask_names[1]}"
+            val = activations.get(key, 0.0)
+            self._last_connectivity = val
+            if abs(val) > self.pda_outlier_threshold:
+                self.outlier_count += 1
+                self._current_is_outlier = True
+                logger.info(f"Outlier detected: {key}={val:.4f} (threshold: {self.pda_outlier_threshold})")
+                return
+            self._current_is_outlier = False
+            self.current_activity = abs(val) / 10.0
+            # For "decrease" target, negate so negative correlation → ball UP
+            directed_val = -val if self._connectivity_target == "decrease" else val
+            self.current_direction = 1.0 if directed_val >= 0 else -1.0
+            return
+
         acts = [activations[name] for name in self.mask_names]
 
         # Reject outliers to prevent extreme activations from dominating movement
@@ -612,8 +636,11 @@ class BallTask(BaseTask):
                 self.hit_counters[i] += 1
 
                 # Log hit event
-                network_name = self.mask_names[i]
-                logger.info(f"✓ Hit! {network_name} target (total: {self.hit_counters[i]})")
+                if self._signal_mode == "connectivity":
+                    label = "target" if self.network_directions[i] > 0 else "nontarget"
+                else:
+                    label = self.mask_names[i]
+                logger.info(f"✓ Hit! {label} target (total: {self.hit_counters[i]})")
 
                 # Flash circle white for visual feedback
                 self.circles[i].fillColor = "white"
@@ -702,9 +729,11 @@ class BallTask(BaseTask):
             self.scale_factor,
             activations[self.mask_names[0]],
             activations[self.mask_names[1]],
-            self.hit_counters[0],
-            self.hit_counters[1],
         ]
+        if self._signal_mode == "connectivity":
+            row.extend([self._last_connectivity, self.hit_counters[0], self.hit_counters[1]])
+        else:
+            row.extend([self.hit_counters[0], self.hit_counters[1]])
         self._psychopy_log_writer.writerow(row)
         self._psychopy_log_file.flush()
 
@@ -931,11 +960,14 @@ class BallTask(BaseTask):
             shapes.append({"type": "circle", "x": 0.5, "y": ball_y, "radius": 0.03, "fill": "white"})
 
             # Hit counter text
+            if self._signal_mode == "connectivity":
+                hit_text = f"target: {self.hit_counters[0]}  nontarget: {self.hit_counters[1]}"
+            else:
+                hit_text = f"{self.mask_names[0]}: {self.hit_counters[0]}  {self.mask_names[1]}: {self.hit_counters[1]}"
             shapes.append(
                 {
                     "type": "text",
-                    "content": f"{self.mask_names[0]}: {self.hit_counters[0]}  "
-                    f"{self.mask_names[1]}: {self.hit_counters[1]}",
+                    "content": hit_text,
                     "x": 0.5,
                     "y": 0.95,
                     "size": 10,
@@ -1044,9 +1076,14 @@ class BallTask(BaseTask):
             logger.info("")
             logger.info("=== BallTask Session Complete ===")
             logger.info(f"Total volumes: {self.current_volume}/{self.coordinator.n_volumes}")
-            logger.info(
-                f"Hits - {self.mask_names[0]}: {self.hit_counters[0]}, {self.mask_names[1]}: {self.hit_counters[1]}"
-            )
+            if self._signal_mode == "connectivity":
+                logger.info(
+                    f"Hits - target: {self.hit_counters[0]}, nontarget: {self.hit_counters[1]}"
+                )
+            else:
+                logger.info(
+                    f"Hits - {self.mask_names[0]}: {self.hit_counters[0]}, {self.mask_names[1]}: {self.hit_counters[1]}"
+                )
             logger.info(f"Total hits: {sum(self.hit_counters)}")
             logger.info(f"Final scale factor: {self.scale_factor:.1f}")
             logger.info(f"Total frames rendered: {self._frame_counter}")

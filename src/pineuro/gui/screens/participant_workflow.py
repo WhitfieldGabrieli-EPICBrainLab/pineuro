@@ -3610,21 +3610,66 @@ class ParticipantWorkflowScreen:
 
             n_volumes = config["feedback"]["n_volumes"]
 
-            # Store mask_names for use by _start_feedback_monitoring
-            self._feedback_mask_names = mask_names
             # Store display names mapping for hits counter (blind mode)
             if display_names:
                 self._feedback_display_names = {mask_names[i]: display_names[i] for i in range(len(mask_names))}
             else:
                 self._feedback_display_names = None
 
+            # Determine what to plot: connectivity signal or individual activations
+            feedback_mode = config.get("feedback", {}).get("feedback_mode", "activation")
+            if feedback_mode == "connectivity" and len(mask_names) >= 2:
+                if blind_mode and sham_config.get("enabled"):
+                    # Blind mode: show only the condition's correlation
+                    # mask_names already resolved to condition-specific masks above
+                    conn_key = f"corr_{mask_names[0]}_{mask_names[1]}"
+                    plot_mask_names = [conn_key]
+                    plot_display_names = ["Connectivity"]
+                else:
+                    # Non-blind: show the real pair's correlation
+                    real_conn_key = f"corr_{mask_names[0]}_{mask_names[1]}"
+                    plot_mask_names = [real_conn_key]
+
+                    # If alternative_masks sham: also show the sham pair's correlation
+                    if (
+                        sham_config.get("enabled")
+                        and sham_config.get("delivery_method") == "alternative_masks"
+                    ):
+                        sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
+                        if sham_mask_mode == "hemisphere_split":
+                            hemi_net = sham_config.get("hemisphere_network", "SomMotA")
+                            t_hemi = sham_config.get("target_hemisphere", "right")
+                            nt_hemi = "left" if t_hemi == "right" else "right"
+                            sham_conn_key = f"corr_{hemi_net}_{t_hemi}_{hemi_net}_{nt_hemi}"
+                        else:
+                            alt_targets = sham_config.get("alternative_mask_targets", [])
+                            if len(alt_targets) >= 2:
+                                sham_conn_key = f"corr_{alt_targets[0]}_{alt_targets[1]}"
+                            else:
+                                sham_conn_key = None
+                        if sham_conn_key and sham_conn_key not in plot_mask_names:
+                            plot_mask_names.append(sham_conn_key)
+
+                    plot_display_names = None  # show column names as-is
+
+                self._plot_label = "Connectivity"
+                plot_y_min, plot_y_max = -1.0, 1.0
+            else:
+                plot_mask_names = mask_names
+                plot_display_names = display_names
+                plot_y_min, plot_y_max = -2.0, 2.0
+                self._plot_label = "Network Activation"
+
+            # Store plot_mask_names for _start_feedback_monitoring (csv column extraction)
+            self._feedback_mask_names = plot_mask_names
+
             self.activation_plot = ActivationPlot(
-                mask_names=mask_names,
+                mask_names=plot_mask_names,
                 n_volumes=n_volumes,
                 height=160,
-                y_min=-2.0,
-                y_max=2.0,
-                display_names=display_names,
+                y_min=plot_y_min,
+                y_max=plot_y_max,
+                display_names=plot_display_names,
             )
 
             # Create FD plot for motion monitoring
@@ -3671,7 +3716,7 @@ class ParticipantWorkflowScreen:
                                 ft.Container(
                                     content=ft.Column(
                                         [
-                                            ft.Text("Network Activation", size=14, weight=ft.FontWeight.W_500),
+                                            ft.Text(self._plot_label, size=14, weight=ft.FontWeight.W_500),
                                             self.activation_plot.build(),
                                             ft.Row(
                                                 [

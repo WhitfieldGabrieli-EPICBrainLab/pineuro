@@ -152,6 +152,8 @@ class StudyEditorScreen:
                 "feedback_interval": None,
                 "connectivity_pairs": None,
                 "connectivity_window": 15,
+                "feedback_mode": "activation",
+                "connectivity_target": "increase",
             },
             "localizer_task": {
                 # Localizer task parameters (when not rest)
@@ -540,13 +542,26 @@ class StudyEditorScreen:
             visible=rt_smooth_val is not None,
         )
 
-        # Differential feedback pair (two dropdowns: positive - negative)
-        # Shown automatically when 2+ masks are configured
-        diff_pair = config.get("feedback", {}).get("differential_pair")
+        # Feedback signal mode (dropdown: activation vs connectivity)
         mask_names_for_diff = config.get("mask", {}).get("mask_names", [])
         diff_options = [ft.dropdown.Option(key=name, text=name) for name in mask_names_for_diff]
         has_multi_mask = len(mask_names_for_diff) >= 2
+        feedback_mode_val = config.get("feedback", {}).get("feedback_mode", "activation")
 
+        self.feedback_mode_dropdown = ft.Dropdown(
+            width=600,
+            label="Feedback signal",
+            options=[
+                ft.dropdown.Option("activation", "Activation (dual-network)"),
+                ft.dropdown.Option("connectivity", "Connectivity (sliding-window correlation)"),
+            ],
+            value=feedback_mode_val,
+            on_select=self._on_feedback_mode_changed,
+            visible=has_multi_mask,
+        )
+
+        # Differential pair (shown in activation mode)
+        diff_pair = config.get("feedback", {}).get("differential_pair")
         self.differential_positive_dropdown = ft.Dropdown(
             width=250,
             label="Positive mask",
@@ -574,7 +589,68 @@ class StudyEditorScreen:
                     ]
                 ),
             ],
-            visible=has_multi_mask,
+            visible=has_multi_mask and feedback_mode_val == "activation",
+        )
+
+        # Connectivity config (shown in connectivity mode)
+        conn_config = config.get("feedback", {})
+        conn_pairs = conn_config.get("connectivity_pairs")
+        conn_window = conn_config.get("connectivity_window", 15)
+        is_conn_mode = feedback_mode_val == "connectivity"
+
+        conn_pair_options = [ft.dropdown.Option(key=name, text=name) for name in mask_names_for_diff]
+        conn_pair_a = (
+            conn_pairs[0][0]
+            if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2
+            else (mask_names_for_diff[0] if mask_names_for_diff else None)
+        )
+        conn_pair_b = (
+            conn_pairs[0][1]
+            if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2
+            else (mask_names_for_diff[1] if has_multi_mask else None)
+        )
+        self.connectivity_pair_a_dropdown = ft.Dropdown(
+            width=250,
+            label="ROI A",
+            options=conn_pair_options,
+            value=conn_pair_a,
+        )
+        self.connectivity_pair_b_dropdown = ft.Dropdown(
+            width=250,
+            label="ROI B",
+            options=conn_pair_options,
+            value=conn_pair_b,
+        )
+        self.connectivity_window_field = ft.TextField(
+            width=600,
+            label="Sliding window size (volumes)",
+            value=str(conn_window),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Number of volumes in correlation window (e.g., 10-30)",
+        )
+        self.connectivity_target_dropdown = ft.Dropdown(
+            width=600,
+            label="Target direction",
+            options=[
+                ft.dropdown.Option("increase", "Increase correlation"),
+                ft.dropdown.Option("decrease", "Decrease correlation (anti-correlation)"),
+            ],
+            value=conn_config.get("connectivity_target", "increase"),
+        )
+        self.connectivity_section = ft.Column(
+            [
+                ft.Text("Connectivity Pair", size=14, weight=ft.FontWeight.W_500),
+                ft.Row(
+                    [
+                        self.connectivity_pair_a_dropdown,
+                        ft.Text("corr", size=14),
+                        self.connectivity_pair_b_dropdown,
+                    ]
+                ),
+                self.connectivity_window_field,
+                self.connectivity_target_dropdown,
+            ],
+            visible=is_conn_mode,
         )
 
         # Intermittent feedback mode (checkbox + interval field)
@@ -591,66 +667,6 @@ class StudyEditorScreen:
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Deliver mean activation every N volumes after baseline",
             visible=interval_val is not None,
-        )
-
-        # Connectivity feedback mode (checkbox + window size + pair selection)
-        conn_config = config.get("feedback", {})
-        conn_pairs = conn_config.get("connectivity_pairs")
-        conn_window = conn_config.get("connectivity_window", 15)
-        has_conn = conn_pairs is not None and len(conn_pairs) > 0
-
-        self.connectivity_enabled_checkbox = ft.Checkbox(
-            label="Enable connectivity feedback",
-            value=has_conn,
-            on_change=self._on_connectivity_enabled_changed,
-            tooltip="Compute sliding-window Pearson correlation between ROI pairs",
-            visible=has_multi_mask,
-        )
-        self.connectivity_window_field = ft.TextField(
-            width=600,
-            label="Sliding window size (volumes)",
-            value=str(conn_window),
-            keyboard_type=ft.KeyboardType.NUMBER,
-            hint_text="Number of volumes in correlation window (e.g., 10-30)",
-            visible=has_conn,
-        )
-
-        conn_pair_options = [ft.dropdown.Option(key=name, text=name) for name in mask_names_for_diff]
-        conn_pair_a = (
-            conn_pairs[0][0]
-            if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2
-            else (mask_names_for_diff[0] if mask_names_for_diff else None)
-        )
-        conn_pair_b = (
-            conn_pairs[0][1]
-            if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2
-            else (mask_names_for_diff[1] if has_multi_mask else None)
-        )
-
-        self.connectivity_pair_a_dropdown = ft.Dropdown(
-            width=250,
-            label="ROI A",
-            options=conn_pair_options,
-            value=conn_pair_a,
-        )
-        self.connectivity_pair_b_dropdown = ft.Dropdown(
-            width=250,
-            label="ROI B",
-            options=conn_pair_options,
-            value=conn_pair_b,
-        )
-        self.connectivity_pair_row = ft.Column(
-            [
-                ft.Text("Connectivity Pair", size=14, weight=ft.FontWeight.W_500),
-                ft.Row(
-                    [
-                        self.connectivity_pair_a_dropdown,
-                        ft.Text("corr", size=14),
-                        self.connectivity_pair_b_dropdown,
-                    ]
-                ),
-            ],
-            visible=has_conn,
         )
 
         # Create dynamic task parameter fields for current feedback task type
@@ -956,12 +972,12 @@ class StudyEditorScreen:
             if old_value not in valid_keys:
                 dropdown.value = None
 
-        # Update connectivity visibility based on mask count
+        # Update feedback mode dropdown and section visibility based on mask count
         n_networks = len(new_options)
-        self.connectivity_enabled_checkbox.visible = n_networks >= 2
+        self.feedback_mode_dropdown.visible = n_networks >= 2
         if n_networks < 2:
-            self.connectivity_window_field.visible = False
-            self.connectivity_pair_row.visible = False
+            self.differential_row.visible = False
+            self.connectivity_section.visible = False
 
         self.page.update()
 
@@ -1079,11 +1095,12 @@ class StudyEditorScreen:
         self.feedback_interval_field.visible = self.intermittent_enabled_checkbox.value
         self.page.update()
 
-    def _on_connectivity_enabled_changed(self, e):
-        """Toggle visibility of connectivity feedback fields."""
-        visible = self.connectivity_enabled_checkbox.value
-        self.connectivity_window_field.visible = visible
-        self.connectivity_pair_row.visible = visible
+    def _on_feedback_mode_changed(self, e):
+        """Toggle visibility of activation vs connectivity feedback fields."""
+        mode = self.feedback_mode_dropdown.value
+        self.differential_row.visible = mode == "activation"
+        self.connectivity_section.visible = mode == "connectivity"
+        self._update_sham_visibility()
         self.page.update()
 
     def _on_sham_enabled_changed(self, e):
@@ -1247,6 +1264,7 @@ class StudyEditorScreen:
         is_enabled = self.sham_enabled_checkbox.value
         method = self.sham_delivery_method_radio.value
         mask_mode = self.sham_mask_mode_radio.value
+        is_connectivity = (self.feedback_mode_dropdown.value or "activation") == "connectivity"
 
         # Update visibility of sham configuration fields
         if hasattr(self, "sham_config_container"):
@@ -1265,6 +1283,23 @@ class StudyEditorScreen:
             self.sham_replay_section.visible = is_enabled and (method == "replay")
         if hasattr(self, "sham_randomization_section"):
             self.sham_randomization_section.visible = is_enabled
+
+        # Target hemisphere is irrelevant for connectivity (correlation is symmetric)
+        if hasattr(self, "sham_target_hemisphere_container"):
+            self.sham_target_hemisphere_container.visible = not is_connectivity
+
+        # Update description text based on feedback mode
+        if hasattr(self, "sham_hemisphere_description"):
+            if is_connectivity:
+                self.sham_hemisphere_description.value = (
+                    "Split the selected network into left and right hemispheres. "
+                    "Compute correlation between hemispheres for sham participants."
+                )
+            else:
+                self.sham_hemisphere_description.value = (
+                    "Split the selected network into left and right hemispheres. "
+                    "One hemisphere is target, the other is non-target."
+                )
 
         self.page.update()
 
@@ -2195,12 +2230,11 @@ class StudyEditorScreen:
                     ),
                     self.rt_smooth_enabled_checkbox,
                     self.rt_smooth_fwhm_field,
+                    self.feedback_mode_dropdown,
                     self.differential_row,
+                    self.connectivity_section,
                     self.intermittent_enabled_checkbox,
                     self.feedback_interval_field,
-                    self.connectivity_enabled_checkbox,
-                    self.connectivity_window_field,
-                    self.connectivity_pair_row,
                     ft.Divider(),
                 ]
             ),
@@ -2263,20 +2297,37 @@ class StudyEditorScreen:
         mask_mode = self.sham_mask_mode_radio.value
 
         # Hemisphere split section (single network split into left/right)
+        feedback_mode_val = self.feedback_mode_dropdown.value or "activation"
+        is_connectivity = feedback_mode_val == "connectivity"
+
+        # Target hemisphere is irrelevant for connectivity (correlation is symmetric)
+        self.sham_target_hemisphere_container = ft.Column(
+            [
+                ft.Text("Target Hemisphere:", size=12),
+                self.sham_target_hemisphere_radio,
+            ],
+            visible=not is_connectivity,
+        )
+
+        self.sham_hemisphere_description = ft.Text(
+            "Split the selected network into left and right hemispheres. "
+            + (
+                "Compute correlation between hemispheres for sham participants."
+                if is_connectivity
+                else "One hemisphere is target, the other is non-target."
+            ),
+            size=11,
+            color=ft.Colors.GREY_600,
+            italic=True,
+        )
+
         self.sham_hemisphere_split_section = ft.Container(
             content=ft.Column(
                 [
                     ft.Text("Hemisphere Split", size=13, weight=ft.FontWeight.BOLD),
                     self.sham_hemisphere_network_dropdown,
-                    ft.Text("Target Hemisphere:", size=12),
-                    self.sham_target_hemisphere_radio,
-                    ft.Text(
-                        "Split the selected network into left and right hemispheres. "
-                        "One hemisphere is target, the other is non-target.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    self.sham_target_hemisphere_container,
+                    self.sham_hemisphere_description,
                 ]
             ),
             visible=is_enabled and method == "alternative_masks" and mask_mode == "hemisphere_split",
@@ -3014,8 +3065,13 @@ class StudyEditorScreen:
                 config["feedback"]["feedback_interval"] = int(interval_str) if interval_str else 5
             else:
                 config["feedback"]["feedback_interval"] = None
-            # Connectivity feedback
-            if self.connectivity_enabled_checkbox.value:
+            # Feedback mode and connectivity
+            feedback_mode = self.feedback_mode_dropdown.value or "activation"
+            config["feedback"]["feedback_mode"] = feedback_mode
+            config["feedback"]["connectivity_target"] = (
+                self.connectivity_target_dropdown.value or "increase"
+            )
+            if feedback_mode == "connectivity":
                 a = self.connectivity_pair_a_dropdown.value
                 b = self.connectivity_pair_b_dropdown.value
                 if a and b and a != b:
@@ -3024,6 +3080,7 @@ class StudyEditorScreen:
                     config["feedback"]["connectivity_pairs"] = None
                 window_str = self.connectivity_window_field.value.strip()
                 config["feedback"]["connectivity_window"] = int(window_str) if window_str else 15
+                config["feedback"]["differential_pair"] = None
             else:
                 config["feedback"]["connectivity_pairs"] = None
                 config["feedback"]["connectivity_window"] = 15

@@ -758,6 +758,15 @@ class FeedbackConfig:
     connectivity_window : int
         Sliding window size in volumes for connectivity computation.
         Default is 15. Must be >= 3.
+    feedback_mode : str
+        Feedback signal type. "activation" (default) uses dual-network
+        activation comparison. "connectivity" uses sliding-window Pearson
+        correlation between the configured pair.
+    connectivity_target : str
+        Target direction for connectivity feedback. "increase" (default)
+        means higher correlation = better. "decrease" means stronger
+        anti-correlation = better (the correlation value is negated before
+        delivery to the task).
     """
 
     n_baseline: int = 25
@@ -769,6 +778,8 @@ class FeedbackConfig:
     feedback_interval: int | None = None
     connectivity_pairs: list[list[str]] | None = None
     connectivity_window: int = 15
+    feedback_mode: str = "activation"
+    connectivity_target: str = "increase"
 
 
 @dataclass

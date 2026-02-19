@@ -2059,6 +2059,7 @@ class NeurofeedbackCoordinator:
         feedback_interval: int | None = None,  # Intermittent mode: deliver mean every N volumes
         connectivity_pairs: list[list[str]] | None = None,  # ROI pairs for sliding-window correlation
         connectivity_window: int = 15,  # Sliding window size in volumes
+        connectivity_target: str = "increase",  # "increase" or "decrease" (negate r)
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -2140,6 +2141,7 @@ class NeurofeedbackCoordinator:
         # Connectivity feedback mode (sliding-window Pearson correlation)
         self._connectivity_estimator: ConnectivityEstimator | None = None
         self._connectivity_names: list[str] = []
+        self._connectivity_target = connectivity_target
         if connectivity_pairs is not None and len(connectivity_pairs) > 0:
             validated_pairs: list[tuple[str, str]] = []
             for pair in connectivity_pairs:
@@ -2157,13 +2159,18 @@ class NeurofeedbackCoordinator:
                 )
                 self._connectivity_names = self._connectivity_estimator.names
                 logger.info(
-                    f"Connectivity feedback: {len(validated_pairs)} pair(s), window={connectivity_window} volumes"
+                    f"Connectivity feedback: {len(validated_pairs)} pair(s), "
+                    f"window={connectivity_window} volumes, target={connectivity_target}"
                 )
 
         # Sham mode configuration
         self._sham_provider = sham_provider
         self._condition = condition
         self._is_sham_mode = sham_provider is not None
+        # Sham timeseries: accumulates replayed mask activations for connectivity computation
+        self._sham_timeseries: dict[str, list[float]] = (
+            {name: [] for name in self.mask_names} if self._is_sham_mode else {}
+        )
 
         # Initialize FeedbackEstimator (pass sham provider for activation delivery)
         self._estimator = FeedbackEstimator(
@@ -2696,7 +2703,13 @@ class NeurofeedbackCoordinator:
                 activations[self._differential_name] = activations.get(m0, 0.0) - activations.get(m1, 0.0)
             # Compute connectivity (sliding-window Pearson correlation)
             if self._connectivity_estimator is not None:
-                conn_values = self._connectivity_estimator.compute(self._estimator.timeseries)
+                # In sham mode: accumulate replayed mask activations and compute from those
+                if self._is_sham_mode:
+                    for name in self.mask_names:
+                        self._sham_timeseries[name].append(activations.get(name, 0.0))
+                    conn_values = self._connectivity_estimator.compute(self._sham_timeseries)
+                else:
+                    conn_values = self._connectivity_estimator.compute(self._estimator.timeseries)
                 activations.update(conn_values)
             self.design_matrix.append(self._estimator._last_design_row)
             # Write design row incrementally (so it's not lost on interrupt)
@@ -3122,6 +3135,7 @@ def run_feedback_session(
     feedback_interval: int | None = None,
     connectivity_pairs: list[list[str]] | None = None,
     connectivity_window: int = 15,
+    connectivity_target: str = "increase",
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -3238,6 +3252,10 @@ def run_feedback_session(
     connectivity_window : int, optional
         Sliding window size in volumes for connectivity computation.
         Default is 15. Must be >= 3.
+    connectivity_target : str, optional
+        Target direction for connectivity. "increase" (default) means higher
+        correlation = better. "decrease" negates the value so stronger
+        anti-correlation = positive signal for the task.
 
     Returns
     -------
@@ -3473,6 +3491,7 @@ def run_feedback_session(
         feedback_interval=feedback_interval,
         connectivity_pairs=connectivity_pairs,
         connectivity_window=connectivity_window,
+        connectivity_target=connectivity_target,
     )
 
     # Set cleanup flags for simulation mode
