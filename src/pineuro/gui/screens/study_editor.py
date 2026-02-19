@@ -146,6 +146,8 @@ class StudyEditorScreen:
                 "n_volumes": 150,
                 "use_efficiency_weights": True,
                 "fd_threshold": 0.5,
+                "dvars_threshold": 1.5,
+                "tsnr_threshold": 20,
                 "moco_enabled": True,
                 "smooth_fwhm": None,
                 "differential_pair": None,
@@ -517,6 +519,26 @@ class StudyEditorScreen:
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Frames exceeding this will be flagged in real time",
             on_change=lambda _: self._validate_field("fd_threshold", self.fd_threshold_field, validate_positive_number),
+        )
+
+        # DVARS threshold for signal quality monitoring
+        self.dvars_threshold_field = ft.TextField(
+            width=600,
+            label="DVARS threshold (standardized)",
+            value=str(config.get("feedback", {}).get("dvars_threshold", 1.5)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Standardized DVARS above this will be flagged in real time",
+            on_change=lambda _: self._validate_field("dvars_threshold", self.dvars_threshold_field, validate_positive_number),
+        )
+
+        # tSNR threshold for signal quality monitoring
+        self.tsnr_threshold_field = ft.TextField(
+            width=600,
+            label="tSNR threshold",
+            value=str(config.get("feedback", {}).get("tsnr_threshold", 20)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="tSNR below this will be flagged in real time",
+            on_change=lambda _: self._validate_field("tsnr_threshold", self.tsnr_threshold_field, validate_positive_number),
         )
 
         # Motion correction mode (Siemens MoCo vs ANTsPy fallback)
@@ -2221,6 +2243,8 @@ class StudyEditorScreen:
                     self.max_feedback_runs_field,
                     self.n_baseline_field,
                     self._f(self.fd_threshold_field),
+                    self._f(self.dvars_threshold_field),
+                    self._f(self.tsnr_threshold_field),
                     self.moco_enabled_checkbox,
                     ft.Text(
                         "Use Siemens MoCo JSON sidecar if available; falls back to ANTsPy registration (~400-500ms/volume).",
@@ -3044,6 +3068,8 @@ class StudyEditorScreen:
             config["feedback"]["n_volumes"] = int(self.feedback_n_volumes_field.value)
             # FD threshold for motion monitoring
             config["feedback"]["fd_threshold"] = float(self.fd_threshold_field.value)
+            config["feedback"]["dvars_threshold"] = float(self.dvars_threshold_field.value)
+            config["feedback"]["tsnr_threshold"] = float(self.tsnr_threshold_field.value)
             # Motion correction mode
             config["feedback"]["moco_enabled"] = self.moco_enabled_checkbox.value
             # Real-time spatial smoothing

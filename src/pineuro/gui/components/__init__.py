@@ -76,7 +76,7 @@ and added to the page controls. Example:
 from .activation_plot import ActivationData, ActivationPlot
 from .collection_progress import CollectionProgressPanel
 from .csv_poller import FeedbackLogPoller, FeedbackMonitor
-from .fd_plot import FDData, FDPlot
+from .qc_plots import FDData, FDPlot
 from .feedback_summary import FeedbackSummaryData, FeedbackSummaryDialog, compute_feedback_summary
 from .mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
 from .pipeline_runner import PipelineRunner

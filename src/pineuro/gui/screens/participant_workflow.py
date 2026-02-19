@@ -39,7 +39,7 @@ from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, sc
 from ..components.activation_plot import ActivationPlot
 from ..components.collection_progress import CollectionProgressPanel
 from ..components.csv_poller import FeedbackMonitor
-from ..components.fd_plot import DVARSPlot, FDPlot, TSNRPlot
+from ..components.qc_plots import DVARSPlot, FDPlot, TSNRPlot
 from ..components.mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
 from ..components.pipeline_runner import PipelineRunner
 from ..components.qc_viewer import QCReportManager
@@ -3681,15 +3681,19 @@ class ParticipantWorkflowScreen:
             )
 
             # Create DVARS plot for signal quality monitoring
+            dvars_threshold = config["feedback"].get("dvars_threshold", 1.5)
             self.dvars_plot = DVARSPlot(
                 n_volumes=n_volumes,
                 height=220,
+                threshold=dvars_threshold,
             )
 
             # Create tSNR plot for signal quality monitoring
+            tsnr_threshold = config["feedback"].get("tsnr_threshold", 20)
             self.tsnr_plot = TSNRPlot(
                 n_volumes=n_volumes,
                 height=220,
+                threshold=tsnr_threshold,
             )
 
             # Create task mirror for visual feedback display
