@@ -249,6 +249,15 @@ class PipelineRunner:
         if self.on_progress:
             self.on_progress(message)
 
+    def _emit_progress_file_only(self, message: str) -> None:
+        """Log a progress message to the file log only (not forwarded to GUI)."""
+        logger.info(f"Progress: {message}")
+
+    def _is_blind_mode(self) -> bool:
+        """Check if sham blind mode is active."""
+        sham_config = self.config.get("sham", {})
+        return sham_config.get("enabled", False) and sham_config.get("blind_mode", False)
+
     def _run_2vol_initial(self) -> None:
         """Collect initial 2vol for positioning verification."""
         config = self.config
@@ -735,14 +744,22 @@ class PipelineRunner:
                     hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
                     if hemisphere_network and hemisphere_network not in yeo_targets:
                         yeo_targets.append(hemisphere_network)
-                        self._emit_progress(f"Including sham hemisphere network: {hemisphere_network}")
+                        if self._is_blind_mode():
+                            self._emit_progress_file_only(f"Including sham hemisphere network: {hemisphere_network}")
+                            self._emit_progress("Including additional network for mask extraction")
+                        else:
+                            self._emit_progress(f"Including sham hemisphere network: {hemisphere_network}")
                     sham_hemisphere_network = hemisphere_network
                 else:
                     alternative_targets = sham_config.get("alternative_mask_targets", [])
                     for target in alternative_targets:
                         if target and target not in yeo_targets:
                             yeo_targets.append(target)
-                            self._emit_progress(f"Including sham alternative network: {target}")
+                            if self._is_blind_mode():
+                                self._emit_progress_file_only(f"Including sham alternative network: {target}")
+                                self._emit_progress("Including additional network for mask extraction")
+                            else:
+                                self._emit_progress(f"Including sham alternative network: {target}")
 
             _mask_files = mask_extraction_rest(
                 participant_id=self.participant_id,
@@ -1175,7 +1192,10 @@ class PipelineRunner:
                         randomization = load_randomization(randomization_path)
                         condition_info = get_condition_for_participant(randomization, self.participant_id)
                         condition = condition_info["condition"]
-                        self._emit_progress(f"Participant condition: {condition}")
+                        if self._is_blind_mode():
+                            self._emit_progress_file_only(f"Participant condition: {condition}")
+                        else:
+                            self._emit_progress(f"Participant condition: {condition}")
 
                         delivery_method = sham_config.get("delivery_method", "alternative_masks")
 
@@ -1219,10 +1239,17 @@ class PipelineRunner:
                                     f"but no matched_participant in randomization file"
                                 )
 
-                            self._emit_progress(
-                                f"Replay mode: looking up feedbacklog from {matched_participant}"
-                                + (f" visit {matched_visit}" if matched_visit else "")
-                            )
+                            if self._is_blind_mode():
+                                self._emit_progress_file_only(
+                                    f"Replay mode: looking up feedbacklog from {matched_participant}"
+                                    + (f" visit {matched_visit}" if matched_visit else "")
+                                )
+                                self._emit_progress("Replay mode: loading activation source")
+                            else:
+                                self._emit_progress(
+                                    f"Replay mode: looking up feedbacklog from {matched_participant}"
+                                    + (f" visit {matched_visit}" if matched_visit else "")
+                                )
 
                             try:
                                 # base_dir is participant-specific (e.g., /data/sub-02)
@@ -1236,16 +1263,26 @@ class PipelineRunner:
                                     task=task_type,
                                     run=task_run_number,
                                 )
-                                self._emit_progress(f"Found feedbacklog: {feedbacklog_path.name}")
+                                if self._is_blind_mode():
+                                    self._emit_progress_file_only(f"Found feedbacklog: {feedbacklog_path.name}")
+                                    self._emit_progress("Activation source loaded")
+                                else:
+                                    self._emit_progress(f"Found feedbacklog: {feedbacklog_path.name}")
 
                                 # Create replay provider with the real mask names
                                 sham_provider = ReplayActivationProvider(
                                     feedbacklog_path=feedbacklog_path,
                                     mask_names=real_mask_names,
                                 )
-                                self._emit_progress(
-                                    f"Replay provider initialized with {sham_provider._n_source_volumes} volumes"
-                                )
+                                if self._is_blind_mode():
+                                    self._emit_progress_file_only(
+                                        f"Replay provider initialized with {sham_provider._n_source_volumes} volumes"
+                                    )
+                                    self._emit_progress("Activation replay ready")
+                                else:
+                                    self._emit_progress(
+                                        f"Replay provider initialized with {sham_provider._n_source_volumes} volumes"
+                                    )
                             except FileNotFoundError as e:
                                 logger.error(f"Could not find feedbacklog for replay: {e}")
                                 self._emit_progress(f"ERROR: {e}")
@@ -1261,7 +1298,12 @@ class PipelineRunner:
         # Combine all masks: real masks + any additional sham masks
         all_mask_files = real_mask_files + sham_mask_files
         all_mask_names = real_mask_names + sham_mask_names
-        self._emit_progress(f"Computing activations for masks: {all_mask_names}")
+        if self._is_blind_mode():
+            self._emit_progress_file_only(f"Computing activations for masks: {all_mask_names}")
+            generic_labels = ["Target", "Non-Target"] + [f"Network {i + 1}" for i in range(2, len(all_mask_names))]
+            self._emit_progress(f"Computing activations for masks: {generic_labels[:len(all_mask_names)]}")
+        else:
+            self._emit_progress(f"Computing activations for masks: {all_mask_names}")
 
         # Determine which masks control the task based on condition
         # For real: use real_mask_names
@@ -1274,7 +1316,10 @@ class PipelineRunner:
             else:
                 # Activation: swap first mask only
                 task_mask_names = [sham_mask_names[0], real_mask_names[1]]
-            self._emit_progress(f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})")
+            if self._is_blind_mode():
+                self._emit_progress_file_only(f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})")
+            else:
+                self._emit_progress(f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})")
         else:
             task_mask_names = real_mask_names
 
