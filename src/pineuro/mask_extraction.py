@@ -1689,8 +1689,8 @@ def create_tissue_masks(
     else:
         logger.info("Reusing existing MNI inverse transforms for tissue masks")
 
-    # Step 3: Warp tissue probability maps MNI → subject space
-    emit_progress("Warping tissue priors", "MNI → subject space")
+    # Step 3: Warp tissue probability maps MNI -> subject space
+    emit_progress("Warping tissue priors", "MNI -> subject space")
     for mni_path, out_path, tissue_name in [
         (wm_mni, wm_prob_file, "WM"),
         (csf_mni, csf_prob_file, "CSF"),
@@ -1709,7 +1709,7 @@ def create_tissue_masks(
         logger.info(f"Warped {tissue_name} probability map to subject space")
 
     # Step 4: Threshold and erode to create binary masks
-    emit_progress("Creating binary masks", "Threshold 0.9, erode 2 voxels")
+    emit_progress("Creating binary masks", "Threshold 0.9, adaptive erosion")
     result = {}
     for prob_file, mask_file, tissue_name in [
         (wm_prob_file, wm_mask_file, "wm"),
@@ -1731,22 +1731,38 @@ def create_tissue_masks(
         pre_erosion_file = prob_file.parent / prob_file.name.replace("_prob.", "_binary.")
         nib.loadsave.save(binary_img, str(pre_erosion_file))
 
-        # Erode using existing utility (2 voxels, 6-connected)
+        # Adaptive erosion: try 2 voxels, fall back to 1, fall back to none
+        # CSF is thin at BOLD resolution and may not survive aggressive erosion
         from pineuro.utils import erode_mask
-        erode_mask(pre_erosion_file, mask_file, overwrite=True)
+        n_post_erosion = 0
+        erosion_used = 0
+        for n_erode in [2, 1]:
+            erode_mask(pre_erosion_file, mask_file, n_erode=n_erode, overwrite=True)
+            eroded_img = nib.loadsave.load(mask_file)
+            n_post_erosion = int((np.asarray(eroded_img.dataobj) > 0).sum())
+            if n_post_erosion > 0:
+                erosion_used = n_erode
+                break
 
-        # Validate non-empty
-        eroded_img = nib.loadsave.load(mask_file)
-        n_post_erosion = int((np.asarray(eroded_img.dataobj) > 0).sum())
+        if n_post_erosion == 0:
+            # No erosion: use the thresholded binary directly
+            import shutil
+            shutil.copy2(pre_erosion_file, mask_file)
+            n_post_erosion = n_pre_erosion
+            erosion_used = 0
+            logger.warning(
+                f"{tissue_name.upper()} mask: skipped erosion (too few voxels at BOLD resolution)"
+            )
+
         if n_post_erosion == 0:
             raise ValueError(
-                f"{tissue_name.upper()} mask is empty after erosion "
-                f"({n_pre_erosion} voxels before erosion). "
+                f"{tissue_name.upper()} mask is empty after thresholding "
+                f"({n_pre_erosion} voxels). "
                 f"The BOLD reference may have poor MNI registration."
             )
         logger.info(
-            f"{tissue_name.upper()} mask: {n_pre_erosion} → {n_post_erosion} voxels "
-            f"(after erosion)"
+            f"{tissue_name.upper()} mask: {n_pre_erosion} -> {n_post_erosion} voxels "
+            f"(erosion={erosion_used})"
         )
         result[tissue_name] = mask_file
 

@@ -148,7 +148,11 @@ class StudyEditorScreen:
                 "fd_threshold": 0.5,
                 "dvars_threshold": 1.5,
                 "tsnr_threshold": 20,
-                "moco_enabled": True,
+                "motion_correction": "siemens_moco",
+                "include_drift": True,
+                "include_motion_regressors": True,
+                "include_wm_regressor": False,
+                "include_csf_regressor": False,
                 "smooth_fwhm": None,
                 "differential_pair": None,
                 "feedback_interval": None,
@@ -156,7 +160,6 @@ class StudyEditorScreen:
                 "connectivity_window": 15,
                 "feedback_mode": "activation",
                 "connectivity_target": "increase",
-                "nuisance_regression": False,
             },
             "localizer_task": {
                 # Localizer task parameters (when not rest)
@@ -542,11 +545,48 @@ class StudyEditorScreen:
             on_change=lambda _: self._validate_field("tsnr_threshold", self.tsnr_threshold_field, validate_positive_number),
         )
 
-        # Motion correction mode (Siemens MoCo vs ANTsPy fallback)
-        self.moco_enabled_checkbox = ft.Checkbox(
-            label="Siemens MoCo enabled",
-            value=config.get("feedback", {}).get("moco_enabled", True),
-            tooltip="Uncheck if Siemens MoCo is disabled on scanner. Will use ANTsPy for motion correction.",
+        # Motion correction mode
+        _mc_value = config.get("feedback", {}).get("motion_correction", "siemens_moco")
+        # Backward compat: migrate old moco_enabled boolean
+        if "moco_enabled" in config.get("feedback", {}) and "motion_correction" not in config.get("feedback", {}):
+            _mc_value = "siemens_moco" if config["feedback"]["moco_enabled"] else "software"
+        self.motion_correction_dropdown = ft.Dropdown(
+            label="Motion correction",
+            width=600,
+            value=_mc_value,
+            options=[
+                ft.dropdown.Option(key="siemens_moco", text="Siemens MoCo"),
+                ft.dropdown.Option(key="software", text="Software (ANTsPy)"),
+                ft.dropdown.Option(key="none", text="None"),
+            ],
+            tooltip="How volumes are motion-corrected during real-time feedback.",
+            on_select=self._on_motion_correction_changed,
+        )
+
+        # GLM nuisance regressor checkboxes
+        _fb_cfg = config.get("feedback", {})
+        # Backward compat: migrate old nuisance_regression boolean
+        _old_nuisance = _fb_cfg.get("nuisance_regression", False)
+        self.drift_checkbox = ft.Checkbox(
+            label="Linear drift",
+            value=_fb_cfg.get("include_drift", True),
+            tooltip="Include linear drift regressor in GLM nuisance model.",
+        )
+        self.motion_regressors_checkbox = ft.Checkbox(
+            label="Motion parameters (6 DOF)",
+            value=_fb_cfg.get("include_motion_regressors", True),
+            tooltip="Include 6 differential motion parameters in GLM. Requires motion correction.",
+            disabled=_mc_value == "none",
+        )
+        self.wm_regressor_checkbox = ft.Checkbox(
+            label="White matter mean",
+            value=_fb_cfg.get("include_wm_regressor", _old_nuisance),
+            tooltip="Include WM mean signal as GLM nuisance regressor. Mask from MNI priors.",
+        )
+        self.csf_regressor_checkbox = ft.Checkbox(
+            label="CSF mean",
+            value=_fb_cfg.get("include_csf_regressor", _old_nuisance),
+            tooltip="Include CSF mean signal as GLM nuisance regressor. Mask from MNI priors.",
         )
 
         # Real-time spatial smoothing (checkbox + conditional FWHM field)
@@ -690,15 +730,6 @@ class StudyEditorScreen:
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Deliver mean activation every N volumes after baseline",
             visible=interval_val is not None,
-        )
-
-        # WM/CSF nuisance regression
-        self.nuisance_regression_checkbox = ft.Checkbox(
-            label="Enable WM/CSF nuisance regression",
-            value=config.get("feedback", {}).get("nuisance_regression", False),
-            tooltip="Add mean white matter and CSF signals as nuisance regressors "
-            "in the real-time GLM. Tissue masks are created from MNI template "
-            "priors during mask extraction (no T1 required).",
         )
 
         # Create dynamic task parameter fields for current feedback task type
@@ -1115,6 +1146,14 @@ class StudyEditorScreen:
         if hasattr(self, "simulator_individual_container"):
             self.simulator_individual_container.visible = mode == "individual"
 
+        self.page.update()
+
+    def _on_motion_correction_changed(self, e):
+        """Disable motion regressors checkbox when motion correction is 'none'."""
+        is_none = self.motion_correction_dropdown.value == "none"
+        self.motion_regressors_checkbox.disabled = is_none
+        if is_none:
+            self.motion_regressors_checkbox.value = False
         self.page.update()
 
     def _on_rt_smooth_enabled_changed(self, e):
@@ -2255,13 +2294,27 @@ class StudyEditorScreen:
                     self._f(self.fd_threshold_field),
                     self._f(self.dvars_threshold_field),
                     self._f(self.tsnr_threshold_field),
-                    self.moco_enabled_checkbox,
+                    self.motion_correction_dropdown,
                     ft.Text(
-                        "Use Siemens MoCo JSON sidecar if available; falls back to ANTsPy registration (~400-500ms/volume).",
+                        "Siemens MoCo: parse from scanner JSON (~0ms). "
+                        "Software: ANTsPy registration (~400-500ms/vol). "
+                        "None: no motion correction.",
                         size=11,
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
+                    ft.Text("GLM Nuisance Regressors", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text(
+                        "Select which regressors to include in the real-time GLM "
+                        "(intercept is always included).",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self.drift_checkbox,
+                    self.motion_regressors_checkbox,
+                    self.wm_regressor_checkbox,
+                    self.csf_regressor_checkbox,
                     self.rt_smooth_enabled_checkbox,
                     self.rt_smooth_fwhm_field,
                     self.feedback_mode_dropdown,
@@ -2269,14 +2322,6 @@ class StudyEditorScreen:
                     self.connectivity_section,
                     self.intermittent_enabled_checkbox,
                     self.feedback_interval_field,
-                    self.nuisance_regression_checkbox,
-                    ft.Text(
-                        "Adds WM and CSF mean signals as GLM nuisance regressors. "
-                        "Tissue masks generated from MNI priors during mask extraction.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
                     ft.Divider(),
                 ]
             ),
@@ -3088,8 +3133,15 @@ class StudyEditorScreen:
             config["feedback"]["fd_threshold"] = float(self.fd_threshold_field.value)
             config["feedback"]["dvars_threshold"] = float(self.dvars_threshold_field.value)
             config["feedback"]["tsnr_threshold"] = float(self.tsnr_threshold_field.value)
-            # Motion correction mode
-            config["feedback"]["moco_enabled"] = self.moco_enabled_checkbox.value
+            # Motion correction mode and GLM nuisance regressors
+            config["feedback"]["motion_correction"] = self.motion_correction_dropdown.value
+            config["feedback"]["include_drift"] = self.drift_checkbox.value
+            config["feedback"]["include_motion_regressors"] = self.motion_regressors_checkbox.value
+            config["feedback"]["include_wm_regressor"] = self.wm_regressor_checkbox.value
+            config["feedback"]["include_csf_regressor"] = self.csf_regressor_checkbox.value
+            # Remove deprecated keys
+            config["feedback"].pop("moco_enabled", None)
+            config["feedback"].pop("nuisance_regression", None)
             # Real-time spatial smoothing
             if self.rt_smooth_enabled_checkbox.value:
                 rt_smooth_val = self.rt_smooth_fwhm_field.value.strip()
@@ -3128,8 +3180,6 @@ class StudyEditorScreen:
             else:
                 config["feedback"]["connectivity_pairs"] = None
                 config["feedback"]["connectivity_window"] = 15
-            # WM/CSF nuisance regression
-            config["feedback"]["nuisance_regression"] = self.nuisance_regression_checkbox.value
             # Also save to task-specific config for reference
             if task_type not in config["task"]:
                 config["task"][task_type] = {}

@@ -781,6 +781,33 @@ class PipelineRunner:
                 sham_hemisphere_network=sham_hemisphere_network,
             )
 
+        # Create WM/CSF tissue masks for nuisance regression (if enabled)
+        fb_cfg = config.get("feedback", {})
+        if fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False):
+            from pineuro.mask_extraction import create_tissue_masks
+
+            self._emit_progress("Creating WM/CSF tissue masks for nuisance regression...")
+            tissue_dir = mask_extraction_dir / "05_tissue"
+
+            # Try to reuse MNI inverse transforms from ICA pathway's 02_mnireg/
+            inv_xfm = None
+            mnireg_dir = mask_extraction_dir / "02_mnireg"
+            if mnireg_dir.exists():
+                inv_files = sorted(mnireg_dir.glob("*_inv_*"))
+                if inv_files:
+                    inv_xfm = [str(f) for f in inv_files]
+                    self._emit_progress(f"Reusing MNI inverse transforms from {mnireg_dir.name}/")
+
+            create_tissue_masks(
+                ref_file=str(ref_file),
+                output_dir=tissue_dir,
+                participant_id=self.participant_id,
+                inv_transform_files=inv_xfm,
+                overwrite=True,
+                progress_callback=progress_callback,
+            )
+            self._emit_progress("WM/CSF tissue masks created")
+
     def _run_coregistration(self, run_id: int = 1) -> None:
         """Coregister masks to 2vol feedback space.
 
@@ -883,7 +910,16 @@ class PipelineRunner:
                 combined_mask_name = f"{self.participant_id}_{hemisphere_network}_thr.nii.gz"
                 network_files = [f for f in network_files if f.name != combined_mask_name]
 
-        self._emit_progress(f"Coregistering {len(network_files)} masks to 2vol {run_str}...")
+        # Include tissue masks for nuisance regression (WM/CSF) if they exist
+        tissue_mask_files = []
+        tissue_masks_dir = mask_extraction_dir / "05_tissue"
+        if tissue_masks_dir.exists():
+            tissue_mask_files = list(tissue_masks_dir.glob(f"{self.participant_id}_tissue_*_mask.nii.gz"))
+            if tissue_mask_files:
+                self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
+
+        all_mask_files_for_coreg = [str(f) for f in network_files] + [str(f) for f in tissue_mask_files]
+        self._emit_progress(f"Coregistering {len(all_mask_files_for_coreg)} masks to 2vol {run_str}...")
 
         # Initial 2vol (run-01) goes to mask_extraction, realtime (run-02+) goes to feedback
         if run_id == 1:
@@ -897,7 +933,7 @@ class PipelineRunner:
             participant_id=self.participant_id,
             root_dir=root_dir,
             input_dicom=twovol_dicom,
-            network_files=[str(f) for f in network_files],
+            network_files=all_mask_files_for_coreg,
             ref_file=str(ref_file),
             run_id=actual_2vol_run,
             overwrite=True,
@@ -1091,6 +1127,25 @@ class PipelineRunner:
             mask_space = "subject boldref"
 
         self._emit_progress(f"Using masks from {mask_space} space")
+
+        # Find tissue masks for nuisance regression (WM/CSF)
+        wm_mask_path = None
+        csf_mask_path = None
+        fb_cfg = config.get("feedback", {})
+        if fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False):
+            if twovol_realtime_enabled:
+                wm_matches = list(masks_dir.glob(f"*_tissue_wm_mask_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz"))
+                csf_matches = list(masks_dir.glob(f"*_tissue_csf_mask_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz"))
+            else:
+                tissue_dir = mask_extraction_dir / "05_tissue"
+                wm_matches = list(tissue_dir.glob("*_tissue_wm_mask.nii.gz")) if tissue_dir.exists() else []
+                csf_matches = list(tissue_dir.glob("*_tissue_csf_mask.nii.gz")) if tissue_dir.exists() else []
+            if wm_matches:
+                wm_mask_path = str(wm_matches[0])
+            if csf_matches:
+                csf_mask_path = str(csf_matches[0])
+            if wm_mask_path or csf_mask_path:
+                self._emit_progress(f"Using tissue masks for nuisance regression from {mask_space} space")
 
         # Helper function to find mask file for a given name
         def find_mask_file(mask_name: str) -> Path:
@@ -1365,7 +1420,13 @@ class PipelineRunner:
                 fd_threshold=config["feedback"].get("fd_threshold", 0.5),
                 condition=condition,  # Log the actual condition
                 sham_provider=sham_provider,  # Replay provider for sham participants
-                moco_enabled=config["feedback"].get("moco_enabled", True),  # Motion correction mode
+                motion_correction=config["feedback"].get("motion_correction", "siemens_moco"),
+                include_drift=config["feedback"].get("include_drift", True),
+                include_motion_regressors=config["feedback"].get("include_motion_regressors", True),
+                include_wm_regressor=config["feedback"].get("include_wm_regressor", False),
+                include_csf_regressor=config["feedback"].get("include_csf_regressor", False),
+                wm_mask_path=wm_mask_path,
+                csf_mask_path=csf_mask_path,
                 murfi_design_path=murfi_design_path,  # External design matrix (MURFI format)
                 smooth_fwhm=config["feedback"].get("smooth_fwhm"),  # Real-time spatial smoothing
                 differential_pair=config["feedback"].get("differential_pair"),  # Configurable differential signal

@@ -808,7 +808,8 @@ class FeedbackEstimator:
     -----
     The GLM design matrix structure:
     - Columns 0 to n_task_regressors-1: Task regressors (of interest, NOT subtracted from error)
-    - Remaining columns: Nuisance regressors (intercept, drift, 6 motion parameters)
+    - Remaining columns: Nuisance regressors (configurable subset of:
+      intercept [always], drift, 6 motion parameters, WM mean, CSF mean)
 
     Activation is computed using continuous normalization (Hinds et al., 2011):
     - Error = y - X_nuisance @ beta_nuisance (removing nuisance only)
@@ -816,10 +817,10 @@ class FeedbackEstimator:
     - Activation = error / deviation
 
     Motion parameters are extracted from dcm2niix JSON sidecar files
-    (ImageComments field).
+    (ImageComments field) for Siemens MoCo, or computed via ANTsPy
+    rigid registration for other scanners.
     """
 
-    _BASE_NUISANCE_REGRESSORS = 8  # intercept + drift + 6 motion
     # Pre-compiled regex for motion parameter extraction (avoids re-compilation per volume)
     _MOTION_PATTERN = re.compile(r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)")
 
@@ -836,6 +837,11 @@ class FeedbackEstimator:
         external_motion_diff: NDArray[np.float64] | None = None,
         dump_algo_vars_path: Path | str | None = None,
         smooth_fwhm: float | None = None,
+        motion_correction: str = "siemens_moco",
+        include_drift: bool = True,
+        include_motion_regressors: bool = True,
+        include_wm_regressor: bool = False,
+        include_csf_regressor: bool = False,
         wm_mask_path: Path | str | None = None,
         csf_mask_path: Path | str | None = None,
     ) -> None:
@@ -857,14 +863,69 @@ class FeedbackEstimator:
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
         self._algo_dump_fh: TextIO | None = None
 
-        # WM/CSF tissue nuisance regression
+        # Motion correction mode (decoupled from GLM regressors)
+        self._motion_correction = motion_correction
+
+        # GLM nuisance regressor configuration (individually toggleable)
+        self._include_drift = include_drift
+        # Motion regressors require motion params to be available
+        self._include_motion = (
+            include_motion_regressors and motion_correction != "none"
+        )
+        if include_motion_regressors and motion_correction == "none":
+            logger.warning(
+                "include_motion_regressors=True but motion_correction='none' — "
+                "no motion parameters available, disabling motion regressors in GLM"
+            )
+        self._include_wm = include_wm_regressor
+        self._include_csf = include_csf_regressor
+
+        # Compute dynamic nuisance regressor count
+        # Design row layout: [task_cols...] [intercept] [drift?] [motion_x6?] [wm?] [csf?]
+        n_nuisance = 1  # intercept always
+        self._drift_offset: int | None = None
+        self._motion_offset: int | None = None
+        self._wm_offset: int | None = None
+        self._csf_offset: int | None = None
+        offset = 1  # next available slot after intercept
+        if self._include_drift:
+            self._drift_offset = offset
+            offset += 1
+            n_nuisance += 1
+        if self._include_motion:
+            self._motion_offset = offset
+            offset += 6
+            n_nuisance += 6
+        if self._include_wm:
+            self._wm_offset = offset
+            offset += 1
+            n_nuisance += 1
+        if self._include_csf:
+            self._csf_offset = offset
+            offset += 1
+            n_nuisance += 1
+        self.N_NUISANCE_REGRESSORS = n_nuisance
+
+        # WM/CSF tissue mask paths
         self._wm_mask_path: Path | None = Path(wm_mask_path) if wm_mask_path else None
         self._csf_mask_path: Path | None = Path(csf_mask_path) if csf_mask_path else None
-        self._use_tissue_nuisance = self._wm_mask_path is not None and self._csf_mask_path is not None
-        self._n_tissue_regressors = 2 if self._use_tissue_nuisance else 0
-        self.N_NUISANCE_REGRESSORS = self._BASE_NUISANCE_REGRESSORS + self._n_tissue_regressors
         self._latest_wm_mean: float = 0.0
         self._latest_csf_mean: float = 0.0
+
+        # Log GLM configuration
+        regressor_parts = ["intercept"]
+        if self._include_drift:
+            regressor_parts.append("drift")
+        if self._include_motion:
+            regressor_parts.append("motion(6)")
+        if self._include_wm:
+            regressor_parts.append("WM")
+        if self._include_csf:
+            regressor_parts.append("CSF")
+        logger.info(
+            f"GLM nuisance model: {' + '.join(regressor_parts)} "
+            f"({n_nuisance} regressors)"
+        )
 
         # Validate and store task regressors
         if task_regressors is not None:
@@ -905,14 +966,16 @@ class FeedbackEstimator:
         self._load_masks(mask_paths_resolved)
 
         # Load tissue masks for WM/CSF mean signal extraction (separate from ROI masks)
-        if self._use_tissue_nuisance:
+        if self._include_wm:
+            if self._wm_mask_path is None:
+                raise ValueError("wm_mask_path required when include_wm_regressor=True")
             self._wm_indices = self._load_tissue_mask(self._wm_mask_path)
+            logger.info(f"WM nuisance regressor: {len(self._wm_indices[0])} voxels")
+        if self._include_csf:
+            if self._csf_mask_path is None:
+                raise ValueError("csf_mask_path required when include_csf_regressor=True")
             self._csf_indices = self._load_tissue_mask(self._csf_mask_path)
-            logger.info(
-                f"Tissue nuisance regression enabled: "
-                f"WM={len(self._wm_indices[0])} voxels, "
-                f"CSF={len(self._csf_indices[0])} voxels"
-            )
+            logger.info(f"CSF nuisance regressor: {len(self._csf_indices[0])} voxels")
 
         # Initialize single GLM for all voxels (shared model across voxels)
         self._glm = IncrementalGLM(
@@ -1274,36 +1337,37 @@ class FeedbackEstimator:
             Raw motion parameters for current volume (absolute values).
             Translations in mm, rotations in degrees.
             Ignored if external_motion_diff was provided at initialization.
+            Ignored if motion regressors are disabled.
 
         Returns
         -------
         X : ndarray, shape (n_regressors,)
-            Design row: [task_cols..., intercept, drift, motion_diff...]
+            Design row: [task_cols..., intercept, drift?, motion_diff?, wm?, csf?]
             Motion parameters are differential (frame-to-frame) with rotations
             converted to arc length (mm) at 50mm radius to match MURFI.
         """
-        # Use external motion diff if available, otherwise compute from absolute motion
         vol_idx = self.n_volumes  # Current volume index (0-based)
 
-        if self._external_motion_diff is not None:
-            # Use pre-loaded motion diff (e.g., from MURFI design file)
-            if vol_idx < len(self._external_motion_diff):
-                motion_diff = self._external_motion_diff[vol_idx, :]
+        # Compute motion diff (needed for GLM motion regressors)
+        if self._include_motion:
+            if self._external_motion_diff is not None:
+                # Use pre-loaded motion diff (e.g., from MURFI design file)
+                if vol_idx < len(self._external_motion_diff):
+                    motion_diff = self._external_motion_diff[vol_idx, :]
+                else:
+                    motion_diff = self._external_motion_diff[-1, :]
             else:
-                # Extrapolate with last row if we exceed design length
-                motion_diff = self._external_motion_diff[-1, :]
-        else:
-            # Compute frame-to-frame motion from absolute parameters
-            if self.n_volumes == 0:
-                motion_diff = np.zeros(6, dtype=np.float64)
-            else:
-                prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
-                motion_diff = motion_params - prev
+                # Compute frame-to-frame motion from absolute parameters
+                if self.n_volumes == 0:
+                    motion_diff = np.zeros(6, dtype=np.float64)
+                else:
+                    prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
+                    motion_diff = motion_params - prev
 
-            # Convert rotations from degrees to arc length (mm) at 50mm radius
-            # This matches MURFI's approach: arc_length = radius * angle_radians
-            # = 50 * (angle_degrees * pi/180)
-            motion_diff[3:6] *= 50.0 * np.pi / 180.0
+                # Convert rotations from degrees to arc length (mm) at 50mm radius
+                # This matches MURFI's approach: arc_length = radius * angle_radians
+                # = 50 * (angle_degrees * pi/180)
+                motion_diff[3:6] *= 50.0 * np.pi / 180.0
 
         self._prev_motion = motion_params.copy()
 
@@ -1315,19 +1379,19 @@ class FeedbackEstimator:
             if vol_idx < len(self._task_regressors):
                 X[: self._n_task_regressors] = self._task_regressors[vol_idx, :]
             else:
-                # Extrapolate with last row if we exceed design length
                 X[: self._n_task_regressors] = self._task_regressors[-1, :]
 
-        # Fill in nuisance regressors (after task columns)
-        nuisance_idx = self._nuisance_start_idx
-        X[nuisance_idx] = 1.0  # intercept
-        X[nuisance_idx + 1] = float(vol_idx + 1)  # linear drift (1-indexed volume number)
-        X[nuisance_idx + 2 : nuisance_idx + 8] = motion_diff  # differential motion
-
-        # WM/CSF tissue mean signals (if enabled)
-        if self._use_tissue_nuisance:
-            X[nuisance_idx + 8] = self._latest_wm_mean
-            X[nuisance_idx + 9] = self._latest_csf_mean
+        # Fill in nuisance regressors (after task columns, using pre-computed offsets)
+        nui = self._nuisance_start_idx
+        X[nui] = 1.0  # intercept (always at offset 0)
+        if self._drift_offset is not None:
+            X[nui + self._drift_offset] = float(vol_idx + 1)  # linear drift (1-indexed)
+        if self._motion_offset is not None:
+            X[nui + self._motion_offset : nui + self._motion_offset + 6] = motion_diff
+        if self._wm_offset is not None:
+            X[nui + self._wm_offset] = self._latest_wm_mean
+        if self._csf_offset is not None:
+            X[nui + self._csf_offset] = self._latest_csf_mean
 
         return X
 
@@ -1438,12 +1502,16 @@ class FeedbackEstimator:
         voxel_values = data[self._voxel_indices]
 
         # Extract tissue mean signals for nuisance regression (if enabled)
-        if self._use_tissue_nuisance:
+        if self._include_wm:
             self._latest_wm_mean = float(np.mean(data[self._wm_indices]))
+        if self._include_csf:
             self._latest_csf_mean = float(np.mean(data[self._csf_indices]))
 
         # ===== 2. Extract motion parameters =====
-        if motion_source is None:
+        # Motion params are extracted whenever available (for FD/QC), even if not in GLM
+        if self._motion_correction == "none":
+            motion_params = np.zeros(6, dtype=np.float64)
+        elif motion_source is None:
             motion_params = np.zeros(6, dtype=np.float64)
         elif isinstance(motion_source, (np.ndarray, list)):
             motion_params = np.array(motion_source, dtype=np.float64)
@@ -1456,7 +1524,11 @@ class FeedbackEstimator:
 
         # ===== 3. Compute QC metrics and build design matrix =====
         # FD must be computed before _build_design_row (which updates _prev_motion)
-        self._latest_fd = self._compute_fd(motion_params)
+        # FD is NaN when motion correction is disabled (no motion params available)
+        if self._motion_correction == "none":
+            self._latest_fd = float("nan")
+        else:
+            self._latest_fd = self._compute_fd(motion_params)
 
         # DVARS: RMS of temporal derivative across mask voxels
         self._latest_dvars = self._compute_dvars(voxel_values)
@@ -2110,7 +2182,11 @@ class NeurofeedbackCoordinator:
         acq: str = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
         sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
         condition: str = "real",  # Participant condition: "real" or "sham"
-        moco_enabled: bool = True,  # Whether Siemens MoCo is enabled on scanner
+        motion_correction: str = "siemens_moco",  # "siemens_moco", "software", "none"
+        include_drift: bool = True,
+        include_motion_regressors: bool = True,
+        include_wm_regressor: bool = False,
+        include_csf_regressor: bool = False,
         external_motion_diff: NDArray[np.float64] | None = None,  # Pre-loaded motion diff (e.g., MURFI)
         dump_algo_vars_path: Path | str | None = None,  # Path to dump GLM algo vars for debugging
         smooth_fwhm: float | None = None,  # Gaussian spatial smoothing FWHM in mm per volume
@@ -2137,13 +2213,20 @@ class NeurofeedbackCoordinator:
         # Debug: dump algo vars for comparison with MURFI
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
 
-        # Motion correction fallback (when Siemens MoCo disabled)
-        self._moco_enabled = moco_enabled
+        # Motion correction mode
+        self._motion_correction = motion_correction
         self._moco_reference_vol: NDArray[np.float64] | None = None
         self._moco_reference_affine: NDArray[np.float64] | None = None
         self._moco_prev_vol: NDArray[np.float64] | None = None  # For incremental registration
-        if not moco_enabled:
-            logger.info("MoCo fallback enabled - will use ANTsPy multi-resolution rigid registration")
+        logger.info(f"Motion correction mode: {motion_correction}")
+        if motion_correction == "software":
+            logger.info("Will use ANTsPy multi-resolution rigid registration (~400-500ms/volume)")
+
+        # GLM regressor configuration (passed through to FeedbackEstimator)
+        self._include_drift = include_drift
+        self._include_motion_regressors = include_motion_regressors
+        self._include_wm_regressor = include_wm_regressor
+        self._include_csf_regressor = include_csf_regressor
 
         # Validate watch directory
         if not self.watch_dir.exists():
@@ -2246,6 +2329,11 @@ class NeurofeedbackCoordinator:
             external_motion_diff=external_motion_diff,
             dump_algo_vars_path=self._dump_algo_vars_path,
             smooth_fwhm=smooth_fwhm,
+            motion_correction=motion_correction,
+            include_drift=include_drift,
+            include_motion_regressors=include_motion_regressors,
+            include_wm_regressor=include_wm_regressor,
+            include_csf_regressor=include_csf_regressor,
             wm_mask_path=wm_mask_path,
             csf_mask_path=csf_mask_path,
         )
@@ -2311,9 +2399,11 @@ class NeurofeedbackCoordinator:
 
         # Simple header: one column per mask (no _delivered/_real suffix)
         header = ["volume", "time", "is_baseline", "is_outlier", "fd", "dvars", "tsnr", "condition"]
-        # WM/CSF tissue signal columns (if nuisance regression enabled)
-        if self._estimator._use_tissue_nuisance:
-            header.extend(["wm_mean", "csf_mean"])
+        # WM/CSF tissue signal columns (independently toggled)
+        if self._estimator._include_wm:
+            header.append("wm_mean")
+        if self._estimator._include_csf:
+            header.append("csf_mean")
         header.extend(self.mask_names)
         if self._differential_name:
             header.append(self._differential_name)
@@ -2339,29 +2429,34 @@ class NeurofeedbackCoordinator:
             self._csv_file = None
             self._csv_writer = None
 
-    def _save_design_matrix(self) -> None:
-        """Save design matrix to TSV file.
+    def _build_design_column_names(self) -> list[str]:
+        """Build column names for the design matrix based on active regressors."""
+        column_names = []
+        n_task = self._estimator._n_task_regressors if self._estimator else 0
+        if n_task == 1:
+            column_names.append("task")
+        elif n_task > 1:
+            column_names.extend([f"task_{i}" for i in range(n_task)])
 
-        Saves the design matrix with column names:
-        [task, intercept, drift, motion_x, motion_y, motion_z, motion_rx, motion_ry, motion_rz]
-        """
+        # Nuisance columns (must match _build_design_row layout)
+        column_names.append("intercept")
+        if self._estimator._include_drift:
+            column_names.append("drift")
+        if self._estimator._include_motion:
+            column_names.extend(["motion_x", "motion_y", "motion_z", "motion_rx", "motion_ry", "motion_rz"])
+        if self._estimator._include_wm:
+            column_names.append("wm_mean")
+        if self._estimator._include_csf:
+            column_names.append("csf_mean")
+        return column_names
+
+    def _save_design_matrix(self) -> None:
+        """Save design matrix to TSV file."""
         if not self.design_matrix:
             logger.warning("No design matrix data to save")
             return
 
-        column_names = [
-            "task",
-            "intercept",
-            "drift",
-            "motion_x",
-            "motion_y",
-            "motion_z",
-            "motion_rx",
-            "motion_ry",
-            "motion_rz",
-        ]
-        if self._estimator._use_tissue_nuisance:
-            column_names.extend(["wm_mean", "csf_mean"])
+        column_names = self._build_design_column_names()
 
         # Convert design matrix list to numpy array
         design_array = np.array(self.design_matrix)
@@ -2380,22 +2475,7 @@ class NeurofeedbackCoordinator:
         """Initialize design matrix TSV file with header for incremental writes."""
         self._design_file = open(self._design_matrix_path, "w", newline="")  # noqa: SIM115
 
-        # Build column names based on actual number of task regressors
-        column_names = []
-
-        # Task regressor columns (if any)
-        n_task = self._estimator._n_task_regressors if self._estimator else 0
-        if n_task == 1:
-            column_names.append("task")
-        elif n_task > 1:
-            column_names.extend([f"task_{i}" for i in range(n_task)])
-
-        # Nuisance regressor columns
-        column_names.extend(
-            ["intercept", "drift", "motion_x", "motion_y", "motion_z", "motion_rx", "motion_ry", "motion_rz"]
-        )
-        if self._estimator._use_tissue_nuisance:
-            column_names.extend(["wm_mean", "csf_mean"])
+        column_names = self._build_design_column_names()
 
         self._design_file.write("\t".join(column_names) + "\n")
         self._design_file.flush()
@@ -2721,12 +2801,12 @@ class NeurofeedbackCoordinator:
         # Process through estimator (timed for diagnostics)
         glm_start = time.monotonic()
         try:
-            # Determine motion source based on MoCo mode
-            if self._moco_enabled:
-                # Standard path: extract motion from JSON sidecar (Siemens MoCo)
+            # Determine motion source based on motion correction mode
+            if self._motion_correction == "siemens_moco":
+                # Siemens MoCo: extract motion from JSON sidecar ImageComments
                 motion_source = json_path
-            else:
-                # Fallback path: compute motion via ANTsPy registration
+            elif self._motion_correction == "software":
+                # Software (ANTsPy): compute motion via rigid registration
                 vol_img = nib.load(nifti_path)
                 vol_data = vol_img.get_fdata()
                 vol_affine = vol_img.affine
@@ -2734,24 +2814,23 @@ class NeurofeedbackCoordinator:
                 # Ensure we have a 3D volume, not 4D
                 if vol_data.ndim == 4:
                     logger.warning(
-                        f"MoCo fallback: volume {volume_num} is 4D with shape {vol_data.shape}, extracting first volume"
+                        f"Software MoCo: volume {volume_num} is 4D with shape {vol_data.shape}, extracting first volume"
                     )
                     vol_data = vol_data[..., 0]
 
                 if self._moco_reference_vol is None:
                     # First volume becomes reference
-                    self._moco_reference_vol = vol_data.copy()  # Copy to avoid reference issues
+                    self._moco_reference_vol = vol_data.copy()
                     self._moco_reference_affine = vol_affine.copy()
-                    self._moco_prev_vol = vol_data.copy()  # Track previous volume for incremental registration
+                    self._moco_prev_vol = vol_data.copy()
                     motion_source = np.zeros(6, dtype=np.float64)
-                    logger.info(f"MoCo fallback: volume {volume_num} set as reference, shape={vol_data.shape}")
+                    logger.info(f"Software MoCo: volume {volume_num} set as reference, shape={vol_data.shape}")
                 else:
                     # Verify shapes match
                     if vol_data.shape != self._moco_prev_vol.shape:
                         logger.error(f"MoCo shape mismatch: prev={self._moco_prev_vol.shape}, mov={vol_data.shape}")
 
                     # Register to PREVIOUS volume (incremental, like Siemens PACE)
-                    # This gives frame-to-frame motion, not absolute motion relative to vol 1
                     corrected_vol, motion_params = _ants_register_volume(
                         self._moco_prev_vol,
                         vol_data,
@@ -2765,6 +2844,9 @@ class NeurofeedbackCoordinator:
                     corrected_img = nib.Nifti1Image(corrected_vol.astype(np.float32), self._moco_reference_affine)
                     nib.save(corrected_img, nifti_path)
                     motion_source = motion_params
+            else:
+                # None: no motion correction, no motion parameters
+                motion_source = None
 
             activations = self._estimator.process_volume(nifti_path, motion_source)
             # Compute differential signal (explicit pair)
@@ -2855,12 +2937,11 @@ class NeurofeedbackCoordinator:
             self._condition,  # Log condition (real/sham) for each volume
         ]
 
-        # WM/CSF tissue signal values (if nuisance regression enabled)
-        if self._estimator._use_tissue_nuisance:
-            row.extend([
-                f"{self._estimator._latest_wm_mean:.4f}",
-                f"{self._estimator._latest_csf_mean:.4f}",
-            ])
+        # WM/CSF tissue signal values (independently toggled)
+        if self._estimator._include_wm:
+            row.append(f"{self._estimator._latest_wm_mean:.4f}")
+        if self._estimator._include_csf:
+            row.append(f"{self._estimator._latest_csf_mean:.4f}")
 
         # Add activation for each mask (these are delivered values - sham or real)
         row.extend([f"{activations.get(name, 0.0):.4f}" for name in self.mask_names])
@@ -3204,7 +3285,11 @@ def run_feedback_session(
     step_id: str | None = None,
     sham_provider: Optional["ShamActivationProvider"] = None,
     condition: str = "real",
-    moco_enabled: bool = True,
+    motion_correction: str = "siemens_moco",
+    include_drift: bool = True,
+    include_motion_regressors: bool = True,
+    include_wm_regressor: bool = False,
+    include_csf_regressor: bool = False,
     murfi_design_path: Path | str | None = None,
     dump_algo_vars_path: Path | str | None = None,
     smooth_fwhm: float | None = None,
@@ -3299,17 +3384,24 @@ def run_feedback_session(
         Participant condition label to log in feedbacklog.tsv. Should be 'real'
         or 'sham'. This is logged for each volume but doesn't affect processing -
         the sham_provider determines what activations are delivered. Default is 'real'.
-    moco_enabled : bool, optional
-        Whether Siemens MoCo (motion correction) is enabled on the scanner. When True
-        (default), motion parameters are extracted from JSON sidecar (ImageComments).
-        When False, uses ANTsPy multi-resolution rigid registration (~400-500ms per
-        volume) to compute motion parameters and correct volumes.
+    motion_correction : str, optional
+        Motion correction mode: "siemens_moco" (parse from JSON sidecar),
+        "software" (ANTsPy registration, ~400-500ms/vol), or "none" (disabled).
+    include_drift : bool, optional
+        Include linear drift regressor in GLM. Default True.
+    include_motion_regressors : bool, optional
+        Include 6 motion parameters in GLM. Default True. Requires
+        motion_correction != "none".
+    include_wm_regressor : bool, optional
+        Include WM mean signal in GLM. Default False.
+    include_csf_regressor : bool, optional
+        Include CSF mean signal in GLM. Default False.
     murfi_design_path : Path or str, optional
         Path to a MURFI design matrix file (.mat). When provided, the design matrix
         (task regressors and motion parameters) is loaded from this file instead of
         being constructed. The MURFI motion_diff columns are used directly in the GLM,
         while ANTsPy registration is still used for volume motion correction if
-        moco_enabled=False. This enables replaying archived data with its original
+        motion_correction="software". This enables replaying archived data with its original
         design. When murfi_design_path is provided, the task_regressors parameter
         is ignored.
     smooth_fwhm : float, optional
@@ -3562,7 +3654,11 @@ def run_feedback_session(
         acq=acq,
         sham_provider=sham_provider,
         condition=condition,
-        moco_enabled=moco_enabled,
+        motion_correction=motion_correction,
+        include_drift=include_drift,
+        include_motion_regressors=include_motion_regressors,
+        include_wm_regressor=include_wm_regressor,
+        include_csf_regressor=include_csf_regressor,
         external_motion_diff=external_motion_diff,
         dump_algo_vars_path=dump_algo_vars_path,
         smooth_fwhm=smooth_fwhm,

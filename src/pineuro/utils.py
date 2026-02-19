@@ -1689,11 +1689,16 @@ def apply_mask(
     logger.info(f"Output: {output_path}")
 
 
-def erode_mask(input_file: Union[str, Path], output_file: Union[str, Path], overwrite: bool = False) -> Path:
-    """Apply binary erosion (2 voxels) to a mask.
+def erode_mask(
+    input_file: Union[str, Path],
+    output_file: Union[str, Path],
+    n_erode: int = 2,
+    overwrite: bool = False,
+) -> Path:
+    """Apply binary erosion to a mask.
 
     Uses 6-connected structuring element (face neighbors only) for conservative
-    erosion. Removes two voxel layers from the mask boundary.
+    erosion. Removes ``n_erode`` voxel layers from the mask boundary.
 
     Parameters
     ----------
@@ -1701,6 +1706,8 @@ def erode_mask(input_file: Union[str, Path], output_file: Union[str, Path], over
         Path to input binary mask NIfTI
     output_file : str or Path
         Path to save eroded mask
+    n_erode : int, default=2
+        Number of erosion iterations (voxel layers to remove)
     overwrite : bool, default=False
         If True, overwrite existing output
 
@@ -1715,7 +1722,7 @@ def erode_mask(input_file: Union[str, Path], output_file: Union[str, Path], over
         logger.info(f"Output exists and overwrite=False. Skipping erosion: {output_path}")
         return output_path
 
-    logger.info(f"Eroding mask by 2 voxels: {input_file}")
+    logger.info(f"Eroding mask by {n_erode} voxels: {input_file}")
 
     # Load mask
     img = nib.load(str(input_file))
@@ -1725,7 +1732,7 @@ def erode_mask(input_file: Union[str, Path], output_file: Union[str, Path], over
     structure = generate_binary_structure(3, 1)
 
     # Apply erosion
-    eroded = binary_erosion(data, structure=structure, iterations=2)
+    eroded = binary_erosion(data, structure=structure, iterations=n_erode)
 
     # Save
     output_path.parent.mkdir(parents=True, exist_ok=True)

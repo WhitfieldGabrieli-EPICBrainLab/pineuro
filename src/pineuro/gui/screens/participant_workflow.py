@@ -433,6 +433,36 @@ class ParticipantWorkflowScreen:
         highpass = config["mask"].get("highpass")
         lowpass = config["mask"].get("lowpass")
 
+        # Generate tissue mask overlays (WM/CSF) if they exist
+        tissue_mask_overlays: dict[str, Path] = {}
+        tissue_dir = mask_extraction_dir / "05_tissue"
+        if tissue_dir.exists() and ref_file.exists():
+            overlays_dir = qc_dir / "overlays" / "subject"
+            overlays_dir.mkdir(parents=True, exist_ok=True)
+            for tissue_type in ["wm", "csf"]:
+                tissue_files = list(tissue_dir.glob(f"*_tissue_{tissue_type}_mask.nii.gz"))
+                if not tissue_files:
+                    continue
+                overlay_path = overlays_dir / f"{self.participant_id}_tissue_{tissue_type}_overlay.png"
+                if not overlay_path.exists():
+                    try:
+                        from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
+
+                        slices = select_slices_from_atlas(
+                            atlas_path=ref_file, labels=[], target_label="",
+                            top_n_per_plane=1, mask_path=tissue_files[0],
+                        )
+                        label = "White Matter" if tissue_type == "wm" else "CSF"
+                        plot_mask_overlay_tripanel(
+                            mask_path=tissue_files[0], ref_path=ref_file,
+                            out_path=overlay_path, slices=slices,
+                            title=f"{label} mask (MNI template prior)",
+                        )
+                    except Exception as ex:
+                        logger.warning(f"Failed to generate tissue overlay for {tissue_type}: {ex}")
+                if overlay_path.exists():
+                    tissue_mask_overlays[tissue_type] = overlay_path
+
         dialog = MaskSelectionDialog(
             page=self.page,
             masks_info=masks_info,
@@ -458,6 +488,8 @@ class ParticipantWorkflowScreen:
             hemisphere_network=sham_hemisphere_network,
             hemisphere_overlays=hemisphere_overlays,
             target_hemisphere=sham_target_hemisphere,
+            # Tissue mask overlays (WM/CSF nuisance regression)
+            tissue_mask_overlays=tissue_mask_overlays,
         )
         dialog.show()
 
@@ -610,6 +642,88 @@ class ParticipantWorkflowScreen:
                 border=ft.border.all(2, ft.Colors.GREY_300),
             )
             mask_cards.append(card)
+
+        # Add tissue mask overlays (WM/CSF) as view-only cards if they exist
+        tissue_dir = mask_extraction_dir / "05_tissue"
+        if tissue_dir.exists():
+            tissue_labels = {"wm": "White Matter", "csf": "CSF"}
+            tissue_files = list(tissue_dir.glob(f"{self.participant_id}_tissue_*_mask.nii.gz"))
+            if tissue_files:
+                mask_cards.append(ft.Divider(height=2, color=ft.Colors.PURPLE_200))
+                mask_cards.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.PURPLE, size=16),
+                                ft.Text(
+                                    "Tissue Masks (nuisance regression, view only)",
+                                    size=12,
+                                    color=ft.Colors.PURPLE_700,
+                                    weight=ft.FontWeight.W_500,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        padding=ft.padding.only(left=5, bottom=5),
+                    )
+                )
+                for tissue_file in tissue_files:
+                    # Determine tissue type from filename
+                    tissue_type = "wm" if "_wm_" in tissue_file.name else "csf"
+                    tissue_label = tissue_labels.get(tissue_type, tissue_type.upper())
+
+                    # Generate overlay on-demand
+                    tissue_overlay = overlays_dir / f"{self.participant_id}_tissue_{tissue_type}_overlay.png"
+                    if not tissue_overlay.exists() and ref_file.exists():
+                        try:
+                            from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
+
+                            atlas_slices = select_slices_from_atlas(
+                                atlas_path=ref_file, labels=[], target_label="",
+                                top_n_per_plane=1, mask_path=tissue_file,
+                            )
+                            plot_mask_overlay_tripanel(
+                                mask_path=tissue_file, ref_path=ref_file,
+                                out_path=tissue_overlay, slices=atlas_slices,
+                                title=f"{tissue_label} mask (MNI template prior)",
+                            )
+                        except Exception as ex:
+                            logger.warning(f"Failed to generate tissue overlay for {tissue_type}: {ex}")
+
+                    if tissue_overlay.exists():
+                        t_b64 = base64.b64encode(tissue_overlay.read_bytes()).decode("utf-8")
+                        t_overlay_content = ft.Image(
+                            src=f"data:image/png;base64,{t_b64}", fit="contain", height=120,
+                        )
+                    else:
+                        t_overlay_content = ft.Container(
+                            content=ft.Text("No preview available", color=ft.Colors.GREY_500),
+                            height=120, alignment=ft.Alignment(0, 0), bgcolor=ft.Colors.GREY_200,
+                        )
+
+                    tissue_card = ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Row([
+                                    ft.Text(tissue_label, size=14, weight=ft.FontWeight.W_500),
+                                    ft.Container(expand=True),
+                                    ft.Text("MNI template prior", size=11, color=ft.Colors.PURPLE_400),
+                                ]),
+                                ft.Container(
+                                    content=t_overlay_content,
+                                    border=ft.border.all(1, ft.Colors.GREY_300),
+                                    border_radius=5,
+                                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        padding=12,
+                        bgcolor=ft.Colors.PURPLE_50,
+                        border_radius=6,
+                        border=ft.border.all(1, ft.Colors.PURPLE_200),
+                    )
+                    mask_cards.append(tissue_card)
 
         def _close_dialog(dlg):
             dlg.open = False
@@ -3031,9 +3145,9 @@ class ParticipantWorkflowScreen:
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF",
-                    "MoCo": "Siemens (scanner)"
-                    if config["feedback"].get("moco_enabled", True)
-                    else "ANTsPy (software)",
+                    "MoCo": {"siemens_moco": "Siemens (scanner)", "software": "ANTsPy (software)", "none": "Disabled"}.get(
+                        config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"
+                    ),
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
@@ -3051,9 +3165,9 @@ class ParticipantWorkflowScreen:
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF",
-                    "MoCo": "Siemens (scanner)"
-                    if config["feedback"].get("moco_enabled", True)
-                    else "ANTsPy (software)",
+                    "MoCo": {"siemens_moco": "Siemens (scanner)", "software": "ANTsPy (software)", "none": "Disabled"}.get(
+                        config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"
+                    ),
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
@@ -3136,8 +3250,8 @@ class ParticipantWorkflowScreen:
             if state_summary != "initial":
                 params["Task State"] = state_summary
 
-            params["MoCo"] = (
-                "Siemens (scanner)" if config["feedback"].get("moco_enabled", True) else "ANTsPy (software)"
+            params["MoCo"] = {"siemens_moco": "Siemens (scanner)", "software": "ANTsPy (software)", "none": "Disabled"}.get(
+                config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"
             )
             params["Output"] = base_dir / "feedback" / "02_feedback_output"
             params["Simulator Speed"] = (
@@ -4231,8 +4345,8 @@ class ParticipantWorkflowScreen:
                 if self.activation_plot and mask_activations:
                     self.activation_plot.add_data(volume, mask_activations)
 
-                # Update FD plot
-                if hasattr(self, "fd_plot") and self.fd_plot and fd is not None:
+                # Update FD plot (skip NaN when motion correction is disabled)
+                if hasattr(self, "fd_plot") and self.fd_plot and fd is not None and fd == fd:
                     self.fd_plot.add_data(volume, fd)
 
                 # Update DVARS plot

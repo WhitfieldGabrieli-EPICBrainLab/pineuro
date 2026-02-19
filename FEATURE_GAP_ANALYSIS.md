@@ -10,11 +10,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 
 ## Tier 1: High Priority (Must-Have Gaps)
 
-### 1.1 Multi-Vendor Scanner Support
-- **Gap**: Motion parameter extraction is Siemens-specific (MoCo JSON sidecar). ANTsPy fallback works but adds ~400-500ms latency. No native GE or Philips DICOM parsing.
-- **Why**: Pyneal supports GE/Siemens/Philips. Single-vendor lock-in excludes ~60% of potential users.
-- **Scope**: Medium
-- **Module**: `feedback.py`, `preprocessing.py`, `utils.py`
+### ~~1.1 Multi-Vendor Scanner Support~~ ✅
+- **Done**: Replaced binary `moco_enabled` flag with 3-way `motion_correction` mode: `"siemens_moco"` (parse from JSON sidecar), `"software"` (ANTsPy registration, ~400-500ms/vol, any scanner), `"none"` (disabled). Motion correction decoupled from GLM — each nuisance regressor (drift, 6 motion params, WM mean, CSF mean) is independently toggleable. Intercept always included. GUI: motion correction dropdown + individual regressor checkboxes (motion checkbox auto-disabled when mode is "none"). Dynamic design matrix columns match active regressors. FD = NaN when motion correction disabled; FD plot gracefully skips NaN. Backward compatible: old `moco_enabled` and `nuisance_regression` config keys auto-migrated.
 
 ### 1.2 Real-Time Nuisance Regression (WM/CSF Signals)
 - **Gap**: No white matter or CSF signal regression. Current nuisance model: intercept + drift + 6 motion params.

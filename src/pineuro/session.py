@@ -731,10 +731,28 @@ class FeedbackConfig:
         Total number of volumes per feedback run
     use_efficiency_weights : bool
         Whether to use efficiency weights in activation estimation
-    moco_enabled : bool
-        Whether Siemens MoCo (motion correction) is enabled on scanner.
-        When True (default), motion parameters are extracted from JSON sidecar.
-        When False, uses ANTsPy multi-resolution rigid registration.
+    motion_correction : str
+        Real-time motion correction mode. Controls how volumes are corrected
+        and how motion parameters are obtained:
+        - ``"siemens_moco"``: Parse motion from Siemens MoCo JSON sidecar
+          (``ImageComments`` field). Fast (~0 ms). Siemens scanners only.
+        - ``"software"``: ANTsPy multi-resolution rigid registration.
+          Works on any scanner (~400-500 ms per volume).
+        - ``"none"``: No motion correction. No motion parameters available.
+    include_drift : bool
+        Include linear drift regressor in the GLM nuisance model.
+    include_motion_regressors : bool
+        Include 6 motion parameters (differential, arc-length converted)
+        as nuisance regressors in the GLM. Requires motion_correction to
+        be ``"siemens_moco"`` or ``"software"`` (ignored when ``"none"``).
+        Motion parameters are still extracted for FD/QC even when this is
+        False, as long as motion_correction is not ``"none"``.
+    include_wm_regressor : bool
+        Include white matter mean signal as a nuisance regressor in the GLM.
+        Tissue mask created from MNI template priors (no T1 required).
+    include_csf_regressor : bool
+        Include CSF mean signal as a nuisance regressor in the GLM.
+        Tissue mask created from MNI template priors (no T1 required).
     smooth_fwhm : float, optional
         Gaussian spatial smoothing FWHM in mm applied to each volume before
         voxel extraction. None (default) disables smoothing. Typical values
@@ -767,11 +785,6 @@ class FeedbackConfig:
         means higher correlation = better. "decrease" means stronger
         anti-correlation = better (the correlation value is negated before
         delivery to the task).
-    nuisance_regression : bool
-        Whether to add WM and CSF mean signals as nuisance regressors in
-        the real-time GLM. Increases nuisance columns from 8 to 10.
-        Tissue masks are created from MNI template priors (no T1 required).
-        Default is False.
     wm_mask_path : Path, optional
         Path to eroded WM binary mask. Resolved automatically during
         session setup (not set directly by user).
@@ -780,10 +793,16 @@ class FeedbackConfig:
         session setup (not set directly by user).
     """
 
+    VALID_MOTION_CORRECTION = {"siemens_moco", "software", "none"}
+
     n_baseline: int = 25
     n_volumes: int = 150
     use_efficiency_weights: bool = True
-    moco_enabled: bool = True
+    motion_correction: str = "siemens_moco"
+    include_drift: bool = True
+    include_motion_regressors: bool = True
+    include_wm_regressor: bool = False
+    include_csf_regressor: bool = False
     smooth_fwhm: float | None = None
     differential_pair: list[str] | None = None
     feedback_interval: int | None = None
@@ -791,11 +810,25 @@ class FeedbackConfig:
     connectivity_window: int = 15
     feedback_mode: str = "activation"
     connectivity_target: str = "increase"
-    nuisance_regression: bool = False
     wm_mask_path: Path | None = None
     csf_mask_path: Path | None = None
 
     def __post_init__(self):
+        # Backward compatibility: migrate old config keys
+        if hasattr(self, "moco_enabled"):
+            self.motion_correction = "siemens_moco" if self.moco_enabled else "software"
+            del self.moco_enabled
+        if hasattr(self, "nuisance_regression"):
+            if self.nuisance_regression:
+                self.include_wm_regressor = True
+                self.include_csf_regressor = True
+            del self.nuisance_regression
+
+        if self.motion_correction not in self.VALID_MOTION_CORRECTION:
+            raise ValueError(
+                f"motion_correction must be one of {self.VALID_MOTION_CORRECTION}, "
+                f"got '{self.motion_correction}'"
+            )
         if self.wm_mask_path is not None:
             self.wm_mask_path = Path(self.wm_mask_path)
         if self.csf_mask_path is not None:
@@ -1685,8 +1718,8 @@ def run_mask_extraction(
             overwrite=overwrite,
         )
 
-    # Create WM/CSF tissue masks for nuisance regression (if enabled)
-    if config.feedback.nuisance_regression:
+    # Create WM/CSF tissue masks for nuisance regression (if either is enabled)
+    if config.feedback.include_wm_regressor or config.feedback.include_csf_regressor:
         from .mask_extraction import create_tissue_masks
 
         logger.info("")
@@ -1697,9 +1730,7 @@ def run_mask_extraction(
         inv_xfm = None
         mnireg_dir = config.paths.mask_extraction_dir / "02_mnireg"
         if mnireg_dir.exists():
-            inv_files = sorted(mnireg_dir.glob("*InverseWarp*")) + sorted(
-                mnireg_dir.glob("*GenericAffine*")
-            )
+            inv_files = sorted(mnireg_dir.glob("*_inv_*"))
             if inv_files:
                 inv_xfm = [str(f) for f in inv_files]
                 logger.info(f"Reusing MNI inverse transforms from {mnireg_dir.name}/")
@@ -1756,7 +1787,7 @@ def run_coregistration(
     n_network = len(network_files)
     tissue_indices: dict[str, int] = {}
 
-    if config.feedback.nuisance_regression:
+    if config.feedback.include_wm_regressor or config.feedback.include_csf_regressor:
         tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
         wm_src = tissue_dir / f"{config.paths.participant_id}_tissue_wm_mask.nii.gz"
         csf_src = tissue_dir / f"{config.paths.participant_id}_tissue_csf_mask.nii.gz"
@@ -2109,7 +2140,11 @@ def run_single_task(
         task_regressors=task_regressors,
         mask_names=config.mask.mask_names,
         use_efficiency_weights=config.feedback.use_efficiency_weights,
-        moco_enabled=config.feedback.moco_enabled,
+        motion_correction=config.feedback.motion_correction,
+        include_drift=config.feedback.include_drift,
+        include_motion_regressors=config.feedback.include_motion_regressors,
+        include_wm_regressor=config.feedback.include_wm_regressor,
+        include_csf_regressor=config.feedback.include_csf_regressor,
         smooth_fwhm=config.feedback.smooth_fwhm,
         differential_pair=config.feedback.differential_pair,
         feedback_interval=config.feedback.feedback_interval,

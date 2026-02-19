@@ -586,7 +586,7 @@ def run_pineuro_feedback(
         task_regressors=task_regressor.reshape(-1, 1),
         simulator_source_dir=dicom_dir,
         simulator_speed=100.0,
-        moco_enabled=True,
+        motion_correction="siemens_moco",
         qc_enabled=False,
     )
 

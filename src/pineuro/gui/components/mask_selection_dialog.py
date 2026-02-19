@@ -86,6 +86,8 @@ class MaskSelectionDialog:
         hemisphere_network: str | None = None,
         hemisphere_overlays: dict[str, Path] | None = None,
         target_hemisphere: str = "right",
+        # Tissue masks (WM/CSF nuisance regression, view-only)
+        tissue_mask_overlays: dict[str, Path] | None = None,
     ):
         """Initialize the mask selection dialog.
 
@@ -141,6 +143,9 @@ class MaskSelectionDialog:
         self.hemisphere_network = hemisphere_network
         self.hemisphere_overlays = hemisphere_overlays or {}
         self.target_hemisphere = target_hemisphere
+
+        # Tissue mask overlays (WM/CSF, view-only)
+        self.tissue_mask_overlays = tissue_mask_overlays or {}
 
         self._dialog: ft.AlertDialog | None = None
         self._stage = 1  # 1 = Accept/Reject, 2 = Select Alternative
@@ -337,6 +342,30 @@ class MaskSelectionDialog:
                 )
                 mask_cards.extend(hemisphere_cards)
 
+        # Add tissue masks as info-only cards (WM/CSF nuisance regression)
+        if self.tissue_mask_overlays:
+            tissue_cards = self._build_tissue_info_cards()
+            if tissue_cards:
+                mask_cards.append(ft.Divider(height=2, color=ft.Colors.PURPLE_200))
+                mask_cards.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.PURPLE, size=16),
+                                ft.Text(
+                                    "Tissue Masks (nuisance regression, view only)",
+                                    size=12,
+                                    color=ft.Colors.PURPLE_700,
+                                    weight=ft.FontWeight.W_500,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        padding=ft.padding.only(left=5, bottom=5),
+                    )
+                )
+                mask_cards.extend(tissue_cards)
+
         return ft.Container(
             content=ft.Column(
                 mask_cards,
@@ -416,6 +445,68 @@ class MaskSelectionDialog:
                 bgcolor=ft.Colors.BLUE_50,
                 border_radius=6,
                 border=ft.border.all(1, ft.Colors.BLUE_200),
+            )
+            cards.append(card)
+
+        return cards
+
+    def _build_tissue_info_cards(self) -> list[ft.Control]:
+        """Build info-only cards for tissue masks (WM/CSF nuisance regression).
+
+        These cards show the white matter and CSF masks for visual verification
+        but do not have accept/reject buttons since they are derived from
+        MNI template probability maps.
+        """
+        labels = {"wm": "White Matter", "csf": "CSF"}
+        cards = []
+
+        for tissue_type in ["wm", "csf"]:
+            overlay_path = self.tissue_mask_overlays.get(tissue_type)
+            if not overlay_path:
+                continue
+
+            overlay_content: ft.Control
+            if overlay_path and overlay_path.exists():
+                overlay_content = self._create_image(overlay_path, height=120)
+            else:
+                overlay_content = ft.Container(
+                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
+                    height=120,
+                    alignment=ft.Alignment(0, 0),
+                    bgcolor=ft.Colors.GREY_200,
+                )
+
+            card = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                ft.Text(
+                                    labels.get(tissue_type, tissue_type.upper()),
+                                    size=14,
+                                    weight=ft.FontWeight.W_500,
+                                ),
+                                ft.Container(expand=True),
+                                ft.Text(
+                                    "MNI template prior",
+                                    size=11,
+                                    color=ft.Colors.PURPLE_400,
+                                ),
+                            ],
+                        ),
+                        ft.Container(
+                            content=overlay_content,
+                            border=ft.border.all(1, ft.Colors.GREY_300),
+                            border_radius=5,
+                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                        ),
+                    ],
+                    spacing=8,
+                ),
+                padding=12,
+                bgcolor=ft.Colors.PURPLE_50,
+                border_radius=6,
+                border=ft.border.all(1, ft.Colors.PURPLE_200),
             )
             cards.append(card)
 
