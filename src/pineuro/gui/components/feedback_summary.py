@@ -3,11 +3,12 @@
 Displays a summary after feedback runs complete, showing:
 - Status (completed/interrupted)
 - Network hit counts (from PsychoPy log)
-- Motion quality statistics (from feedbacklog)
-- Activation and FD timeseries plots
+- FD, DVARS, and tSNR quality cards (from feedbacklog)
+- Activation timeseries plot
 """
 
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,9 @@ class FeedbackSummaryData:
     completed: bool
     dvars_mean: float
     dvars_max: float
+    dvars_above_threshold: int
+    dvars_pct_above_threshold: float
+    dvars_threshold: float
     tsnr_final: float
 
 
@@ -45,6 +49,7 @@ def compute_feedback_summary(
     n_baseline: int,
     n_expected_volumes: int,
     fd_threshold: float = 0.5,
+    dvars_threshold: float = 1.5,
 ) -> FeedbackSummaryData:
     """Compute summary statistics from feedback and PsychoPy logs.
 
@@ -54,11 +59,12 @@ def compute_feedback_summary(
         n_baseline: Number of baseline volumes
         n_expected_volumes: Expected total number of volumes
         fd_threshold: FD threshold in mm for counting excessive motion
+        dvars_threshold: DVARS threshold (standardized) for counting high-variability volumes
 
     Returns:
         FeedbackSummaryData with computed statistics
     """
-    # Load feedback log for FD statistics
+    # Load feedback log
     df = pd.read_csv(feedbacklog_path, sep="\t")
     df["fd"] = pd.to_numeric(df["fd"], errors="coerce")
 
@@ -94,10 +100,21 @@ def compute_feedback_summary(
 
     completed = total_volumes >= n_expected_volumes
 
-    # DVARS statistics
-    dvars_values = pd.to_numeric(df["dvars"], errors="coerce").values
+    # DVARS statistics (standardized to match real-time display)
+    raw_dvars = pd.to_numeric(df["dvars"], errors="coerce").values
+    # Standardize: divide by sqrt(median(DVARS^2)) from stable volumes (6+)
+    pool = raw_dvars[5:] if len(raw_dvars) > 5 else raw_dvars
+    pool = pool[(pool > 0) & np.isfinite(pool)]
+    if len(pool) > 0:
+        median_sq = float(np.median(pool**2))
+        denom = math.sqrt(median_sq) if median_sq > 0 else 1.0
+    else:
+        denom = 1.0
+    dvars_values = raw_dvars / denom
     dvars_mean = float(np.nanmean(dvars_values)) if len(dvars_values) > 0 else 0.0
     dvars_max = float(np.nanmax(dvars_values)) if len(dvars_values) > 0 else 0.0
+    dvars_above = int(np.nansum(dvars_values > dvars_threshold))
+    dvars_pct = (dvars_above / total_volumes * 100) if total_volumes > 0 else 0.0
 
     # tSNR: use last value (most stable estimate after convergence)
     tsnr_values = pd.to_numeric(df["tsnr"], errors="coerce").values
@@ -118,6 +135,9 @@ def compute_feedback_summary(
         completed=completed,
         dvars_mean=dvars_mean,
         dvars_max=dvars_max,
+        dvars_above_threshold=dvars_above,
+        dvars_pct_above_threshold=dvars_pct,
+        dvars_threshold=dvars_threshold,
         tsnr_final=tsnr_final,
     )
 
@@ -128,8 +148,8 @@ class FeedbackSummaryDialog:
     Displays:
     - Run status (completed/interrupted)
     - Network hit counts
-    - Motion quality (FD statistics)
-    - Activation and FD timeseries plots
+    - FD, DVARS, and tSNR quality cards
+    - Activation timeseries plot
     """
 
     def __init__(
@@ -140,7 +160,7 @@ class FeedbackSummaryDialog:
         task: str,
         run: int,
         activation_plot_path: Path | None = None,
-        fd_plot_path: Path | None = None,
+        connectivity_plot_path: Path | None = None,
         on_close: Callable[[], None] | None = None,
         on_view_full_qc: Callable[[], None] | None = None,
         display_names: dict[str, str] | None = None,
@@ -154,7 +174,7 @@ class FeedbackSummaryDialog:
             task: Task type (feedback/transfer)
             run: Run number
             activation_plot_path: Path to activation timeseries plot PNG
-            fd_plot_path: Path to FD timeseries plot PNG
+            connectivity_plot_path: Path to connectivity timeseries plot PNG
             on_close: Callback when dialog is closed
             on_view_full_qc: Callback to open full QC report
             display_names: Optional mapping of network names to display names (for blind mode)
@@ -165,7 +185,7 @@ class FeedbackSummaryDialog:
         self.task = task
         self.run = run
         self.activation_plot_path = activation_plot_path
-        self.fd_plot_path = fd_plot_path
+        self.connectivity_plot_path = connectivity_plot_path
         self.on_close = on_close
         self.on_view_full_qc = on_view_full_qc
         self.display_names = display_names or {}
@@ -226,14 +246,15 @@ class FeedbackSummaryDialog:
             border_radius=8,
         )
 
-        # Stats cards row
+        # Stats cards row: Network Hits | FD | DVARS | tSNR
         stats_row = ft.Row(
             [
                 self._build_hits_card(),
-                self._build_motion_card(),
-                self._build_signal_quality_card(),
+                self._build_fd_card(),
+                self._build_dvars_card(),
+                self._build_tsnr_card(),
             ],
-            spacing=15,
+            spacing=12,
             alignment=ft.MainAxisAlignment.CENTER,
         )
 
@@ -244,34 +265,21 @@ class FeedbackSummaryDialog:
             stats_row,
         ]
 
-        # Add plots if available
-        if self.activation_plot_path and self.activation_plot_path.exists():
-            content_children.append(ft.Container(height=15))
-            content_children.append(
-                ft.Container(
-                    content=ft.Image(
-                        src=str(self.activation_plot_path),
-                        width=700,
-                    ),
-                    border=ft.border.all(1, ft.Colors.GREY_300),
-                    border_radius=8,
-                    padding=5,
+        # Timeseries plots
+        for plot_path in [self.activation_plot_path, self.connectivity_plot_path]:
+            if plot_path and plot_path.exists():
+                content_children.append(ft.Container(height=10))
+                content_children.append(
+                    ft.Container(
+                        content=ft.Image(
+                            src=str(plot_path),
+                            width=750,
+                        ),
+                        border=ft.border.all(1, ft.Colors.GREY_300),
+                        border_radius=8,
+                        padding=5,
+                    )
                 )
-            )
-
-        if self.fd_plot_path and self.fd_plot_path.exists():
-            content_children.append(ft.Container(height=10))
-            content_children.append(
-                ft.Container(
-                    content=ft.Image(
-                        src=str(self.fd_plot_path),
-                        width=700,
-                    ),
-                    border=ft.border.all(1, ft.Colors.GREY_300),
-                    border_radius=8,
-                    padding=5,
-                )
-            )
 
         return ft.Container(
             content=ft.Column(
@@ -279,7 +287,7 @@ class FeedbackSummaryDialog:
                 spacing=0,
                 scroll=ft.ScrollMode.AUTO,
             ),
-            width=750,
+            width=800,
             height=600,
             padding=10,
         )
@@ -358,14 +366,14 @@ class FeedbackSummaryDialog:
             bgcolor=ft.Colors.GREY_100,
             border_radius=8,
             border=ft.border.all(1, ft.Colors.GREY_300),
-            width=200,
+            width=170,
         )
 
-    def _build_motion_card(self) -> ft.Control:
-        """Build the motion quality summary card."""
+    def _build_fd_card(self) -> ft.Control:
+        """Build the framewise displacement summary card."""
         data = self.summary_data
 
-        # Determine motion quality color
+        # Determine quality color
         if data.fd_pct_above_threshold < 5:
             quality_color = ft.Colors.GREEN
             quality_text = "Good"
@@ -382,46 +390,30 @@ class FeedbackSummaryDialog:
                     ft.Row(
                         [
                             ft.Icon(ft.Icons.SPEED, color=quality_color, size=20),
-                            ft.Text(
-                                "Motion Quality",
-                                size=14,
-                                weight=ft.FontWeight.BOLD,
-                            ),
+                            ft.Text("FD", size=14, weight=ft.FontWeight.BOLD),
                         ],
                         spacing=8,
                     ),
                     ft.Container(height=8),
                     ft.Row(
                         [
-                            ft.Text("Mean FD:", size=13, color=ft.Colors.GREY_700),
-                            ft.Text(
-                                f"{data.fd_mean:.2f} mm",
-                                size=13,
-                                weight=ft.FontWeight.W_500,
-                            ),
+                            ft.Text("Mean:", size=13, color=ft.Colors.GREY_700),
+                            ft.Text(f"{data.fd_mean:.2f} mm", size=13, weight=ft.FontWeight.W_500),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     ft.Row(
                         [
-                            ft.Text("Max FD:", size=13, color=ft.Colors.GREY_700),
-                            ft.Text(
-                                f"{data.fd_max:.2f} mm",
-                                size=13,
-                                weight=ft.FontWeight.W_500,
-                            ),
+                            ft.Text("Max:", size=13, color=ft.Colors.GREY_700),
+                            ft.Text(f"{data.fd_max:.2f} mm", size=13, weight=ft.FontWeight.W_500),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     ft.Row(
                         [
+                            ft.Text(f">{data.fd_threshold}mm:", size=13, color=ft.Colors.GREY_700),
                             ft.Text(
-                                f">{data.fd_threshold}mm:",
-                                size=13,
-                                color=ft.Colors.GREY_700,
-                            ),
-                            ft.Text(
-                                f"{data.fd_above_threshold} vols ({data.fd_pct_above_threshold:.1f}%)",
+                                f"{data.fd_above_threshold} ({data.fd_pct_above_threshold:.1f}%)",
                                 size=13,
                                 weight=ft.FontWeight.W_500,
                                 color=quality_color,
@@ -433,12 +425,7 @@ class FeedbackSummaryDialog:
                     ft.Row(
                         [
                             ft.Text("Quality:", size=13, weight=ft.FontWeight.W_500),
-                            ft.Text(
-                                quality_text,
-                                size=13,
-                                weight=ft.FontWeight.BOLD,
-                                color=quality_color,
-                            ),
+                            ft.Text(quality_text, size=13, weight=ft.FontWeight.BOLD, color=quality_color),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
@@ -449,11 +436,81 @@ class FeedbackSummaryDialog:
             bgcolor=ft.Colors.GREY_100,
             border_radius=8,
             border=ft.border.all(1, ft.Colors.GREY_300),
-            width=200,
+            width=170,
         )
 
-    def _build_signal_quality_card(self) -> ft.Control:
-        """Build the signal quality summary card (DVARS + tSNR)."""
+    def _build_dvars_card(self) -> ft.Control:
+        """Build the DVARS summary card."""
+        data = self.summary_data
+
+        # Determine quality color (same thresholds as FD: <5% good, <15% moderate)
+        if data.dvars_pct_above_threshold < 5:
+            quality_color = ft.Colors.GREEN
+            quality_text = "Good"
+        elif data.dvars_pct_above_threshold < 15:
+            quality_color = ft.Colors.ORANGE
+            quality_text = "Moderate"
+        else:
+            quality_color = ft.Colors.RED
+            quality_text = "High variability"
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.SHOW_CHART, color=quality_color, size=20),
+                            ft.Text("DVARS", size=14, weight=ft.FontWeight.BOLD),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Container(height=8),
+                    ft.Row(
+                        [
+                            ft.Text("Mean:", size=13, color=ft.Colors.GREY_700),
+                            ft.Text(f"{data.dvars_mean:.1f}", size=13, weight=ft.FontWeight.W_500),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text("Max:", size=13, color=ft.Colors.GREY_700),
+                            ft.Text(f"{data.dvars_max:.1f}", size=13, weight=ft.FontWeight.W_500),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text(f">{data.dvars_threshold}:", size=13, color=ft.Colors.GREY_700),
+                            ft.Text(
+                                f"{data.dvars_above_threshold} ({data.dvars_pct_above_threshold:.1f}%)",
+                                size=13,
+                                weight=ft.FontWeight.W_500,
+                                color=quality_color,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Divider(height=1),
+                    ft.Row(
+                        [
+                            ft.Text("Quality:", size=13, weight=ft.FontWeight.W_500),
+                            ft.Text(quality_text, size=13, weight=ft.FontWeight.BOLD, color=quality_color),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                ],
+                spacing=4,
+            ),
+            padding=15,
+            bgcolor=ft.Colors.GREY_100,
+            border_radius=8,
+            border=ft.border.all(1, ft.Colors.GREY_300),
+            width=170,
+        )
+
+    def _build_tsnr_card(self) -> ft.Control:
+        """Build the temporal SNR summary card."""
         data = self.summary_data
 
         # Determine tSNR quality color
@@ -470,57 +527,44 @@ class FeedbackSummaryDialog:
             tsnr_color = ft.Colors.GREY_500
             tsnr_text = "N/A"
 
-        rows = [
-            ft.Row(
+        return ft.Container(
+            content=ft.Column(
                 [
-                    ft.Icon(ft.Icons.INSIGHTS, color=ft.Colors.CYAN, size=20),
-                    ft.Text("Signal Quality", size=14, weight=ft.FontWeight.BOLD),
-                ],
-                spacing=8,
-            ),
-            ft.Container(height=8),
-            ft.Row(
-                [
-                    ft.Text("Mean DVARS:", size=13, color=ft.Colors.GREY_700),
-                    ft.Text(f"{data.dvars_mean:.1f}", size=13, weight=ft.FontWeight.W_500),
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            ft.Row(
-                [
-                    ft.Text("Max DVARS:", size=13, color=ft.Colors.GREY_700),
-                    ft.Text(f"{data.dvars_max:.1f}", size=13, weight=ft.FontWeight.W_500),
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            ft.Row(
-                [
-                    ft.Text("tSNR:", size=13, color=ft.Colors.GREY_700),
-                    ft.Text(
-                        f"{data.tsnr_final:.1f}" if data.tsnr_final > 0 else "N/A",
-                        size=13,
-                        weight=ft.FontWeight.W_500,
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.INSIGHTS, color=tsnr_color, size=20),
+                            ft.Text("tSNR", size=14, weight=ft.FontWeight.BOLD),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Container(height=8),
+                    ft.Row(
+                        [
+                            ft.Text("Final:", size=13, color=ft.Colors.GREY_700),
+                            ft.Text(
+                                f"{data.tsnr_final:.1f}" if data.tsnr_final > 0 else "N/A",
+                                size=13,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Divider(height=1),
+                    ft.Row(
+                        [
+                            ft.Text("Quality:", size=13, weight=ft.FontWeight.W_500),
+                            ft.Text(tsnr_text, size=13, weight=ft.FontWeight.BOLD, color=tsnr_color),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                 ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                spacing=4,
             ),
-            ft.Divider(height=1),
-            ft.Row(
-                [
-                    ft.Text("tSNR quality:", size=13, weight=ft.FontWeight.W_500),
-                    ft.Text(tsnr_text, size=13, weight=ft.FontWeight.BOLD, color=tsnr_color),
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-        ]
-
-        return ft.Container(
-            content=ft.Column(rows, spacing=4),
             padding=15,
             bgcolor=ft.Colors.GREY_100,
             border_radius=8,
             border=ft.border.all(1, ft.Colors.GREY_300),
-            width=200,
+            width=170,
         )
 
     def _build_actions(self) -> list:

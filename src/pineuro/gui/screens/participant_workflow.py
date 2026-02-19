@@ -2393,6 +2393,7 @@ class ParticipantWorkflowScreen:
         n_baseline = config.get("feedback", {}).get("n_baseline", 25)
         n_volumes = config.get("feedback", {}).get("n_volumes", 150)
         fd_threshold = config.get("feedback", {}).get("fd_threshold", 0.5)
+        dvars_threshold = config.get("feedback", {}).get("dvars_threshold", 1.5)
 
         # Find the feedbacklog and psychopylog files
         output_dir = base_dir / "feedback" / "02_feedback_output"
@@ -2411,18 +2412,18 @@ class ParticipantWorkflowScreen:
                 n_baseline=n_baseline,
                 n_expected_volumes=n_volumes,
                 fd_threshold=fd_threshold,
+                dvars_threshold=dvars_threshold,
             )
         except Exception as e:
             logger.error(f"Failed to compute feedback summary: {e}")
             return
 
-        # Generate plots if they don't exist
+        # Generate summary plots
         qc_dir = output_dir / "qc"
         qc_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use consistent naming for summary plots
         activation_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_activation.png"
-        fd_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_fd.png"
+        connectivity_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_connectivity.png"
 
         try:
             if not activation_plot_path.exists():
@@ -2430,15 +2431,14 @@ class ParticipantWorkflowScreen:
                     feedback_log_path=feedbacklog_path,
                     out_path=activation_plot_path,
                     n_baseline=n_baseline,
-                    title=f"Activation Timeseries - {self.participant_id} ({task} run {run})",
+                    title=f"Activation - {self.participant_id} ({task} run {run})",
                 )
-            if not fd_plot_path.exists():
-                qc.plot_fd_timeseries(
+            if not connectivity_plot_path.exists():
+                qc.plot_connectivity_timeseries(
                     feedback_log_path=feedbacklog_path,
-                    out_path=fd_plot_path,
+                    out_path=connectivity_plot_path,
                     n_baseline=n_baseline,
-                    threshold=fd_threshold,
-                    title=f"Framewise Displacement - {self.participant_id} ({task} run {run})",
+                    title=f"Connectivity - {self.participant_id} ({task} run {run})",
                 )
         except Exception as e:
             logger.warning(f"Failed to generate summary plots: {e}")
@@ -2478,7 +2478,7 @@ class ParticipantWorkflowScreen:
             task=task,
             run=run,
             activation_plot_path=activation_plot_path if activation_plot_path.exists() else None,
-            fd_plot_path=fd_plot_path if fd_plot_path.exists() else None,
+            connectivity_plot_path=connectivity_plot_path if connectivity_plot_path.exists() else None,
             on_view_full_qc=on_view_full_qc,
             display_names=display_names_dict,
         )

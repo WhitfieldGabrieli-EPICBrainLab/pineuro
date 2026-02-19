@@ -2567,11 +2567,52 @@ def generate_hemisphere_overlays(
 # ============================================================================
 
 
+def _classify_feedbacklog_columns(df: pd.DataFrame) -> dict[str, list[str]]:
+    """Classify feedbacklog columns into semantic groups.
+
+    Returns dict with keys: 'meta', 'quality', 'tissue', 'activation', 'differential',
+    'connectivity', 'sham_real'.
+    """
+    meta = {"volume", "time", "is_baseline", "is_outlier", "condition"}
+    quality = {"fd", "dvars", "tsnr"}
+    tissue = {"wm_mean", "csf_mean"}
+
+    activation = []
+    differential = []
+    connectivity = []
+    sham_real = []
+
+    for col in df.columns:
+        if col in meta or col in quality or col in tissue:
+            continue
+        if col.endswith("_real"):
+            sham_real.append(col)
+        elif col.startswith("corr_"):
+            connectivity.append(col)
+        elif "-" in col:
+            differential.append(col)
+        else:
+            activation.append(col)
+
+    return {
+        "meta": [c for c in df.columns if c in meta],
+        "quality": [c for c in df.columns if c in quality],
+        "tissue": [c for c in df.columns if c in tissue],
+        "activation": activation,
+        "differential": differential,
+        "connectivity": connectivity,
+        "sham_real": sham_real,
+    }
+
+
 def plot_activation_timeseries(
     feedback_log_path: Path, out_path: Path, n_baseline: int | None = None, title: str | None = None
 ) -> None:
     """
     Plot per-mask activation timeseries from feedback log.
+
+    Only plots the target mask activation columns, excluding quality metrics,
+    tissue regressors, differentials, correlations, and sham _real columns.
 
     Parameters
     ----------
@@ -2584,46 +2625,95 @@ def plot_activation_timeseries(
     title : str, optional
         Figure title
     """
-    # Load feedback log
     df = pd.read_csv(feedback_log_path, sep="\t")
+    groups = _classify_feedbacklog_columns(df)
+    mask_cols = groups["activation"]
 
-    # Get mask columns (all columns except metadata)
-    meta_cols = ["volume", "time", "is_baseline", "is_outlier", "fd", "condition"]
-    mask_cols = [col for col in df.columns if col not in meta_cols]
+    if not mask_cols:
+        logger.warning("No activation mask columns found in feedback log, skipping plot")
+        return
 
-    # Ensure numeric columns are properly typed (handles edge cases where pandas infers object dtype)
-    numeric_cols = ["volume", "time", "fd"] + mask_cols
-    for col in numeric_cols:
+    # Ensure numeric
+    for col in ["volume"] + mask_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     n_volumes = len(df)
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
 
-    # Plot each mask's activation
     for mask_name in mask_cols:
         ax.plot(df["volume"], df[mask_name], linewidth=1.5, label=mask_name, alpha=0.8)
 
-    # Shade baseline period
     if n_baseline is not None and n_baseline > 0:
         ax.axvspan(-0.5, n_baseline - 0.5, color="gray", alpha=0.1, label="Baseline")
         ax.axvline(n_baseline - 0.5, color="gray", linestyle="--", linewidth=1.0, alpha=0.5)
 
-    # Add zero reference line
     ax.axhline(0, color="gray", linestyle="-", linewidth=0.8, alpha=0.3)
-
-    # Labels and legend
     ax.set_xlabel("Volume Index", fontweight="bold")
     ax.set_ylabel("Activation (normalized)", fontweight="bold")
     ax.legend(loc="best", fontsize=9)
     ax.set_xlim(-0.5, n_volumes - 0.5)
+    ax.set_title(title or "Mask Activation Timeseries", fontsize=12, fontweight="bold", pad=10)
 
-    if title:
-        ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
-    else:
-        ax.set_title("Mask Activation Timeseries", fontsize=12, fontweight="bold", pad=10)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
+def plot_connectivity_timeseries(
+    feedback_log_path: Path, out_path: Path, n_baseline: int | None = None, title: str | None = None
+) -> None:
+    """
+    Plot connectivity correlation timeseries from feedback log.
+
+    Parameters
+    ----------
+    feedback_log_path : Path
+        Path to feedback log TSV file
+    out_path : Path
+        Path to save the PNG
+    n_baseline : int, optional
+        Number of baseline volumes (will be shaded differently)
+    title : str, optional
+        Figure title
+
+    Returns
+    -------
+    bool
+        True if a plot was generated, False if no connectivity columns found.
+    """
+    df = pd.read_csv(feedback_log_path, sep="\t")
+    groups = _classify_feedbacklog_columns(df)
+    conn_cols = groups["connectivity"]
+
+    if not conn_cols:
+        return
+
+    for col in ["volume"] + conn_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    n_volumes = len(df)
+
+    fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
+
+    for col in conn_cols:
+        # Clean up label: "corr_ContA_DefaultA" -> "ContA - DefaultA"
+        label = col.replace("corr_", "").replace("_", " - ", 1)
+        ax.plot(df["volume"], df[col], linewidth=1.5, label=label, alpha=0.8)
+
+    if n_baseline is not None and n_baseline > 0:
+        ax.axvspan(-0.5, n_baseline - 0.5, color="gray", alpha=0.1, label="Baseline")
+        ax.axvline(n_baseline - 0.5, color="gray", linestyle="--", linewidth=1.0, alpha=0.5)
+
+    ax.axhline(0, color="gray", linestyle="-", linewidth=0.8, alpha=0.3)
+    ax.set_xlabel("Volume Index", fontweight="bold")
+    ax.set_ylabel("Correlation (r)", fontweight="bold")
+    ax.set_ylim(-1.05, 1.05)
+    ax.legend(loc="best", fontsize=9)
+    ax.set_xlim(-0.5, n_volumes - 0.5)
+    ax.set_title(title or "Connectivity Timeseries", fontsize=12, fontweight="bold", pad=10)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
@@ -3095,6 +3185,28 @@ def generate_feedback_report(
                     "type": "single_image",
                     "path": fd_out.relative_to(output_dir).as_posix(),
                     "alt": "Framewise displacement timeseries",
+                }
+            )
+
+    # Connectivity timeseries
+    if feedback_log.exists():
+        conn_out = output_dir / "connectivity_timeseries.png"
+        if overwrite or not conn_out.exists():
+            logger.info("Generating connectivity timeseries")
+            plot_connectivity_timeseries(
+                feedback_log_path=feedback_log,
+                out_path=conn_out,
+                n_baseline=n_baseline,
+                title=f"Connectivity - {subject} (task: {task}, run: {run})",
+            )
+
+        if conn_out.exists():
+            sections.append({"type": "heading", "content": "Connectivity"})
+            sections.append(
+                {
+                    "type": "single_image",
+                    "path": conn_out.relative_to(output_dir).as_posix(),
+                    "alt": "Connectivity timeseries",
                 }
             )
 
