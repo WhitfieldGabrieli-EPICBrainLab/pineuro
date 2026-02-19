@@ -39,6 +39,7 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 - **Why**: Essential for open-source credibility, NeuroImage reviewers, and safe refactoring.
 - **Scope**: Large
 - **Module**: New `tests/` directory, `pyproject.toml` (dev deps)
+- **Also update**: `CONTRIBUTING.md` Testing section — replace "no pytest suite yet" with how to run tests, write tests, fixture conventions
 
 ---
 
@@ -71,26 +72,28 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 - **Gap**: README has API examples but no walkthrough tutorial with real data.
 - **Approach**: Tutorial (Markdown in `docs/`) walking through: download OpenNeuro dataset → preprocess → extract masks → run simulated feedback → inspect QC reports. Link to an existing OpenNeuro rt-fMRI dataset rather than hosting custom data.
 - **Impact**: HIGH
+- **Also update**: `CONTRIBUTING.md` — add reference to tutorial and sample data location
 
 ### A.2 Expand In-Repo Documentation
 - **Gap**: Docs exist but are sparse. No API reference, no FAQ, no troubleshooting.
 - **Approach**: Keep docs in-repo on GitHub (no external hosting site). Expand `docs/` with: comprehensive user guide, API reference, task development guide, FAQ/troubleshooting.
 - **Impact**: HIGH
+- **Also update**: `CONTRIBUTING.md` Architecture section — update doc pointers if `docs/` structure changes
 
 ### A.5 CI/CD Pipeline
 - **Gap**: No automated testing or build pipeline.
 - **Approach**: GitHub Actions with linting, pytest, type checking, build verification. Pairs with 1.7.
 - **Impact**: MEDIUM
+- **Also update**: `CONTRIBUTING.md` PR Process section — add CI checks that must pass, link to workflow
 
-### A.6 Contributing Guide
-- **Gap**: No CONTRIBUTING.md.
-- **Approach**: Development setup, code style, PR process, how to add tasks/atlases.
-- **Impact**: MEDIUM
+### ~~A.6 Contributing Guide~~ ✅
+- **Done**: Created `CONTRIBUTING.md` covering development setup, Ruff linting, code conventions, project architecture overview, how to add tasks (plugin system) and atlases (registry), PR process, testing, and platform notes.
 
 ### A.8 API Stability & Versioning
 - **Gap**: Version 0.1.0 with no changelog or versioning strategy.
 - **Approach**: Add CHANGELOG.md, follow semantic versioning.
 - **Impact**: MEDIUM
+- **Also update**: `CONTRIBUTING.md` PR Process section — add changelog entry requirement, versioning policy
 
 ---
 
@@ -135,7 +138,7 @@ These items are deferred for later consideration:
 | `pyproject.toml` | 1.7 dev deps, ~~2.9 Windows classifier~~ ✅ |
 | `tests/` (new) | 1.7 formal test suite |
 | `docs/` | A.1 tutorial, A.2 expanded docs |
-| `CONTRIBUTING.md` (new) | A.6 |
+| `CONTRIBUTING.md` (new) | ~~A.6~~ ✅ |
 | `CHANGELOG.md` (new) | A.8 |
 
 ---
