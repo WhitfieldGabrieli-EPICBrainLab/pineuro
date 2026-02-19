@@ -84,7 +84,10 @@ def compute_feedback_summary(
                 # Extract network name (e.g., "DefaultA_hits" -> "DefaultA")
                 network_name = col.replace("_hits", "")
                 # Get max value (cumulative, so last row has final count)
-                hits = int(psych_df[col].max())
+                max_val = psych_df[col].max()
+                if pd.isna(max_val):
+                    continue
+                hits = int(max_val)
                 hits_per_network[network_name] = hits
         except Exception as e:
             logger.warning(f"Failed to parse PsychoPy log for hits: {e}")

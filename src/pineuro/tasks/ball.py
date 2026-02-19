@@ -1002,6 +1002,12 @@ class BallTask(BaseTask):
             self._psychopy_log_file = None
             self._psychopy_log_writer = None
 
+        # Delete visual stimuli while GL context is still alive
+        # (prevents PsychoPy TextStim.__del__ access violations during GC)
+        for attr in ["ball", "fixation_cross", "question_text", "slider_instruction_text"]:
+            if hasattr(self, attr):
+                delattr(self, attr)
+
         # Call base class cleanup (shows questions, closes window, clears events, resets pyglet)
         super().cleanup()
 

@@ -3023,7 +3023,10 @@ def generate_feedback_report(
             hit_strs = []
             for col in hit_cols:
                 network_name = col.replace("_hits", "")
-                hits = int(psych_df[col].max())
+                max_val = psych_df[col].max()
+                if pd.isna(max_val):
+                    continue
+                hits = int(max_val)
                 total_hits += hits
                 hit_strs.append(f"{network_name}: {hits}")
             if hit_strs:
