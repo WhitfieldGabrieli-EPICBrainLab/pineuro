@@ -90,6 +90,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "mask_extraction_task": (".mask_extraction", "mask_extraction_task"),
     "import_manual_masks": (".mask_extraction", "import_manual_masks"),
     "coregister_2vol": (".mask_extraction", "coregister_2vol"),
+    "create_tissue_masks": (".mask_extraction", "create_tissue_masks"),
     "ATLAS_SOURCES": (".atlas_registry", "ATLAS_SOURCES"),
     "get_atlas_labels": (".mask_extraction", "get_atlas_labels"),
     # --- tasks (lightweight but deferred to avoid loading task modules) ---

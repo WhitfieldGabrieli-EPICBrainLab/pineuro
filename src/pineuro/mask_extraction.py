@@ -1593,6 +1593,168 @@ def mask_extraction_rest(
 
 
 # =============================================================================
+# SECTION 3A: TISSUE MASK EXTRACTION (WM/CSF for nuisance regression)
+# =============================================================================
+# Creates eroded white matter and CSF masks from MNI tissue probability maps.
+# These are used as nuisance regressors in the real-time GLM (mean WM/CSF
+# signal per volume). No T1 structural scan required — masks are derived from
+# MNI template priors warped to participant functional space.
+
+
+def create_tissue_masks(
+    ref_file: Union[str, Path],
+    output_dir: Union[str, Path],
+    participant_id: str,
+    inv_transform_files: list[str] | None = None,
+    overwrite: bool = False,
+    progress_callback: Callable[[str, str], None] | None = None,
+) -> dict[str, Path]:
+    """Create eroded WM and CSF masks in participant functional space.
+
+    Uses MNI152NLin2009cAsym tissue probability maps from templateflow,
+    warped to participant space via ANTs SyN registration. Masks are
+    thresholded at 0.9 probability and eroded by 2 voxels to avoid
+    partial volume contamination from gray matter.
+
+    Parameters
+    ----------
+    ref_file : str or Path
+        BOLD reference file in participant space (boldref from preprocessing).
+    output_dir : str or Path
+        Directory for tissue mask outputs (typically mask_extraction/05_tissue/).
+    participant_id : str
+        Participant ID for file naming.
+    inv_transform_files : list of str, optional
+        Inverse ANTs transform files (MNI → subject direction) from a prior
+        ``compute_xfm_to_mni`` call. If provided, the MNI registration step
+        is skipped (reuses existing transforms from mask_extraction_rest).
+        If None, a fresh SyN registration is computed.
+    overwrite : bool
+        Whether to overwrite existing outputs.
+    progress_callback : callable, optional
+        Progress callback ``(step, detail)`` for GUI integration.
+
+    Returns
+    -------
+    dict with keys ``'wm'`` and ``'csf'``, values are Paths to eroded
+    binary masks in participant functional space.
+
+    Raises
+    ------
+    ValueError
+        If resulting masks are empty after erosion.
+    """
+    from templateflow import api as tflow
+
+    ref_file = Path(ref_file)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    def emit_progress(step: str, detail: str = "") -> None:
+        if progress_callback is not None:
+            progress_callback(step, detail)
+
+    # Output file paths
+    wm_prob_file = output_dir / f"{participant_id}_tissue_wm_prob.nii.gz"
+    csf_prob_file = output_dir / f"{participant_id}_tissue_csf_prob.nii.gz"
+    wm_mask_file = output_dir / f"{participant_id}_tissue_wm_mask.nii.gz"
+    csf_mask_file = output_dir / f"{participant_id}_tissue_csf_mask.nii.gz"
+
+    # Check if final outputs exist (skip if not overwriting)
+    if not overwrite and wm_mask_file.exists() and csf_mask_file.exists():
+        logger.info("Tissue masks already exist, skipping creation")
+        return {"wm": wm_mask_file, "csf": csf_mask_file}
+
+    # Step 1: Fetch MNI tissue probability maps from templateflow
+    emit_progress("Fetching tissue priors", "MNI152NLin2009cAsym WM/CSF")
+    wm_mni = Path(str(tflow.get(
+        "MNI152NLin2009cAsym", resolution=2, label="WM", suffix="probseg"
+    )))
+    csf_mni = Path(str(tflow.get(
+        "MNI152NLin2009cAsym", resolution=2, label="CSF", suffix="probseg"
+    )))
+    logger.info(f"WM prior: {wm_mni.name}")
+    logger.info(f"CSF prior: {csf_mni.name}")
+
+    # Step 2: Compute or reuse MNI registration
+    if inv_transform_files is None:
+        emit_progress("Computing MNI registration", "ANTs SyN (may take 1-2 min)")
+        output_prefix = output_dir / f"{ref_file.with_suffix('').stem}_to_MNI_tissue"
+        _warped, _fwd_xfm, inv_transform_files = compute_xfm_to_mni(
+            input_file=ref_file,
+            output_prefix=output_prefix,
+            overwrite=overwrite,
+        )
+        logger.info("Computed fresh MNI registration for tissue masks")
+    else:
+        logger.info("Reusing existing MNI inverse transforms for tissue masks")
+
+    # Step 3: Warp tissue probability maps MNI → subject space
+    emit_progress("Warping tissue priors", "MNI → subject space")
+    for mni_path, out_path, tissue_name in [
+        (wm_mni, wm_prob_file, "WM"),
+        (csf_mni, csf_prob_file, "CSF"),
+    ]:
+        if not overwrite and out_path.exists():
+            logger.info(f"{tissue_name} probability map already exists: {out_path.name}")
+            continue
+        apply_xfm(
+            moving=mni_path,
+            fixed=ref_file,
+            transform_files=inv_transform_files,
+            output_file=out_path,
+            interpolator='linear',
+            overwrite=overwrite,
+        )
+        logger.info(f"Warped {tissue_name} probability map to subject space")
+
+    # Step 4: Threshold and erode to create binary masks
+    emit_progress("Creating binary masks", "Threshold 0.9, erode 2 voxels")
+    result = {}
+    for prob_file, mask_file, tissue_name in [
+        (wm_prob_file, wm_mask_file, "wm"),
+        (csf_prob_file, csf_mask_file, "csf"),
+    ]:
+        if not overwrite and mask_file.exists():
+            logger.info(f"{tissue_name.upper()} mask already exists: {mask_file.name}")
+            result[tissue_name] = mask_file
+            continue
+
+        # Load probability map and threshold
+        prob_img = nib.loadsave.load(prob_file)
+        prob_data = np.asarray(prob_img.dataobj)
+        binary_data = (prob_data >= 0.9).astype(np.uint8)
+        n_pre_erosion = int(binary_data.sum())
+
+        # Save pre-erosion binary for debugging
+        binary_img = Nifti1Image(binary_data, prob_img.affine, prob_img.header)
+        pre_erosion_file = prob_file.parent / prob_file.name.replace("_prob.", "_binary.")
+        nib.loadsave.save(binary_img, str(pre_erosion_file))
+
+        # Erode using existing utility (2 voxels, 6-connected)
+        from pineuro.utils import erode_mask
+        erode_mask(pre_erosion_file, mask_file, overwrite=True)
+
+        # Validate non-empty
+        eroded_img = nib.loadsave.load(mask_file)
+        n_post_erosion = int((np.asarray(eroded_img.dataobj) > 0).sum())
+        if n_post_erosion == 0:
+            raise ValueError(
+                f"{tissue_name.upper()} mask is empty after erosion "
+                f"({n_pre_erosion} voxels before erosion). "
+                f"The BOLD reference may have poor MNI registration."
+            )
+        logger.info(
+            f"{tissue_name.upper()} mask: {n_pre_erosion} → {n_post_erosion} voxels "
+            f"(after erosion)"
+        )
+        result[tissue_name] = mask_file
+
+    emit_progress("Tissue masks complete", f"WM and CSF masks in {output_dir.name}/")
+    return result
+
+
+# =============================================================================
 # SECTION 3B: TASK-BASED MASK EXTRACTION (GLM CONTRASTS)
 # =============================================================================
 # Alternative to ICA-based extraction: uses a task localizer and GLM contrasts

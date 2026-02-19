@@ -767,6 +767,17 @@ class FeedbackConfig:
         means higher correlation = better. "decrease" means stronger
         anti-correlation = better (the correlation value is negated before
         delivery to the task).
+    nuisance_regression : bool
+        Whether to add WM and CSF mean signals as nuisance regressors in
+        the real-time GLM. Increases nuisance columns from 8 to 10.
+        Tissue masks are created from MNI template priors (no T1 required).
+        Default is False.
+    wm_mask_path : Path, optional
+        Path to eroded WM binary mask. Resolved automatically during
+        session setup (not set directly by user).
+    csf_mask_path : Path, optional
+        Path to eroded CSF binary mask. Resolved automatically during
+        session setup (not set directly by user).
     """
 
     n_baseline: int = 25
@@ -780,6 +791,15 @@ class FeedbackConfig:
     connectivity_window: int = 15
     feedback_mode: str = "activation"
     connectivity_target: str = "increase"
+    nuisance_regression: bool = False
+    wm_mask_path: Path | None = None
+    csf_mask_path: Path | None = None
+
+    def __post_init__(self):
+        if self.wm_mask_path is not None:
+            self.wm_mask_path = Path(self.wm_mask_path)
+        if self.csf_mask_path is not None:
+            self.csf_mask_path = Path(self.csf_mask_path)
 
 
 @dataclass
@@ -1608,7 +1628,7 @@ def run_mask_extraction(
         from .mask_extraction import import_manual_masks
 
         logger.info("Using manual ROI import")
-        return import_manual_masks(
+        network_files = import_manual_masks(
             participant_id=config.paths.participant_id,
             root_dir=str(config.paths.mask_extraction_dir),
             mask_paths=config.mask.manual_mask_paths,
@@ -1622,7 +1642,7 @@ def run_mask_extraction(
         from .mask_extraction import mask_extraction_task
 
         logger.info("Using task-based (GLM) mask extraction")
-        return mask_extraction_task(
+        network_files = mask_extraction_task(
             participant_id=config.paths.participant_id,
             root_dir=str(config.paths.mask_extraction_dir),
             input_file=preproc_file,
@@ -1650,7 +1670,7 @@ def run_mask_extraction(
         from .mask_extraction import mask_extraction_rest
 
         logger.info("Using ICA-based (resting-state) mask extraction")
-        return mask_extraction_rest(
+        network_files = mask_extraction_rest(
             participant_id=config.paths.participant_id,
             root_dir=str(config.paths.mask_extraction_dir),
             input_file=preproc_file,
@@ -1664,6 +1684,35 @@ def run_mask_extraction(
             lowpass=config.mask.lowpass,
             overwrite=overwrite,
         )
+
+    # Create WM/CSF tissue masks for nuisance regression (if enabled)
+    if config.feedback.nuisance_regression:
+        from .mask_extraction import create_tissue_masks
+
+        logger.info("")
+        logger.info("Creating WM/CSF tissue masks for nuisance regression...")
+        tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
+
+        # Try to reuse MNI inverse transforms from mask_extraction_rest
+        inv_xfm = None
+        mnireg_dir = config.paths.mask_extraction_dir / "02_mnireg"
+        if mnireg_dir.exists():
+            inv_files = sorted(mnireg_dir.glob("*InverseWarp*")) + sorted(
+                mnireg_dir.glob("*GenericAffine*")
+            )
+            if inv_files:
+                inv_xfm = [str(f) for f in inv_files]
+                logger.info(f"Reusing MNI inverse transforms from {mnireg_dir.name}/")
+
+        create_tissue_masks(
+            ref_file=ref_file,
+            output_dir=tissue_dir,
+            participant_id=config.paths.participant_id,
+            inv_transform_files=inv_xfm,
+            overwrite=overwrite,
+        )
+
+    return network_files
 
 
 def run_coregistration(
@@ -1702,15 +1751,46 @@ def run_coregistration(
 
     twovol_dir = twovol_dicom_dir or config.resolve_simulator_source("2vol_realtime")
 
-    return coregister_2vol(
+    # Append tissue masks to the coregistration list if nuisance regression enabled
+    all_files = list(network_files)
+    n_network = len(network_files)
+    tissue_indices: dict[str, int] = {}
+
+    if config.feedback.nuisance_regression:
+        tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
+        wm_src = tissue_dir / f"{config.paths.participant_id}_tissue_wm_mask.nii.gz"
+        csf_src = tissue_dir / f"{config.paths.participant_id}_tissue_csf_mask.nii.gz"
+        if wm_src.exists() and csf_src.exists():
+            tissue_indices["wm"] = len(all_files)
+            all_files.append(wm_src)
+            tissue_indices["csf"] = len(all_files)
+            all_files.append(csf_src)
+            logger.info("Including WM/CSF tissue masks in 2vol coregistration")
+        else:
+            logger.warning(
+                f"Nuisance regression enabled but tissue masks not found in {tissue_dir}. "
+                "Run mask extraction first."
+            )
+
+    coreg_files = coregister_2vol(
         participant_id=config.paths.participant_id,
         root_dir=str(config.paths.mask_extraction_dir),
         input_dicom=str(twovol_dir),
-        network_files=network_files,
+        network_files=all_files,
         ref_file=ref_file,
         overwrite=overwrite,
         output_subdir="04_2vol",
     )
+
+    # Split results: network masks returned to caller, tissue paths stored in config
+    network_coreg = coreg_files[:n_network]
+    if tissue_indices:
+        config.feedback.wm_mask_path = coreg_files[tissue_indices["wm"]]
+        config.feedback.csf_mask_path = coreg_files[tissue_indices["csf"]]
+        logger.info(f"Tissue mask paths set: WM={config.feedback.wm_mask_path.name}, "
+                     f"CSF={config.feedback.csf_mask_path.name}")
+
+    return network_coreg
 
 
 def setup_visit_with_reused_masks(
@@ -2033,6 +2113,8 @@ def run_single_task(
         smooth_fwhm=config.feedback.smooth_fwhm,
         differential_pair=config.feedback.differential_pair,
         feedback_interval=config.feedback.feedback_interval,
+        wm_mask_path=config.feedback.wm_mask_path,
+        csf_mask_path=config.feedback.csf_mask_path,
         **simulator_kwargs,
     )
 

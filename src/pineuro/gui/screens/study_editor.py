@@ -156,6 +156,7 @@ class StudyEditorScreen:
                 "connectivity_window": 15,
                 "feedback_mode": "activation",
                 "connectivity_target": "increase",
+                "nuisance_regression": False,
             },
             "localizer_task": {
                 # Localizer task parameters (when not rest)
@@ -689,6 +690,15 @@ class StudyEditorScreen:
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Deliver mean activation every N volumes after baseline",
             visible=interval_val is not None,
+        )
+
+        # WM/CSF nuisance regression
+        self.nuisance_regression_checkbox = ft.Checkbox(
+            label="Enable WM/CSF nuisance regression",
+            value=config.get("feedback", {}).get("nuisance_regression", False),
+            tooltip="Add mean white matter and CSF signals as nuisance regressors "
+            "in the real-time GLM. Tissue masks are created from MNI template "
+            "priors during mask extraction (no T1 required).",
         )
 
         # Create dynamic task parameter fields for current feedback task type
@@ -2259,6 +2269,14 @@ class StudyEditorScreen:
                     self.connectivity_section,
                     self.intermittent_enabled_checkbox,
                     self.feedback_interval_field,
+                    self.nuisance_regression_checkbox,
+                    ft.Text(
+                        "Adds WM and CSF mean signals as GLM nuisance regressors. "
+                        "Tissue masks generated from MNI priors during mask extraction.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
                     ft.Divider(),
                 ]
             ),
@@ -3110,6 +3128,8 @@ class StudyEditorScreen:
             else:
                 config["feedback"]["connectivity_pairs"] = None
                 config["feedback"]["connectivity_window"] = 15
+            # WM/CSF nuisance regression
+            config["feedback"]["nuisance_regression"] = self.nuisance_regression_checkbox.value
             # Also save to task-specific config for reference
             if task_type not in config["task"]:
                 config["task"][task_type] = {}

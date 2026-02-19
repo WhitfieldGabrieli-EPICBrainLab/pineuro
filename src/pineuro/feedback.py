@@ -819,7 +819,7 @@ class FeedbackEstimator:
     (ImageComments field).
     """
 
-    N_NUISANCE_REGRESSORS = 8  # intercept + drift + 6 motion
+    _BASE_NUISANCE_REGRESSORS = 8  # intercept + drift + 6 motion
     # Pre-compiled regex for motion parameter extraction (avoids re-compilation per volume)
     _MOTION_PATTERN = re.compile(r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)")
 
@@ -836,6 +836,8 @@ class FeedbackEstimator:
         external_motion_diff: NDArray[np.float64] | None = None,
         dump_algo_vars_path: Path | str | None = None,
         smooth_fwhm: float | None = None,
+        wm_mask_path: Path | str | None = None,
+        csf_mask_path: Path | str | None = None,
     ) -> None:
         if len(mask_paths) == 0:
             raise ValueError("At least one mask path required")
@@ -854,6 +856,15 @@ class FeedbackEstimator:
         self._smooth_fwhm = smooth_fwhm
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
         self._algo_dump_fh: TextIO | None = None
+
+        # WM/CSF tissue nuisance regression
+        self._wm_mask_path: Path | None = Path(wm_mask_path) if wm_mask_path else None
+        self._csf_mask_path: Path | None = Path(csf_mask_path) if csf_mask_path else None
+        self._use_tissue_nuisance = self._wm_mask_path is not None and self._csf_mask_path is not None
+        self._n_tissue_regressors = 2 if self._use_tissue_nuisance else 0
+        self.N_NUISANCE_REGRESSORS = self._BASE_NUISANCE_REGRESSORS + self._n_tissue_regressors
+        self._latest_wm_mean: float = 0.0
+        self._latest_csf_mean: float = 0.0
 
         # Validate and store task regressors
         if task_regressors is not None:
@@ -892,6 +903,16 @@ class FeedbackEstimator:
 
         # Load masks and build voxel index mapping
         self._load_masks(mask_paths_resolved)
+
+        # Load tissue masks for WM/CSF mean signal extraction (separate from ROI masks)
+        if self._use_tissue_nuisance:
+            self._wm_indices = self._load_tissue_mask(self._wm_mask_path)
+            self._csf_indices = self._load_tissue_mask(self._csf_mask_path)
+            logger.info(
+                f"Tissue nuisance regression enabled: "
+                f"WM={len(self._wm_indices[0])} voxels, "
+                f"CSF={len(self._csf_indices[0])} voxels"
+            )
 
         # Initialize single GLM for all voxels (shared model across voxels)
         self._glm = IncrementalGLM(
@@ -1075,6 +1096,34 @@ class FeedbackEstimator:
 
         # Map masks to master index
         self._mask_voxel_idx = self._map_masks_to_master(mask_indices)
+
+    def _load_tissue_mask(self, mask_path: Path) -> tuple[NDArray, NDArray, NDArray]:
+        """Load a tissue mask and return 3D fancy indices for extraction.
+
+        Parameters
+        ----------
+        mask_path : Path
+            Path to binary tissue mask NIfTI.
+
+        Returns
+        -------
+        tuple of (i, j, k) index arrays for direct fancy indexing into volumes.
+
+        Raises
+        ------
+        ValueError
+            If mask shape doesn't match ROI masks or mask is empty.
+        """
+        img: Nifti1Image = nib.loadsave.load(mask_path)  # type: ignore[assignment]
+        mask_data = np.asarray(img.dataobj) > 0
+        if mask_data.shape[:3] != self._shape:
+            raise ValueError(
+                f"Tissue mask shape {mask_data.shape[:3]} != ROI mask shape {self._shape}"
+            )
+        indices = np.where(mask_data)
+        if len(indices[0]) == 0:
+            raise ValueError(f"Tissue mask is empty after loading: {mask_path}")
+        return indices
 
     def _extract_motion_params_from_json(self, json_path: Path) -> NDArray[np.float64]:
         """Extract motion parameters from dcm2niix JSON sidecar.
@@ -1275,6 +1324,11 @@ class FeedbackEstimator:
         X[nuisance_idx + 1] = float(vol_idx + 1)  # linear drift (1-indexed volume number)
         X[nuisance_idx + 2 : nuisance_idx + 8] = motion_diff  # differential motion
 
+        # WM/CSF tissue mean signals (if enabled)
+        if self._use_tissue_nuisance:
+            X[nuisance_idx + 8] = self._latest_wm_mean
+            X[nuisance_idx + 9] = self._latest_csf_mean
+
         return X
 
     def _compute_weights(self) -> None:
@@ -1382,6 +1436,11 @@ class FeedbackEstimator:
         # Extract voxel values using direct fancy indexing (faster than reshape + ravel)
         # self._voxel_indices is a tuple of (i, j, k) arrays
         voxel_values = data[self._voxel_indices]
+
+        # Extract tissue mean signals for nuisance regression (if enabled)
+        if self._use_tissue_nuisance:
+            self._latest_wm_mean = float(np.mean(data[self._wm_indices]))
+            self._latest_csf_mean = float(np.mean(data[self._csf_indices]))
 
         # ===== 2. Extract motion parameters =====
         if motion_source is None:
@@ -2060,6 +2119,8 @@ class NeurofeedbackCoordinator:
         connectivity_pairs: list[list[str]] | None = None,  # ROI pairs for sliding-window correlation
         connectivity_window: int = 15,  # Sliding window size in volumes
         connectivity_target: str = "increase",  # "increase" or "decrease" (negate r)
+        wm_mask_path: Path | str | None = None,  # WM tissue mask for nuisance regression
+        csf_mask_path: Path | str | None = None,  # CSF tissue mask for nuisance regression
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -2185,6 +2246,8 @@ class NeurofeedbackCoordinator:
             external_motion_diff=external_motion_diff,
             dump_algo_vars_path=self._dump_algo_vars_path,
             smooth_fwhm=smooth_fwhm,
+            wm_mask_path=wm_mask_path,
+            csf_mask_path=csf_mask_path,
         )
 
         # Processing state
@@ -2248,6 +2311,9 @@ class NeurofeedbackCoordinator:
 
         # Simple header: one column per mask (no _delivered/_real suffix)
         header = ["volume", "time", "is_baseline", "is_outlier", "fd", "dvars", "tsnr", "condition"]
+        # WM/CSF tissue signal columns (if nuisance regression enabled)
+        if self._estimator._use_tissue_nuisance:
+            header.extend(["wm_mean", "csf_mean"])
         header.extend(self.mask_names)
         if self._differential_name:
             header.append(self._differential_name)
@@ -2294,6 +2360,8 @@ class NeurofeedbackCoordinator:
             "motion_ry",
             "motion_rz",
         ]
+        if self._estimator._use_tissue_nuisance:
+            column_names.extend(["wm_mean", "csf_mean"])
 
         # Convert design matrix list to numpy array
         design_array = np.array(self.design_matrix)
@@ -2326,6 +2394,8 @@ class NeurofeedbackCoordinator:
         column_names.extend(
             ["intercept", "drift", "motion_x", "motion_y", "motion_z", "motion_rx", "motion_ry", "motion_rz"]
         )
+        if self._estimator._use_tissue_nuisance:
+            column_names.extend(["wm_mean", "csf_mean"])
 
         self._design_file.write("\t".join(column_names) + "\n")
         self._design_file.flush()
@@ -2785,6 +2855,13 @@ class NeurofeedbackCoordinator:
             self._condition,  # Log condition (real/sham) for each volume
         ]
 
+        # WM/CSF tissue signal values (if nuisance regression enabled)
+        if self._estimator._use_tissue_nuisance:
+            row.extend([
+                f"{self._estimator._latest_wm_mean:.4f}",
+                f"{self._estimator._latest_csf_mean:.4f}",
+            ])
+
         # Add activation for each mask (these are delivered values - sham or real)
         row.extend([f"{activations.get(name, 0.0):.4f}" for name in self.mask_names])
         if self._differential_name:
@@ -3136,6 +3213,8 @@ def run_feedback_session(
     connectivity_pairs: list[list[str]] | None = None,
     connectivity_window: int = 15,
     connectivity_target: str = "increase",
+    wm_mask_path: Path | str | None = None,
+    csf_mask_path: Path | str | None = None,
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -3492,6 +3571,8 @@ def run_feedback_session(
         connectivity_pairs=connectivity_pairs,
         connectivity_window=connectivity_window,
         connectivity_target=connectivity_target,
+        wm_mask_path=wm_mask_path,
+        csf_mask_path=csf_mask_path,
     )
 
     # Set cleanup flags for simulation mode
