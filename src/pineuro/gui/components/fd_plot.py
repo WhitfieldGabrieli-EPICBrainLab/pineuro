@@ -1,7 +1,7 @@
 """Real-time QC plot components for neurofeedback monitoring.
 
 This module provides Flet-based line charts for displaying real-time
-framewise displacement (FD) and DVARS timeseries during feedback runs.
+framewise displacement (FD), DVARS, and tSNR timeseries during feedback runs.
 
 Requires flet-charts package: pip install flet-charts
 """
@@ -39,6 +39,10 @@ FD_LINE_COLOR = ft.Colors.ORANGE_500
 THRESHOLD_LINE_COLOR = ft.Colors.RED_600
 THRESHOLD_FILL_COLOR = ft.Colors.with_opacity(0.15, ft.Colors.RED_600)
 DVARS_LINE_COLOR = ft.Colors.CYAN_500
+DVARS_THRESHOLD = 1.5  # Standardized DVARS threshold (Nichols 2013, fMRIPrep default)
+TSNR_LINE_COLOR = ft.Colors.GREEN_600
+TSNR_GOOD_THRESHOLD = 40.0
+TSNR_MODERATE_THRESHOLD = 20.0
 
 # Default threshold value
 DEFAULT_THRESHOLD = 0.5  # mm
@@ -296,39 +300,36 @@ class FDPlot:
 
         # Create summary text for threshold exceedances
         self._summary_text = ft.Text(
-            f"0 frames > {self.threshold}mm (0.0%)",
-            size=11,
+            f"0 > {self.threshold}mm (0%)",
+            size=10,
             color=ft.Colors.GREY_600,
         )
 
-        # Create legend row
+        # Create legend row (compact for narrow column layout)
         legend = ft.Row(
             [
-                # FD line indicator
                 ft.Row(
                     [
-                        ft.Container(width=20, height=3, bgcolor=FD_LINE_COLOR, border_radius=2),
-                        ft.Text("FD", size=11),
+                        ft.Container(width=14, height=3, bgcolor=FD_LINE_COLOR, border_radius=2),
+                        ft.Text("FD", size=10),
                     ],
-                    spacing=4,
+                    spacing=3,
                 ),
-                # Threshold indicator
                 ft.Row(
                     [
                         ft.Container(
-                            width=20,
+                            width=14,
                             height=0,
                             border=ft.border.only(top=ft.BorderSide(1.5, THRESHOLD_LINE_COLOR)),
                         ),
-                        ft.Text(f"Threshold ({self.threshold}mm)", size=11),
+                        ft.Text(f"{self.threshold}mm", size=10),
                     ],
-                    spacing=4,
+                    spacing=3,
                 ),
-                # Summary
                 self._summary_text,
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            spacing=15,
+            spacing=8,
         )
 
         return ft.Container(
@@ -375,7 +376,7 @@ class FDPlot:
         if self._summary_text is not None:
             n_above = self.data.count_above_threshold(self.threshold)
             pct_above = self.data.get_pct_above_threshold(self.threshold)
-            self._summary_text.value = f"{n_above} frames > {self.threshold}mm ({pct_above:.1f}%)"
+            self._summary_text.value = f"{n_above} > {self.threshold}mm ({pct_above:.1f}%)"
 
             # Change color to red if there are frames above threshold
             if n_above > 0:
@@ -439,38 +440,83 @@ class DVARSData:
 
 
 class DVARSPlot:
-    """Real-time DVARS timeseries plot using Flet LineChart.
+    """Real-time standardized DVARS timeseries plot using Flet LineChart.
 
-    Displays DVARS values over time with auto-scaling Y axis.
-    No threshold line (DVARS has no standard threshold like FD's 0.5mm).
+    Raw DVARS (Power 2012) is standardized by dividing by sqrt(median(DVARS²))
+    from stable volumes (Nichols 2013). This makes the values dimensionless
+    with a standard threshold of 1.5 (fMRIPrep default).
     """
 
-    def __init__(self, n_volumes: int, height: float = 100):
-        """Initialize the DVARS plot.
-
-        Args:
-            n_volumes: Total expected number of volumes (fixes x-axis range)
-            height: Chart height in pixels
-        """
+    def __init__(self, n_volumes: int, height: float = 100, threshold: float = DVARS_THRESHOLD):
         self.n_volumes = n_volumes
         self.height = height
+        self.threshold = threshold
         self.data = DVARSData()
         self.chart: LineChart | None = None
         self._summary_text: ft.Text | None = None
+
+    def _get_standardized_values(self) -> list[float]:
+        """Standardize raw DVARS: divide by sqrt(median(DVARS²)) from stable volumes.
+
+        Always standardizes using whatever non-zero data is available.
+        Prefers volumes 6+ (past scanner stabilization) for the median estimate.
+        Volume 1 (DVARS=0, no previous frame) is excluded from plotting.
+        """
+        import math
+
+        vals = self.data.dvars_values
+        if not vals:
+            return []
+
+        # Collect non-zero values for robust median estimate
+        # Prefer volumes 6+ (past scanner stabilization) for the median
+        if len(vals) > 5:
+            pool = [v for v in vals[5:] if v > 0]
+        else:
+            pool = [v for v in vals if v > 0]
+
+        if not pool:
+            return [0.0] * len(vals)
+
+        squared = sorted(v * v for v in pool)
+        median_sq = squared[len(squared) // 2]
+        if median_sq <= 0:
+            return [0.0] * len(vals)
+
+        denom = math.sqrt(median_sq)
+        return [v / denom for v in vals]
 
     def _create_data_series(self) -> list:
         if LineChartData is None:
             return []
 
-        points = [
-            LineChartDataPoint(
-                x=float(self.data.volumes[i]),
-                y=self.data.dvars_values[i],
-            )
-            for i in range(len(self.data.volumes))
-        ]
+        std_values = self._get_standardized_values()
+        min_x, max_x, _, _ = self._calculate_axis_range()
+        series = []
 
-        return [
+        # DVARS timeseries — skip volume 1 (DVARS=0 is undefined, no previous frame)
+        points = []
+        for i in range(len(self.data.volumes)):
+            if i < len(std_values) and self.data.dvars_values[i] == 0.0:
+                continue  # skip undefined DVARS (first volume)
+            point_marker = None
+            val = std_values[i] if i < len(std_values) else 0.0
+            if ChartCirclePoint is not None and val > self.threshold:
+                point_marker = ChartCirclePoint(
+                    color=THRESHOLD_LINE_COLOR,
+                    radius=4,
+                    stroke_color=ft.Colors.RED_900,
+                    stroke_width=1,
+                )
+            points.append(
+                LineChartDataPoint(
+                    x=float(self.data.volumes[i]),
+                    y=val,
+                    point=point_marker,
+                )
+            )
+
+        series.append(
             LineChartData(
                 points=points,
                 color=DVARS_LINE_COLOR,
@@ -478,14 +524,33 @@ class DVARSPlot:
                 curved=False,
                 rounded_stroke_cap=True,
             )
-        ]
+        )
+
+        # Threshold reference line at 1.5
+        series.append(
+            LineChartData(
+                points=[
+                    LineChartDataPoint(x=float(min_x), y=self.threshold),
+                    LineChartDataPoint(x=float(max_x), y=self.threshold),
+                ],
+                color=THRESHOLD_LINE_COLOR,
+                stroke_width=1.5,
+                dash_pattern=[5, 5],
+                curved=False,
+            )
+        )
+
+        return series
 
     def _calculate_axis_range(self) -> tuple[float, float, float, float]:
         min_x = 1
         max_x = self.n_volumes
         min_y = 0.0
-        data_max = self.data.get_max_dvars() if self.data.dvars_values else 0.0
-        max_y = max(10.0, data_max * 1.2)
+        std_values = self._get_standardized_values()
+        # Use stable standardized values (skip first 5 + zeros) for axis scaling
+        stable = [v for v in std_values[5:] if v > 0] if len(std_values) > 5 else [v for v in std_values if v > 0]
+        data_max = max(stable) if stable else 0.0
+        max_y = max(self.threshold * 1.5, data_max * 1.2)
         return (min_x, max_x, min_y, max_y)
 
     def build(self) -> ft.Container:
@@ -505,7 +570,7 @@ class DVARSPlot:
             min_y=min_y,
             max_y=max_y,
             horizontal_grid_lines=ChartGridLines(
-                interval=max(1.0, max_y / 4),
+                interval=max(0.5, max_y / 4),
                 color=ft.Colors.with_opacity(0.2, ft.Colors.GREY_500),
                 width=1,
             ),
@@ -516,7 +581,7 @@ class DVARSPlot:
             ),
             left_axis=ChartAxis(
                 label_size=40,
-                title=ft.Text("DVARS", size=12),
+                title=ft.Text("Std. DVARS", size=10),
             ),
             bottom_axis=ChartAxis(
                 label_size=32,
@@ -527,8 +592,8 @@ class DVARSPlot:
         )
 
         self._summary_text = ft.Text(
-            "Mean DVARS: --",
-            size=11,
+            f"0 > {self.threshold} (0%)",
+            size=10,
             color=ft.Colors.GREY_600,
         )
 
@@ -536,15 +601,26 @@ class DVARSPlot:
             [
                 ft.Row(
                     [
-                        ft.Container(width=20, height=3, bgcolor=DVARS_LINE_COLOR, border_radius=2),
-                        ft.Text("DVARS", size=11),
+                        ft.Container(width=14, height=3, bgcolor=DVARS_LINE_COLOR, border_radius=2),
+                        ft.Text("DVARS", size=10),
                     ],
-                    spacing=4,
+                    spacing=3,
+                ),
+                ft.Row(
+                    [
+                        ft.Container(
+                            width=14,
+                            height=0,
+                            border=ft.border.only(top=ft.BorderSide(1.5, THRESHOLD_LINE_COLOR)),
+                        ),
+                        ft.Text(f"{self.threshold}", size=10),
+                    ],
+                    spacing=3,
                 ),
                 self._summary_text,
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            spacing=15,
+            spacing=8,
         )
 
         return ft.Container(
@@ -574,13 +650,15 @@ class DVARSPlot:
         self.chart.min_y = min_y
         self.chart.max_y = max_y
 
-        # Update grid interval to match new y range
         if self.chart.horizontal_grid_lines:
-            self.chart.horizontal_grid_lines.interval = max(1.0, max_y / 4)
+            self.chart.horizontal_grid_lines.interval = max(0.5, max_y / 4)
 
         if self._summary_text is not None:
-            mean_dvars = self.data.get_mean_dvars()
-            self._summary_text.value = f"Mean DVARS: {mean_dvars:.1f}"
+            std_values = self._get_standardized_values()
+            n_above = sum(1 for v in std_values if v > self.threshold)
+            pct = (n_above / len(std_values) * 100) if std_values else 0
+            self._summary_text.value = f"{n_above} > {self.threshold} ({pct:.1f}%)"
+            self._summary_text.color = THRESHOLD_LINE_COLOR if n_above > 0 else ft.Colors.GREY_600
 
         try:
             self.chart.update()
@@ -588,6 +666,266 @@ class DVARSPlot:
                 self._summary_text.update()
         except Exception as e:
             logger.debug(f"DVARS chart update failed: {e}")
+
+    def clear(self):
+        """Clear all data and reset chart."""
+        self.data.clear()
+        self._update_chart()
+
+
+# =============================================================================
+# tSNR Plot
+# =============================================================================
+
+
+@dataclass
+class TSNRData:
+    """Container for tSNR timeseries data.
+
+    Attributes:
+        volumes: List of volume numbers (x-axis)
+        tsnr_values: List of running tSNR values (y-axis)
+    """
+
+    volumes: list[int] = field(default_factory=list)
+    tsnr_values: list[float] = field(default_factory=list)
+
+    def add_point(self, volume: int, tsnr: float):
+        """Add a new data point."""
+        self.volumes.append(volume)
+        self.tsnr_values.append(tsnr)
+
+    def clear(self):
+        """Clear all data."""
+        self.volumes.clear()
+        self.tsnr_values.clear()
+
+    @property
+    def n_points(self) -> int:
+        return len(self.volumes)
+
+    def get_latest_tsnr(self) -> float:
+        if not self.tsnr_values:
+            return 0.0
+        return self.tsnr_values[-1]
+
+    def get_max_tsnr(self) -> float:
+        if not self.tsnr_values:
+            return 0.0
+        return max(self.tsnr_values)
+
+
+class TSNRPlot:
+    """Real-time tSNR timeseries plot using Flet LineChart.
+
+    Displays running tSNR over time with reference lines at quality
+    thresholds (20 = moderate, 40 = good). Shows convergence as the
+    Welford estimate stabilizes.
+    """
+
+    def __init__(self, n_volumes: int, height: float = 80):
+        """Initialize the tSNR plot.
+
+        Args:
+            n_volumes: Total expected number of volumes (fixes x-axis range)
+            height: Chart height in pixels
+        """
+        self.n_volumes = n_volumes
+        self.height = height
+        self.data = TSNRData()
+        self.chart: LineChart | None = None
+        self._summary_text: ft.Text | None = None
+
+    def _create_data_series(self) -> list:
+        if LineChartData is None:
+            return []
+
+        min_x, max_x, _, _ = self._calculate_axis_range()
+        series = []
+
+        # tSNR timeseries line
+        points = [
+            LineChartDataPoint(
+                x=float(self.data.volumes[i]),
+                y=self.data.tsnr_values[i],
+            )
+            for i in range(len(self.data.volumes))
+        ]
+        series.append(
+            LineChartData(
+                points=points,
+                color=TSNR_LINE_COLOR,
+                stroke_width=2,
+                curved=False,
+                rounded_stroke_cap=True,
+            )
+        )
+
+        # Reference line at tSNR = 40 (good quality threshold)
+        series.append(
+            LineChartData(
+                points=[
+                    LineChartDataPoint(x=float(min_x), y=TSNR_GOOD_THRESHOLD),
+                    LineChartDataPoint(x=float(max_x), y=TSNR_GOOD_THRESHOLD),
+                ],
+                color=ft.Colors.GREEN_400,
+                stroke_width=1,
+                dash_pattern=[5, 5],
+                curved=False,
+            )
+        )
+
+        # Reference line at tSNR = 20 (moderate quality threshold)
+        series.append(
+            LineChartData(
+                points=[
+                    LineChartDataPoint(x=float(min_x), y=TSNR_MODERATE_THRESHOLD),
+                    LineChartDataPoint(x=float(max_x), y=TSNR_MODERATE_THRESHOLD),
+                ],
+                color=ft.Colors.ORANGE_400,
+                stroke_width=1,
+                dash_pattern=[5, 5],
+                curved=False,
+            )
+        )
+
+        return series
+
+    def _calculate_axis_range(self) -> tuple[float, float, float, float]:
+        min_x = 1
+        max_x = self.n_volumes
+        min_y = 0.0
+        data_max = self.data.get_max_tsnr() if self.data.tsnr_values else 0.0
+        max_y = max(60.0, data_max * 1.2)
+        return (min_x, max_x, min_y, max_y)
+
+    def build(self) -> ft.Container:
+        if LineChart is None:
+            return ft.Container(
+                content=ft.Text("Chart not available", size=16, color=ft.Colors.GREY_500),
+                height=self.height,
+            )
+
+        self._data_series = self._create_data_series()
+        min_x, max_x, min_y, max_y = self._calculate_axis_range()
+
+        self.chart = LineChart(
+            data_series=self._data_series,
+            min_x=min_x,
+            max_x=max_x,
+            min_y=min_y,
+            max_y=max_y,
+            horizontal_grid_lines=ChartGridLines(
+                interval=max(10.0, max_y / 4),
+                color=ft.Colors.with_opacity(0.2, ft.Colors.GREY_500),
+                width=1,
+            ),
+            vertical_grid_lines=ChartGridLines(
+                interval=25,
+                color=ft.Colors.with_opacity(0.2, ft.Colors.GREY_500),
+                width=1,
+            ),
+            left_axis=ChartAxis(
+                label_size=40,
+                title=ft.Text("tSNR", size=12),
+            ),
+            bottom_axis=ChartAxis(
+                label_size=32,
+                title=ft.Text("Volume", size=12),
+            ),
+            bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.GREY_500),
+            expand=True,
+        )
+
+        self._summary_text = ft.Text(
+            "tSNR: --",
+            size=10,
+            color=ft.Colors.GREY_600,
+        )
+
+        legend = ft.Row(
+            [
+                ft.Row(
+                    [
+                        ft.Container(width=14, height=3, bgcolor=TSNR_LINE_COLOR, border_radius=2),
+                        ft.Text("tSNR", size=10),
+                    ],
+                    spacing=3,
+                ),
+                ft.Row(
+                    [
+                        ft.Container(
+                            width=14,
+                            height=0,
+                            border=ft.border.only(top=ft.BorderSide(1, ft.Colors.GREEN_400)),
+                        ),
+                        ft.Text("40", size=10, color=ft.Colors.GREEN_600),
+                    ],
+                    spacing=3,
+                ),
+                ft.Row(
+                    [
+                        ft.Container(
+                            width=14,
+                            height=0,
+                            border=ft.border.only(top=ft.BorderSide(1, ft.Colors.ORANGE_400)),
+                        ),
+                        ft.Text("20", size=10, color=ft.Colors.ORANGE_600),
+                    ],
+                    spacing=3,
+                ),
+                self._summary_text,
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            spacing=8,
+        )
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Container(content=self.chart, height=self.height, expand=True),
+                    legend,
+                ],
+                spacing=5,
+            ),
+            padding=10,
+        )
+
+    def add_data(self, volume: int, tsnr: float):
+        """Add new tSNR data and update chart."""
+        self.data.add_point(volume, tsnr)
+        self._update_chart()
+
+    def _update_chart(self):
+        if self.chart is None:
+            return
+
+        self.chart.data_series = self._create_data_series()
+        min_x, max_x, min_y, max_y = self._calculate_axis_range()
+        self.chart.min_x = min_x
+        self.chart.max_x = max_x
+        self.chart.min_y = min_y
+        self.chart.max_y = max_y
+
+        if self.chart.horizontal_grid_lines:
+            self.chart.horizontal_grid_lines.interval = max(10.0, max_y / 4)
+
+        if self._summary_text is not None:
+            latest = self.data.get_latest_tsnr()
+            self._summary_text.value = f"tSNR: {latest:.1f}"
+            if latest >= TSNR_GOOD_THRESHOLD:
+                self._summary_text.color = ft.Colors.GREEN_600
+            elif latest >= TSNR_MODERATE_THRESHOLD:
+                self._summary_text.color = ft.Colors.ORANGE_600
+            else:
+                self._summary_text.color = ft.Colors.RED_600
+
+        try:
+            self.chart.update()
+            if self._summary_text is not None:
+                self._summary_text.update()
+        except Exception as e:
+            logger.debug(f"tSNR chart update failed: {e}")
 
     def clear(self):
         """Clear all data and reset chart."""

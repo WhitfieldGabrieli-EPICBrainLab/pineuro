@@ -501,7 +501,7 @@ class SessionState:
 
         if is_retry and existing_run_idx is not None:
             old_run = self.completed_runs[existing_run_idx]
-            logger.info(f"Replacing run for slot {slot_run_number} (acq {old_run.acq} → {acq})")
+            logger.info(f"Replacing run for slot {slot_run_number} (acq {old_run.acq} -> {acq})")
             self.completed_runs[existing_run_idx] = run_info
         else:
             self.completed_runs.append(run_info)

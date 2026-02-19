@@ -39,7 +39,7 @@ from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, sc
 from ..components.activation_plot import ActivationPlot
 from ..components.collection_progress import CollectionProgressPanel
 from ..components.csv_poller import FeedbackMonitor
-from ..components.fd_plot import DVARSPlot, FDPlot
+from ..components.fd_plot import DVARSPlot, FDPlot, TSNRPlot
 from ..components.mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
 from ..components.pipeline_runner import PipelineRunner
 from ..components.qc_viewer import QCReportManager
@@ -3676,66 +3676,94 @@ class ParticipantWorkflowScreen:
             fd_threshold = config["feedback"].get("fd_threshold", 0.5)
             self.fd_plot = FDPlot(
                 n_volumes=n_volumes,
-                height=120,
+                height=220,
                 threshold=fd_threshold,
             )
 
             # Create DVARS plot for signal quality monitoring
             self.dvars_plot = DVARSPlot(
                 n_volumes=n_volumes,
-                height=100,
+                height=220,
             )
 
-            # tSNR text indicator (running aggregate, not a timeseries)
-            self._tsnr_text = ft.Text("tSNR: --", size=14, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
+            # Create tSNR plot for signal quality monitoring
+            self.tsnr_plot = TSNRPlot(
+                n_volumes=n_volumes,
+                height=220,
+            )
 
             # Create task mirror for visual feedback display
             self.task_mirror = TaskMirror(width=480, height=270)
 
-            # Create progress and status UI elements
-            self._progress_bar = ft.ProgressBar(value=0, width=400)
-            self._progress_text = ft.Text("0 / 0 volumes", size=14)
-            self._status_text = ft.Text("Waiting for data...", size=14, color=ft.Colors.GREY_600)
-            self._hits_text = ft.Text("Hits: --", size=14)
+            # Create progress and status UI elements (compact for status strip)
+            self._progress_bar = ft.ProgressBar(value=0, width=300)
+            self._progress_text = ft.Text("0 / 0 volumes", size=12)
+            self._status_text = ft.Text("Waiting...", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
+            self._hits_text = ft.Text("Hits: --", size=12)
 
-            # Build monitoring panel with plots and task mirror side by side
+            # Build monitoring panel:
+            # Row 1: Activation/Connectivity plot + Task mirror side by side
+            # Row 2: FD, DVARS, tSNR plots side by side (full width)
             monitoring_panel = ft.Container(
                 content=ft.Column(
                     [
-                        # Header
-                        ft.Text(
-                            self._get_step_label(step_id),
-                            size=18,
-                            weight=ft.FontWeight.BOLD,
-                        ),
-                        ft.Divider(),
-                        # Side-by-side: Plots column and Task mirror
+                        # Header row: title + stop button
                         ft.Row(
                             [
-                                # Plots column (expandable)
+                                ft.Text(
+                                    self._get_step_label(step_id),
+                                    size=18,
+                                    weight=ft.FontWeight.BOLD,
+                                ),
+                                ft.FilledButton(
+                                    "Stop",
+                                    icon=ft.Icons.STOP,
+                                    on_click=lambda e: self._on_stop_clicked(),
+                                    bgcolor=ft.Colors.RED,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        ft.Divider(),
+                        # Status strip: status, progress, hits
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Row(
+                                        [
+                                            self._status_text,
+                                            ft.Row(
+                                                [self._progress_bar, self._progress_text],
+                                                spacing=8,
+                                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                            ),
+                                        ],
+                                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                    ),
+                                    self._hits_text,
+                                ],
+                                spacing=4,
+                            ),
+                            bgcolor=ft.Colors.GREY_50,
+                            border_radius=8,
+                            padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                        ),
+                        # Row 1: Activation plot + Task mirror side by side
+                        ft.Row(
+                            [
                                 ft.Container(
                                     content=ft.Column(
                                         [
                                             ft.Text(self._plot_label, size=14, weight=ft.FontWeight.W_500),
                                             self.activation_plot.build(),
-                                            ft.Row(
-                                                [
-                                                    ft.Text(
-                                                        "Framewise Displacement", size=14, weight=ft.FontWeight.W_500
-                                                    ),
-                                                    self._tsnr_text,
-                                                ],
-                                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                            ),
-                                            self.fd_plot.build(),
-                                            ft.Text("DVARS", size=14, weight=ft.FontWeight.W_500),
-                                            self.dvars_plot.build(),
                                         ],
                                         spacing=5,
                                     ),
                                     expand=True,
+                                    height=300,
                                 ),
-                                # Task mirror (fixed width)
                                 ft.Container(
                                     content=ft.Column(
                                         [
@@ -3746,51 +3774,57 @@ class ParticipantWorkflowScreen:
                                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                     ),
                                     width=500,
+                                    height=300,
                                 ),
                             ],
                             spacing=20,
                             vertical_alignment=ft.CrossAxisAlignment.START,
                         ),
-                        # Progress section
-                        ft.Container(height=10),
+                        # Row 2: QC plots side by side (FD, DVARS, tSNR)
                         ft.Row(
                             [
-                                ft.Text("Progress:", size=14, weight=ft.FontWeight.W_500),
-                                self._progress_bar,
-                                self._progress_text,
-                            ],
-                            spacing=10,
-                            alignment=ft.MainAxisAlignment.START,
-                        ),
-                        # Status section
-                        ft.Row(
-                            [
-                                ft.Text("Status:", size=14, weight=ft.FontWeight.W_500),
-                                self._status_text,
-                            ],
-                            spacing=10,
-                        ),
-                        ft.Row(
-                            [
-                                self._hits_text,
-                            ],
-                            spacing=10,
-                        ),
-                        # Stop button
-                        ft.Container(height=10),
-                        ft.Row(
-                            [
-                                ft.FilledButton(
-                                    "Stop",
-                                    icon=ft.icons.Icons.STOP,
-                                    on_click=lambda e: self._on_stop_clicked(),
-                                    bgcolor=ft.Colors.RED,
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text(
+                                                "Framewise Displacement",
+                                                size=12,
+                                                weight=ft.FontWeight.W_500,
+                                            ),
+                                            self.fd_plot.build(),
+                                        ],
+                                        spacing=3,
+                                    ),
+                                    expand=True,
+                                    height=300,
+                                ),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text("DVARS", size=12, weight=ft.FontWeight.W_500),
+                                            self.dvars_plot.build(),
+                                        ],
+                                        spacing=3,
+                                    ),
+                                    expand=True,
+                                    height=300,
+                                ),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text("tSNR", size=12, weight=ft.FontWeight.W_500),
+                                            self.tsnr_plot.build(),
+                                        ],
+                                        spacing=3,
+                                    ),
+                                    expand=True,
+                                    height=300,
                                 ),
                             ],
-                            alignment=ft.MainAxisAlignment.END,
+                            spacing=10,
                         ),
                     ],
-                    spacing=10,
+                    spacing=8,
                     scroll=ft.ScrollMode.AUTO,
                 ),
                 padding=20,
@@ -4201,16 +4235,9 @@ class ParticipantWorkflowScreen:
                 if hasattr(self, "dvars_plot") and self.dvars_plot and dvars is not None:
                     self.dvars_plot.add_data(volume, dvars)
 
-                # Update tSNR text indicator
-                if hasattr(self, "_tsnr_text") and self._tsnr_text and tsnr is not None and tsnr > 0:
-                    self._tsnr_text.value = f"tSNR: {tsnr:.1f}"
-                    if tsnr >= 40:
-                        self._tsnr_text.color = ft.Colors.GREEN_600
-                    elif tsnr >= 20:
-                        self._tsnr_text.color = ft.Colors.ORANGE_600
-                    else:
-                        self._tsnr_text.color = ft.Colors.RED_600
-                    self._tsnr_text.update()
+                # Update tSNR plot
+                if hasattr(self, "tsnr_plot") and self.tsnr_plot and tsnr is not None and tsnr > 0:
+                    self.tsnr_plot.add_data(volume, tsnr)
 
                 # Update progress
                 n_volumes = self.study_config.session_config["feedback"]["n_volumes"]

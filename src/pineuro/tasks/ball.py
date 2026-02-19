@@ -524,6 +524,11 @@ class BallTask(BaseTask):
             # For "decrease" target, negate so negative correlation → ball UP
             directed_val = -val if self._connectivity_target == "decrease" else val
             self.current_direction = 1.0 if directed_val >= 0 else -1.0
+            direction_label = "UP" if self.current_direction > 0 else "DOWN"
+            logger.debug(
+                f"Connectivity: r={val:.4f}, target={self._connectivity_target}, "
+                f"directed={directed_val:.4f} → {direction_label}"
+            )
             return
 
         acts = [activations[name] for name in self.mask_names]
@@ -640,7 +645,7 @@ class BallTask(BaseTask):
                     label = "target" if self.network_directions[i] > 0 else "nontarget"
                 else:
                     label = self.mask_names[i]
-                logger.info(f"✓ Hit! {label} target (total: {self.hit_counters[i]})")
+                logger.info(f"Hit! {label} target (total: {self.hit_counters[i]})")
 
                 # Flash circle white for visual feedback
                 self.circles[i].fillColor = "white"
@@ -860,17 +865,17 @@ class BallTask(BaseTask):
         if max_single > self._max_hits_threshold:
             self.scale_factor = old_scale * (1 - self._scale_adjust_factor)
             logger.info(
-                f"  Adaptive difficulty: {max_single} hits > {self._max_hits_threshold} max → "
-                f"decreasing scale_factor {old_scale:.1f} → {self.scale_factor:.1f}"
+                f"  Adaptive difficulty: {max_single} hits > {self._max_hits_threshold} max -> "
+                f"decreasing scale_factor {old_scale:.1f} -> {self.scale_factor:.1f}"
             )
         elif total_hits < self._min_hits_threshold:
             self.scale_factor = old_scale * (1 + self._scale_adjust_factor)
             logger.info(
-                f"  Adaptive difficulty: {total_hits} total hits < {self._min_hits_threshold} min → "
-                f"increasing scale_factor {old_scale:.1f} → {self.scale_factor:.1f}"
+                f"  Adaptive difficulty: {total_hits} total hits < {self._min_hits_threshold} min -> "
+                f"increasing scale_factor {old_scale:.1f} -> {self.scale_factor:.1f}"
             )
         else:
-            logger.info(f"  Adaptive difficulty: hits in range → keeping scale_factor at {old_scale:.1f}")
+            logger.info(f"  Adaptive difficulty: hits in range -> keeping scale_factor at {old_scale:.1f}")
 
     def _record_run_completion(self) -> None:
         """Record run completion with BallTask-specific state.
@@ -1032,6 +1037,10 @@ class BallTask(BaseTask):
 
             logger.info("=== BallTask Session Started ===")
             logger.info(f"Mode: {'FEEDBACK' if self.feedback_mode else 'NON-FEEDBACK (transfer)'}")
+            logger.info(f"Signal mode: {self._signal_mode}")
+            if self._signal_mode == "connectivity":
+                logger.info(f"Connectivity target: {self._connectivity_target}")
+                logger.info(f"Connectivity key: corr_{self.mask_names[0]}_{self.mask_names[1]}")
             logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
             logger.info(f"Scale factor: {self.scale_factor}")
             logger.info(f"Target volumes: {self.coordinator.n_volumes}")
