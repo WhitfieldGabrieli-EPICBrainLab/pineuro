@@ -273,6 +273,8 @@ def generate_randomization(
         - "simple": Random real/sham assignment with no replay matching.
         - "replay": Random assignment plus automatic sham→real participant
           matching for feedbacklog replay (round-robin if more sham than real).
+          The first participant (participant_ids[0]) is always assigned "real"
+          since replay requires prior data to exist.
     matched_visit : str, optional
         Visit ID to populate the matched_visit column for replay participants.
         Ignored when method="simple".
@@ -312,6 +314,11 @@ def generate_randomization(
     conditions = ["real"] * len(participant_ids)
     for i in range(n_sham):
         conditions[indices[i]] = "sham"
+
+    # First participant must be real for replay (no prior data to replay from)
+    if method == "replay" and conditions[0] == "sham":
+        first_real = next(i for i in range(len(conditions)) if conditions[i] == "real")
+        conditions[0], conditions[first_real] = conditions[first_real], conditions[0]
 
     # --- Build matched_participant column for replay method ---
     matched_participants: list[str | None] = [None] * len(participant_ids)
