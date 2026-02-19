@@ -515,9 +515,9 @@ class BaseTask(TaskBase):
         if hasattr(self, "coordinator") and hasattr(self.coordinator, "should_show_questions"):
             should_show = self.coordinator.should_show_questions()
 
-        if should_show:
+        if should_show and hasattr(self, "win") and self.win is not None:
             self._show_post_run_questions()
-        else:
+        elif not should_show:
             logger.info("Session was stopped - skipping post-run questions")
 
         # Delegate to TaskBase for window/simulator/pyglet cleanup

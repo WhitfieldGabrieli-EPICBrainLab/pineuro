@@ -458,6 +458,11 @@ class BallTask(BaseTask):
         """
         from psychopy import core, event
 
+        # Guard against setup() not completing (window/stimuli may not exist)
+        if not hasattr(self, "win") or self.win is None:
+            logger.info("No window available - skipping post-run questions")
+            return
+
         # Get questions from metadata
         metadata = self.get_task_metadata()
         if not metadata or not metadata.post_run_questions:

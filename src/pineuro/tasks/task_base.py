@@ -235,6 +235,9 @@ class TaskBase(ABC):  # noqa: B024
             target_screen = 0
             logger.warning("No monitors detected, using screen 0")
 
+        # Reset stale pyglet state from previous runs (may be from a dead thread)
+        self._reset_pyglet_for_new_window()
+
         # Platform-specific window creation
         if platform in ("darwin", "windows"):
             # macOS/Windows: screen parameter works directly
@@ -281,8 +284,70 @@ class TaskBase(ABC):  # noqa: B024
 
         return self.win
 
+    def _reset_pyglet_for_new_window(self) -> None:
+        """Reset pyglet global state so a new PsychoPy window can be created.
+
+        Each task run happens in a fresh thread, but pyglet binds global state
+        to the thread that first imported it.  After a run is stopped, the old
+        thread is dead and pyglet's globals are stale.  Two things break:
+
+        1. ``wglShareLists`` fails ("Unable to share contexts") because the
+           shadow window's GL context was created in the old (dead) thread.
+        2. ``platform_event_loop.start()`` fails ("must be called from the
+           same thread that imports pyglet.app") because ``_event_thread``
+           still records the old thread ID.
+
+        This method patches both before ``visual.Window()`` is called.
+        Only runs when the current thread differs from pyglet's recorded thread
+        (i.e. this is a re-run, not the first run).
+        """
+        import sys
+
+        if sys.platform != "win32":
+            return
+
+        from ctypes import windll
+
+        current_thread = windll.kernel32.GetCurrentThreadId()
+
+        # Check if we're in the same thread that created pyglet's state.
+        # If so, everything is fine — no reset needed.
+        try:
+            import pyglet.app
+
+            if pyglet.app.platform_event_loop._event_thread == current_thread:
+                return
+        except Exception:
+            return
+
+        logger.debug("Detected new thread for PsychoPy window — resetting pyglet state")
+
+        try:
+            import pyglet
+            import pyglet.gl as gl
+            from pyglet.gl import gl_info
+
+            # 1. Clear stale GL context so new window won't try to share
+            #    with the dead shadow window's context via wglShareLists.
+            gl.current_context = None
+
+            # Orphan the shadow window (don't close() it — that triggers
+            # event loop thread checks that fail from the new thread).
+            gl._shadow_window = None
+            pyglet.options["shadow_window"] = False
+
+            # Reset gl_info so Win32Config.match() uses the basic pixel
+            # format path instead of the ARB path (which needs an active
+            # GL context that no longer exists).
+            gl_info.remove_active_context()
+
+            # 2. Re-bind the platform event loop to the current thread.
+            pyglet.app.platform_event_loop._event_thread = current_thread
+        except Exception as e:
+            logger.debug(f"Could not reset pyglet state: {e}")
+
     def _reset_pyglet_gl_info(self) -> None:
-        """Reset pyglet's gl_info state to allow clean window recreation.
+        """Reset pyglet's gl_info cached state after closing a window.
 
         Without this, gl_info retains stale OpenGL version info that causes
         "string index out of range" errors when creating a new window.
@@ -527,6 +592,19 @@ class TaskBase(ABC):  # noqa: B024
             self.win.close()
             self.win = None
 
+        # Force-close any remaining pyglet windows (prevents stale GL contexts
+        # from causing "Unable to share contexts" on the next run)
+        try:
+            import pyglet
+
+            for window in list(pyglet.app.windows):
+                try:
+                    window.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # Clear pending events for clean state
         try:
             from psychopy import event
@@ -537,3 +615,8 @@ class TaskBase(ABC):  # noqa: B024
 
         # Reset pyglet gl_info for clean window recreation
         self._reset_pyglet_gl_info()
+
+        # Force garbage collection to release GL context references
+        import gc
+
+        gc.collect()
