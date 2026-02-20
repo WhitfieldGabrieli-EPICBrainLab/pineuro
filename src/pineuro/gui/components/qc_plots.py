@@ -13,12 +13,13 @@ Requires flet-charts package: pip install flet-charts
 import logging
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 import flet as ft
 
 # Import chart types from flet_charts package
 try:
-    import flet_charts as fch
+    import flet_charts as fch  # type: ignore[import-untyped]
 
     LineChart = fch.LineChart
     LineChartData = fch.LineChartData
@@ -108,7 +109,7 @@ class BaseQCPlot:
         self.height = height
         self.threshold = threshold
         self.data = QCData()
-        self.chart: LineChart | None = None
+        self.chart: Any = None
         self._summary_text: ft.Text | None = None
 
     # --- Public API ---

@@ -69,7 +69,7 @@ class TaskMirror:
             src=placeholder,
             width=self.width,
             height=self.height,
-            fit="contain",
+            fit=ft.ImageFit.CONTAIN,
         )
         self._container = ft.Container(
             content=self._image,
@@ -107,6 +107,6 @@ class TaskMirror:
     def reset(self) -> None:
         """Reset to empty state."""
         if self._image is not None:
-            self._image.src_base64 = None
+            self._image.src = ""
             with contextlib.suppress(Exception):
                 self._image.update()

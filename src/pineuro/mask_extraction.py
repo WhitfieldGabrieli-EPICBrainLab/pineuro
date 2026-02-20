@@ -154,7 +154,7 @@ import re  # Regex for filename parsing
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Union, cast
 
 # NOTE: nilearn is imported lazily inside the functions that need it to avoid
 # ~8s import cost at module load time. The GUI imports this module at startup
@@ -375,11 +375,11 @@ def compute_mask_network_correlation(
     network_index = labels.index(network_name) + 1  # 1-based indexing
 
     # Load mask
-    mask_img = load(mask_file)
+    mask_img = cast(Nifti1Image, load(mask_file))
     mask_data = mask_img.get_fdata().ravel()
 
     # Load and resample Yeo atlas to mask space
-    atlas_img = load(yeo_subject_space)
+    atlas_img = cast(Nifti1Image, load(yeo_subject_space))
     atlas_resampled = resample_to_img(atlas_img, mask_img, interpolation="nearest")
     atlas_data = atlas_resampled.get_fdata().astype(int).ravel()
 
@@ -455,7 +455,7 @@ def extract_yeo_mask_for_network(
     network_index = labels.index(network_name) + 1  # Yeo uses 1-based indexing
 
     # Load atlas and extract network region
-    atlas_img = load(yeo_subject_space)
+    atlas_img = cast(Nifti1Image, load(yeo_subject_space))
     atlas_data = atlas_img.get_fdata()
 
     # Create binary mask for this network
@@ -532,7 +532,7 @@ def split_mask_by_hemisphere(
         return output_left, output_right
 
     # Load unthresholded mask (ICA component with continuous values)
-    mask_img = load(input_mask)
+    mask_img = cast(Nifti1Image, load(input_mask))
     mask_data = mask_img.get_fdata()
     affine = mask_img.affine
 
@@ -560,14 +560,14 @@ def split_mask_by_hemisphere(
         abs_flat = np.abs(flat)
         if n_voxels >= np.count_nonzero(abs_flat):
             # Keep all nonzero voxels if fewer than threshold
-            return (abs_flat > 0).astype("uint8").reshape(data.shape)
+            return np.asarray((abs_flat > 0).astype("uint8").reshape(data.shape))
         # Find threshold value for top N
         threshold_indices = np.argpartition(abs_flat, -n_voxels)[-n_voxels:]
         result = np.zeros(flat.shape, dtype="uint8")
         result[threshold_indices] = 1
         # Only keep where original was nonzero (positive values after thresholding)
-        result = result & (flat > 0)
-        return result.reshape(data.shape)
+        result_masked: np.ndarray = np.asarray(result & (flat > 0))
+        return result_masked.reshape(data.shape)
 
     left_thresholded = threshold_hemisphere(left_values, threshold)
     right_thresholded = threshold_hemisphere(right_values, threshold)
@@ -650,7 +650,7 @@ def combine_ica_components(
         raise ValueError(f"Cannot combine component with itself: {component_idx_1}")
 
     # Load ICA components
-    components_img = load(components_file)
+    components_img = cast(Nifti1Image, load(components_file))
     components_data = components_img.get_fdata()
     n_components = components_data.shape[3]
 
@@ -744,7 +744,7 @@ def combine_ica_components_unthresholded(
         raise FileNotFoundError(f"Components file not found: {components_file}")
 
     # Load ICA components
-    components_img = load(components_file)
+    components_img = cast(Nifti1Image, load(components_file))
     components_data = components_img.get_fdata()
 
     # Extract and z-score each component before averaging
@@ -831,7 +831,7 @@ def regenerate_mask_from_selection(
         # Also save an unthresholded version (full atlas region)
         labels = get_yeo_labels(n_networks=n_yeo)
         network_index = labels.index(network_name) + 1
-        atlas_img = load(yeo_subject_space)
+        atlas_img = cast(Nifti1Image, load(yeo_subject_space))
         atlas_data = atlas_img.get_fdata()
         network_mask = (atlas_data == network_index).astype(float)
         save(Nifti1Image(network_mask, atlas_img.affine, atlas_img.header), network_file)
@@ -849,7 +849,7 @@ def regenerate_mask_from_selection(
         if not components_file.exists():
             raise FileNotFoundError(f"Components file not found: {components_file}")
 
-        components_img = load(components_file)
+        components_img = cast(Nifti1Image, load(components_file))
         components_data = components_img.get_fdata()
 
         if component_idx >= components_data.shape[3]:
@@ -864,8 +864,8 @@ def regenerate_mask_from_selection(
         flat = ic_data.ravel()
         mask = np.zeros(flat.shape, dtype=bool)
         mask[np.argpartition(flat, -threshold)[-threshold:]] = True
-        mask = mask.reshape(ic_data.shape)
-        thresholded = ((ic_data * mask) > 0).astype("uint8")
+        mask_3d: np.ndarray = np.asarray(mask.reshape(ic_data.shape))
+        thresholded = ((ic_data * mask_3d) > 0).astype("uint8")
         save(Nifti1Image(thresholded, components_img.affine, components_img.header), thr_file)
 
         logger.info(f"Saved regenerated mask ({int(thresholded.sum())} voxels) to {thr_file}")
@@ -1011,10 +1011,9 @@ def run_ica(
     logger.info("Parameters:")
     logger.info(f"  n_components: {n_components}")
 
-    img = load(input_file)
+    img = cast(Nifti1Image, load(input_file))
     # Extract TR from 4th dimension of zooms (temporal spacing)
-    # type: ignore - nibabel typing doesn't recognize header.get_zooms()[3]
-    tr = img.header.get_zooms()[3]  # type: ignore
+    tr = img.header.get_zooms()[3]
 
     # Convert nan to None (nilearn needs None to skip smoothing/filtering)
     import math
@@ -1031,10 +1030,10 @@ def run_ica(
     canica: Any = CanICA(
         mask=mask_file,
         n_components=n_components,
-        smoothing_fwhm=smooth_fwhm,  # type: ignore - nilearn accepts None or float
+        smoothing_fwhm=smooth_fwhm,  # type: ignore[arg-type]
         high_pass=highpass,
         low_pass=lowpass,
-        threshold=None,  # type: ignore - nilearn accepts None or float
+        threshold=None,  # type: ignore[arg-type]
         t_r=tr,
         n_jobs=-1,  # Use all CPUs
         random_state=0,  # For reproducibility
@@ -1143,19 +1142,19 @@ def spatial_correlation(
 
     # Load input file
     logger.info(f"Loading: {input_file}...")
-    img = load(input_file)
+    img = cast(Nifti1Image, load(input_file))
     data = get_data(img)
     n = data.shape[3]
 
     # Load parcellation and resample (note: they should already be co-registered)
     logger.info(f"Loading: {parcellation_file}...")
-    img_parcellation = load(parcellation_file)
+    img_parcellation = cast(Nifti1Image, load(parcellation_file))
     img_parcellation_rs = resample_to_img(img_parcellation, img, interpolation="nearest")
     data_parcellation = get_data(img_parcellation_rs).astype(int)
 
     # Load mask
     logger.info(f"Loading: {mask_file}...")
-    img_mask = load(mask_file)
+    img_mask = cast(Nifti1Image, load(mask_file))
     data_mask = get_data(img_mask) > 0
     V = data_mask.sum()
 
@@ -1356,7 +1355,7 @@ def mask_extraction_rest(
         lowpass=lowpass,
         overwrite=overwrite,
     )
-    components_img = load(components_file)
+    components_img = cast(Nifti1Image, load(components_file))
     components_data = get_data(components_img)
     emit_progress("Step 1/3", "ICA complete")
 
@@ -1411,7 +1410,9 @@ def mask_extraction_rest(
 
         # Load Schaefer parcellation
         schaefer_maps = schaefer.maps
-        schaefer_img = schaefer_maps if isinstance(schaefer_maps, nib.Nifti1Image) else nib.load(schaefer_maps)
+        schaefer_img = (
+            schaefer_maps if isinstance(schaefer_maps, nib.Nifti1Image) else cast(Nifti1Image, nib.load(schaefer_maps))
+        )
         schaefer_data = schaefer_img.get_fdata()
 
         # Group parcels by network name: "7Networks_LH_Default_Temp_1" → "Default"
@@ -1506,8 +1507,8 @@ def mask_extraction_rest(
             # Find component index with maximum correlation for this network
             ic_ind = chosen_components[target]
             # Extract that component's spatial map as the network mask
-            ic_data = components_data[..., ic_ind]  # type: ignore
-            ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)  # type: ignore
+            ic_data = components_data[..., ic_ind]
+            ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)
             save(ic_img, network_file)
         else:
             logger.info("Output file exists and overwrite=False. Skipping network extraction.")
@@ -1520,7 +1521,7 @@ def mask_extraction_rest(
     for network_file in network_files:
         thr_file = network_file.with_name(network_file.with_suffix("").stem + "_thr.nii.gz")
         if not thr_file.exists() or overwrite:
-            img: SpatialImage = load(network_file)  # type: ignore
+            img = cast(Nifti1Image, load(network_file))
             data = img.get_fdata()
             flat = data.ravel()
             # Use argpartition to efficiently find top N voxels without full sort
@@ -1528,7 +1529,7 @@ def mask_extraction_rest(
             mask[np.argpartition(flat, -threshold)[-threshold:]] = True
             mask = mask.reshape(data.shape)
             thresholded = ((data * mask) > 0).astype("uint8")
-            save(Nifti1Image(thresholded, img.affine, img.header), thr_file)  # type: ignore
+            save(Nifti1Image(thresholded, img.affine, img.header), thr_file)
         else:
             logger.info("Output file exists and overwrite=False. Skipping network thresholding.")
         network_thr_files.append(thr_file)
@@ -1667,12 +1668,8 @@ def create_tissue_masks(
 
     # Step 1: Fetch MNI tissue probability maps from templateflow
     emit_progress("Fetching tissue priors", "MNI152NLin2009cAsym WM/CSF")
-    wm_mni = Path(str(tflow.get(
-        "MNI152NLin2009cAsym", resolution=2, label="WM", suffix="probseg"
-    )))
-    csf_mni = Path(str(tflow.get(
-        "MNI152NLin2009cAsym", resolution=2, label="CSF", suffix="probseg"
-    )))
+    wm_mni = Path(str(tflow.get("MNI152NLin2009cAsym", resolution=2, label="WM", suffix="probseg")))
+    csf_mni = Path(str(tflow.get("MNI152NLin2009cAsym", resolution=2, label="CSF", suffix="probseg")))
     logger.info(f"WM prior: {wm_mni.name}")
     logger.info(f"CSF prior: {csf_mni.name}")
 
@@ -1703,7 +1700,7 @@ def create_tissue_masks(
             fixed=ref_file,
             transform_files=inv_transform_files,
             output_file=out_path,
-            interpolator='linear',
+            interpolator="linear",
             overwrite=overwrite,
         )
         logger.info(f"Warped {tissue_name} probability map to subject space")
@@ -1721,7 +1718,7 @@ def create_tissue_masks(
             continue
 
         # Load probability map and threshold
-        prob_img = nib.loadsave.load(prob_file)
+        prob_img = cast(Nifti1Image, nib.loadsave.load(prob_file))
         prob_data = np.asarray(prob_img.dataobj)
         binary_data = (prob_data >= 0.9).astype(np.uint8)
         n_pre_erosion = int(binary_data.sum())
@@ -1734,11 +1731,12 @@ def create_tissue_masks(
         # Adaptive erosion: try 2 voxels, fall back to 1, fall back to none
         # CSF is thin at BOLD resolution and may not survive aggressive erosion
         from pineuro.utils import erode_mask
+
         n_post_erosion = 0
         erosion_used = 0
         for n_erode in [2, 1]:
             erode_mask(pre_erosion_file, mask_file, n_erode=n_erode, overwrite=True)
-            eroded_img = nib.loadsave.load(mask_file)
+            eroded_img = cast(Nifti1Image, nib.loadsave.load(mask_file))
             n_post_erosion = int((np.asarray(eroded_img.dataobj) > 0).sum())
             if n_post_erosion > 0:
                 erosion_used = n_erode
@@ -1747,12 +1745,11 @@ def create_tissue_masks(
         if n_post_erosion == 0:
             # No erosion: use the thresholded binary directly
             import shutil
+
             shutil.copy2(pre_erosion_file, mask_file)
             n_post_erosion = n_pre_erosion
             erosion_used = 0
-            logger.warning(
-                f"{tissue_name.upper()} mask: skipped erosion (too few voxels at BOLD resolution)"
-            )
+            logger.warning(f"{tissue_name.upper()} mask: skipped erosion (too few voxels at BOLD resolution)")
 
         if n_post_erosion == 0:
             raise ValueError(
@@ -1760,10 +1757,7 @@ def create_tissue_masks(
                 f"({n_pre_erosion} voxels). "
                 f"The BOLD reference may have poor MNI registration."
             )
-        logger.info(
-            f"{tissue_name.upper()} mask: {n_pre_erosion} -> {n_post_erosion} voxels "
-            f"(erosion={erosion_used})"
-        )
+        logger.info(f"{tissue_name.upper()} mask: {n_pre_erosion} -> {n_post_erosion} voxels (erosion={erosion_used})")
         result[tissue_name] = mask_file
 
     emit_progress("Tissue masks complete", f"WM and CSF masks in {output_dir.name}/")
@@ -2022,7 +2016,7 @@ def _fetch_atlas_and_resolve_regions(
     if atlas_source == "harvard_oxford":
         atlas = datasets.fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
         atlas_maps = atlas.maps
-        atlas_img = atlas_maps if isinstance(atlas_maps, nib.Nifti1Image) else nib.load(atlas_maps)
+        atlas_img = atlas_maps if isinstance(atlas_maps, nib.Nifti1Image) else cast(Nifti1Image, nib.load(atlas_maps))
         atlas_data = atlas_img.get_fdata()
         labels = list(atlas.labels)
         # Harvard-Oxford: label index = voxel value
@@ -2040,7 +2034,7 @@ def _fetch_atlas_and_resolve_regions(
     elif atlas_source == "aal":
         atlas = datasets.fetch_atlas_aal(version="SPM12")
         atlas_maps = atlas.maps
-        atlas_img = atlas_maps if isinstance(atlas_maps, nib.Nifti1Image) else nib.load(atlas_maps)
+        atlas_img = atlas_maps if isinstance(atlas_maps, nib.Nifti1Image) else cast(Nifti1Image, nib.load(atlas_maps))
         atlas_data = atlas_img.get_fdata()
         labels = list(atlas.labels)
         indices = [int(i) for i in atlas.indices]
@@ -2061,7 +2055,7 @@ def _fetch_atlas_and_resolve_regions(
             resolution_mm=2,
         )
         atlas_maps = atlas.maps
-        atlas_img = atlas_maps if isinstance(atlas_maps, nib.Nifti1Image) else nib.load(atlas_maps)
+        atlas_img = atlas_maps if isinstance(atlas_maps, nib.Nifti1Image) else cast(Nifti1Image, nib.load(atlas_maps))
         atlas_data = atlas_img.get_fdata()
         raw_labels = [lbl.decode() if isinstance(lbl, bytes) else str(lbl) for lbl in atlas.labels]
         labels = raw_labels
@@ -2637,7 +2631,7 @@ def mask_extraction_task(
             atlas_mask_path = Path(atlas_mask)
             if not atlas_mask_path.exists():
                 raise FileNotFoundError(f"Atlas mask not found: {atlas_mask_path}")
-            atlas_img = load(atlas_mask_path)
+            atlas_img = cast(Nifti1Image, load(atlas_mask_path))
             atlas_label = atlas_mask_path.name
             emit_progress(f"Step 2/{n_steps}", f"Using user-provided atlas: {atlas_label}")
         else:
@@ -2686,13 +2680,13 @@ def mask_extraction_task(
                 invert=False,
                 overwrite=overwrite,
             )
-            atlas_img = load(atlas_subject_path)
+            atlas_img = cast(Nifti1Image, load(atlas_subject_path))
             atlas_label = fetch_label
             emit_progress(f"Step 2/{n_steps}", "Atlas registered to subject space")
 
         # Resample atlas to stat map resolution if needed
         first_stat_path = stat_map_paths[list(contrasts.keys())[0]]
-        stat_ref_img: SpatialImage = load(first_stat_path)  # type: ignore
+        stat_ref_img = cast(Nifti1Image, load(first_stat_path))
         atlas_resampled_img = resample_to_img(atlas_img, stat_ref_img, interpolation="nearest")
         atlas_subject_space_data = (atlas_resampled_img.get_fdata() > 0.5).astype(np.float64)
 
@@ -2742,9 +2736,9 @@ def mask_extraction_task(
             network_thr_files.append(thr_file)
 
             # Still record selection metadata from existing file
-            img: SpatialImage = load(thr_file)  # type: ignore
+            img = cast(Nifti1Image, load(thr_file))
             n_voxels = int(img.get_fdata().sum())
-            stat_img: SpatialImage = load(stat_map_path)  # type: ignore
+            stat_img = cast(Nifti1Image, load(stat_map_path))
             stat_data = stat_img.get_fdata()
             selections[mask_name] = TaskMaskSelection(
                 mask_name=mask_name,
@@ -2760,11 +2754,11 @@ def mask_extraction_task(
         emit_progress(step_label, f"Thresholding {mask_name}...")
 
         # Load stat map
-        stat_img: SpatialImage = load(stat_map_path)  # type: ignore
+        stat_img = cast(Nifti1Image, load(stat_map_path))
         stat_data = stat_img.get_fdata()
 
         # Copy unthresholded map
-        save(Nifti1Image(stat_data, stat_img.affine, stat_img.header), unthr_file)  # type: ignore
+        save(Nifti1Image(stat_data, stat_img.affine, stat_img.header), unthr_file)
 
         positive_mask = stat_data > 0
         n_positive = int(positive_mask.sum())
@@ -2811,7 +2805,7 @@ def mask_extraction_task(
             atlas_masked_stat = stat_data * atlas_subject_space_data
             atlas_masked_file = masks_dir / f"{participant_id}_{mask_name}_atlas_masked.nii.gz"
             save(
-                Nifti1Image(atlas_masked_stat, stat_img.affine, stat_img.header),  # type: ignore
+                Nifti1Image(atlas_masked_stat, stat_img.affine, stat_img.header),
                 atlas_masked_file,
             )
 
@@ -2875,7 +2869,7 @@ def mask_extraction_task(
                 cluster_outcome=outcome,
             )
 
-        save(Nifti1Image(binary_mask, stat_img.affine, stat_img.header), thr_file)  # type: ignore
+        save(Nifti1Image(binary_mask, stat_img.affine, stat_img.header), thr_file)
         network_thr_files.append(thr_file)
 
         emit_progress(step_label, f"{mask_name}: {n_kept} voxels (peak {stat_type}={peak_stat:.2f})")
@@ -3061,14 +3055,14 @@ def import_manual_masks(
 
         if mask_space == "native":
             # Load and validate
-            img: SpatialImage = load(mask_path)  # type: ignore
+            img = cast(Nifti1Image, load(mask_path))
             data = np.asarray(img.get_fdata())
 
             if data.ndim != 3:
                 raise ValueError(f"Mask must be 3D, got {data.ndim}D: {mask_path}")
 
             # Warn on shape mismatch with ref_file
-            ref_img: SpatialImage = load(ref_file)  # type: ignore
+            ref_img = cast(Nifti1Image, load(ref_file))
             if data.shape != ref_img.shape[:3]:
                 logger.warning(
                     f"Shape mismatch for {mask_name}: mask {data.shape} vs "
@@ -3079,7 +3073,7 @@ def import_manual_masks(
 
             # Binarize
             binarized = (data > 0).astype(np.uint8)
-            save(Nifti1Image(binarized, img.affine, img.header), out_file)  # type: ignore
+            save(Nifti1Image(binarized, img.affine, img.header), out_file)
 
         else:
             # anat or mni: apply registration transform
@@ -3096,29 +3090,29 @@ def import_manual_masks(
             )
 
             # Load transformed mask and binarize
-            img = load(transformed_file)  # type: ignore
+            img = cast(Nifti1Image, load(transformed_file))
             data = np.asarray(img.get_fdata())
 
             binarized = (data > 0).astype(np.uint8)
-            save(Nifti1Image(binarized, img.affine, img.header), out_file)  # type: ignore
+            save(Nifti1Image(binarized, img.affine, img.header), out_file)
 
             # Clean up intermediate transformed file
             if transformed_file.exists() and transformed_file != out_file:
                 transformed_file.unlink()
 
-        n_voxels = int(np.sum(nib.load(out_file).get_fdata() > 0))
+        n_voxels = int(np.sum(cast(Nifti1Image, nib.load(out_file)).get_fdata() > 0))
         emit_progress(f"Mask {i}/{len(mask_paths)}", f"{mask_name}: {n_voxels} voxels")
         output_files.append(out_file)
 
     # Save selections JSON for review dialog and persistence
-    selections_data = {
+    selections_data: dict[str, Any] = {
         "type": "manual",
         "ref_file": str(ref_file),
         "mask_space": mask_space,
         "selections": {},
     }
     for mask_name, out_file in zip(mask_names, output_files, strict=False):
-        n_vox = int(np.sum(nib.load(out_file).get_fdata() > 0))
+        n_vox = int(np.sum(cast(Nifti1Image, nib.load(out_file)).get_fdata() > 0))
         selections_data["selections"][mask_name] = {
             "n_voxels_thresholded": n_vox,
             "source": "manual_import",
@@ -3373,12 +3367,12 @@ def generate_reference_qc_overlays(
         apply_xfm(
             moving=yeo_sub,
             fixed=mean_file,
-            transform_files=xfm_files,
+            transform_files=[str(f) for f in xfm_files],
             output_file=atlas_reference,
             interpolator="nearestNeighbor",
             overwrite=overwrite,
         )
-        atlas_data = load(atlas_reference).get_fdata()
+        atlas_data = cast(Nifti1Image, load(atlas_reference)).get_fdata()
         n_labels = int(np.max(atlas_data))
         labels = get_yeo_labels(n_networks=17 if n_labels > 7 else 7)
     else:

@@ -402,7 +402,7 @@ def _gamma_pdf_rate(t: np.ndarray, shape: float, rate: float) -> np.ndarray:
     # Set t=0 to 0 (limit of t^(a-1) as t->0 for a>1)
     pdf[t == 0] = 0.0
 
-    return pdf
+    return np.asarray(pdf)
 
 
 def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
@@ -708,7 +708,7 @@ def get_nifti_files(directory: Path) -> list[Path]:
         Sorted list of NIfTI file paths
 
     """
-    nifti_files = []
+    nifti_files: list[Path] = []
     for ext in NIFTI_EXTENSIONS:
         nifti_files.extend(directory.glob(ext))
 
@@ -1062,9 +1062,9 @@ def _run_job_worker(job_spec: dict) -> dict:
     """
     try:
         run_command(
-            cmd_name=job_spec.get("cmd_name"),
-            cmd=job_spec.get("cmd"),
-            description=job_spec.get("description"),
+            cmd_name=job_spec["cmd_name"],
+            cmd=job_spec["cmd"],
+            description=job_spec["description"],
             inputs=job_spec.get("inputs"),
             outputs=job_spec.get("outputs"),
             overwrite=job_spec.get("overwrite", False),
@@ -1327,7 +1327,7 @@ def compute_mean(input_file: Union[str, Path], output_file: Union[str, Path], ov
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Load 4D image and compute mean along time axis
-    img = nib.load(str(input_file))
+    img = cast(Nifti1Image, nib.load(str(input_file)))
     data = img.get_fdata()
     mean_data = data.mean(axis=-1)
 
@@ -1531,8 +1531,8 @@ def apply_xfm_sform_to_mni(
     epi_tpl_path = cast(Path, tflow.get("MNI152NLin2009cAsym", resolution=2, desc="fMRIPrep", suffix="boldref"))  # type: ignore
 
     logger.info(f"Resampling to MNI space: {Path(input_file).name}")
-    source_img = nib.load(str(input_file))
-    target_img = nib.load(str(epi_tpl_path))
+    source_img = cast(Nifti1Image, nib.load(str(input_file)))
+    target_img = cast(Nifti1Image, nib.load(str(epi_tpl_path)))
 
     resampled = resample_to_img(
         source_img, target_img, interpolation=nilearn_interp, force_resample=True, copy_header=True
@@ -1663,8 +1663,8 @@ def apply_mask(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Load images
-    img = nib.load(str(input_file))
-    mask = nib.load(str(mask_file))
+    img = cast(Nifti1Image, nib.load(str(input_file)))
+    mask = cast(Nifti1Image, nib.load(str(mask_file)))
 
     # Get data
     data = img.get_fdata()
@@ -1723,7 +1723,7 @@ def erode_mask(
     logger.info(f"Eroding mask by {n_erode} voxels: {input_file}")
 
     # Load mask
-    img = nib.load(str(input_file))
+    img = cast(Nifti1Image, nib.load(str(input_file)))
     data = img.get_fdata() > 0  # Ensure binary
 
     # 6-connected structuring element (face neighbors only)

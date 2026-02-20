@@ -83,7 +83,7 @@ import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .tasks.session import SessionState
@@ -125,7 +125,7 @@ class SimulatorSourceMapping:
     >>> localizer_sources = mapping.get_localizer_sources("sub-001", n_runs=2)
     """
 
-    _data: dict
+    _data: dict[str, dict[str, Path]]
 
     @classmethod
     def from_file(cls, path: Path) -> SimulatorSourceMapping:
@@ -296,7 +296,7 @@ class VisitConfig:
     notes: str = ""
     created: str = field(default_factory=lambda: datetime.now().isoformat())
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration."""
         if self.mask_source not in ("compute", "reuse"):
             raise ValueError(f"mask_source must be 'compute' or 'reuse', got '{self.mask_source}'")
@@ -361,7 +361,7 @@ class ShamConfig:
     alternative_mask_targets: list[str] = field(default_factory=lambda: ["SomMotA", "SomMotB"])
     randomization_file: Path | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration and convert paths."""
         if self.enabled:
             if self.delivery_method not in ("alternative_masks", "replay"):
@@ -421,7 +421,7 @@ class PathConfig:
     collection_dir: Path | None = None
     mask_source_dir: Path | None = None  # For mask reuse across visits
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Convert all paths to Path objects and set defaults for optional directories."""
         self.base_dir = Path(self.base_dir)
 
@@ -465,7 +465,7 @@ class PathConfig:
     @property
     def participant_visit_dir(self) -> Path:
         """Return the participant + visit directory."""
-        return self._participant_visit_dir
+        return cast(Path, self._participant_visit_dir)
 
     @property
     def is_multi_visit(self) -> bool:
@@ -581,7 +581,7 @@ class ScanConfig:
         """Alias for localizer_n_runs (backward compatibility)."""
         return self.localizer_n_runs
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Convert all DICOM source paths to Path objects."""
         self.localizer_source_dicoms = [Path(p) for p in self.localizer_source_dicoms]
         if self.reference_dicoms is not None:
@@ -694,7 +694,7 @@ class MaskConfig:
     manual_anat_file: Path | None = None
     manual_mask_space: str = "native"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.localizer_type not in ("rest", "task", "manual"):
             raise ValueError(f"localizer_type must be 'rest', 'task', or 'manual', got '{self.localizer_type}'")
         if self.localizer_type == "task" and not self.contrasts:
@@ -813,7 +813,7 @@ class FeedbackConfig:
     wm_mask_path: Path | None = None
     csf_mask_path: Path | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Backward compatibility: migrate old config keys
         if hasattr(self, "moco_enabled"):
             self.motion_correction = "siemens_moco" if self.moco_enabled else "software"
@@ -826,8 +826,7 @@ class FeedbackConfig:
 
         if self.motion_correction not in self.VALID_MOTION_CORRECTION:
             raise ValueError(
-                f"motion_correction must be one of {self.VALID_MOTION_CORRECTION}, "
-                f"got '{self.motion_correction}'"
+                f"motion_correction must be one of {self.VALID_MOTION_CORRECTION}, got '{self.motion_correction}'"
             )
         if self.wm_mask_path is not None:
             self.wm_mask_path = Path(self.wm_mask_path)
@@ -858,11 +857,11 @@ class TaskConfig:
 
     task_type: str = "ball"
     max_feedback_runs: int = 2
-    task_params: dict = field(default_factory=dict)
-    network_assignment: dict = field(default_factory=dict)
+    task_params: dict[str, Any] = field(default_factory=dict)
+    network_assignment: dict[str, str] = field(default_factory=dict)
 
 
-def _path_to_str(obj):
+def _path_to_str(obj: Any) -> Any:
     """Convert Path objects to strings for JSON serialization."""
     if isinstance(obj, Path):
         return str(obj)
@@ -881,11 +880,11 @@ class SelectedAcquisitions:
     when multiple attempts exist (e.g., after interruptions/retries).
     """
 
-    localizer: dict[int, int] = None  # run_num -> acq_num for localizer runs
-    reference: dict[int, int] = None  # run_num -> acq_num for reference scans
-    feedback: dict[str, dict] = None  # step_id -> {run, acq} for feedback runs
+    localizer: dict[int, int] | None = None  # run_num -> acq_num for localizer runs
+    reference: dict[int, int] | None = None  # run_num -> acq_num for reference scans
+    feedback: dict[str, dict[str, Any]] | None = None  # step_id -> {run, acq} for feedback runs
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize empty dicts if None."""
         if self.localizer is None:
             self.localizer = {}
@@ -967,7 +966,7 @@ class SessionConfig:
         return cls._from_dict(data)
 
     @classmethod
-    def _from_dict(cls, data: dict) -> SessionConfig:
+    def _from_dict(cls, data: dict[str, Any]) -> SessionConfig:
         """Create config from dictionary."""
         paths_data = data.get("paths", {})
         paths = PathConfig(**paths_data)
@@ -1009,7 +1008,7 @@ class SessionConfig:
         with open(path, "w") as f:
             json.dump(self._to_dict(), f, indent=2)
 
-    def _to_dict(self) -> dict:
+    def _to_dict(self) -> dict[str, Any]:
         """Convert to dictionary with Path objects as strings."""
         result = {
             "paths": _path_to_str(asdict(self.paths)),
@@ -1152,6 +1151,7 @@ def ref_file_path(config: SessionConfig, task: str = "rest", source_visit: str |
         # Get ref from a different visit
         preprocessing_dir = config.paths.base_dir / config.paths.participant_id / source_visit / "preprocessing"
     else:
+        assert config.paths.preprocessing_dir is not None
         preprocessing_dir = config.paths.preprocessing_dir
     return preprocessing_dir / f"{config.paths.participant_id}_task-{task}_boldref.nii.gz"
 
@@ -1201,7 +1201,7 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
     return max_run + 1
 
 
-def get_localizer_run_info(collection_dir: Path, task: str, run: int, expected_volumes: int) -> dict:
+def get_localizer_run_info(collection_dir: Path, task: str, run: int, expected_volumes: int) -> dict[str, Any]:
     """Get run info for localizer/reference with retry detection using acq entity.
 
     Scans for existing {task}_acq-*_run-{run:02d} folders and determines
@@ -1300,6 +1300,7 @@ def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
     """
     if config.visit is None or config.visit.mask_source == "compute":
         # Masks computed in this visit
+        assert config.paths.mask_extraction_dir is not None
         # Check both ICA-based (03_masks) and task-based (02_masks) directories
         mask_dir = config.paths.mask_extraction_dir / "03_masks"
         if not mask_dir.exists():
@@ -1309,6 +1310,7 @@ def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
         return (mask_files, ref)
     elif config.visit.mask_source == "reuse":
         # Masks from another visit
+        assert config.visit.mask_source_visit is not None
         source_visit = config.visit.mask_source_visit
         source_base = config.paths.base_dir / config.paths.participant_id / source_visit / "mask_extraction"
         # Check both ICA-based (03_masks) and task-based (02_masks) directories
@@ -1347,7 +1349,7 @@ def is_single_visit_data(participant_dir: Path) -> bool:
     return has_direct_masks and not has_visit_dirs
 
 
-def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict]:
+def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict[str, Any]]:
     """Detect existing visit directories for a participant.
 
     Parameters
@@ -1367,7 +1369,7 @@ def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict]:
         - masks_approved: bool
     """
     participant_dir = base_dir / participant_id
-    visits = []
+    visits: list[dict[str, Any]] = []
 
     if not participant_dir.exists():
         return visits
@@ -1511,6 +1513,7 @@ def run_dicom_collection(
     logger.info(f"DICOM COLLECTION ({task_name})")
     logger.info("=" * 60)
 
+    assert config.paths.collection_dir is not None
     collection_dir = config.paths.collection_dir
     if source_dirs is None:
         source_dirs = config.resolve_localizer_sources()
@@ -1628,7 +1631,11 @@ def run_preprocessing(
 
 
 def run_mask_extraction(
-    config: SessionConfig, preproc_file: Path, mask_file: Path, ref_file: Path, overwrite: bool = False
+    config: SessionConfig,
+    preproc_file: Path | None,
+    mask_file: Path | None,
+    ref_file: Path | None,
+    overwrite: bool = False,
 ) -> list[Path]:
     """Run mask extraction (ICA-based or GLM-based depending on config).
 
@@ -1636,12 +1643,12 @@ def run_mask_extraction(
     ----------
     config : SessionConfig
         Session configuration
-    preproc_file : Path
-        Preprocessed 4D NIfTI file
-    mask_file : Path
-        Brain mask file
-    ref_file : Path
-        BOLD reference file
+    preproc_file : Path or None
+        Preprocessed 4D NIfTI file (None for manual import)
+    mask_file : Path or None
+        Brain mask file (None for manual import)
+    ref_file : Path or None
+        BOLD reference file (None for manual import)
     overwrite : bool
         If True, rerun even if outputs exist
 
@@ -1661,12 +1668,14 @@ def run_mask_extraction(
         from .mask_extraction import import_manual_masks
 
         logger.info("Using manual ROI import")
+        manual_ref = config.mask.manual_ref_file or ref_file
+        assert manual_ref is not None, "ref_file or manual_ref_file is required for manual import"
         network_files = import_manual_masks(
             participant_id=config.paths.participant_id,
             root_dir=str(config.paths.mask_extraction_dir),
-            mask_paths=config.mask.manual_mask_paths,
+            mask_paths=list(config.mask.manual_mask_paths),
             mask_names=config.mask.mask_names,
-            ref_file=config.mask.manual_ref_file or ref_file,
+            ref_file=manual_ref,
             mask_space=config.mask.manual_mask_space,
             anat_file=config.mask.manual_anat_file,
             overwrite=overwrite,
@@ -1674,6 +1683,7 @@ def run_mask_extraction(
     elif localizer_type == "task":
         from .mask_extraction import mask_extraction_task
 
+        assert preproc_file is not None and mask_file is not None and ref_file is not None
         logger.info("Using task-based (GLM) mask extraction")
         network_files = mask_extraction_task(
             participant_id=config.paths.participant_id,
@@ -1702,6 +1712,7 @@ def run_mask_extraction(
     else:
         from .mask_extraction import mask_extraction_rest
 
+        assert preproc_file is not None and mask_file is not None and ref_file is not None
         logger.info("Using ICA-based (resting-state) mask extraction")
         network_files = mask_extraction_rest(
             participant_id=config.paths.participant_id,
@@ -1722,6 +1733,7 @@ def run_mask_extraction(
     if config.feedback.include_wm_regressor or config.feedback.include_csf_regressor:
         from .mask_extraction import create_tissue_masks
 
+        assert config.paths.mask_extraction_dir is not None
         logger.info("")
         logger.info("Creating WM/CSF tissue masks for nuisance regression...")
         tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
@@ -1735,6 +1747,7 @@ def run_mask_extraction(
                 inv_xfm = [str(f) for f in inv_files]
                 logger.info(f"Reusing MNI inverse transforms from {mnireg_dir.name}/")
 
+        assert ref_file is not None
         create_tissue_masks(
             ref_file=ref_file,
             output_dir=tissue_dir,
@@ -1780,6 +1793,7 @@ def run_coregistration(
     logger.info("COREGISTER MASKS TO FEEDBACK SPACE")
     logger.info("=" * 60)
 
+    assert config.paths.mask_extraction_dir is not None
     reference_dir = reference_dicom_dir or config.resolve_simulator_source("reference_realtime")
 
     # Append tissue masks to the coregistration list if nuisance regression enabled
@@ -1788,6 +1802,7 @@ def run_coregistration(
     tissue_indices: dict[str, int] = {}
 
     if config.feedback.include_wm_regressor or config.feedback.include_csf_regressor:
+        assert config.paths.mask_extraction_dir is not None
         tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
         wm_src = tissue_dir / f"{config.paths.participant_id}_tissue_wm_mask.nii.gz"
         csf_src = tissue_dir / f"{config.paths.participant_id}_tissue_csf_mask.nii.gz"
@@ -1799,8 +1814,7 @@ def run_coregistration(
             logger.info("Including WM/CSF tissue masks in reference coregistration")
         else:
             logger.warning(
-                f"Nuisance regression enabled but tissue masks not found in {tissue_dir}. "
-                "Run mask extraction first."
+                f"Nuisance regression enabled but tissue masks not found in {tissue_dir}. Run mask extraction first."
             )
 
     coreg_files = coregister_reference(
@@ -1818,8 +1832,9 @@ def run_coregistration(
     if tissue_indices:
         config.feedback.wm_mask_path = coreg_files[tissue_indices["wm"]]
         config.feedback.csf_mask_path = coreg_files[tissue_indices["csf"]]
-        logger.info(f"Tissue mask paths set: WM={config.feedback.wm_mask_path.name}, "
-                     f"CSF={config.feedback.csf_mask_path.name}")
+        logger.info(
+            f"Tissue mask paths set: WM={config.feedback.wm_mask_path.name}, CSF={config.feedback.csf_mask_path.name}"
+        )
 
     return network_coreg
 
@@ -1859,6 +1874,7 @@ def setup_visit_with_reused_masks(
     if config.visit is None or config.visit.mask_source != "reuse":
         raise ValueError("setup_visit_with_reused_masks requires config.visit.mask_source='reuse'")
 
+    assert config.visit.mask_source_visit is not None
     source_visit = config.visit.mask_source_visit
     logger.info(f"Source visit: {source_visit}")
 
@@ -1880,6 +1896,7 @@ def setup_visit_with_reused_masks(
 
     # Coregister source masks to current visit's reference
     # Output goes to session_dir (feedback/) instead of mask_extraction_dir
+    assert config.paths.session_dir is not None
     coreg_masks = coregister_reference(
         participant_id=config.paths.participant_id,
         root_dir=str(config.paths.session_dir),  # feedback/ directory
@@ -1949,6 +1966,7 @@ def setup_session(
         reference_source = config.resolve_simulator_source("reference_realtime")
         if skip_collection:
             logger.info("Skipping reference collection (using source DICOMs directly)")
+            assert reference_source is not None, "reference_realtime source required for mask reuse"
             reference_dicoms = reference_source
         else:
             reference_list = run_dicom_collection(
@@ -1973,7 +1991,8 @@ def setup_session(
         initial_reference_source = config.resolve_simulator_source("reference_initial")
         if skip_collection:
             logger.info("Skipping initial reference collection (using source DICOMs directly)")
-            initial_reference = [initial_reference_source]
+            assert initial_reference_source is not None, "reference_initial source required"
+            initial_reference: list[Path] = [initial_reference_source]
         else:
             initial_reference = run_dicom_collection(
                 config,
@@ -1986,6 +2005,7 @@ def setup_session(
             )
 
         # Step 1: Import manual masks (no localizer or preprocessing needed)
+        assert config.mask.manual_ref_file is not None, "manual_ref_file required for manual localizer"
         ref_file = config.mask.manual_ref_file
         network_files = run_mask_extraction(config, None, None, ref_file, overwrite)
 
@@ -2009,6 +2029,7 @@ def setup_session(
     initial_reference_source = config.resolve_simulator_source("reference_initial")
     if skip_collection:
         logger.info("Skipping initial reference collection (using source DICOMs directly)")
+        assert initial_reference_source is not None, "reference_initial source required"
         initial_reference = [initial_reference_source]
     else:
         initial_reference = run_dicom_collection(
@@ -2067,7 +2088,7 @@ def run_single_task(
     session_state: SessionState,
     run_type: str,
     use_simulator: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     """Run a single task (transfer or feedback).
 
     Uses the task registry and factory to create the appropriate task based
@@ -2112,7 +2133,7 @@ def run_single_task(
     task_regressors = _compute_regressors_for_task(metadata, config)
 
     # Set up simulator parameters if using simulator
-    simulator_kwargs = {}
+    simulator_kwargs: dict[str, Any] = {}
     if use_simulator:
         source_run_type = f"{run_type}_run-{task_run_number:02d}"
         simulator_source = config.resolve_simulator_source(source_run_type)
@@ -2126,6 +2147,8 @@ def run_single_task(
     # Resolve mask names from network assignment
     task_mask_names = _resolve_mask_names(config, metadata)
 
+    assert config.paths.feedback_output_dir is not None
+    assert config.paths.collection_dir is not None
     # Start feedback session
     session_info = run_feedback_session(
         mask_paths=list(mask_files),
@@ -2199,7 +2222,7 @@ def run_single_task(
     return results
 
 
-def _compute_regressors_for_task(metadata, config):
+def _compute_regressors_for_task(metadata: Any, config: SessionConfig) -> Any:
     """Compute task regressors based on metadata.design_type.
 
     Parameters
@@ -2234,7 +2257,7 @@ def _compute_regressors_for_task(metadata, config):
         return None
 
 
-def _resolve_mask_names(config, metadata):
+def _resolve_mask_names(config: SessionConfig, metadata: Any) -> list[str]:
     """Resolve ordered mask names from network_assignment or defaults.
 
     Parameters
@@ -2324,7 +2347,9 @@ def coregister_before_first_transfer(
     try:
         from .mask_extraction import generate_reference_qc_overlays
 
-        run_str = re.search(r"run-(\d+)", coreg_mask_files[0].stem).group(1) if coreg_mask_files else "01"  # type: ignore
+        assert config.paths.mask_extraction_dir is not None
+        _run_match = re.search(r"run-(\d+)", coreg_mask_files[0].stem) if coreg_mask_files else None
+        run_str = _run_match.group(1) if _run_match else "01"
         generate_reference_qc_overlays(
             participant_id=config.paths.participant_id,
             session_dir=config.paths.mask_extraction_dir,  # reference outputs are in mask_extraction/04_reference
@@ -2378,7 +2403,7 @@ def run_full_session(
     n_feedback_runs: int = 2,
     reset_session: bool = False,
     use_simulator: bool = True,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Run a complete multi-run session.
 
     Workflow depends on task config: with transfer runs it's
@@ -2413,6 +2438,7 @@ def run_full_session(
     logger.info(f"Task: {config.task.task_type}")
     logger.info(f"Workflow: {' -> '.join(r.capitalize() for r in run_sequence)}")
 
+    assert config.paths.session_dir is not None
     session_dir = config.paths.session_dir
     if reset_session:
         session_state = SessionState.reset(session_dir, task_id=config.task.task_type)
@@ -2469,7 +2495,7 @@ def run_next_task(
     mask_files: list[Path],
     n_feedback_runs: int = 2,
     use_simulator: bool = True,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Run the next task in the session sequence.
 
     Loads session state, determines the next run type, executes it, and exits.
@@ -2493,6 +2519,7 @@ def run_next_task(
     """
     from .tasks.session import SessionState
 
+    assert config.paths.session_dir is not None
     session_dir = config.paths.session_dir
     session_state = SessionState.load(session_dir, task_id=config.task.task_type)
 
@@ -2554,4 +2581,5 @@ def reset_session_state(config: SessionConfig) -> SessionState:
     """
     from .tasks.session import SessionState
 
+    assert config.paths.session_dir is not None
     return SessionState.reset(config.paths.session_dir, task_id=config.task.task_type)

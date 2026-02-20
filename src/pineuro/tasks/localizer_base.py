@@ -23,6 +23,8 @@ Dependencies
 PsychoPy (for concrete tasks), pandas (for events TSV output)
 """
 
+from __future__ import annotations
+
 import logging
 from abc import abstractmethod
 from pathlib import Path
@@ -91,7 +93,7 @@ class BaseLocalizerTask(TaskBase):
         self.monitor_position = monitor_position
 
         self._events: list[dict[str, Any]] = []
-        self._experiment_clock = None
+        self._experiment_clock: Any = None
 
     # =========================================================================
     # Stimulus presentation utilities

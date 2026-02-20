@@ -175,7 +175,7 @@ class VisitSelectionDialog:
     def _show_multi_visit_dialog(self):
         """Show dialog when multi-visit data exists."""
         # Build visit list
-        visit_tiles = []
+        visit_tiles: list[ft.Control] = []
         visits_with_approved_masks = []
 
         for visit in self.existing_visits:
@@ -323,7 +323,7 @@ class VisitSelectionDialog:
         def create_visit(e):
             self.page.pop_dialog()
 
-            mask_value = mask_source_dropdown.value
+            mask_value = mask_source_dropdown.value or ""
             if mask_value.startswith("reuse:"):
                 mask_source = "reuse"
                 mask_source_visit = mask_value.split(":", 1)[1]

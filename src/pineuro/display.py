@@ -21,7 +21,6 @@ Examples
 
 import logging
 from dataclasses import dataclass
-from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +89,8 @@ def get_monitors() -> list[MonitorInfo]:
             )
 
         logger.debug(f"Detected {len(monitors)} monitor(s)")
-        for m in monitors:
-            logger.debug(f"  {m.name}: {m.width}x{m.height} at ({m.x}, {m.y})")
+        for mon in monitors:
+            logger.debug(f"  {mon.name}: {mon.width}x{mon.height} at ({mon.x}, {mon.y})")
 
         return monitors
 
@@ -103,7 +102,7 @@ def get_monitors() -> list[MonitorInfo]:
         return []
 
 
-def get_monitor_by_position(position: Literal["left", "right"]) -> MonitorInfo | None:
+def get_monitor_by_position(position: str) -> MonitorInfo | None:
     """Get monitor by position label.
 
     Parameters

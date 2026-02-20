@@ -9,12 +9,13 @@ Requires flet-charts package: pip install flet-charts
 import logging
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 import flet as ft
 
 # Import chart types from flet_charts package
 try:
-    import flet_charts as fch
+    import flet_charts as fch  # type: ignore[import-untyped]
 
     LineChart = fch.LineChart
     LineChartData = fch.LineChartData
@@ -128,10 +129,10 @@ class ActivationPlot:
         self.mask_colors = {name: NETWORK_COLORS[i % len(NETWORK_COLORS)] for i, name in enumerate(mask_names)}
 
         # Chart control (created in build())
-        self.chart: LineChart | None = None
-        self._data_series: list[LineChartData] = []
+        self.chart: Any = None
+        self._data_series: list[Any] = []
 
-    def _create_data_series(self) -> list[LineChartData]:
+    def _create_data_series(self) -> list[Any]:
         """Create LineChartData objects for each mask.
 
         Returns:
@@ -333,7 +334,7 @@ class ActivationPlot:
         )
 
         # Create legend (use display_names for blind mode)
-        legend_items = []
+        legend_items: list[ft.Control] = []
         for i, mask_name in enumerate(self.mask_names):
             display_name = self.display_names[i] if i < len(self.display_names) else mask_name
             legend_items.append(

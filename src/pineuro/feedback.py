@@ -140,7 +140,7 @@ import time  # Timing for volume collection
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, TextIO
+from typing import IO, TYPE_CHECKING, Any, Optional, cast
 
 # Type-checking only imports (avoid circular dependencies)
 if TYPE_CHECKING:
@@ -199,7 +199,7 @@ def _rotation_matrix_to_euler(R: NDArray[np.float64]) -> NDArray[np.float64]:
     # Use scipy for robust conversion
     rot = Rotation.from_matrix(R)
     # XYZ intrinsic = xyz extrinsic, matches FSL convention
-    return rot.as_euler("xyz")
+    return np.asarray(rot.as_euler("xyz"))
 
 
 def _ants_register_volume(
@@ -600,7 +600,7 @@ class IncrementalGLM:
         # Compute normalized activation (error / deviation)
         activation = error / deviation
 
-        return activation
+        return np.asarray(activation)
 
     def update(
         self,
@@ -860,7 +860,7 @@ class FeedbackEstimator:
         self.use_efficiency_weights = use_efficiency_weights
         self._smooth_fwhm = smooth_fwhm
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
-        self._algo_dump_fh: TextIO | None = None
+        self._algo_dump_fh: IO[Any] | None = None
 
         # Motion correction mode (decoupled from GLM regressors)
         self._motion_correction = motion_correction
@@ -868,9 +868,7 @@ class FeedbackEstimator:
         # GLM nuisance regressor configuration (individually toggleable)
         self._include_drift = include_drift
         # Motion regressors require motion params to be available
-        self._include_motion = (
-            include_motion_regressors and motion_correction != "none"
-        )
+        self._include_motion = include_motion_regressors and motion_correction != "none"
         if include_motion_regressors and motion_correction == "none":
             logger.warning(
                 "include_motion_regressors=True but motion_correction='none' — "
@@ -921,10 +919,7 @@ class FeedbackEstimator:
             regressor_parts.append("WM")
         if self._include_csf:
             regressor_parts.append("CSF")
-        logger.info(
-            f"GLM nuisance model: {' + '.join(regressor_parts)} "
-            f"({n_nuisance} regressors)"
-        )
+        logger.info(f"GLM nuisance model: {' + '.join(regressor_parts)} ({n_nuisance} regressors)")
 
         # Validate and store task regressors
         if task_regressors is not None:
@@ -941,7 +936,7 @@ class FeedbackEstimator:
                 raise ValueError(
                     f"task_regressors has {task_regressors.shape[0]} rows, expected {n_volumes} to match n_volumes"
                 )
-            self._task_regressors = task_regressors
+            self._task_regressors: NDArray[np.float64] | None = task_regressors
             self._n_task_regressors = task_regressors.shape[1]
         else:
             # No task regressors - nuisance-only model
@@ -1038,8 +1033,7 @@ class FeedbackEstimator:
         coords : set of tuple
             Set of (i, j, k) coordinates where mask > 0.
         """
-        # type: ignore[assignment] - nibabel load() returns SpatialImage, not Nifti1Image
-        img: Nifti1Image = nib.loadsave.load(path)  # type: ignore[assignment]
+        img = cast(Nifti1Image, nib.loadsave.load(path))
         data = np.asarray(img.dataobj)
 
         # Verify compatible shape
@@ -1120,8 +1114,7 @@ class FeedbackEstimator:
         and creating mappings from each mask to the master index.
         """
         # Load first mask to get reference shape for validation
-        # type: ignore[assignment] - nibabel load() returns SpatialImage, not Nifti1Image
-        first_img: Nifti1Image = nib.loadsave.load(mask_paths[0])  # type: ignore[assignment]
+        first_img = cast(Nifti1Image, nib.loadsave.load(mask_paths[0]))
         self._shape = first_img.shape[:3]
 
         # Load all masks and collect coordinates
@@ -1139,7 +1132,7 @@ class FeedbackEstimator:
         # Map masks to master index
         self._mask_voxel_idx = self._map_masks_to_master(mask_indices)
 
-    def _load_tissue_mask(self, mask_path: Path) -> tuple[NDArray, NDArray, NDArray]:
+    def _load_tissue_mask(self, mask_path: Path) -> tuple[np.ndarray, ...]:
         """Load a tissue mask and return 3D fancy indices for extraction.
 
         Parameters
@@ -1156,12 +1149,10 @@ class FeedbackEstimator:
         ValueError
             If mask shape doesn't match ROI masks or mask is empty.
         """
-        img: Nifti1Image = nib.loadsave.load(mask_path)  # type: ignore[assignment]
+        img = cast(Nifti1Image, nib.loadsave.load(mask_path))
         mask_data = np.asarray(img.dataobj) > 0
         if mask_data.shape[:3] != self._shape:
-            raise ValueError(
-                f"Tissue mask shape {mask_data.shape[:3]} != ROI mask shape {self._shape}"
-            )
+            raise ValueError(f"Tissue mask shape {mask_data.shape[:3]} != ROI mask shape {self._shape}")
         indices = np.where(mask_data)
         if len(indices[0]) == 0:
             raise ValueError(f"Tissue mask is empty after loading: {mask_path}")
@@ -1291,6 +1282,7 @@ class FeedbackEstimator:
             self._welford_m2 = np.zeros_like(voxel_values)
             return 0.0
 
+        assert self._welford_m2 is not None  # initialized alongside _welford_mean
         delta = voxel_values - self._welford_mean
         self._welford_mean += delta / self._welford_count
         delta2 = voxel_values - self._welford_mean
@@ -1307,7 +1299,7 @@ class FeedbackEstimator:
         voxel_tsnr = self._welford_mean[valid] / std[valid]
         return float(np.median(voxel_tsnr))
 
-    def _build_design_row(self, motion_params: NDArray[np.float64]) -> NDArray[np.float64]:
+    def _build_design_row(self, motion_params: np.ndarray) -> NDArray[np.float64]:
         """Build design matrix row for current volume.
 
         Parameters
@@ -1329,11 +1321,12 @@ class FeedbackEstimator:
         # Compute motion diff (needed for GLM motion regressors)
         if self._include_motion:
             # Compute frame-to-frame motion from absolute parameters
+            motion_diff: np.ndarray
             if self.n_volumes == 0:
                 motion_diff = np.zeros(6, dtype=np.float64)
             else:
                 prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
-                motion_diff = motion_params - prev
+                motion_diff = np.asarray(motion_params - prev, dtype=np.float64)
 
             # Convert rotations from degrees to arc length (mm) at 50mm radius
             # arc_length = radius * angle_radians = 50 * (angle_degrees * pi/180)
@@ -1407,10 +1400,12 @@ class FeedbackEstimator:
     ) -> None:
         """Dump algorithm variables to file for debugging/comparison with MURFI."""
         if self._algo_dump_fh is None:
+            assert self._dump_algo_vars_path is not None  # caller checks _dump_algo_vars_path
             self._algo_dump_fh = open(self._dump_algo_vars_path, "w")  # noqa: SIM115
             self._algo_dump_fh.write("# pineuro algo dump\n")
 
         algo_vars = self._glm.dump_algo_vars(list(range(min(10, self._n_voxels))))
+        assert self._algo_dump_fh is not None
         fh = self._algo_dump_fh
 
         fh.write(f"\n=== Volume {self.n_volumes} ===\n")
@@ -1452,8 +1447,7 @@ class FeedbackEstimator:
         nifti_path = Path(nifti_path)
 
         # ===== 1. Load volume data =====
-        # type: ignore[assignment] - nibabel load() returns SpatialImage, not Nifti1Image
-        img: Nifti1Image = nib.loadsave.load(nifti_path)  # type: ignore[assignment]
+        img = cast(Nifti1Image, nib.loadsave.load(nifti_path))
 
         # Apply spatial smoothing if configured
         if self._smooth_fwhm is not None:
@@ -1479,10 +1473,8 @@ class FeedbackEstimator:
 
         # ===== 2. Extract motion parameters =====
         # Motion params are extracted whenever available (for FD/QC), even if not in GLM
-        if self._motion_correction == "none":
-            motion_params = np.zeros(6, dtype=np.float64)
-        elif motion_source is None:
-            motion_params = np.zeros(6, dtype=np.float64)
+        if self._motion_correction == "none" or motion_source is None:
+            motion_params: np.ndarray = np.zeros(6, dtype=np.float64)
         elif isinstance(motion_source, (np.ndarray, list)):
             motion_params = np.array(motion_source, dtype=np.float64)
             if motion_params.shape != (6,):
@@ -2348,7 +2340,7 @@ class NeurofeedbackCoordinator:
         # CSV log setup with BIDS-style naming (use acq entity if provided)
         self._csv_path = self.output_dir / f"{self.subject}_task-{self.task}_{self._run_acq_str}_feedbacklog.tsv"
         self._design_matrix_path = self.output_dir / f"{self.subject}_task-{self.task}_{self._run_acq_str}_design.tsv"
-        self._design_file: TextIO | None = None  # File handle for incremental design matrix writes
+        self._design_file: IO[Any] | None = None  # File handle for incremental design matrix writes
 
         logger.info(f"NeurofeedbackCoordinator initialized: watching {self.watch_dir}, {n_volumes} volumes expected")
 
@@ -2362,8 +2354,8 @@ class NeurofeedbackCoordinator:
         In sham mode, additional {mask}_real columns are added to log
         the actual computed activations alongside the delivered (sham) values.
         """
-        self._csv_file = open(self._csv_path, "w", newline="")  # noqa: SIM115
-        self._csv_writer = csv.writer(self._csv_file, delimiter="\t")
+        self._csv_file: IO[Any] | None = open(self._csv_path, "w", newline="")  # noqa: SIM115
+        self._csv_writer: Any = csv.writer(self._csv_file, delimiter="\t")
 
         # Simple header: one column per mask (no _delivered/_real suffix)
         header = ["volume", "time", "is_baseline", "is_outlier", "fd", "dvars", "tsnr", "condition"]
@@ -2740,9 +2732,10 @@ class NeurofeedbackCoordinator:
                 shutil.copy2(volume_path, nifti_path)
                 # Also copy JSON sidecar if present
                 json_src = get_json_sidecar_path(volume_path)
-                json_path = self.nifti_dir / f"{output_name}.json"
+                json_dest = self.nifti_dir / f"{output_name}.json"
+                json_path: Path | None = json_dest
                 if json_src.exists():
-                    shutil.copy2(json_src, json_path)
+                    shutil.copy2(json_src, json_dest)
                 else:
                     json_path = None  # No sidecar available
             except Exception as e:
@@ -2770,14 +2763,15 @@ class NeurofeedbackCoordinator:
         glm_start = time.monotonic()
         try:
             # Determine motion source based on motion correction mode
+            motion_source: Path | NDArray[np.float64] | None
             if self._motion_correction == "siemens_moco":
                 # Siemens MoCo: extract motion from JSON sidecar ImageComments
                 motion_source = json_path
             elif self._motion_correction == "software":
                 # Software (ANTsPy): compute motion via rigid registration
-                vol_img = nib.load(nifti_path)
-                vol_data = vol_img.get_fdata()
-                vol_affine = vol_img.affine
+                vol_img = cast(Nifti1Image, nib.load(nifti_path))
+                vol_data = np.asarray(vol_img.get_fdata(), dtype=np.float64)
+                vol_affine = np.asarray(vol_img.affine, dtype=np.float64)
 
                 # Ensure we have a 3D volume, not 4D
                 if vol_data.ndim == 4:
@@ -2788,12 +2782,14 @@ class NeurofeedbackCoordinator:
 
                 if self._moco_reference_vol is None:
                     # First volume becomes reference
-                    self._moco_reference_vol = vol_data.copy()
-                    self._moco_reference_affine = vol_affine.copy()
-                    self._moco_prev_vol = vol_data.copy()
+                    self._moco_reference_vol = np.array(vol_data, dtype=np.float64)
+                    self._moco_reference_affine = np.array(vol_affine, dtype=np.float64)
+                    self._moco_prev_vol = np.array(vol_data, dtype=np.float64)
                     motion_source = np.zeros(6, dtype=np.float64)
                     logger.info(f"Software MoCo: volume {volume_num} set as reference, shape={vol_data.shape}")
                 else:
+                    assert self._moco_prev_vol is not None  # set when reference is set
+                    assert self._moco_reference_affine is not None  # set when reference is set
                     # Verify shapes match
                     if vol_data.shape != self._moco_prev_vol.shape:
                         logger.error(f"MoCo shape mismatch: prev={self._moco_prev_vol.shape}, mov={vol_data.shape}")
@@ -2801,12 +2797,12 @@ class NeurofeedbackCoordinator:
                     # Register to PREVIOUS volume (incremental, like Siemens PACE)
                     corrected_vol, motion_params = _ants_register_volume(
                         self._moco_prev_vol,
-                        vol_data,
+                        np.asarray(vol_data, dtype=np.float64),
                         self._moco_reference_affine,
                     )
 
                     # Update previous volume to the corrected one for next iteration
-                    self._moco_prev_vol = corrected_vol.copy()
+                    self._moco_prev_vol = np.array(corrected_vol, dtype=np.float64)
 
                     # Overwrite NIfTI with corrected volume
                     corrected_img = nib.Nifti1Image(corrected_vol.astype(np.float32), self._moco_reference_affine)
@@ -2819,6 +2815,7 @@ class NeurofeedbackCoordinator:
             activations = self._estimator.process_volume(nifti_path, motion_source)
             # Compute differential signal (explicit pair)
             if self._differential_name is not None:
+                assert self._differential_pair is not None  # set alongside _differential_name
                 m0, m1 = self._differential_pair
                 activations[self._differential_name] = activations.get(m0, 0.0) - activations.get(m1, 0.0)
             # Compute connectivity (sliding-window Pearson correlation)
@@ -2924,6 +2921,7 @@ class NeurofeedbackCoordinator:
             real_activations = self._estimator._last_real_activations
             row.extend([f"{real_activations.get(name, 0.0):.4f}" for name in self.mask_names])
             if self._differential_name:
+                assert self._differential_pair is not None  # set alongside _differential_name
                 real_diff = real_activations.get(self._differential_pair[0], 0.0) - real_activations.get(
                     self._differential_pair[1], 0.0
                 )

@@ -151,7 +151,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "generate_task_mask_extraction_script": (".script_generator", "generate_task_mask_extraction_script"),
     "save_script": (".script_generator", "save_script"),
     # --- config module ---
-    "config": (".config", None),  # Module import, not attribute
+    "config": (".config", ""),  # Module import, not attribute
 }
 
 

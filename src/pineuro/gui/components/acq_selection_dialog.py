@@ -150,7 +150,7 @@ class AcqSelectionDialog:
 
     def _build_content(self) -> ft.Control:
         """Build the dialog content with radio buttons per run."""
-        run_controls = []
+        run_controls: list[ft.Control] = []
 
         for run_info in self.runs:
             if not run_info.acquisitions:
@@ -166,7 +166,7 @@ class AcqSelectionDialog:
             )
 
             # Radio buttons for each acq
-            radios = []
+            radios: list[ft.Control] = []
             for acq in run_info.acquisitions:
                 if acq.is_complete:
                     status_icon = ft.Icons.CHECK_CIRCLE

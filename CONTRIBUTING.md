@@ -176,15 +176,28 @@ ATLAS_SOURCES: dict[str, dict[str, Any]] = {
 1. Fork the repo and create a feature branch from `main`.
 2. Keep PRs focused — one feature or fix per PR.
 3. Run `ruff check .` and `ruff format .` before submitting.
-4. Include a clear description of **what** changed and **why**.
-5. Ensure cross-platform compatibility (Windows, macOS, Linux).
+4. Run `pytest` and ensure all tests pass.
+5. Include a clear description of **what** changed and **why**.
+6. Ensure cross-platform compatibility (Windows, macOS, Linux).
+
+All PRs are checked by CI (GitHub Actions). The following must pass before merge:
+
+- **Lint**: `ruff check .` + `ruff format . --check`
+- **Type check**: `mypy src/pineuro/`
+- **Tests**: `pytest` on Ubuntu/Windows/macOS × Python 3.10/3.11/3.12
+- **Build**: package builds successfully
 
 ## Testing
 
-There is no formal pytest suite yet (this is planned — see item 1.7 in `FEATURE_GAP_ANALYSIS.md`). In the meantime:
+pineuro uses **pytest**. Tests live in `tests/` and are run with:
 
-- **Manual testing**: Launch the GUI (`pineuro-gui`) and verify your changes work end-to-end.
-- **Validation scripts**: For pipeline changes, run the comparison scripts in `tests/` against known reference outputs.
+```bash
+pytest              # Run all tests
+pytest -v           # Verbose output
+pytest tests/test_import.py  # Run a specific file
+```
+
+When adding new functionality, include tests in `tests/test_<module>.py`. The validation comparison scripts (`compare_*.py`) remain for full-pipeline validation against reference outputs.
 
 ## Platform Notes
 

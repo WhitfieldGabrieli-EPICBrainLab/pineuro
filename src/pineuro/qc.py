@@ -136,10 +136,13 @@ logger = logging.getLogger(__name__)
 import matplotlib
 
 matplotlib.use("Agg")  # Non-interactive backend (thread-safe, no GUI)
+from typing import Any, cast
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from nibabel import load
+from nibabel.nifti1 import Nifti1Image
 
 # ============================================================================
 # SECTION 1: Core Plotting Primitives
@@ -449,12 +452,12 @@ def select_slices_from_atlas(
     # because ICA-derived masks may have different spatial extent than
     # the group-level Yeo parcellation
     if mask_path is not None:
-        slice_img = load(mask_path)
+        slice_img = cast(Nifti1Image, load(mask_path))
         slice_data = slice_img.get_fdata()
         mask = slice_data > 0  # Binary mask from any non-zero voxels
     else:
         # Use atlas to create mask for the target network
-        atlas_img = load(atlas_path)
+        atlas_img = cast(Nifti1Image, load(atlas_path))
         atlas_data = atlas_img.get_fdata().astype(int)
 
         # Fallback: if network label unknown, use center slices
@@ -592,8 +595,8 @@ def plot_mask_overlay_tripanel(
     ... )
     """
     # --- Load volumes ---
-    mask_img = load(mask_path)
-    ref_img = load(ref_path)
+    mask_img = cast(Nifti1Image, load(mask_path))
+    ref_img = cast(Nifti1Image, load(ref_path))
 
     mask = mask_img.get_fdata()
     ref = ref_img.get_fdata()
@@ -868,7 +871,7 @@ def plot_brain_mask_coverage(mask_path: Path, ref_path: Path, out_path: Path, ti
         Figure title
     """
     # Use automatic slice selection (middle slices)
-    mask_img = load(mask_path)
+    mask_img = cast(Nifti1Image, load(mask_path))
     mask_data = mask_img.get_fdata()
 
     slices = {
@@ -904,8 +907,8 @@ def plot_registration_overlay(ref_path: Path, moving_path: Path, out_path: Path,
     """
     from scipy import ndimage
 
-    ref_img = load(ref_path)
-    moving_img = load(moving_path)
+    ref_img = cast(Nifti1Image, load(ref_path))
+    moving_img = cast(Nifti1Image, load(moving_path))
 
     ref = ref_img.get_fdata()
     moving = moving_img.get_fdata()
@@ -1050,7 +1053,7 @@ def generate_preprocessing_report(
         coreg_files = sorted(glob(str(coreg_dir / f"{participant_id}_task-{task}_run-*.nii.gz")))
 
     # Build QC sections
-    sections = []
+    sections: list[dict[str, Any]] = []
 
     # Summary box
     summary_data = {
@@ -1197,7 +1200,7 @@ def plot_corr_heatmap(corr_df: pd.DataFrame, chosen_components: Mapping[str, int
     ax.set_xticks(range(corr_df.shape[1]))
     ax.set_xticklabels(corr_df.columns, rotation=45, ha="right")
     ax.set_yticks(range(corr_df.shape[0]))
-    ax.set_yticklabels(range(corr_df.shape[0]))
+    ax.set_yticklabels([str(i) for i in range(corr_df.shape[0])])
     ax.set_title("ICA Component × Yeo Network Spatial Correlations", pad=10)
 
     # Mark chosen components with prominent markers
@@ -1235,10 +1238,10 @@ def plot_ica_component_grid(
     title : str, optional
         Figure title
     """
-    components_img = load(components_path)
+    components_img = cast(Nifti1Image, load(components_path))
     components_data = components_img.get_fdata()
 
-    ref_img = load(ref_path)
+    ref_img = cast(Nifti1Image, load(ref_path))
     ref_data = ref_img.get_fdata()
 
     # Check orientation
@@ -1349,7 +1352,7 @@ def summarize_mask(mask_path: Path, name: str, chosen_component: int = -1, corre
     >>> print(f"{summary.name}: {summary.voxels} voxels, {summary.volume_ml:.1f} mL")
     DefaultA: 2000 voxels, 8.0 mL
     """
-    img = load(mask_path)
+    img = cast(Nifti1Image, load(mask_path))
     data = img.get_fdata()
     mask = data > 0
 
@@ -1467,7 +1470,7 @@ def generate_mask_extraction_report(
     subject_overlay_dir = overlays_dir / "subject"
 
     # Build QC sections
-    sections = []
+    sections: list[dict[str, Any]] = []
 
     # Summary box
     summary_data = {
@@ -1612,7 +1615,8 @@ def generate_mask_extraction_report(
                 for network, mask_path in network_masks.items():
                     # Find warped mask for this run
                     mask_reference = (
-                        reference_masks_dir / f"{participant_id}_{network}_thr_to_task-reference_run-{run_str}_mean.nii.gz"
+                        reference_masks_dir
+                        / f"{participant_id}_{network}_thr_to_task-reference_run-{run_str}_mean.nii.gz"
                     )
 
                     if not mask_reference.exists():
@@ -1805,7 +1809,7 @@ def generate_task_mask_extraction_report(
             network_masks[mask_name] = mask_file
 
     # Build QC sections
-    sections = []
+    sections: list[dict[str, Any]] = []
 
     # Summary box
     summary_data = {
@@ -2002,7 +2006,6 @@ def generate_alternative_overlays(
     from glob import glob
 
     from nibabel.loadsave import save
-    from nibabel.nifti1 import Nifti1Image
 
     from pineuro.utils import get_yeo_labels
 
@@ -2066,7 +2069,7 @@ def generate_alternative_overlays(
     labels = get_yeo_labels(n_networks)
 
     # Load ICA components
-    components_img = load(components_file)
+    components_img = cast(Nifti1Image, load(components_file))
     components_data = components_img.get_fdata()
     _n_components = components_data.shape[3]
 
@@ -2099,9 +2102,9 @@ def generate_alternative_overlays(
             ic_data = components_data[..., comp_idx]
             threshold = 2000
             flat = ic_data.ravel()
-            mask = np.zeros(flat.shape, dtype=bool)
-            mask[np.argpartition(flat, -threshold)[-threshold:]] = True
-            mask = mask.reshape(ic_data.shape)
+            mask_flat = np.zeros(flat.shape, dtype=bool)
+            mask_flat[np.argpartition(flat, -threshold)[-threshold:]] = True
+            mask = mask_flat.reshape(ic_data.shape)
             thresholded = ((ic_data * mask) > 0).astype("uint8")
 
             # Save temporary mask
@@ -2171,7 +2174,6 @@ def generate_yeo_network_overlay(
     from glob import glob
 
     from nibabel.loadsave import save
-    from nibabel.nifti1 import Nifti1Image
 
     from pineuro.utils import get_yeo_labels
 
@@ -2218,7 +2220,7 @@ def generate_yeo_network_overlay(
     network_index = labels.index(network_name) + 1
 
     # Load atlas and extract network region
-    atlas_img = load(yeo2sub)
+    atlas_img = cast(Nifti1Image, load(yeo2sub))
     atlas_data = atlas_img.get_fdata()
     network_mask = (atlas_data == network_index).astype("uint8")
 
@@ -2309,7 +2311,7 @@ def generate_atlas_region_overlay(
     logger.info(f"Generating atlas region overlay for {atlas_name}")
 
     try:
-        atlas_img = load(atlas_subject_path)
+        atlas_img = cast(Nifti1Image, load(atlas_subject_path))
         n_voxels = int((atlas_img.get_fdata() > 0).sum())
 
         atlas_slices = select_slices_from_atlas(
@@ -2400,7 +2402,7 @@ def generate_mask_overlay(
 
     try:
         # Load mask to get voxel count
-        mask_img = load(mask_path)
+        mask_img = cast(Nifti1Image, load(mask_path))
         mask_data = mask_img.get_fdata()
         n_voxels = int((mask_data > 0).sum())
 
@@ -2532,7 +2534,7 @@ def generate_hemisphere_overlays(
         logger.info(f"Generating {hemisphere_network} {hemisphere} hemisphere overlay")
 
         # Get voxel count for title
-        mask_img = load(mask_path)
+        mask_img = cast(Nifti1Image, load(mask_path))
         mask_data = mask_img.get_fdata()
         n_voxels = int((mask_data > 0).sum())
 
@@ -3025,7 +3027,7 @@ def generate_feedback_report(
     design_file = feedback_dir / design_pattern
 
     # Build QC sections
-    sections = []
+    sections: list[dict[str, Any]] = []
 
     # Summary box
     summary_data = {
@@ -3563,7 +3565,7 @@ def write_html_report(
             return p.as_posix()
 
     # Build sections using new template
-    sections = []
+    sections: list[dict[str, Any]] = []
 
     # ICA × Yeo correlation heatmap
     if heatmap_png and heatmap_png.exists():

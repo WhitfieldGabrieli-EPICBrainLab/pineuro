@@ -61,18 +61,16 @@ class StudyEditorScreen:
         """
         self.page = page
         self.config_manager = config_manager
-        self.study_config = study_config
         self.is_new = study_config is None
         self.on_cancel_callback = on_cancel
         self.on_save_callback = on_save
         self.on_start_session_callback = on_start_session
 
         # Create default config if new study
-        if self.is_new:
-            self.study_config = self._create_default_config()
+        self.study_config: StudyConfig = study_config if study_config is not None else self._create_default_config()
 
         # Validation state
-        self.validation_errors = {}
+        self.validation_errors: dict[str, str] = {}
 
         # Dynamic task parameter fields (populated based on task type)
         self.task_param_fields: dict[str, ft.Control] = {}
@@ -121,7 +119,6 @@ class StudyEditorScreen:
                 "collection_speed": 10.0,  # Speed for localizer/collection
                 "feedback_simulator_speed": 1.0,  # Speed for feedback runs
                 "scanner_dicom_dir": "/BOLD_DICOM",
-
             },
             "mask": {
                 "n_yeo": 17,
@@ -552,7 +549,9 @@ class StudyEditorScreen:
             value=str(config.get("feedback", {}).get("dvars_threshold", 1.5)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Standardized DVARS above this will be flagged in real time",
-            on_change=lambda _: self._validate_field("dvars_threshold", self.dvars_threshold_field, validate_positive_number),
+            on_change=lambda _: self._validate_field(
+                "dvars_threshold", self.dvars_threshold_field, validate_positive_number
+            ),
         )
 
         # tSNR threshold for signal quality monitoring
@@ -562,7 +561,9 @@ class StudyEditorScreen:
             value=str(config.get("feedback", {}).get("tsnr_threshold", 20)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="tSNR below this will be flagged in real time",
-            on_change=lambda _: self._validate_field("tsnr_threshold", self.tsnr_threshold_field, validate_positive_number),
+            on_change=lambda _: self._validate_field(
+                "tsnr_threshold", self.tsnr_threshold_field, validate_positive_number
+            ),
         )
 
         # Motion correction mode
@@ -973,7 +974,7 @@ class StudyEditorScreen:
                 )
 
             # Build monitor info text
-            monitor_texts = []
+            monitor_texts: list[ft.Control] = []
             for m in monitors:
                 position = "Left" if m.index == 0 else "Right"
                 monitor_texts.append(
@@ -1097,11 +1098,11 @@ class StudyEditorScreen:
         """
         try:
             validator(field.value, field_name)
-            field.error_text = None
+            field.error_text = None  # type: ignore[attr-defined]
             if field_name in self.validation_errors:
                 del self.validation_errors[field_name]
         except ValidationError as e:
-            field.error_text = str(e)
+            field.error_text = str(e)  # type: ignore[attr-defined]
             self.validation_errors[field_name] = str(e)
 
         field.update()
@@ -1472,6 +1473,14 @@ class StudyEditorScreen:
                 hint_text=f"{param.hint} (comma-separated)" if param.hint else "Comma-separated values",
             )
 
+        # Fallback for unsupported parameter types
+        return ft.TextField(
+            width=600,
+            label=param.label,
+            value=str(current_value) if current_value is not None else "",
+            hint_text=param.hint,
+        )
+
     def _on_task_type_changed(self, e):
         """Handle feedback task type dropdown change.
 
@@ -1776,79 +1785,6 @@ class StudyEditorScreen:
                     title=f"Select {field.label}",
                     initialdir=initial_dir,
                     filetypes=filetypes,
-                )
-
-                # Clean up
-                root.destroy()
-
-                logger.info(f"Selected file: {path}")
-                if path:
-                    field.value = path
-                    field.update()
-
-            except Exception as ex:
-                logger.error(f"Error opening file picker: {ex}")
-                # Show error to user
-                _snack = ft.SnackBar(ft.Text(f"Error opening file browser: {ex}"))
-                _snack.open = True
-                self.page.overlay.append(_snack)
-                self.page.update()
-
-        return ft.IconButton(
-            icon=ft.icons.Icons.FILE_OPEN,
-            tooltip="Browse for file",
-            on_click=pick_file,
-        )
-
-    def _create_file_browse_button(self, field: ft.TextField, filetypes: list = None) -> ft.IconButton:
-        """Create a browse button for file selection.
-
-        Args:
-            field: TextField to update with selected file
-            filetypes: List of (description, pattern) tuples for file filter
-                       e.g., [("TSV files", "*.tsv"), ("All files", "*.*")]
-
-        Returns:
-            IconButton that opens file picker
-        """
-
-        def pick_file(e):
-            """Handle file picker click event."""
-            logger.info(f"File picker clicked for field: {field.label}")
-
-            # Use tkinter file dialog as a workaround for Flet FilePicker issues on Linux
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-            except ImportError:
-                logger.error("tkinter is not available")
-                _snack = ft.SnackBar(ft.Text("File browser requires tkinter. Install: sudo apt-get install python3-tk"))
-                _snack.open = True
-                self.page.overlay.append(_snack)
-                self.page.update()
-                return
-
-            try:
-                # Create a temporary tkinter root window
-                root = tk.Tk()
-                root.withdraw()  # Hide the main window
-                root.attributes("-topmost", True)  # Bring to front
-
-                # Set up file types filter
-                ftypes = filetypes if filetypes else [("All files", "*.*")]
-
-                # Get initial directory from current value
-                import os
-
-                initialdir = None
-                if field.value:
-                    dirname = os.path.dirname(field.value)
-                    if dirname and os.path.isdir(dirname):
-                        initialdir = dirname
-
-                # Open file picker
-                path = filedialog.askopenfilename(
-                    title=f"Select {field.label}", initialdir=initialdir, filetypes=ftypes
                 )
 
                 # Clean up
@@ -2318,8 +2254,7 @@ class StudyEditorScreen:
                     ),
                     ft.Text("GLM Nuisance Regressors", size=14, weight=ft.FontWeight.W_500),
                     ft.Text(
-                        "Select which regressors to include in the real-time GLM "
-                        "(intercept is always included).",
+                        "Select which regressors to include in the real-time GLM (intercept is always included).",
                         size=11,
                         color=ft.Colors.GREY_600,
                         italic=True,
@@ -2678,7 +2613,7 @@ class StudyEditorScreen:
         # Build simulator paths content
         is_mapping_mode = self.simulator_source_mode_radio.value == "mapping"
 
-        simulator_header = [
+        simulator_header: list[ft.Control] = [
             ft.Divider(),
             ft.Text("Simulator Source Paths", size=16, weight=ft.FontWeight.BOLD),
             ft.Text(
@@ -2713,7 +2648,7 @@ class StudyEditorScreen:
         )
 
         # Individual paths container
-        individual_content = []
+        individual_content: list[ft.Control] = []
 
         # Localizer section
         individual_content.append(ft.Text("Localizer Runs", size=14, weight=ft.FontWeight.BOLD))
@@ -3156,9 +3091,7 @@ class StudyEditorScreen:
             # Feedback mode and connectivity
             feedback_mode = self.feedback_mode_dropdown.value or "activation"
             config["feedback"]["feedback_mode"] = feedback_mode
-            config["feedback"]["connectivity_target"] = (
-                self.connectivity_target_dropdown.value or "increase"
-            )
+            config["feedback"]["connectivity_target"] = self.connectivity_target_dropdown.value or "increase"
             if feedback_mode == "connectivity":
                 a = self.connectivity_pair_a_dropdown.value
                 b = self.connectivity_pair_b_dropdown.value

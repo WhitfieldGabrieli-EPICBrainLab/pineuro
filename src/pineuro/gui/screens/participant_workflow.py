@@ -23,7 +23,7 @@ import logging
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
     from pineuro.session import VisitConfig
@@ -39,9 +39,9 @@ from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, sc
 from ..components.activation_plot import ActivationPlot
 from ..components.collection_progress import CollectionProgressPanel
 from ..components.csv_poller import FeedbackMonitor
-from ..components.qc_plots import DVARSPlot, FDPlot, TSNRPlot
 from ..components.mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
 from ..components.pipeline_runner import PipelineRunner
+from ..components.qc_plots import DVARSPlot, FDPlot, TSNRPlot
 from ..components.qc_viewer import QCReportManager
 from ..components.run_selection_dialog import RunInfo, RunSelectionDialog
 from ..components.task_mirror import TaskMirror
@@ -188,9 +188,9 @@ class ParticipantWorkflowScreen:
         self._log_file_handler: logging.FileHandler | None = None
 
         # Cache mask reuse mode flag for easy access
-        visit_config = self.study_config.session_config.get("visit", {})
-        self._is_mask_reuse_mode = visit_config.get("mask_source") == "reuse"
-        self._mask_source_visit = visit_config.get("mask_source_visit")
+        visit_conf_dict: dict = self.study_config.session_config.get("visit", {})
+        self._is_mask_reuse_mode = visit_conf_dict.get("mask_source") == "reuse"
+        self._mask_source_visit = visit_conf_dict.get("mask_source_visit")
         self._log_file_path: Path | None = None
         self._setup_file_logging()
 
@@ -260,7 +260,7 @@ class ParticipantWorkflowScreen:
         """Show the mask review/selection dialog."""
         from glob import glob
 
-        import pandas as pd
+        import pandas as pd  # type: ignore[import-untyped]
 
         from pineuro import qc
         from pineuro.mask_extraction import get_alternative_components, load_mask_selections
@@ -359,7 +359,7 @@ class ParticipantWorkflowScreen:
         )
 
         # Yeo overlays will be generated on-demand when user rejects a mask
-        yeo_overlays = {}
+        yeo_overlays: dict[str, Path] = {}
 
         # Generate hemisphere overlays for sham verification (if hemisphere_split mode)
         hemisphere_overlays = {}
@@ -393,7 +393,7 @@ class ParticipantWorkflowScreen:
             alternatives = get_alternative_components(corr_df, network, top_n=n_components)
 
             # Find overlay paths
-            overlay_path = overlays_dir / f"{self.participant_id}_{network}_overlay.png"
+            overlay_path: Path | None = overlays_dir / f"{self.participant_id}_{network}_overlay.png"
             if not overlay_path.exists():
                 overlay_path = None
 
@@ -449,13 +449,18 @@ class ParticipantWorkflowScreen:
                         from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
 
                         slices = select_slices_from_atlas(
-                            atlas_path=ref_file, labels=[], target_label="",
-                            top_n_per_plane=1, mask_path=tissue_files[0],
+                            atlas_path=ref_file,
+                            labels=[],
+                            target_label="",
+                            top_n_per_plane=1,
+                            mask_path=tissue_files[0],
                         )
                         label = "White Matter" if tissue_type == "wm" else "CSF"
                         plot_mask_overlay_tripanel(
-                            mask_path=tissue_files[0], ref_path=ref_file,
-                            out_path=overlay_path, slices=slices,
+                            mask_path=tissue_files[0],
+                            ref_path=ref_file,
+                            out_path=overlay_path,
+                            slices=slices,
                             title=f"{label} mask (MNI template prior)",
                         )
                     except Exception as ex:
@@ -538,8 +543,9 @@ class ParticipantWorkflowScreen:
         ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
 
         # Find QC report
-        qc_report = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
-        if not qc_report.exists():
+        qc_report_path = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
+        qc_report: Path | None = qc_report_path
+        if not qc_report_path.exists():
             # Try glob fallback
             matches = list(qc_dir.glob("*mask_extraction_qc.html"))
             qc_report = matches[0] if matches else None
@@ -558,7 +564,7 @@ class ParticipantWorkflowScreen:
         # Build mask cards with overlay images
         overlays_dir = qc_dir / "overlays" / "subject"
         overlays_dir.mkdir(parents=True, exist_ok=True)
-        mask_cards = []
+        mask_cards: list[ft.Control] = []
         for mask_file in mask_files:
             # Strip full .nii.gz suffix then participant prefix and _thr suffix
             bare = mask_file.name.replace(".nii.gz", "").replace(".nii", "")
@@ -604,9 +610,9 @@ class ParticipantWorkflowScreen:
 
             if overlay_path.exists():
                 b64 = base64.b64encode(overlay_path.read_bytes()).decode("utf-8")
-                overlay_content = ft.Image(
+                overlay_content: ft.Control = ft.Image(
                     src=f"data:image/png;base64,{b64}",
-                    fit="contain",
+                    fit=ft.ImageFit.CONTAIN,
                     height=150,
                 )
             else:
@@ -679,12 +685,17 @@ class ParticipantWorkflowScreen:
                             from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
 
                             atlas_slices = select_slices_from_atlas(
-                                atlas_path=ref_file, labels=[], target_label="",
-                                top_n_per_plane=1, mask_path=tissue_file,
+                                atlas_path=ref_file,
+                                labels=[],
+                                target_label="",
+                                top_n_per_plane=1,
+                                mask_path=tissue_file,
                             )
                             plot_mask_overlay_tripanel(
-                                mask_path=tissue_file, ref_path=ref_file,
-                                out_path=tissue_overlay, slices=atlas_slices,
+                                mask_path=tissue_file,
+                                ref_path=ref_file,
+                                out_path=tissue_overlay,
+                                slices=atlas_slices,
                                 title=f"{tissue_label} mask (MNI template prior)",
                             )
                         except Exception as ex:
@@ -692,23 +703,29 @@ class ParticipantWorkflowScreen:
 
                     if tissue_overlay.exists():
                         t_b64 = base64.b64encode(tissue_overlay.read_bytes()).decode("utf-8")
-                        t_overlay_content = ft.Image(
-                            src=f"data:image/png;base64,{t_b64}", fit="contain", height=120,
+                        t_overlay_content: ft.Control = ft.Image(
+                            src=f"data:image/png;base64,{t_b64}",
+                            fit=ft.ImageFit.CONTAIN,
+                            height=120,
                         )
                     else:
                         t_overlay_content = ft.Container(
                             content=ft.Text("No preview available", color=ft.Colors.GREY_500),
-                            height=120, alignment=ft.Alignment(0, 0), bgcolor=ft.Colors.GREY_200,
+                            height=120,
+                            alignment=ft.Alignment(0, 0),
+                            bgcolor=ft.Colors.GREY_200,
                         )
 
                     tissue_card = ft.Container(
                         content=ft.Column(
                             [
-                                ft.Row([
-                                    ft.Text(tissue_label, size=14, weight=ft.FontWeight.W_500),
-                                    ft.Container(expand=True),
-                                    ft.Text("MNI template prior", size=11, color=ft.Colors.PURPLE_400),
-                                ]),
+                                ft.Row(
+                                    [
+                                        ft.Text(tissue_label, size=14, weight=ft.FontWeight.W_500),
+                                        ft.Container(expand=True),
+                                        ft.Text("MNI template prior", size=11, color=ft.Colors.PURPLE_400),
+                                    ]
+                                ),
                                 ft.Container(
                                     content=t_overlay_content,
                                     border=ft.border.all(1, ft.Colors.GREY_300),
@@ -852,7 +869,7 @@ class ParticipantWorkflowScreen:
                                         ft.Container(
                                             content=ft.Image(
                                                 src=f"data:image/png;base64,{b64_atlas}",
-                                                fit="contain",
+                                                fit=ft.ImageFit.CONTAIN,
                                                 height=180,
                                             ),
                                             border=ft.border.all(1, ft.Colors.TEAL_200),
@@ -1469,7 +1486,13 @@ class ParticipantWorkflowScreen:
             realtime_reference_masks_dir = feedback_dir / "01_reference" / "masks"
             if (
                 realtime_reference_masks_dir.exists()
-                and len(list(realtime_reference_masks_dir.glob(f"*_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz")))
+                and len(
+                    list(
+                        realtime_reference_masks_dir.glob(
+                            f"*_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz"
+                        )
+                    )
+                )
                 > 0
             ):
                 self.step_statuses["coregistration_realtime"] = StepStatus.COMPLETE
@@ -1964,7 +1987,7 @@ class ParticipantWorkflowScreen:
         collection_dir = base_dir / "collection"
         tmp_dir = base_dir / "tmp"
 
-        result = {
+        result: dict[str, Any] = {
             "collection_exists": False,
             "collection_size": 0,
             "collection_subdirs": [],
@@ -2059,7 +2082,7 @@ class ParticipantWorkflowScreen:
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=20,
                 ),
-                alignment=ft.alignment.center,
+                alignment=ft.Alignment(0, 0),
                 expand=True,
             )
         else:
@@ -2083,20 +2106,23 @@ class ParticipantWorkflowScreen:
                                 ),
                                 ft.Container(
                                     content=ft.Column(
-                                        [
-                                            ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
-                                            for subdir in cleanup_info["collection_subdirs"][:6]
-                                        ]
-                                        + (
+                                        cast(
+                                            list[ft.Control],
                                             [
-                                                ft.Text(
-                                                    f"  ... and {len(cleanup_info['collection_subdirs']) - 6} more",
-                                                    size=12,
-                                                    color=ft.Colors.GREY_500,
-                                                )
+                                                ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
+                                                for subdir in cleanup_info["collection_subdirs"][:6]
                                             ]
-                                            if len(cleanup_info["collection_subdirs"]) > 6
-                                            else []
+                                            + (
+                                                [
+                                                    ft.Text(
+                                                        f"  ... and {len(cleanup_info['collection_subdirs']) - 6} more",
+                                                        size=12,
+                                                        color=ft.Colors.GREY_500,
+                                                    )
+                                                ]
+                                                if len(cleanup_info["collection_subdirs"]) > 6
+                                                else []
+                                            ),
                                         ),
                                         spacing=2,
                                     ),
@@ -2129,20 +2155,23 @@ class ParticipantWorkflowScreen:
                                 ),
                                 ft.Container(
                                     content=ft.Column(
-                                        [
-                                            ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
-                                            for subdir in cleanup_info["tmp_subdirs"][:6]
-                                        ]
-                                        + (
+                                        cast(
+                                            list[ft.Control],
                                             [
-                                                ft.Text(
-                                                    f"  ... and {len(cleanup_info['tmp_subdirs']) - 6} more",
-                                                    size=12,
-                                                    color=ft.Colors.GREY_500,
-                                                )
+                                                ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
+                                                for subdir in cleanup_info["tmp_subdirs"][:6]
                                             ]
-                                            if len(cleanup_info["tmp_subdirs"]) > 6
-                                            else []
+                                            + (
+                                                [
+                                                    ft.Text(
+                                                        f"  ... and {len(cleanup_info['tmp_subdirs']) - 6} more",
+                                                        size=12,
+                                                        color=ft.Colors.GREY_500,
+                                                    )
+                                                ]
+                                                if len(cleanup_info["tmp_subdirs"]) > 6
+                                                else []
+                                            ),
                                         ),
                                         spacing=2,
                                     ),
@@ -2761,7 +2790,7 @@ class ParticipantWorkflowScreen:
         step_info = self._get_step_info(step_id, config, base_dir, participant_id)
 
         # Build parameter list
-        param_rows = []
+        param_rows: list[ft.Control] = []
         for key, value in step_info["parameters"].items():
             param_rows.append(
                 ft.Row(
@@ -2994,7 +3023,9 @@ class ParticipantWorkflowScreen:
             source_visit_dir = study_base_dir / self.participant_id / mask_source_visit
             me_dir = source_visit_dir / "mask_extraction"
             input_masks_path = me_dir / "03_masks" if (me_dir / "03_masks").exists() else me_dir / "02_masks"
-            description = f"Register network masks from {mask_source_visit} to real-time reference space for feedback runs."
+            description = (
+                f"Register network masks from {mask_source_visit} to real-time reference space for feedback runs."
+            )
         else:
             # Standard mode: masks come from current visit
             me_dir = base_dir / "mask_extraction"
@@ -3049,7 +3080,7 @@ class ParticipantWorkflowScreen:
             attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
             description += f" Previous attempts ({attempts_str}) will be preserved."
 
-        info = {
+        info: dict[str, Any] = {
             "label": "Collect Initial Reference",
             "description": description,
             "parameters": {
@@ -3112,7 +3143,7 @@ class ParticipantWorkflowScreen:
             attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
             description += f" Previous attempts ({attempts_str}) will be preserved."
 
-        info = {
+        info: dict[str, Any] = {
             "label": "Collect Real-time Reference",
             "description": description,
             "parameters": {
@@ -3212,9 +3243,11 @@ class ParticipantWorkflowScreen:
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF",
-                    "MoCo": {"siemens_moco": "Siemens (scanner)", "software": "ANTsPy (software)", "none": "Disabled"}.get(
-                        config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"
-                    ),
+                    "MoCo": {
+                        "siemens_moco": "Siemens (scanner)",
+                        "software": "ANTsPy (software)",
+                        "none": "Disabled",
+                    }.get(config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"),
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
@@ -3232,9 +3265,11 @@ class ParticipantWorkflowScreen:
                     "Volumes": config["feedback"]["n_volumes"],
                     "Baseline": config["feedback"]["n_baseline"],
                     "Feedback": "OFF",
-                    "MoCo": {"siemens_moco": "Siemens (scanner)", "software": "ANTsPy (software)", "none": "Disabled"}.get(
-                        config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"
-                    ),
+                    "MoCo": {
+                        "siemens_moco": "Siemens (scanner)",
+                        "software": "ANTsPy (software)",
+                        "none": "Disabled",
+                    }.get(config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"),
                     "Output": base_dir / "feedback" / "02_feedback_output",
                     "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
                 },
@@ -3273,7 +3308,7 @@ class ParticipantWorkflowScreen:
                 attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
                 description += f" Previous attempts ({attempts_str}) will be preserved."
 
-            info = {
+            info: dict[str, Any] = {
                 "label": f"Collect Localizer Run {run_num}",
                 "description": description,
                 "parameters": {
@@ -3317,9 +3352,11 @@ class ParticipantWorkflowScreen:
             if state_summary != "initial":
                 params["Task State"] = state_summary
 
-            params["MoCo"] = {"siemens_moco": "Siemens (scanner)", "software": "ANTsPy (software)", "none": "Disabled"}.get(
-                config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"
-            )
+            params["MoCo"] = {
+                "siemens_moco": "Siemens (scanner)",
+                "software": "ANTsPy (software)",
+                "none": "Disabled",
+            }.get(config["feedback"].get("motion_correction", "siemens_moco"), "Unknown")
             params["Output"] = base_dir / "feedback" / "02_feedback_output"
             params["Simulator Speed"] = (
                 f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x"
@@ -3638,11 +3675,12 @@ class ParticipantWorkflowScreen:
                 self._show_qc_approval_dialog("realtime")
 
             # Auto-show feedback summary dialog after feedback/transfer steps
-            is_feedback_transfer = completed_step_id.startswith("transfer_") or completed_step_id.startswith(
-                "feedback_"
-            )
-            if is_feedback_transfer:
-                self._show_feedback_summary(completed_step_id)
+            if completed_step_id is not None:
+                is_feedback_transfer = completed_step_id.startswith("transfer_") or completed_step_id.startswith(
+                    "feedback_"
+                )
+                if is_feedback_transfer:
+                    self._show_feedback_summary(completed_step_id)
 
         # Schedule the UI update on the main thread
         try:
@@ -3861,7 +3899,9 @@ class ParticipantWorkflowScreen:
 
             # Store display names mapping for hits counter (blind mode)
             if display_names:
-                self._feedback_display_names = {mask_names[i]: display_names[i] for i in range(len(mask_names))}
+                self._feedback_display_names: dict[str, str] | None = {
+                    mask_names[i]: display_names[i] for i in range(len(mask_names))
+                }
             else:
                 self._feedback_display_names = None
 
@@ -3880,10 +3920,7 @@ class ParticipantWorkflowScreen:
                     plot_mask_names = [real_conn_key]
 
                     # If alternative_masks sham: also show the sham pair's correlation
-                    if (
-                        sham_config.get("enabled")
-                        and sham_config.get("delivery_method") == "alternative_masks"
-                    ):
+                    if sham_config.get("enabled") and sham_config.get("delivery_method") == "alternative_masks":
                         sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
                         if sham_mask_mode == "hemisphere_split":
                             hemi_net = sham_config.get("hemisphere_network", "SomMotA")
@@ -4302,8 +4339,8 @@ class ParticipantWorkflowScreen:
         }
         # Handle dynamic feedback_N labels
         if step_id.startswith("feedback_"):
-            run_num = int(step_id.split("_")[-1])
-            return f"Feedback Run {run_num}"
+            fb_run_num = int(step_id.split("_")[-1])
+            return f"Feedback Run {fb_run_num}"
         return labels.get(step_id, step_id)
 
     def _get_collection_n_volumes(self, step_id: str) -> int:
@@ -4318,23 +4355,23 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
 
         if step_id == "reference_initial":
-            return config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
+            return int(config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2)))
 
         elif step_id == "reference_realtime":
-            return config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
+            return int(config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2)))
 
         elif step_id.startswith("rest_run_"):
             # Use new localizer_n_volumes, fall back to legacy
             n_volumes = config["scan"].get("localizer_n_volumes")
             if n_volumes is not None:
-                return n_volumes
+                return int(n_volumes)
             # Legacy: try to get from rest_n_volumes list
             run_num = int(step_id.split("_")[-1])
             run_idx = run_num - 1
             rest_volumes = config["scan"].get("rest_n_volumes", [200])
             if isinstance(rest_volumes, list) and run_idx < len(rest_volumes):
-                return rest_volumes[run_idx]
-            return rest_volumes[0] if isinstance(rest_volumes, list) else rest_volumes
+                return int(rest_volumes[run_idx])
+            return int(rest_volumes[0]) if isinstance(rest_volumes, list) else int(rest_volumes)
 
         return 0
 
@@ -4416,7 +4453,7 @@ class ParticipantWorkflowScreen:
         self._psychopylog_path = output_dir / log_path.name.replace("feedbacklog.tsv", "psychopylog.tsv")
 
         # Create and start feedback monitor
-        self.feedback_monitor = FeedbackMonitor(
+        self.feedback_monitor: FeedbackMonitor | None = FeedbackMonitor(
             log_path=log_path,
             mask_names=mask_names,
             n_volumes=n_volumes,
@@ -4544,9 +4581,8 @@ class ParticipantWorkflowScreen:
     def _on_stop_clicked(self):
         """Handle stop button click during execution - shows confirmation dialog."""
         # Check if this is a feedback/transfer step (which has post-run questions)
-        is_feedback_step = self._current_step_id.startswith("transfer_") or self._current_step_id.startswith(
-            "feedback_"
-        )
+        step_id = self._current_step_id or ""
+        is_feedback_step = step_id.startswith("transfer_") or step_id.startswith("feedback_")
 
         # Checkbox for showing questions (only relevant for feedback steps)
         show_questions_checkbox = ft.Checkbox(
@@ -4556,7 +4592,7 @@ class ParticipantWorkflowScreen:
 
         def confirm_stop(e):
             self.page.pop_dialog()
-            show_questions = show_questions_checkbox.value if is_feedback_step else False
+            show_questions = bool(show_questions_checkbox.value) if is_feedback_step else False
 
             # Stop feedback monitoring
             self._stop_feedback_monitoring()
@@ -4572,7 +4608,7 @@ class ParticipantWorkflowScreen:
             self.page.pop_dialog()
 
         # Build dialog content
-        content_items = [
+        content_items: list[ft.Control] = [
             ft.Text(
                 "Are you sure you want to stop the current run?",
                 size=14,

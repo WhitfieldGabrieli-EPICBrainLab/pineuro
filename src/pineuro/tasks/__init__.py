@@ -133,7 +133,7 @@ def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
     if plugin_dirs is None:
         return []
 
-    discovered = []
+    discovered: list[str] = []
     existing_tasks = set(get_registered_task_ids())
 
     for plugin_dir in plugin_dirs:
@@ -178,8 +178,8 @@ def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
 # Task modules register themselves via register_task() at import time
 from .ball import BallTask  # Registers "ball" task
 from .fixation import FixationTask  # Registers "fixation" localizer task
-from .self_other import SelfOtherTask  # Registers "self_other" localizer task
 from .gauge import GaugeTask  # Registers "gauge" task
+from .self_other import SelfOtherTask  # Registers "self_other" localizer task
 from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
 
 __all__ = [

@@ -23,7 +23,7 @@ import csv
 import logging
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 # Third-party imports
 import numpy as np
@@ -175,7 +175,7 @@ class BallTask(BaseTask):
         scale_factor: float = 10.0,
         internal_scaler: float = 10.0,
         pda_outlier_threshold: float = 2.0,
-        trigger_keys: list[str] = None,
+        trigger_keys: list[str] | None = None,
         left_button: str = "1",
         right_button: str = "2",
         enter_button: str = "0",
@@ -284,7 +284,7 @@ class BallTask(BaseTask):
         self._frame_counter = 0
 
         self.current_activity = 0.0
-        self.current_direction = 0  # +1 (up) or -1 (down)
+        self.current_direction: float = 0  # +1 (up) or -1 (down)
         self.pause_movement = False
         self.is_baseline = True
         self.current_volume = 0
@@ -450,7 +450,12 @@ class BallTask(BaseTask):
             wrap_width=1.2,
         )
 
-    def _show_post_run_questions(self) -> None:
+    def _show_post_run_questions(
+        self,
+        left_button: str = "1",
+        right_button: str = "2",
+        enter_button: str = "3",
+    ) -> list[dict[str, Any]]:
         """Display post-run slider questions from metadata.
 
         Shows BallTask-specific instruction screen first, then delegates
@@ -461,13 +466,13 @@ class BallTask(BaseTask):
         # Guard against setup() not completing (window/stimuli may not exist)
         if not hasattr(self, "win") or self.win is None:
             logger.info("No window available - skipping post-run questions")
-            return
+            return []
 
         # Get questions from metadata
         metadata = self.get_task_metadata()
         if not metadata or not metadata.post_run_questions:
             logger.info("No post-run questions defined in metadata")
-            return
+            return []
 
         # Show instruction screen (BallTask-specific)
         self.slider_instruction_text.draw()
@@ -497,6 +502,7 @@ class BallTask(BaseTask):
         )
 
         logger.info(f"Post-run questions complete: {len(responses)} responses")
+        return responses
 
     def calculate_ball_movement(self, activations: dict) -> None:
         """Update movement parameters based on new activations.
@@ -808,13 +814,15 @@ class BallTask(BaseTask):
         run_type = "feedback" if self.feedback_mode else "transfer"
         state.record_run(
             run_type=run_type,
-            hit_counters=self.hit_counters,
-            scale_factor=self.scale_factor,
-            circle_radii=self.circle_radii,
             volumes_processed=self.current_volume,
-            min_hits_threshold=self._min_hits_threshold,
-            max_hits_threshold=self._max_hits_threshold,
-            scale_adjust_factor=self._scale_adjust_factor,
+            task_state_snapshot={
+                "hit_counters": self.hit_counters,
+                "scale_factor": self.scale_factor,
+                "circle_radii": self.circle_radii,
+                "min_hits_threshold": self._min_hits_threshold,
+                "max_hits_threshold": self._max_hits_threshold,
+                "scale_adjust_factor": self._scale_adjust_factor,
+            },
             # Slot-based tracking
             slot_run_number=self._slot_run_number,
             acq=self._acq,
@@ -1097,9 +1105,7 @@ class BallTask(BaseTask):
             logger.info("=== BallTask Session Complete ===")
             logger.info(f"Total volumes: {self.current_volume}/{self.coordinator.n_volumes}")
             if self._signal_mode == "connectivity":
-                logger.info(
-                    f"Hits - target: {self.hit_counters[0]}, nontarget: {self.hit_counters[1]}"
-                )
+                logger.info(f"Hits - target: {self.hit_counters[0]}, nontarget: {self.hit_counters[1]}")
             else:
                 logger.info(
                     f"Hits - {self.mask_names[0]}: {self.hit_counters[0]}, {self.mask_names[1]}: {self.hit_counters[1]}"

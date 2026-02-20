@@ -105,7 +105,9 @@ class PipelineRunner:
         self._task_mirror_callback = callback
 
     @staticmethod
-    def find_available_collections(collection_dir: Path, task: str, run: int, expected_volumes: int) -> list[dict]:
+    def find_available_collections(
+        collection_dir: Path, task: str, run: int, expected_volumes: int
+    ) -> list[dict[str, Any]]:
         """Find all complete collection folders for a run.
 
         Parameters
@@ -136,7 +138,7 @@ class PipelineRunner:
             return []
 
         pattern = f"{task}_acq-*_run-{run:02d}"
-        collections = []
+        collections: list[dict[str, Any]] = []
 
         for folder in collection_dir.glob(pattern):
             if folder.is_dir():
@@ -266,7 +268,7 @@ class PipelineRunner:
     def _is_blind_mode(self) -> bool:
         """Check if sham blind mode is active."""
         sham_config = self.config.get("sham", {})
-        return sham_config.get("enabled", False) and sham_config.get("blind_mode", False)
+        return bool(sham_config.get("enabled", False) and sham_config.get("blind_mode", False))
 
     def _run_reference_initial(self) -> None:
         """Collect initial reference scan for positioning verification."""
@@ -404,7 +406,7 @@ class PipelineRunner:
                 except Exception as e:
                     logger.warning(f"Failed to resolve localizer source from mapping: {e}")
             else:
-                logger.debug(f"Skipping source mapping (no mapping_path or participant_id)")
+                logger.debug("Skipping source mapping (no mapping_path or participant_id)")
 
             # 2. Fall back to individual localizer_source_dicoms field
             if not source_dir:
@@ -679,7 +681,7 @@ class PipelineRunner:
             participant_id=self.participant_id,
             task=task_name,
             root_dir=preprocessing_dir,
-            input_dicoms=input_dicoms,
+            input_dicoms=[str(d) for d in input_dicoms],
             overwrite=self.overwrite,
             qc_enabled=True,  # Generate QC report
             progress_callback=progress_callback,
@@ -934,7 +936,10 @@ class PipelineRunner:
         # Find the most recent complete reference collection for this run
         n_volumes = config["scan"].get("reference_n_volumes", 2)
         collections = self.find_available_collections(
-            collection_dir=base_dir / "collection", task="task-reference", run=actual_reference_run, expected_volumes=n_volumes
+            collection_dir=base_dir / "collection",
+            task="task-reference",
+            run=actual_reference_run,
+            expected_volumes=n_volumes,
         )
         if not collections:
             raise ValueError(f"No reference collection found for run {actual_reference_run}")
@@ -1201,8 +1206,12 @@ class PipelineRunner:
         fb_cfg = config.get("feedback", {})
         if fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False):
             if reference_realtime_enabled:
-                wm_matches = list(masks_dir.glob(f"*_tissue_wm_mask_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz"))
-                csf_matches = list(masks_dir.glob(f"*_tissue_csf_mask_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz"))
+                wm_matches = list(
+                    masks_dir.glob(f"*_tissue_wm_mask_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz")
+                )
+                csf_matches = list(
+                    masks_dir.glob(f"*_tissue_csf_mask_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz")
+                )
             else:
                 tissue_dir = mask_extraction_dir / "05_tissue"
                 wm_matches = list(tissue_dir.glob("*_tissue_wm_mask.nii.gz")) if tissue_dir.exists() else []
@@ -1302,6 +1311,7 @@ class PipelineRunner:
 
         feedback_task_type = config.get("task", {}).get("task_type", "ball")
         metadata = get_task_metadata(feedback_task_type)
+        design: NuisanceOnlyDesign | BlockDesign
         if metadata.design_type == "nuisance_only":
             design = NuisanceOnlyDesign()
         else:  # "block" (default)
@@ -1435,7 +1445,7 @@ class PipelineRunner:
         if self._is_blind_mode():
             self._emit_progress_file_only(f"Computing activations for masks: {all_mask_names}")
             generic_labels = ["Target", "Non-Target"] + [f"Network {i + 1}" for i in range(2, len(all_mask_names))]
-            self._emit_progress(f"Computing activations for masks: {generic_labels[:len(all_mask_names)]}")
+            self._emit_progress(f"Computing activations for masks: {generic_labels[: len(all_mask_names)]}")
         else:
             self._emit_progress(f"Computing activations for masks: {all_mask_names}")
 
@@ -1451,7 +1461,9 @@ class PipelineRunner:
                 # Activation: swap first mask only
                 task_mask_names = [sham_mask_names[0], real_mask_names[1]]
             if self._is_blind_mode():
-                self._emit_progress_file_only(f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})")
+                self._emit_progress_file_only(
+                    f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})"
+                )
             else:
                 self._emit_progress(f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})")
         else:

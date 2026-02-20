@@ -15,7 +15,7 @@ from pathlib import Path
 
 import flet as ft
 import numpy as np
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +259,7 @@ class FeedbackSummaryDialog:
         )
 
         # Build content column
-        content_children = [
+        content_children: list[ft.Control] = [
             status_row,
             ft.Container(height=15),
             stats_row,
@@ -296,7 +296,7 @@ class FeedbackSummaryDialog:
         """Build the network hits summary card."""
         data = self.summary_data
 
-        hit_rows = []
+        hit_rows: list[ft.Control] = []
         total_hits = 0
         for network, hits in data.hits_per_network.items():
             total_hits += hits
@@ -567,9 +567,9 @@ class FeedbackSummaryDialog:
             width=170,
         )
 
-    def _build_actions(self) -> list:
+    def _build_actions(self) -> list[ft.Control]:
         """Build dialog action buttons."""
-        actions = []
+        actions: list[ft.Control] = []
 
         if self.on_view_full_qc:
             actions.append(

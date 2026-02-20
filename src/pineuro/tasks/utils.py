@@ -108,7 +108,7 @@ class ActivationNormalizer:
         if not 0 <= lower_percentile < upper_percentile <= 100:
             raise ValueError("percentiles must satisfy: 0 <= lower < upper <= 100")
 
-        self.window = deque(maxlen=window_size)
+        self.window: deque[float] = deque(maxlen=window_size)
         self.lower_percentile = lower_percentile
         self.upper_percentile = upper_percentile
 
@@ -141,7 +141,7 @@ class ActivationNormalizer:
 
         # Normalize to [0, 1] and clip
         normalized = (value - lower) / (upper - lower)
-        return np.clip(normalized, 0.0, 1.0)
+        return float(np.clip(normalized, 0.0, 1.0))
 
     def reset(self):
         """Reset normalizer to initial state."""

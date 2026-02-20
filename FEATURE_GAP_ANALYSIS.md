@@ -64,11 +64,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 ### ~~A.2 Expand In-Repo Documentation~~ ✅
 - **Done**: Created 10 user guide pages covering every feature: study-configuration.md, preprocessing.md, mask-extraction.md, feedback-sessions.md, tasks.md, sham-and-blinding.md, multi-visit.md, display-setup.md, simulation-mode.md, qc-reports.md. Updated docs/index.md with complete navigation. All task types (gauge, ball, thermometer, fixation, self_other), feedback modes (activation, connectivity, differential, intermittent), mask methods (ICA, GLM, manual ROI), atlas options, sham/blinding, multi-visit, display setup, and output formats documented.
 
-### A.5 CI/CD Pipeline
-- **Gap**: No automated testing or build pipeline.
-- **Approach**: GitHub Actions with linting, pytest, type checking, build verification. Pairs with 1.7.
-- **Impact**: MEDIUM
-- **Also update**: `CONTRIBUTING.md` PR Process section — add CI checks that must pass, link to workflow
+### ~~A.5 CI/CD Pipeline~~ ✅
+- **Done**: Added `.github/workflows/ci.yml` with 4 jobs: lint (Ruff check + format), typecheck (mypy, lenient), build (sdist + wheel artifact upload), test (pytest on Ubuntu/Windows/macOS × Python 3.10/3.11/3.12 matrix). Added `pytest`, `mypy`, `build` to dev dependencies. Added `[tool.pytest.ini_options]` and `[tool.mypy]` config to `pyproject.toml`. Smoke test `tests/test_import.py` verifies package imports on all platforms. Updated `CONTRIBUTING.md` Testing section (pytest instructions) and PR Process section (CI checks that must pass).
 
 ### ~~A.6 Contributing Guide~~ ✅
 - **Done**: Created `CONTRIBUTING.md` covering development setup, Ruff linting, code conventions, project architecture overview, how to add tasks (plugin system) and atlases (registry), PR process, testing, and platform notes.

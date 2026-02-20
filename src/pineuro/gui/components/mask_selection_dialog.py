@@ -176,7 +176,7 @@ class MaskSelectionDialog:
         """Create an Image widget from a local file path."""
         return ft.Image(
             src=str(path),
-            fit="contain",
+            fit=ft.ImageFit.CONTAIN,
             height=height,
             width=width,
         )
@@ -208,7 +208,7 @@ class MaskSelectionDialog:
 
     def _build_stage1_content(self) -> ft.Control:
         """Build content for Stage 1: Accept/Reject each mask."""
-        mask_cards = []
+        mask_cards: list[ft.Control] = []
 
         for name, info in self.masks_info.items():
             selection = self._selections.get(name)
@@ -384,7 +384,7 @@ class MaskSelectionDialog:
         but do not have accept/reject buttons since they are derived from the
         parent network mask.
         """
-        cards = []
+        cards: list[ft.Control] = []
 
         for hemisphere in ["left", "right"]:
             overlay_path = self.hemisphere_overlays.get(hemisphere)
@@ -458,7 +458,7 @@ class MaskSelectionDialog:
         MNI template probability maps.
         """
         labels = {"wm": "White Matter", "csf": "CSF"}
-        cards = []
+        cards: list[ft.Control] = []
 
         for tissue_type in ["wm", "csf"]:
             overlay_path = self.tissue_mask_overlays.get(tissue_type)
@@ -664,7 +664,7 @@ class MaskSelectionDialog:
             content=ft.Column([], spacing=10),
         )
 
-        alternative_items = []
+        alternative_items: list[ft.Control] = []
 
         # Get the currently selected component to mark it
         current_selection = self._selections.get(network_name)
@@ -769,7 +769,7 @@ class MaskSelectionDialog:
         )
 
         # Build the content column
-        content_items = [
+        content_items: list[ft.Control] = [
             ft.Container(
                 content=ft.Row(
                     [
@@ -890,7 +890,7 @@ class MaskSelectionDialog:
 
     def _build_stage2_actions(self) -> list[ft.Control]:
         """Build action buttons for Stage 2."""
-        actions = [
+        actions: list[ft.Control] = [
             ft.TextButton("Back", on_click=self._on_back_clicked),
         ]
 
@@ -1268,6 +1268,8 @@ class MaskSelectionDialog:
         from pineuro import qc
         from pineuro.mask_extraction import split_mask_by_hemisphere
 
+        if self.hemisphere_network is None:
+            return
         selection = self._selections.get(self.hemisphere_network)
         if not selection:
             return
@@ -1282,9 +1284,9 @@ class MaskSelectionDialog:
             if selection.source_type == "ica" and selection.component_index is not None:
                 # Extract the selected ICA component
                 components_img = load(self.components_file)
-                components_data = components_img.get_fdata()
+                components_data = components_img.get_fdata()  # type: ignore[attr-defined]
                 ic_data = components_data[..., selection.component_index]
-                ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)
+                ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)  # type: ignore[attr-defined]
                 save(ic_img, network_file)
 
             elif selection.source_type == "yeo_atlas":
@@ -1294,9 +1296,9 @@ class MaskSelectionDialog:
                 labels = get_yeo_labels(n_networks=self.n_yeo)
                 network_index = labels.index(self.hemisphere_network) + 1
                 atlas_img = load(self.yeo_subject_space)
-                atlas_data = atlas_img.get_fdata()
+                atlas_data = atlas_img.get_fdata()  # type: ignore[attr-defined]
                 network_mask = (atlas_data == network_index).astype(float)
-                save(Nifti1Image(network_mask, atlas_img.affine, atlas_img.header), network_file)
+                save(Nifti1Image(network_mask, atlas_img.affine, atlas_img.header), network_file)  # type: ignore[attr-defined]
 
             # Now split into hemispheres
             left_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_left_thr.nii.gz"
@@ -1435,7 +1437,7 @@ class MaskSelectionDialog:
     def _on_reload_clicked(self, e):
         """Handle Reload button - reload selections, correlations, and images from disk."""
         try:
-            import pandas as pd
+            import pandas as pd  # type: ignore[import-untyped]
 
             # Check if approval marker was removed (e.g., by running reproduce_masks.py)
             approval_marker = self.mask_extraction_dir / ".masks_approved"

@@ -17,6 +17,9 @@ Dependencies
 PsychoPy (for concrete tasks)
 """
 
+from __future__ import annotations
+
+import contextlib
 import logging
 import threading
 import time
@@ -61,7 +64,7 @@ class TaskBase(ABC):  # noqa: B024
         self._simulator_thread: threading.Thread | None = None
 
         self._running = False
-        self.win = None
+        self.win: Any = None
 
         # Shared event fired when trigger is received (for external timing sync)
         self.trigger_event: threading.Event | None = None
@@ -398,9 +401,7 @@ class TaskBase(ABC):  # noqa: B024
         # Exact match on position
         for i, scr in enumerate(screens):
             if scr.x == target_x and scr.y == target_y:
-                logger.info(
-                    f"Resolved pyglet screen: ({target_x},{target_y}) -> index {i} ({scr.width}x{scr.height})"
-                )
+                logger.info(f"Resolved pyglet screen: ({target_x},{target_y}) -> index {i} ({scr.width}x{scr.height})")
                 return i
 
         # Fallback: closest by distance
@@ -412,9 +413,7 @@ class TaskBase(ABC):  # noqa: B024
                 best_dist = dist
                 best_i = i
         scr = screens[best_i]
-        logger.warning(
-            f"No exact pyglet match for ({target_x},{target_y}), using closest: index {best_i}"
-        )
+        logger.warning(f"No exact pyglet match for ({target_x},{target_y}), using closest: index {best_i}")
         return best_i
 
     # =========================================================================
@@ -647,10 +646,8 @@ class TaskBase(ABC):  # noqa: B024
             import pyglet
 
             for window in list(pyglet.app.windows):
-                try:
+                with contextlib.suppress(Exception):
                     window.close()
-                except Exception:
-                    pass
         except Exception:
             pass
 

@@ -135,7 +135,7 @@ class FeedbackLogPoller:
             logger.warning(f"Row length mismatch: {len(row)} vs {len(self._headers)}")
             return None
 
-        data = {}
+        data: dict[str, Any] = {}
         for i, header in enumerate(self._headers):
             value = row[i]
 

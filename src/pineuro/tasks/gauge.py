@@ -31,11 +31,9 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 # Third-party imports
-import numpy as np
-
 # Note: psychopy imports are lazy (inside methods) to avoid initialising
 # pyglet's OpenGL shadow window on the main thread, which breaks
 # background-thread window creation on native Windows.
@@ -174,9 +172,7 @@ class GaugeTask(BaseTask):
             run_acq_str = f"acq-{acq_str}_run-{coordinator.run_number:02d}"
         else:
             run_acq_str = f"run-{coordinator.run_number:02d}"
-        self._events_path = (
-            output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_events.tsv"
-        )
+        self._events_path = output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_events.tsv"
         self._psychopy_log_path = (
             output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_psychopylog.tsv"
         )
@@ -198,11 +194,19 @@ class GaugeTask(BaseTask):
         # Open per-frame log
         self._psychopy_log_file = open(self._psychopy_log_path, "w", newline="")  # noqa: SIM115
         self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter="\t")
-        self._psychopy_log_writer.writerow([
-            "frame", "time", "volume", "score", "condition",
-            "feedback_active", "labels_swapped",
-            f"{self.mask_names[0]}_activation", f"{self.mask_names[1]}_activation",
-        ])
+        self._psychopy_log_writer.writerow(
+            [
+                "frame",
+                "time",
+                "volume",
+                "score",
+                "condition",
+                "feedback_active",
+                "labels_swapped",
+                f"{self.mask_names[0]}_activation",
+                f"{self.mask_names[1]}_activation",
+            ]
+        )
         self._psychopy_log_file.flush()
 
         # Create window
@@ -223,7 +227,7 @@ class GaugeTask(BaseTask):
             cos_a = math.cos(angle_rad)
             sin_a = math.sin(angle_rad)
 
-            is_center = (i == N_TICK_MARKS // 2)
+            is_center = i == N_TICK_MARKS // 2
             length = CENTER_TICK_LENGTH if is_center else TICK_LENGTH
             width = 4.0 if is_center else 2.0
 
@@ -358,17 +362,19 @@ class GaugeTask(BaseTask):
             activations = self._latest_data["activations"]
 
         frame_time = time.time() - self._task_start_time
-        self._psychopy_log_writer.writerow([
-            self._frame_counter,
-            f"{frame_time:.4f}",
-            self.current_volume,
-            f"{self.score:.2f}",
-            self._current_condition,
-            int(self._feedback_active),
-            int(self._labels_swapped),
-            f"{activations.get(self.mask_names[0], 0.0):.6f}",
-            f"{activations.get(self.mask_names[1], 0.0):.6f}",
-        ])
+        self._psychopy_log_writer.writerow(
+            [
+                self._frame_counter,
+                f"{frame_time:.4f}",
+                self.current_volume,
+                f"{self.score:.2f}",
+                self._current_condition,
+                int(self._feedback_active),
+                int(self._labels_swapped),
+                f"{activations.get(self.mask_names[0], 0.0):.6f}",
+                f"{activations.get(self.mask_names[1], 0.0):.6f}",
+            ]
+        )
         self._psychopy_log_file.flush()
 
     # ------------------------------------------------------------------
@@ -480,9 +486,7 @@ class GaugeTask(BaseTask):
 
         # Check for label swap — original paradigm swaps every N sub-blocks
         # (every major block boundary). label_swap_after_block is the interval.
-        if (self.label_swap_after_block > 0
-                and block_idx > 0
-                and block_idx % self.label_swap_after_block == 0):
+        if self.label_swap_after_block > 0 and block_idx > 0 and block_idx % self.label_swap_after_block == 0:
             self._swap_label_positions()
             logger.info(f"Labels swapped at block {block_idx}")
 
@@ -520,8 +524,13 @@ class GaugeTask(BaseTask):
             if event.getKeys(keyList=["escape"]):
                 raise KeyboardInterrupt("Escape pressed")
 
-        self._record_event(warmup_onset, self.warmup_duration, f"{condition}_warmup",
-                           score=f"{self.score:.2f}", labels_swapped=int(self._labels_swapped))
+        self._record_event(
+            warmup_onset,
+            self.warmup_duration,
+            f"{condition}_warmup",
+            score=f"{self.score:.2f}",
+            labels_swapped=int(self._labels_swapped),
+        )
 
         # -- Active feedback phase --
         active_duration = duration - self.warmup_duration
@@ -559,8 +568,13 @@ class GaugeTask(BaseTask):
             if event.getKeys(keyList=["escape"]):
                 raise KeyboardInterrupt("Escape pressed")
 
-        self._record_event(active_onset, active_duration, condition,
-                           score=f"{self.score:.2f}", labels_swapped=int(self._labels_swapped))
+        self._record_event(
+            active_onset,
+            active_duration,
+            condition,
+            score=f"{self.score:.2f}",
+            labels_swapped=int(self._labels_swapped),
+        )
 
     def _run_button_press(self):
         """Run a button press catch trial between blocks."""
@@ -605,8 +619,9 @@ class GaugeTask(BaseTask):
             if remaining > 0.001:
                 core.wait(remaining, hogCPUperiod=0.001)
 
-        self._record_event(onset, self.button_press_duration, "button_press",
-                           response=response, response_time=response_time)
+        self._record_event(
+            onset, self.button_press_duration, "button_press", response=response, response_time=response_time
+        )
 
     # ------------------------------------------------------------------
     # Required abstract methods
@@ -627,32 +642,61 @@ class GaugeTask(BaseTask):
         if self._current_condition == "rest":
             # Fixation cross
             cross_size = 0.1
-            shapes.extend([
-                {"type": "line", "x1": 0.5 - cross_size, "y1": 0.5,
-                 "x2": 0.5 + cross_size, "y2": 0.5, "stroke": "white", "stroke_width": 3},
-                {"type": "line", "x1": 0.5, "y1": 0.5 - cross_size,
-                 "x2": 0.5, "y2": 0.5 + cross_size, "stroke": "white", "stroke_width": 3},
-            ])
+            shapes.extend(
+                [
+                    {
+                        "type": "line",
+                        "x1": 0.5 - cross_size,
+                        "y1": 0.5,
+                        "x2": 0.5 + cross_size,
+                        "y2": 0.5,
+                        "stroke": "white",
+                        "stroke_width": 3,
+                    },
+                    {
+                        "type": "line",
+                        "x1": 0.5,
+                        "y1": 0.5 - cross_size,
+                        "x2": 0.5,
+                        "y2": 0.5 + cross_size,
+                        "stroke": "white",
+                        "stroke_width": 3,
+                    },
+                ]
+            )
         else:
             # Gauge needle indicator (simplified for mirror)
             needle_color = "red" if self._feedback_active else "white"
             angle_rad = math.radians(self.score)
             nx = 0.5 - 0.3 * math.cos(angle_rad)
             ny = 0.3 + 0.3 * math.sin(angle_rad)
-            shapes.append({"type": "line", "x1": 0.5, "y1": 0.6,
-                           "x2": nx, "y2": ny, "stroke": needle_color, "stroke_width": 3})
+            shapes.append(
+                {"type": "line", "x1": 0.5, "y1": 0.6, "x2": nx, "y2": ny, "stroke": needle_color, "stroke_width": 3}
+            )
 
             # Condition text
-            shapes.append({
-                "type": "text", "content": self._current_condition.upper(),
-                "x": 0.5, "y": 0.85, "size": 14, "color": "white",
-            })
+            shapes.append(
+                {
+                    "type": "text",
+                    "content": self._current_condition.upper(),
+                    "x": 0.5,
+                    "y": 0.85,
+                    "size": 14,
+                    "color": "white",
+                }
+            )
 
             # Score
-            shapes.append({
-                "type": "text", "content": f"Score: {self.score:.0f}°",
-                "x": 0.5, "y": 0.95, "size": 10, "color": "gray",
-            })
+            shapes.append(
+                {
+                    "type": "text",
+                    "content": f"Score: {self.score:.0f}°",
+                    "x": 0.5,
+                    "y": 0.95,
+                    "size": 10,
+                    "color": "gray",
+                }
+            )
 
         return {"background": "black", "shapes": shapes}
 
@@ -725,8 +769,9 @@ class GaugeTask(BaseTask):
                 # Determine condition (alternating)
                 condition = self.conditions[i % len(self.conditions)]
 
-                logger.info(f"Block {i + 1}/{len(self.block_durations)}: "
-                            f"{condition} ({duration}s), score={self.score:.1f}°")
+                logger.info(
+                    f"Block {i + 1}/{len(self.block_durations)}: {condition} ({duration}s), score={self.score:.1f}°"
+                )
 
                 self._run_block(i, condition, duration)
 
@@ -764,8 +809,7 @@ class GaugeTask(BaseTask):
             self._psychopy_log_writer = None
 
         # Delete visual stimuli while GL context is alive
-        for attr in ["_fixation", "_instruction_text", "_left_label", "_right_label",
-                      "_needle"]:
+        for attr in ["_fixation", "_instruction_text", "_left_label", "_right_label", "_needle"]:
             if hasattr(self, attr):
                 delattr(self, attr)
         if hasattr(self, "_tick_marks"):
@@ -782,7 +826,6 @@ from .task_registry import (
     NetworkRole,
     TaskMetadata,
     TaskParameter,
-    pineuro_task,
 )
 
 GAUGE_METADATA = TaskMetadata(
@@ -886,8 +929,8 @@ GAUGE_METADATA = TaskMetadata(
 )
 
 # Register task
-from .task_registry import register_task
 from .factory import register_task_class
+from .task_registry import register_task
 
 register_task(GAUGE_METADATA)
 register_task_class("gauge", GaugeTask)

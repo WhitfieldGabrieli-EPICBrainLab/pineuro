@@ -302,7 +302,7 @@ class QCReportManager:
         Returns:
             List of (label, path) tuples for available plots
         """
-        plots = []
+        plots: list[tuple[str, Path]] = []
         qc_dir = self.base_dir / "preprocessing" / "qc"
 
         if not qc_dir.exists():
@@ -336,7 +336,7 @@ class QCReportManager:
         Returns:
             List of (label, path) tuples for available plots
         """
-        plots = []
+        plots: list[tuple[str, Path]] = []
         qc_dir = self.base_dir / "qc"
 
         if not qc_dir.exists():
@@ -392,7 +392,7 @@ class QCReportManager:
         Returns:
             List of (label, path) tuples for reference overlay images
         """
-        plots = []
+        plots: list[tuple[str, Path]] = []
         run_pattern = f"run-{run_id:02d}"
 
         # QC overlays are in participant-level qc/ directory
@@ -431,7 +431,7 @@ class QCReportManager:
         Returns:
             List of (label, path) tuples for available plots
         """
-        plots = []
+        plots: list[tuple[str, Path]] = []
         qc_dir = self.base_dir / "feedback" / "qc"
 
         if not qc_dir.exists():

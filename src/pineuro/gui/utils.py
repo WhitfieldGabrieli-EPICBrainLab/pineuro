@@ -332,7 +332,7 @@ def open_mask_viewer_in_browser(
     Path
         Path to the generated HTML file.
     """
-    from nilearn.plotting import view_img
+    from nilearn.plotting import view_img  # type: ignore[import-untyped]
 
     from pineuro.gui.components.qc_viewer import open_qc_report
 

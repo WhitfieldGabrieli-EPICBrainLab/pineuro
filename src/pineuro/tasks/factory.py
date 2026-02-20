@@ -121,13 +121,14 @@ def create_task(
     logger.info(f"Creating task '{task_id}' with {len(mask_names)} mask(s)")
 
     # Create task instance
-    return task_class(
+    task: BaseTask = task_class(
         coordinator=coordinator,
         session_state=session_state,
         output_dir=output_dir,
         simulator=simulator,
         **filtered_config,
     )
+    return task
 
 
 def create_localizer_task(

@@ -168,7 +168,7 @@ def display_text(
     text: str,
     duration: float | None = None,
     wait_key: bool = False,
-    wait_keys: list = None,
+    wait_keys: list | None = None,
     pos: tuple[float, float] = (0, 0),
     height: float = 0.05,
     color: str = "white",
@@ -226,7 +226,7 @@ def display_text(
         while True:
             keys = event.getKeys(keyList=wait_keys)
             if keys:
-                return keys[0]
+                return str(keys[0])
             core.wait(0.01)
 
     return None

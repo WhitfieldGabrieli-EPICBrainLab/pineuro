@@ -26,13 +26,15 @@ Feedback runs (runs 2-5) show post-block thermometer feedback from
 the participant-specific STG mask.
 """
 
+from __future__ import annotations
+
 import csv
 import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -137,7 +139,7 @@ class ThermometerTask(BaseTask):
         left_button: str = "1",
         right_button: str = "2",
         confirm_button: str = "3",
-        session_state: Optional["SessionState"] = None,
+        session_state: SessionState | None = None,
         trigger_keys: list[str] | None = None,
         presenter_monitor: str = "right",
         **kwargs,
@@ -187,10 +189,10 @@ class ThermometerTask(BaseTask):
         self._blocks: list[BlockInfo] = []
 
         # Pre-loaded audio (populated in setup)
-        self._preloaded_sounds: dict[str, object] = {}
+        self._preloaded_sounds: dict[str, Any] = {}
 
         # Task clock (set in run)
-        self._task_clock = None
+        self._task_clock: Any = None
 
         # Date string for TSV
         self._date = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -366,9 +368,9 @@ class ThermometerTask(BaseTask):
         "date",
     ]
 
-    def _record_event(self, onset: float, duration: float, trial_type: str, **kwargs):
+    def _record_event(self, onset: float, duration: float, trial_type: str, **kwargs: Any) -> None:
         """Record an event for the BIDS events TSV."""
-        event = {col: "n/a" for col in self._TSV_COLUMNS}
+        event: dict[str, Any] = {col: "n/a" for col in self._TSV_COLUMNS}
         event["onset"] = round(onset, 1)
         event["duration"] = round(duration, 1) if not isinstance(duration, str) else duration
         event["trial_type"] = trial_type

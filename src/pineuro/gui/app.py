@@ -175,7 +175,7 @@ class PyrtnfApp:
             return ft.Container(
                 content=ft.Column(
                     [
-                        ft.Icon(ft.icons.Icons.FOLDER_OPEN, size=100, color=ft.Colors.GREY_400),
+                        ft.Icon(ft.Icons.FOLDER_OPEN, size=100, color=ft.Colors.GREY_400),
                         ft.Text(
                             "No studies found",
                             size=20,
@@ -188,18 +188,18 @@ class PyrtnfApp:
                         ),
                         ft.ElevatedButton(
                             "Create New Study",
-                            icon=ft.icons.Icons.CREATE,
+                            icon=ft.Icons.CREATE,
                             on_click=lambda _: self.show_study_editor(None),
                         ),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=10,
                 ),
-                alignment=ft.alignment.Alignment.CENTER,
+                alignment=ft.Alignment(0, 0),
             )
 
         # Create study cards in a grid
-        cards = []
+        cards: list[ft.Control] = []
         for study_meta in studies:
             cards.append(self._create_study_card(study_meta))
 
@@ -250,19 +250,19 @@ class PyrtnfApp:
                         ft.Row(
                             [
                                 ft.IconButton(
-                                    icon=ft.icons.Icons.EDIT,
+                                    icon=ft.Icons.EDIT,
                                     icon_size=24,
                                     tooltip="Edit Study Configuration",
                                     on_click=lambda _, name=study_meta.name: self.show_study_editor(name),
                                 ),
                                 ft.IconButton(
-                                    icon=ft.icons.Icons.CONTENT_COPY,
+                                    icon=ft.Icons.CONTENT_COPY,
                                     icon_size=24,
                                     tooltip="Duplicate",
                                     on_click=lambda _, name=study_meta.name: self._duplicate_study(name),
                                 ),
                                 ft.IconButton(
-                                    icon=ft.icons.Icons.DELETE_OUTLINE,
+                                    icon=ft.Icons.DELETE_OUTLINE,
                                     icon_size=24,
                                     tooltip="Delete",
                                     on_click=lambda _, name=study_meta.name: self._confirm_delete_study(name),
@@ -314,7 +314,7 @@ class PyrtnfApp:
             participant_id = participant_id_field.value.strip()
 
             if not participant_id:
-                participant_id_field.error_text = "Participant ID is required"
+                participant_id_field.error_text = "Participant ID is required"  # type: ignore[attr-defined]
                 participant_id_field.update()
                 return
 
@@ -451,8 +451,10 @@ class PyrtnfApp:
             study_config=self.current_study,
             on_cancel=lambda: self.show_study_manager(),
             on_save=lambda: self.show_study_manager(),
-            on_start_session=lambda participant_id, visit_id=None, visit_config=None: self.show_participant_workflow(
-                self.current_study, participant_id, visit_id, visit_config
+            on_start_session=lambda participant_id, visit_id=None, visit_config=None: (
+                self.show_participant_workflow(self.current_study, participant_id, visit_id, visit_config)
+                if self.current_study is not None
+                else None
             ),
         )
 
@@ -464,8 +466,8 @@ class PyrtnfApp:
         self,
         study_config: StudyConfig,
         participant_id: str,
-        visit_id: str = None,
-        visit_config: "VisitConfig" = None,
+        visit_id: str | None = None,
+        visit_config: "VisitConfig | None" = None,
     ):
         """Show the participant workflow screen.
 

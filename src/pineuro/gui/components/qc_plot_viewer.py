@@ -96,7 +96,7 @@ class QCPlotViewer:
         Returns:
             Container with scrollable plot images
         """
-        plot_controls = []
+        plot_controls: list[ft.Control] = []
 
         for label, path in self.plots:
             if not path.exists():
@@ -116,7 +116,7 @@ class QCPlotViewer:
                             ft.Container(
                                 content=ft.Image(
                                     src=str(path),
-                                    fit="contain",
+                                    fit=ft.ImageFit.CONTAIN,
                                 ),
                                 border=ft.border.all(1, ft.Colors.GREY_300),
                                 border_radius=5,
@@ -147,7 +147,7 @@ class QCPlotViewer:
         Returns:
             List of action button controls
         """
-        actions = []
+        actions: list[ft.Control] = []
 
         # View full report button (if HTML path available)
         if self.html_report_path and self.html_report_path.exists():

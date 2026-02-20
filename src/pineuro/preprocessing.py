@@ -103,7 +103,7 @@ import threading  # Multi-threading for volume collection with watchdog
 import time  # Timing for collection timeout and progress tracking
 from collections.abc import Callable
 from pathlib import Path
-from typing import Union
+from typing import Union, cast
 
 import nibabel as nib
 
@@ -216,7 +216,7 @@ def motion_correction(input_file: Union[str, Path], output_file: Union[str, Path
         logger.info(f"Running motion correction: {input_file.name}")
 
         # Load 4D image
-        img = nib.load(input_file)
+        img = cast(Nifti1Image, nib.load(input_file))
         data = np.asarray(img.dataobj, dtype=np.float32)
         affine = img.affine
         n_vols = data.shape[3]
@@ -332,7 +332,7 @@ def concat(input_files: list[Union[str, Path]], output_file: Union[str, Path], o
 
     # --- Load all input images ---
     # nibabel loads headers lazily, but get_fdata() loads the full array
-    images = [nib.load(str(f)) for f in input_files]
+    images = [cast(Nifti1Image, nib.load(str(f))) for f in input_files]
 
     # --- Concatenate along time axis (axis=-1 = 4th dimension) ---
     # For 4D volumes with shape (X, Y, Z, T), this appends timepoints
@@ -482,12 +482,11 @@ def temporal_filtering(
         return
 
     # --- Load image and extract timing parameters ---
-    img = nib.load(str(input_file))
+    img = cast(Nifti1Image, nib.load(str(input_file)))
     data = img.get_fdata()
 
     # Extract TR from NIfTI header (4th element of zooms is temporal spacing)
-    # nibabel's type hints don't recognize this, hence type: ignore
-    tr = img.header.get_zooms()[3]  # type: ignore
+    tr = img.header.get_zooms()[3]
     fs = 1.0 / tr  # Sampling frequency in Hz
     nyquist = fs / 2.0  # Nyquist frequency (max representable frequency)
 
@@ -832,7 +831,7 @@ def preprocessing(
         # Build job specifications for parallel execution
         dcm_jobs = []
         nifti_file_paths = []
-        for run, path in enumerate(input_paths):
+        for run, dicom_dir in enumerate(input_paths):
             # BIDS-style naming: sub-XX_task-YY_run-01.nii.gz
             output_name = f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}"
             nifti_file_path = nifti_dir / f"{output_name}.nii.gz"
@@ -841,9 +840,9 @@ def preprocessing(
             dcm_jobs.append(
                 {
                     "cmd_name": "dcm2niix",
-                    "cmd": ["dcm2niix", "-z", "y", "-o", str(nifti_dir), "-f", output_name, str(path)],
+                    "cmd": ["dcm2niix", "-z", "y", "-o", str(nifti_dir), "-f", output_name, str(dicom_dir)],
                     "description": f"DICOM to NIfTI conversion run {run + 1}",
-                    "inputs": path,
+                    "inputs": dicom_dir,
                     "outputs": nifti_file_path,
                     "overwrite": overwrite,
                     "verbose": False,  # Suppress per-job output in parallel mode
@@ -856,10 +855,10 @@ def preprocessing(
 
     else:
         # --- Sequential Conversion (single run or n_jobs=1) ---
-        for run, path in enumerate(input_paths):
+        for run, dicom_dir in enumerate(input_paths):
             emit_progress("Step 1/4", f"Converting run {run + 1}/{len(input_paths)}...")
             nifti_file = dicom_to_nifti(
-                dicom_dir=path,
+                dicom_dir=dicom_dir,
                 output_dir=nifti_dir,
                 output_name=f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}",
                 overwrite=overwrite,
@@ -1012,7 +1011,7 @@ def preprocessing(
         # Combine all coregistered runs into a single 4D timeseries.
         # The order is chronological (run-01, run-02, ...).
         emit_progress("Step 4/4", f"Concatenating {len(concat_files)} runs...")
-        concat(input_files=concat_files, output_file=coreg_file, overwrite=overwrite)
+        concat(input_files=list(concat_files), output_file=coreg_file, overwrite=overwrite)
 
     # -------------------------------------------------------------------------
     # Finalization: Create Final Output Files

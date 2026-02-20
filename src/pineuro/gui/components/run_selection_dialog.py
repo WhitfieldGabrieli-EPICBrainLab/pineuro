@@ -78,7 +78,7 @@ class RunSelectionDialog:
 
     def _build_content(self) -> ft.Control:
         """Build the dialog content with run selection options."""
-        run_controls = []
+        run_controls: list[ft.Control] = []
 
         for run in self.runs:
             # Determine status color and icon
@@ -187,7 +187,7 @@ class RunSelectionDialog:
                 border_radius=5,
             )
 
-        content_children = run_controls
+        content_children: list[ft.Control] = list(run_controls)
         if info_text:
             content_children.append(ft.Container(height=10))
             content_children.append(info_text)
