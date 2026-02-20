@@ -102,6 +102,9 @@ class BaseQCPlot:
 
     def __init__(self, n_volumes: int, height: float, threshold: float):
         self.n_volumes = n_volumes
+        # Round up to next multiple of 25 so auto-generated x-axis labels
+        # don't overlap with the endpoint (e.g. 412 → 425)
+        self._x_max = math.ceil(n_volumes / 25) * 25
         self.height = height
         self.threshold = threshold
         self.data = QCData()
@@ -346,7 +349,7 @@ class FDPlot(BaseQCPlot):
     def _calculate_axis_range(self):
         data_max = max(self.data.values) if self.data.values else 0.0
         max_y = max(self.threshold * 1.2, data_max * 1.2, self.threshold + 0.1)
-        return (1, self.n_volumes, 0.0, max_y)
+        return (1, self._x_max, 0.0, max_y)
 
     def _get_grid_interval(self, max_y: float) -> float:
         return 0.5
@@ -416,7 +419,7 @@ class DVARSPlot(BaseQCPlot):
         stable = [v for v in std_values[5:] if v > 0] if len(std_values) > 5 else [v for v in std_values if v > 0]
         data_max = max(stable) if stable else 0.0
         max_y = max(self.threshold * 1.5, data_max * 1.2)
-        return (1, self.n_volumes, 0.0, max_y)
+        return (1, self._x_max, 0.0, max_y)
 
     def _get_grid_interval(self, max_y: float) -> float:
         return max(0.5, max_y / 4)
@@ -458,7 +461,7 @@ class TSNRPlot(BaseQCPlot):
     def _calculate_axis_range(self):
         data_max = max(self.data.values) if self.data.values else 0.0
         max_y = max(60.0, data_max * 1.2)
-        return (1, self.n_volumes, 0.0, max_y)
+        return (1, self._x_max, 0.0, max_y)
 
     def _get_grid_interval(self, max_y: float) -> float:
         return max(10.0, max_y / 4)

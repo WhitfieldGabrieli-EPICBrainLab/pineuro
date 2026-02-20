@@ -81,14 +81,14 @@ class GaugeTask(BaseTask):
         If None, uses first two masks from coordinator.
     block_durations : str, default="30,90,60,30,90,60,60,90,30,60,90,30"
         Comma-separated block durations in seconds.
-    conditions : str, default="focus,wander"
-        Comma-separated condition labels (alternating).
+    conditions : str, default="wander,focus"
+        Comma-separated condition labels (alternating). Rockland starts with Wander.
     swap_labels : bool, default=False
         If True, start with labels in swapped position (Wandering on left).
     score_factor : float, default=3.0
         Degrees of needle movement per unit of differential activation.
-    label_swap_after_block : int, default=6
-        Swap label positions after this block number. 0 to disable.
+    label_swap_after_block : int, default=3
+        Swap label positions every N blocks (Rockland: 3). 0 to disable.
     button_press_duration : float, default=2.0
         Duration of button press prompt between blocks (seconds).
     warmup_duration : float, default=2.0
@@ -108,15 +108,16 @@ class GaugeTask(BaseTask):
         coordinator,
         mask_names: list[str] | None = None,
         block_durations: str = "30,90,60,30,90,60,60,90,30,60,90,30",
-        conditions: str = "focus,wander",
+        conditions: str = "wander,focus",
         swap_labels: bool = False,
         score_factor: float = 3.0,
-        label_swap_after_block: int = 6,
+        label_swap_after_block: int = 3,
         button_press_duration: float = 2.0,
         warmup_duration: float = 2.0,
         trigger_keys: list[str] | None = None,
         button_key: str = "1",
         presenter_monitor: str = "right",
+        feedback_mode: bool = True,
         session_state: Optional["SessionState"] = None,
         **kwargs,
     ):
@@ -133,7 +134,7 @@ class GaugeTask(BaseTask):
         super().__init__(
             coordinator,
             mask_name=mask_names[0],
-            feedback_mode=True,
+            feedback_mode=feedback_mode,
             session_state=session_state,
             **kwargs,
         )
@@ -477,10 +478,13 @@ class GaugeTask(BaseTask):
         """
         from psychopy import core, event
 
-        # Check for label swap
-        if self.label_swap_after_block > 0 and block_idx == self.label_swap_after_block:
+        # Check for label swap — original paradigm swaps every N sub-blocks
+        # (every major block boundary). label_swap_after_block is the interval.
+        if (self.label_swap_after_block > 0
+                and block_idx > 0
+                and block_idx % self.label_swap_after_block == 0):
             self._swap_label_positions()
-            logger.info(f"Labels swapped after block {block_idx}")
+            logger.info(f"Labels swapped at block {block_idx}")
 
         self._current_condition = condition
         self._current_block = block_idx + 1
@@ -539,7 +543,7 @@ class GaugeTask(BaseTask):
             if new_vol != self.current_volume:
                 self.current_volume = new_vol
                 activations = data.get("activations", {})
-                if activations and not data.get("is_baseline", False):
+                if activations and not data.get("is_baseline", False) and self.feedback_mode:
                     self._update_score(activations)
 
             self._draw_gauge()
@@ -668,9 +672,9 @@ class GaugeTask(BaseTask):
             # Wait for coordinator
             self.coordinator.wait_until_ready(timeout=10.0)
 
-            # Show instructions
-            super().show_instructions(
-                slides=[
+            # Show instructions (vary by feedback vs transfer mode)
+            if self.feedback_mode:
+                slides = [
                     "Next is the feedback task.\n\n"
                     "During this scan, direct your gaze to the instruction\n"
                     "below the gauge.\n\n"
@@ -679,7 +683,18 @@ class GaugeTask(BaseTask):
                     "'Wandering' label.\n\n"
                     "You will be periodically asked to push a button.\n\n"
                     "Press any key to continue.",
-                ],
+                ]
+            else:
+                slides = [
+                    "Next is a transfer run.\n\n"
+                    "The gauge will be visible but the needle will\n"
+                    "NOT move during this scan.\n\n"
+                    "Follow the same instructions as before and\n"
+                    "try to modulate your thoughts accordingly.\n\n"
+                    "Press any key to continue.",
+                ]
+            super().show_instructions(
+                slides=slides,
                 advance_keys=["space", "1", "2", "3"],
                 text_height=0.05,
                 wrap_width=1.4,
@@ -691,7 +706,8 @@ class GaugeTask(BaseTask):
             self._task_start_time = core.getTime()
             self._last_frame_time = core.getTime()
 
-            logger.info("=== GaugeTask Session Started ===")
+            run_type = "feedback" if self.feedback_mode else "transfer"
+            logger.info(f"=== GaugeTask Session Started ({run_type}) ===")
             logger.info(f"Networks: {self.mask_names[0]} (focus) vs {self.mask_names[1]} (wander)")
             logger.info(f"Blocks: {len(self.block_durations)}, durations: {self.block_durations}")
             logger.info(f"Score factor: {self.score_factor}")
@@ -788,6 +804,13 @@ GAUGE_METADATA = TaskMetadata(
     ],
     parameters=[
         TaskParameter(
+            key="use_transfer_runs",
+            label="Use Transfer Runs",
+            type="bool",
+            default=True,
+            hint="Include transfer runs (1 before feedback, 1 after)",
+        ),
+        TaskParameter(
             key="block_durations",
             label="Block Durations",
             type="str",
@@ -798,8 +821,8 @@ GAUGE_METADATA = TaskMetadata(
             key="conditions",
             label="Conditions",
             type="str",
-            default="focus,wander",
-            hint="Comma-separated condition labels (alternating). First condition starts first block.",
+            default="wander,focus",
+            hint="Comma-separated condition labels (alternating). Rockland starts with Wander.",
         ),
         TaskParameter(
             key="swap_labels",
@@ -819,12 +842,12 @@ GAUGE_METADATA = TaskMetadata(
         ),
         TaskParameter(
             key="label_swap_after_block",
-            label="Label Swap After Block",
+            label="Label Swap Interval",
             type="int",
-            default=6,
+            default=3,
             min_value=0,
             max_value=24,
-            hint="Swap Focused/Wandering label positions after this block. 0 to disable.",
+            hint="Swap Focused/Wandering labels every N blocks (Rockland: 3). 0 to disable.",
         ),
         TaskParameter(
             key="button_press_duration",

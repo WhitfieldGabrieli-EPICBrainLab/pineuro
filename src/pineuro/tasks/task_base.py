@@ -195,7 +195,8 @@ class TaskBase(ABC):  # noqa: B024
         """Create a fullscreen PsychoPy window with cross-platform monitor targeting.
 
         Handles platform differences:
-        - macOS/Windows: Uses screen parameter directly
+        - macOS: Uses screeninfo index directly (pyglet enumerates by position)
+        - Windows: Matches screeninfo (x,y) to pyglet screen index (adapter order may differ)
         - Linux: Creates window then moves it using Xlib
 
         Parameters
@@ -228,9 +229,6 @@ class TaskBase(ABC):  # noqa: B024
         target_monitor = get_monitor_by_position(monitor_position)
         if target_monitor:
             target_screen = target_monitor.index
-            logger.info(
-                f"Task window targeting {monitor_position} monitor: {target_monitor.name} (screen={target_screen})"
-            )
         else:
             target_screen = 0
             logger.warning("No monitors detected, using screen 0")
@@ -239,12 +237,29 @@ class TaskBase(ABC):  # noqa: B024
         self._reset_pyglet_for_new_window()
 
         # Platform-specific window creation
-        if platform in ("darwin", "windows"):
-            # macOS/Windows: screen parameter works directly
+        if platform == "darwin":
+            # macOS: pyglet enumerates by position, index matches screeninfo
             self.win = visual.Window(
                 fullscr=True,
                 monitor=mon,
                 screen=target_screen,
+                units=units,
+                color=color,
+                allowGUI=False,
+                waitBlanking=False,
+                **kwargs,
+            )
+        elif platform == "windows":
+            # Windows: screeninfo sorts by x-position but pyglet uses adapter
+            # order (DISPLAY1, DISPLAY2...). Resolve by matching (x,y) position.
+            if target_monitor:
+                pyglet_idx = self._resolve_pyglet_screen_index(target_monitor.x, target_monitor.y)
+            else:
+                pyglet_idx = 0
+            self.win = visual.Window(
+                fullscr=True,
+                monitor=mon,
+                screen=pyglet_idx,
                 units=units,
                 color=color,
                 allowGUI=False,
@@ -367,6 +382,40 @@ class TaskBase(ABC):  # noqa: B024
             logger.debug("Reset pyglet gl_info state for clean window recreation")
         except Exception as e:
             logger.debug(f"Could not reset pyglet gl_info state: {e}")
+
+    def _resolve_pyglet_screen_index(self, target_x: int, target_y: int) -> int:
+        """Find pyglet screen index matching a screeninfo monitor position.
+
+        screeninfo sorts by x-position; pyglet uses Windows adapter order.
+        Both report identical (x,y) from EnumDisplayMonitors, so we match
+        on position to bridge the two enumeration orders.
+        """
+        import pyglet
+
+        display = pyglet.canvas.get_display()
+        screens = display.get_screens()
+
+        # Exact match on position
+        for i, scr in enumerate(screens):
+            if scr.x == target_x and scr.y == target_y:
+                logger.info(
+                    f"Resolved pyglet screen: ({target_x},{target_y}) -> index {i} ({scr.width}x{scr.height})"
+                )
+                return i
+
+        # Fallback: closest by distance
+        best_i = 0
+        best_dist = float("inf")
+        for i, scr in enumerate(screens):
+            dist = (scr.x - target_x) ** 2 + (scr.y - target_y) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best_i = i
+        scr = screens[best_i]
+        logger.warning(
+            f"No exact pyglet match for ({target_x},{target_y}), using closest: index {best_i}"
+        )
+        return best_i
 
     # =========================================================================
     # Instructions Display

@@ -2899,8 +2899,8 @@ class NeurofeedbackCoordinator:
             f"{elapsed_time:.2f}",
             is_baseline,
             is_outlier,
-            f"{fd:.4f}",
-            f"{dvars:.4f}",
+            f"{fd:.2f}",
+            f"{dvars:.2f}",
             f"{tsnr:.2f}",
             self._condition,  # Log condition (real/sham) for each volume
         ]
@@ -2956,7 +2956,7 @@ class NeurofeedbackCoordinator:
         logger.info(
             f"[{elapsed_time:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
             f"({status}): {activation_str} "
-            f"[proc:{total_duration:.0f}ms drift:{drift_str}ms FD:{fd:.2f} DVARS:{dvars:.1f}{outlier_indicator}]{queue_warning}"
+            f"[proc:{total_duration:.0f}ms drift:{drift_str}ms{outlier_indicator}]{queue_warning}"
         )
 
     def run(self) -> None:

@@ -7,6 +7,7 @@ Requires flet-charts package: pip install flet-charts
 """
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 import flet as ft
@@ -114,6 +115,8 @@ class ActivationPlot:
         self.mask_names = mask_names
         self.display_names = display_names if display_names else mask_names
         self.n_volumes = n_volumes
+        # Round up to next multiple of 25 so x-axis labels don't overlap
+        self._x_max = math.ceil(n_volumes / 25) * 25
         self.height = height
         self.y_min = y_min
         self.y_max = y_max
@@ -174,8 +177,8 @@ class ActivationPlot:
         Returns:
             Tuple of (min_x, max_x, min_y, max_y)
         """
-        # X axis: fixed range from 1 to n_volumes
-        min_x, max_x = 1, self.n_volumes
+        # X axis: fixed range from 1 to rounded max
+        min_x, max_x = 1, self._x_max
 
         # Y axis: dynamic based on data
         if self.data.n_points == 0:
@@ -235,7 +238,7 @@ class ActivationPlot:
         return labels
 
     def _create_x_axis_labels(self, min_x: float, max_x: float) -> list:
-        """Create custom X axis labels with smaller font size.
+        """Create custom X axis labels at round intervals.
 
         Args:
             min_x: Minimum X value
@@ -247,20 +250,26 @@ class ActivationPlot:
         if ChartAxisLabel is None:
             return []
 
-        labels = []
-        # Create labels at regular intervals (every 25 volumes or so)
+        # Pick a nice interval: 25, 50, or 100 depending on range
         x_range = max_x - min_x
-        num_labels = min(6, max(2, int(x_range / 25) + 1))
-        interval = x_range / (num_labels - 1) if num_labels > 1 else x_range
+        if x_range <= 150:
+            interval = 25
+        elif x_range <= 300:
+            interval = 50
+        else:
+            interval = 100
 
-        for i in range(num_labels):
-            value = min_x + i * interval
-            labels.append(
-                ChartAxisLabel(
-                    value=value,
-                    label=ft.Text(f"{int(value)}", size=10),
+        labels = []
+        value = 0
+        while value <= max_x:
+            if value >= min_x:
+                labels.append(
+                    ChartAxisLabel(
+                        value=float(value),
+                        label=ft.Text(f"{value}", size=10),
+                    )
                 )
-            )
+            value += interval
         return labels
 
     def build(self) -> ft.Container:

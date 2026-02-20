@@ -292,7 +292,23 @@ class PipelineRunner:
             # Simulator mode: create temp watch dir and use source DICOMs
             watch_dir = base_dir / "tmp" / "incoming_2vol_initial"
             watch_dir.mkdir(parents=True, exist_ok=True)
-            simulator_source_dir = config["scan"]["twovol_initial_dicoms"]
+            simulator_source_dir = config["scan"].get("twovol_initial_dicoms", "")
+
+            # Try mapping file if individual field is empty
+            if not simulator_source_dir:
+                mapping_path = config["scan"].get("simulator_source_mapping", "")
+                if mapping_path and self.participant_id:
+                    try:
+                        from pineuro.session import SimulatorSourceMapping
+
+                        mapping = SimulatorSourceMapping.from_file(Path(mapping_path))
+                        resolved = mapping.get_source(self.participant_id, "2vol_initial")
+                        if resolved is not None:
+                            simulator_source_dir = str(resolved)
+                            logger.info(f"2vol_initial source from mapping: {simulator_source_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to resolve 2vol_initial from mapping: {e}")
+
             simulator_speed = config["scan"].get("collection_speed", 10.0)
         else:
             # Real-time mode: watch scanner DICOM directory
@@ -361,20 +377,38 @@ class PipelineRunner:
 
         if simulator_enabled:
             # Simulator mode: get source directory and create temp watch dir
-            localizer_sources = config["scan"].get("localizer_source_dicoms")
-            if localizer_sources is None:
-                localizer_sources = config["scan"].get("rest_source_dicoms", [])
+            source_dir = None
 
-            # Get source for this run (0-indexed)
-            if isinstance(localizer_sources, list):
-                if len(localizer_sources) >= run_num:
-                    source_dir = localizer_sources[run_num - 1]
-                elif len(localizer_sources) > 0:
-                    source_dir = localizer_sources[0]
-                else:
-                    source_dir = None
+            # 1. Try simulator_source_mapping first (per-subject paths)
+            mapping_path = config["scan"].get("simulator_source_mapping", "")
+            if mapping_path and self.participant_id:
+                try:
+                    from pineuro.session import SimulatorSourceMapping
+
+                    mapping = SimulatorSourceMapping.from_file(Path(mapping_path))
+                    run_type = f"rest{run_num}"
+                    resolved = mapping.get_source(self.participant_id, run_type)
+                    if resolved is not None:
+                        source_dir = str(resolved)
+                        logger.info(f"Localizer source from mapping: {source_dir}")
+                except Exception as e:
+                    logger.warning(f"Failed to resolve localizer source from mapping: {e}")
             else:
-                source_dir = localizer_sources
+                logger.debug(f"Skipping source mapping (no mapping_path or participant_id)")
+
+            # 2. Fall back to individual localizer_source_dicoms field
+            if not source_dir:
+                localizer_sources = config["scan"].get("localizer_source_dicoms")
+                if localizer_sources is None:
+                    localizer_sources = config["scan"].get("rest_source_dicoms", [])
+
+                if isinstance(localizer_sources, list):
+                    if len(localizer_sources) >= run_num:
+                        source_dir = localizer_sources[run_num - 1]
+                    elif len(localizer_sources) > 0:
+                        source_dir = localizer_sources[0]
+                else:
+                    source_dir = localizer_sources
 
             watch_dir = base_dir / "tmp" / f"incoming_{task_name}_run{run_num}"
             watch_dir.mkdir(parents=True, exist_ok=True)
@@ -436,10 +470,12 @@ class PipelineRunner:
 
         self._emit_progress(f"Collected {n_volumes} volumes to {output_dir}")
 
-        # Wait for localizer task to finish (if running)
+        # Stop and wait for localizer task (collection is done, task can end)
+        if self._current_localizer_task is not None:
+            self._current_localizer_task.stop()
         if localizer_thread is not None and localizer_thread.is_alive():
             self._emit_progress("Waiting for localizer task to complete...")
-            localizer_thread.join(timeout=60)
+            localizer_thread.join(timeout=10)
             self._current_localizer_task = None
 
     def _launch_localizer_task(
@@ -483,6 +519,10 @@ class PipelineRunner:
         events_dir = base_dir / "collection"
         events_dir.mkdir(parents=True, exist_ok=True)
 
+        # Get presenter monitor from display config
+        display_config = config.get("display", {})
+        presenter_monitor = display_config.get("presenter_monitor", "right")
+
         task = create_localizer_task(
             task_id=task_id,
             output_dir=events_dir,
@@ -492,6 +532,7 @@ class PipelineRunner:
             acq=acq,  # Pass acq for events file naming
             watch_dir=str(watch_dir),  # Pass watch_dir for auto-trigger on first DICOM
             simulator=simulator,  # Pass simulator for task-controlled start timing
+            monitor_position=presenter_monitor,
         )
 
         # Set trigger event for timing synchronization with collect_dicoms
@@ -1015,7 +1056,23 @@ class PipelineRunner:
             # Simulator mode: create temp watch dir and use source DICOMs
             watch_dir = base_dir / "tmp" / "incoming_2vol_realtime"
             watch_dir.mkdir(parents=True, exist_ok=True)
-            simulator_source_dir = config["scan"]["twovol_realtime_dicoms"]
+            simulator_source_dir = config["scan"].get("twovol_realtime_dicoms", "")
+
+            # Try mapping file if individual field is empty
+            if not simulator_source_dir:
+                mapping_path = config["scan"].get("simulator_source_mapping", "")
+                if mapping_path and self.participant_id:
+                    try:
+                        from pineuro.session import SimulatorSourceMapping
+
+                        mapping = SimulatorSourceMapping.from_file(Path(mapping_path))
+                        resolved = mapping.get_source(self.participant_id, "2vol_realtime")
+                        if resolved is not None:
+                            simulator_source_dir = str(resolved)
+                            logger.info(f"2vol_realtime source from mapping: {simulator_source_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to resolve 2vol_realtime from mapping: {e}")
+
             simulator_speed = config["scan"].get("collection_speed", 10.0)
         else:
             # Real-time mode: watch scanner DICOM directory
@@ -1176,33 +1233,45 @@ class PipelineRunner:
             # Get per-run simulator source path based on step_id
             # step_id format: transfer_1, transfer_2, feedback_1, feedback_2, etc.
             run_num_in_step = int(step_id.split("_")[-1])  # Extract run number from step_id
+            simulator_source_dir = None
 
-            if task_type == "transfer":
-                # Transfer runs use transfer_source_dicoms list (index 0 for transfer_1, 1 for transfer_2)
-                transfer_sources = config["scan"].get("transfer_source_dicoms", [])
-                # Handle legacy single-path format
-                if isinstance(transfer_sources, str):
-                    transfer_sources = [transfer_sources, transfer_sources]
-                if run_num_in_step <= len(transfer_sources) and transfer_sources[run_num_in_step - 1]:
-                    simulator_source_dir = transfer_sources[run_num_in_step - 1]
+            # 1. Try simulator_source_mapping first (per-subject paths)
+            mapping_path = config["scan"].get("simulator_source_mapping", "")
+            if mapping_path and self.participant_id:
+                try:
+                    from pineuro.session import SimulatorSourceMapping
+
+                    mapping = SimulatorSourceMapping.from_file(Path(mapping_path))
+                    run_type = f"{task_type}_run-{run_num_in_step:02d}"
+                    resolved = mapping.get_source(self.participant_id, run_type)
+                    if resolved is not None:
+                        simulator_source_dir = str(resolved)
+                        logger.info(f"Feedback source from mapping: {simulator_source_dir}")
+                except Exception as e:
+                    logger.warning(f"Failed to resolve feedback source from mapping: {e}")
+
+            # 2. Fall back to individual source fields
+            if not simulator_source_dir:
+                if task_type == "transfer":
+                    transfer_sources = config["scan"].get("transfer_source_dicoms", [])
+                    if isinstance(transfer_sources, str):
+                        transfer_sources = [transfer_sources, transfer_sources]
+                    if run_num_in_step <= len(transfer_sources) and transfer_sources[run_num_in_step - 1]:
+                        simulator_source_dir = transfer_sources[run_num_in_step - 1]
+                    else:
+                        simulator_source_dir = config["scan"].get("feedback_dicoms", "")
+                        if not simulator_source_dir and transfer_sources:
+                            simulator_source_dir = transfer_sources[0]
                 else:
-                    # Fallback to legacy feedback_dicoms or first available path
-                    simulator_source_dir = config["scan"].get("feedback_dicoms", "")
-                    if not simulator_source_dir and transfer_sources:
-                        simulator_source_dir = transfer_sources[0]
-            else:
-                # Feedback runs use feedback_source_dicoms list (index 0 for feedback_1, etc.)
-                feedback_sources = config["scan"].get("feedback_source_dicoms", [])
-                # Handle legacy single-path format
-                if isinstance(feedback_sources, str):
-                    feedback_sources = [feedback_sources, feedback_sources]
-                if run_num_in_step <= len(feedback_sources) and feedback_sources[run_num_in_step - 1]:
-                    simulator_source_dir = feedback_sources[run_num_in_step - 1]
-                else:
-                    # Fallback to legacy feedback_dicoms or first available path
-                    simulator_source_dir = config["scan"].get("feedback_dicoms", "")
-                    if not simulator_source_dir and feedback_sources:
-                        simulator_source_dir = feedback_sources[0]
+                    feedback_sources = config["scan"].get("feedback_source_dicoms", [])
+                    if isinstance(feedback_sources, str):
+                        feedback_sources = [feedback_sources, feedback_sources]
+                    if run_num_in_step <= len(feedback_sources) and feedback_sources[run_num_in_step - 1]:
+                        simulator_source_dir = feedback_sources[run_num_in_step - 1]
+                    else:
+                        simulator_source_dir = config["scan"].get("feedback_dicoms", "")
+                        if not simulator_source_dir and feedback_sources:
+                            simulator_source_dir = feedback_sources[0]
 
             simulator_speed = config["scan"].get(
                 "feedback_simulator_speed", config["scan"].get("collection_speed", 10.0)
