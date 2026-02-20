@@ -62,6 +62,7 @@ class PipelineRunner:
         self._current_coordinator = None  # Track coordinator for feedback tasks
         self._current_localizer_task = None  # Track localizer task for stop support
         self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
+        self.overwrite: bool = False
         self._selected_rest_runs: list | None = None  # Selected runs for preprocessing
         self._selected_acqs: dict[int, int] | None = None  # {run_id: acq_num} for preprocessing
 
@@ -80,6 +81,15 @@ class PipelineRunner:
             runs: List of run IDs (1 and/or 2), or None to use all available
         """
         self._selected_rest_runs = runs
+
+    def set_overwrite(self, overwrite: bool) -> None:
+        """Set whether pipeline steps should overwrite existing outputs.
+
+        Args:
+            overwrite: If True, re-run all sub-steps. If False, skip sub-steps
+                whose output files already exist.
+        """
+        self.overwrite = overwrite
 
     def set_task_mirror_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
         """Set callback for task visual state mirroring.
@@ -670,7 +680,7 @@ class PipelineRunner:
             task=task_name,
             root_dir=preprocessing_dir,
             input_dicoms=input_dicoms,
-            overwrite=True,  # Overwrite since user clicked "Start"
+            overwrite=self.overwrite,
             qc_enabled=True,  # Generate QC report
             progress_callback=progress_callback,
         )
@@ -759,7 +769,7 @@ class PipelineRunner:
                 ref_file=str(ref_file) if threshold_method == "cluster" else None,
                 cluster_start_threshold=cluster_start_threshold,
                 cluster_step=cluster_step,
-                overwrite=True,
+                overwrite=self.overwrite,
                 smoothing_fwhm=smooth_fwhm,
                 high_pass=highpass,
                 qc_enabled=True,
@@ -816,7 +826,7 @@ class PipelineRunner:
                 smooth_fwhm=smooth_fwhm,
                 highpass=highpass,
                 lowpass=lowpass,
-                overwrite=True,
+                overwrite=self.overwrite,
                 qc_enabled=True,
                 progress_callback=progress_callback,
                 sham_hemisphere_network=sham_hemisphere_network,
@@ -844,7 +854,7 @@ class PipelineRunner:
                 output_dir=tissue_dir,
                 participant_id=self.participant_id,
                 inv_transform_files=inv_xfm,
-                overwrite=True,
+                overwrite=self.overwrite,
                 progress_callback=progress_callback,
             )
             self._emit_progress("WM/CSF tissue masks created")
@@ -977,7 +987,7 @@ class PipelineRunner:
             network_files=all_mask_files_for_coreg,
             ref_file=str(ref_file),
             run_id=actual_reference_run,
-            overwrite=True,
+            overwrite=self.overwrite,
             output_subdir=output_subdir,
         )
 
@@ -1008,7 +1018,7 @@ class PipelineRunner:
                 network_coreg_files=coreg_masks,
                 run_str=str(actual_reference_run).zfill(2),
                 n_yeo=config["mask"]["n_yeo"],
-                overwrite=True,
+                overwrite=self.overwrite,
                 reference_subdir=reference_subdir,
             )
             self._emit_progress(f"QC overlays generated for reference {run_str}")

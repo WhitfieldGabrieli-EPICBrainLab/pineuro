@@ -2784,8 +2784,8 @@ class ParticipantWorkflowScreen:
                 warning_text = "Previous run data exists and will be archived before starting fresh."
                 warning_icon = ft.icons.Icons.ARCHIVE
             else:
-                warning_text = "Output files already exist. Running this step will overwrite them."
-                warning_icon = ft.icons.Icons.WARNING
+                warning_text = "Output files already exist. You'll be asked whether to skip or overwrite."
+                warning_icon = ft.icons.Icons.INFO
 
             overwrite_warning = ft.Container(
                 content=ft.Row(
@@ -3413,6 +3413,71 @@ class ParticipantWorkflowScreen:
         Args:
             step_id: Step identifier to execute
         """
+        # Check if outputs exist for processing steps (not collection/feedback)
+        is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
+        is_collection = step_id.startswith("rest_run_") or step_id in ("reference_initial", "reference_realtime")
+
+        if not is_feedback_transfer and not is_collection:
+            config = self.study_config.session_config
+            base_dir = Path(config["paths"]["base_dir"])
+            step_info = self._get_step_info(step_id, config, base_dir, self.participant_id)
+            if step_info.get("outputs_exist", False):
+                self._show_overwrite_dialog(step_id)
+                return
+
+        self._continue_preview_start(step_id, overwrite=False)
+
+    def _show_overwrite_dialog(self, step_id: str):
+        """Show dialog asking user whether to skip existing outputs or overwrite.
+
+        Args:
+            step_id: Step identifier to execute after user chooses
+        """
+
+        def on_skip(e):
+            dialog.open = False
+            self.page.update()
+            self._continue_preview_start(step_id, overwrite=False)
+
+        def on_overwrite(e):
+            dialog.open = False
+            self.page.update()
+            self._continue_preview_start(step_id, overwrite=True)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Outputs Already Exist"),
+            content=ft.Text(
+                "Output files from a previous run were found.\n\n"
+                "Skip existing will only re-run steps whose outputs are missing. "
+                "Overwrite will re-run everything from scratch."
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: _close(e)),
+                ft.OutlinedButton("Overwrite All", on_click=on_overwrite),
+                ft.FilledButton("Skip Existing", on_click=on_skip),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        def _close(e):
+            dialog.open = False
+            self.page.update()
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
+    def _continue_preview_start(self, step_id: str, overwrite: bool):
+        """Continue starting a step after overwrite decision is made.
+
+        Args:
+            step_id: Step identifier to execute
+            overwrite: Whether to overwrite existing outputs
+        """
+        # Store overwrite choice to pass to pipeline runner
+        self._pending_overwrite = overwrite
+
         # For preprocessing, handle run selection and acq selection dialogs
         if step_id == "preprocessing":
             if self._needs_run_selection():
@@ -3476,6 +3541,9 @@ class ParticipantWorkflowScreen:
                 on_error=self._on_pipeline_error,
                 on_collection_progress=self._on_collection_progress,
             )
+
+        # Pass overwrite choice to runner
+        self.pipeline_runner.set_overwrite(getattr(self, "_pending_overwrite", False))
 
         # Pass selected runs and acqs to runner for preprocessing step
         if step_id == "preprocessing":
