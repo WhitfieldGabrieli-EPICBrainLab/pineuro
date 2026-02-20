@@ -1955,15 +1955,22 @@ class ParticipantWorkflowScreen:
             - collection_exists: bool
             - collection_size: int (bytes)
             - collection_subdirs: list of subdir names
+            - tmp_exists: bool
+            - tmp_size: int (bytes)
+            - tmp_subdirs: list of subdir names
             - total_size: int (bytes)
         """
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
+        tmp_dir = base_dir / "tmp"
 
         result = {
             "collection_exists": False,
             "collection_size": 0,
             "collection_subdirs": [],
+            "tmp_exists": False,
+            "tmp_size": 0,
+            "tmp_subdirs": [],
             "total_size": 0,
         }
 
@@ -1974,7 +1981,14 @@ class ParticipantWorkflowScreen:
                 result["collection_subdirs"] = sorted(subdirs)
                 result["collection_size"] = self._get_dir_size(collection_dir)
 
-        result["total_size"] = result["collection_size"]
+        if tmp_dir.exists():
+            subdirs = [d.name for d in tmp_dir.iterdir() if d.is_dir()]
+            if subdirs:
+                result["tmp_exists"] = True
+                result["tmp_subdirs"] = sorted(subdirs)
+                result["tmp_size"] = self._get_dir_size(tmp_dir)
+
+        result["total_size"] = result["collection_size"] + result["tmp_size"]
         return result
 
     def _build_utilities_section(self) -> ft.ExpansionPanel:
@@ -2037,7 +2051,7 @@ class ParticipantWorkflowScreen:
                         ft.Icon(ft.Icons.CHECK_CIRCLE, size=64, color=ft.Colors.GREEN),
                         ft.Text("Nothing to Clean", size=20, weight=ft.FontWeight.BOLD),
                         ft.Text(
-                            "No temporary files found. The collection directory is empty or doesn't exist.",
+                            "No temporary files found.",
                             text_align=ft.TextAlign.CENTER,
                         ),
                     ],
@@ -2082,6 +2096,52 @@ class ParticipantWorkflowScreen:
                                                 )
                                             ]
                                             if len(cleanup_info["collection_subdirs"]) > 6
+                                            else []
+                                        ),
+                                        spacing=2,
+                                    ),
+                                    padding=ft.padding.only(left=30),
+                                ),
+                            ],
+                            spacing=5,
+                        ),
+                        padding=10,
+                        bgcolor=ft.Colors.GREY_100,
+                        border_radius=5,
+                    )
+                )
+
+            if cleanup_info["tmp_exists"]:
+                dir_items.append(
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Icon(ft.Icons.FOLDER, color=ft.Colors.AMBER),
+                                        ft.Text("tmp/", weight=ft.FontWeight.BOLD),
+                                        ft.Text(
+                                            f"({self._format_size(cleanup_info['tmp_size'])})",
+                                            color=ft.Colors.GREY_600,
+                                        ),
+                                    ],
+                                    spacing=10,
+                                ),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
+                                            for subdir in cleanup_info["tmp_subdirs"][:6]
+                                        ]
+                                        + (
+                                            [
+                                                ft.Text(
+                                                    f"  ... and {len(cleanup_info['tmp_subdirs']) - 6} more",
+                                                    size=12,
+                                                    color=ft.Colors.GREY_500,
+                                                )
+                                            ]
+                                            if len(cleanup_info["tmp_subdirs"]) > 6
                                             else []
                                         ),
                                         spacing=2,
@@ -2205,11 +2265,12 @@ class ParticipantWorkflowScreen:
         self.page.update()
 
     def _run_cleanup(self):
-        """Execute cleanup - delete collection directory."""
+        """Execute cleanup - delete collection directory and tmp subdirectories."""
         import shutil
 
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
+        tmp_dir = base_dir / "tmp"
 
         self._add_log("[INFO] Starting cleanup...")
 
@@ -2217,6 +2278,12 @@ class ParticipantWorkflowScreen:
             if collection_dir.exists():
                 shutil.rmtree(collection_dir)
                 self._add_log(f"[SUCCESS] Deleted: {collection_dir}")
+
+            if tmp_dir.exists():
+                for subdir in tmp_dir.iterdir():
+                    if subdir.is_dir():
+                        shutil.rmtree(subdir)
+                        self._add_log(f"[SUCCESS] Deleted: {subdir}")
 
             self._add_log("[SUCCESS] Cleanup complete")
 
