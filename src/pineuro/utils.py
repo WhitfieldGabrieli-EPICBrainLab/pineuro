@@ -427,7 +427,7 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     - Positive gamma: shape=6
     - Negative gamma: shape=16
     - Undershoot ratio: 1/6
-    - Rate parameter: tr * (1/16), matching MURFI's dt = tr * hrfSamplePeriod
+    - Rate parameter: tr * (1/16)
     - Normalized to sum to 1.0 for proper convolution scaling
 
     Examples
@@ -444,7 +444,7 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     shape_neg = 16.0  # undershoot shape
     undershoot_ratio = 6.0  # positive-to-negative amplitude ratio
 
-    # Rate parameter depends on TR (matches MURFI: dt = tr * hrfSamplePeriod)
+    # Rate parameter depends on TR
     rate = tr * hires_dt
 
     # High-resolution time points (in sample units)
@@ -525,7 +525,7 @@ def compute_boxcar_task_regressor(
     shape_neg = 16.0
     undershoot_ratio = 6.0
 
-    # Rate parameter depends on TR (matches MURFI: dt = tr * hrfSamplePeriod)
+    # Rate parameter depends on TR
     rate = tr * hires_dt
 
     # Compute high-resolution HRF (16 Hz, 32 seconds = 512 samples)
@@ -538,14 +538,12 @@ def compute_boxcar_task_regressor(
     if hrf_sum > 0:
         hrf_hires = hrf_hires / hrf_sum
 
-    # MURFI compatibility: use fixed downsample factor of 16 (1/hrfSamplePeriod)
-    # instead of samples_per_tr, and start boxcar 1 unit earlier
-    murfi_downsample_factor = 16
+    # Use fixed downsample factor of 16 for high-resolution HRF convolution
+    hrf_downsample_factor = 16
 
     # Create high-resolution boxcar
-    # MURFI starts boxcar at n_baseline * 16 (conditionShift shifts the condition)
-    n_hires_samples = n_volumes * murfi_downsample_factor + len(hrf_hires)
-    onset_hires = n_baseline * murfi_downsample_factor
+    n_hires_samples = n_volumes * hrf_downsample_factor + len(hrf_hires)
+    onset_hires = n_baseline * hrf_downsample_factor
 
     boxcar_hires = np.zeros(n_hires_samples, dtype=np.float64)
     boxcar_hires[onset_hires:] = 1.0
@@ -553,10 +551,10 @@ def compute_boxcar_task_regressor(
     # Convolve at high resolution
     convolved_hires = np.convolve(boxcar_hires, hrf_hires, mode="full")
 
-    # Downsample using fixed factor of 16 (MURFI: i / hrfSamplePeriod = i * 16)
+    # Downsample back to volume resolution
     regressor = np.zeros(n_volumes, dtype=np.float64)
     for i in range(n_volumes):
-        hires_idx = i * murfi_downsample_factor
+        hires_idx = i * hrf_downsample_factor
         if hires_idx < len(convolved_hires):
             regressor[i] = convolved_hires[hires_idx]
 
@@ -1741,198 +1739,3 @@ def erode_mask(
 
     logger.info(f"Eroded mask: {int(data.sum())} -> {int(eroded.sum())} voxels")
     return output_path
-
-
-def parse_murfi_design(
-    design_path: Union[str, Path],
-) -> dict:
-    """Parse a MURFI design matrix file.
-
-    MURFI (mu-rt feedback imaging) design files contain pre-computed design
-    matrices with task regressors and motion parameters. This function parses
-    these files for use in pineuro's feedback pipeline.
-
-    File Format
-    -----------
-    The first line is a header comment starting with '#' that contains column
-    names in the format: "# ColName(contrast) ColName(contrast) ..."
-
-    Subsequent lines contain space-separated numeric values, one row per volume.
-
-    Standard columns:
-    - Regulation or similar task names: HRF-convolved task regressor
-    - trend_order_0: Intercept (constant 1)
-    - trend_order_1: Linear drift (volume number)
-    - motion_diff_tx/ty/tz: Translation differences (mm)
-    - motion_diff_rx/ry/rz: Rotation differences (radians)
-
-    Parameters
-    ----------
-    design_path : str or Path
-        Path to MURFI design .mat file.
-
-    Returns
-    -------
-    dict
-        Dictionary containing:
-        - 'task_regressors': ndarray, shape (n_volumes, n_task_cols)
-            Task regressor columns (HRF-convolved). Empty array if no task columns.
-        - 'motion_diff': ndarray, shape (n_volumes, 6)
-            Motion difference parameters [tx, ty, tz, rx, ry, rz].
-            Translations in mm, rotations in radians (as stored in MURFI).
-        - 'intercept': ndarray, shape (n_volumes,)
-            Intercept column.
-        - 'drift': ndarray, shape (n_volumes,)
-            Linear drift column.
-        - 'column_names': list of str
-            Original column names from header.
-        - 'n_volumes': int
-            Number of volumes (rows) in the design.
-
-    Raises
-    ------
-    FileNotFoundError
-        If design_path does not exist.
-    ValueError
-        If file format is invalid or required columns are missing.
-
-    Notes
-    -----
-    MURFI stores rotation parameters in radians. The returned motion_diff
-    preserves these units. Consumers may need to convert rotations to degrees
-    if their pipeline expects that format.
-
-    Task regressors are identified as columns that are NOT one of:
-    trend_order_0, trend_order_1, motion_diff_*.
-
-    Examples
-    --------
-    >>> design = parse_murfi_design('/path/to/design-00017.mat')
-    >>> print(design['n_volumes'])
-    150
-    >>> print(design['task_regressors'].shape)
-    (150, 1)
-    >>> print(design['motion_diff'].shape)
-    (150, 6)
-    """
-    design_path = Path(design_path)
-    if not design_path.exists():
-        raise FileNotFoundError(f"MURFI design file not found: {design_path}")
-
-    # Read all lines
-    with open(design_path) as f:
-        lines = f.readlines()
-
-    if not lines:
-        raise ValueError(f"MURFI design file is empty: {design_path}")
-
-    # Parse header (first line starting with #)
-    header_line = lines[0].strip()
-    if not header_line.startswith("#"):
-        raise ValueError(f"MURFI design file must start with header comment: {design_path}")
-
-    # Extract column names from header
-    # Format: "# ColName(contrast) ColName(contrast) ..."
-    header_content = header_line[1:].strip()  # Remove leading #
-    # Split on whitespace but preserve column names with parentheses
-    import re
-
-    column_pattern = re.compile(r"(\S+\(\d+\))")
-    column_matches = column_pattern.findall(header_content)
-
-    if not column_matches:
-        raise ValueError(f"Could not parse column names from header: {header_line}")
-
-    # Extract base column names (without the contrast suffix)
-    column_names = []
-    for col in column_matches:
-        # Extract name before parentheses
-        base_name = col.split("(")[0]
-        column_names.append(base_name)
-
-    logger.debug(f"MURFI design columns: {column_names}")
-
-    # Parse data rows
-    data_rows = []
-    for i, line in enumerate(lines[1:], start=2):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            values = [float(v) for v in line.split()]
-            data_rows.append(values)
-        except ValueError as e:
-            raise ValueError(f"Invalid numeric data at line {i}: {line}") from e
-
-    if not data_rows:
-        raise ValueError(f"No data rows found in MURFI design file: {design_path}")
-
-    # Convert to numpy array
-    data = np.array(data_rows, dtype=np.float64)
-    n_volumes = data.shape[0]
-    n_cols = data.shape[1]
-
-    if n_cols != len(column_names):
-        raise ValueError(f"Column count mismatch: header has {len(column_names)} columns, data has {n_cols} columns")
-
-    # Identify column indices
-    motion_cols = [
-        "motion_diff_tx",
-        "motion_diff_ty",
-        "motion_diff_tz",
-        "motion_diff_rx",
-        "motion_diff_ry",
-        "motion_diff_rz",
-    ]
-    nuisance_cols = ["trend_order_0", "trend_order_1"] + motion_cols
-
-    # Find motion parameter columns
-    motion_indices = []
-    for mcol in motion_cols:
-        if mcol in column_names:
-            motion_indices.append(column_names.index(mcol))
-        else:
-            raise ValueError(f"Required motion column '{mcol}' not found in design")
-
-    # Find intercept and drift columns
-    if "trend_order_0" in column_names:
-        intercept_idx = column_names.index("trend_order_0")
-        intercept = data[:, intercept_idx]
-    else:
-        logger.warning("No trend_order_0 (intercept) column found, using ones")
-        intercept = np.ones(n_volumes, dtype=np.float64)
-
-    if "trend_order_1" in column_names:
-        drift_idx = column_names.index("trend_order_1")
-        drift = data[:, drift_idx]
-    else:
-        logger.warning("No trend_order_1 (drift) column found, using 1:n_volumes")
-        drift = np.arange(1, n_volumes + 1, dtype=np.float64)
-
-    # Extract motion parameters
-    motion_diff = data[:, motion_indices]
-
-    # Identify task regressors (columns that are not nuisance)
-    task_indices = []
-    for i, name in enumerate(column_names):
-        if name not in nuisance_cols:
-            task_indices.append(i)
-
-    if task_indices:
-        task_regressors = data[:, task_indices]
-        task_names = [column_names[i] for i in task_indices]
-        logger.info(f"Found {len(task_indices)} task regressor(s): {task_names}")
-    else:
-        task_regressors = np.empty((n_volumes, 0), dtype=np.float64)
-        logger.info("No task regressors found (nuisance-only design)")
-
-    logger.info(f"Parsed MURFI design: {n_volumes} volumes, {len(task_indices)} task regressor(s), 6 motion parameters")
-
-    return {
-        "task_regressors": task_regressors,
-        "motion_diff": motion_diff,
-        "intercept": intercept,
-        "drift": drift,
-        "column_names": column_names,
-        "n_volumes": n_volumes,
-    }

@@ -834,7 +834,6 @@ class FeedbackEstimator:
         mask_names: list[str] | None = None,
         use_efficiency_weights: bool = True,
         sham_provider: Optional["ShamActivationProvider"] = None,
-        external_motion_diff: NDArray[np.float64] | None = None,
         dump_algo_vars_path: Path | str | None = None,
         smooth_fwhm: float | None = None,
         motion_correction: str = "siemens_moco",
@@ -1012,34 +1011,14 @@ class FeedbackEstimator:
         self._sham_provider = sham_provider
         self._last_real_activations: dict[str, float] = {}
 
-        # External motion diff support (e.g., from MURFI design files)
-        # When provided, these pre-computed differential motion parameters are used
-        # instead of computing motion_diff from absolute motion params
-        if external_motion_diff is not None:
-            external_motion_diff = np.asarray(external_motion_diff, dtype=np.float64)
-            if external_motion_diff.ndim != 2 or external_motion_diff.shape[1] != 6:
-                raise ValueError(
-                    f"external_motion_diff must have shape (n_volumes, 6), got {external_motion_diff.shape}"
-                )
-            if external_motion_diff.shape[0] != n_volumes:
-                raise ValueError(
-                    f"external_motion_diff has {external_motion_diff.shape[0]} rows, "
-                    f"expected {n_volumes} to match n_volumes"
-                )
-            self._external_motion_diff = external_motion_diff
-            logger.info(f"Using external motion diff parameters ({n_volumes} rows)")
-        else:
-            self._external_motion_diff = None
-
         sham_status = "SHAM MODE" if sham_provider is not None else "disabled"
-        motion_status = "external" if external_motion_diff is not None else "computed"
         logger.info(
             f"FeedbackEstimator initialized with {len(mask_paths)} masks, "
             f"{self._n_voxels} total voxels, "
             f"n_baseline={n_baseline}, n_volumes={n_volumes}, tr={tr:.3f}s, "
             f"task_regressors={self._n_task_regressors}, "
             f"efficiency_weights={'enabled' if use_efficiency_weights else 'disabled'}, "
-            f"sham={sham_status}, motion={motion_status}"
+            f"sham={sham_status}"
         )
 
     def _load_single_mask(self, path: Path, name: str) -> tuple[NDArray[np.intp], set[tuple[int, int, int]]]:
@@ -1336,7 +1315,6 @@ class FeedbackEstimator:
         motion_params : ndarray, shape (6,)
             Raw motion parameters for current volume (absolute values).
             Translations in mm, rotations in degrees.
-            Ignored if external_motion_diff was provided at initialization.
             Ignored if motion regressors are disabled.
 
         Returns
@@ -1344,30 +1322,22 @@ class FeedbackEstimator:
         X : ndarray, shape (n_regressors,)
             Design row: [task_cols..., intercept, drift?, motion_diff?, wm?, csf?]
             Motion parameters are differential (frame-to-frame) with rotations
-            converted to arc length (mm) at 50mm radius to match MURFI.
+            converted to arc length (mm) at 50mm radius.
         """
         vol_idx = self.n_volumes  # Current volume index (0-based)
 
         # Compute motion diff (needed for GLM motion regressors)
         if self._include_motion:
-            if self._external_motion_diff is not None:
-                # Use pre-loaded motion diff (e.g., from MURFI design file)
-                if vol_idx < len(self._external_motion_diff):
-                    motion_diff = self._external_motion_diff[vol_idx, :]
-                else:
-                    motion_diff = self._external_motion_diff[-1, :]
+            # Compute frame-to-frame motion from absolute parameters
+            if self.n_volumes == 0:
+                motion_diff = np.zeros(6, dtype=np.float64)
             else:
-                # Compute frame-to-frame motion from absolute parameters
-                if self.n_volumes == 0:
-                    motion_diff = np.zeros(6, dtype=np.float64)
-                else:
-                    prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
-                    motion_diff = motion_params - prev
+                prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
+                motion_diff = motion_params - prev
 
-                # Convert rotations from degrees to arc length (mm) at 50mm radius
-                # This matches MURFI's approach: arc_length = radius * angle_radians
-                # = 50 * (angle_degrees * pi/180)
-                motion_diff[3:6] *= 50.0 * np.pi / 180.0
+            # Convert rotations from degrees to arc length (mm) at 50mm radius
+            # arc_length = radius * angle_radians = 50 * (angle_degrees * pi/180)
+            motion_diff[3:6] *= 50.0 * np.pi / 180.0
 
         self._prev_motion = motion_params.copy()
 
@@ -2187,7 +2157,6 @@ class NeurofeedbackCoordinator:
         include_motion_regressors: bool = True,
         include_wm_regressor: bool = False,
         include_csf_regressor: bool = False,
-        external_motion_diff: NDArray[np.float64] | None = None,  # Pre-loaded motion diff (e.g., MURFI)
         dump_algo_vars_path: Path | str | None = None,  # Path to dump GLM algo vars for debugging
         smooth_fwhm: float | None = None,  # Gaussian spatial smoothing FWHM in mm per volume
         differential_pair: list[str] | None = None,  # Ordered pair [positive, negative] for differential signal
@@ -2326,7 +2295,6 @@ class NeurofeedbackCoordinator:
             mask_names=mask_names,
             use_efficiency_weights=use_efficiency_weights,
             sham_provider=sham_provider,
-            external_motion_diff=external_motion_diff,
             dump_algo_vars_path=self._dump_algo_vars_path,
             smooth_fwhm=smooth_fwhm,
             motion_correction=motion_correction,
@@ -3290,7 +3258,6 @@ def run_feedback_session(
     include_motion_regressors: bool = True,
     include_wm_regressor: bool = False,
     include_csf_regressor: bool = False,
-    murfi_design_path: Path | str | None = None,
     dump_algo_vars_path: Path | str | None = None,
     smooth_fwhm: float | None = None,
     differential_pair: list[str] | None = None,
@@ -3396,14 +3363,6 @@ def run_feedback_session(
         Include WM mean signal in GLM. Default False.
     include_csf_regressor : bool, optional
         Include CSF mean signal in GLM. Default False.
-    murfi_design_path : Path or str, optional
-        Path to a MURFI design matrix file (.mat). When provided, the design matrix
-        (task regressors and motion parameters) is loaded from this file instead of
-        being constructed. The MURFI motion_diff columns are used directly in the GLM,
-        while ANTsPy registration is still used for volume motion correction if
-        motion_correction="software". This enables replaying archived data with its original
-        design. When murfi_design_path is provided, the task_regressors parameter
-        is ignored.
     smooth_fwhm : float, optional
         Gaussian spatial smoothing FWHM in mm applied to each volume before
         voxel extraction. None (default) disables smoothing.
@@ -3605,33 +3564,6 @@ def run_feedback_session(
     if sham_provider is not None:
         logger.info(f"SHAM MODE ACTIVE: condition='{condition}'")
 
-    # Parse MURFI design file if provided
-    external_motion_diff = None
-    if murfi_design_path is not None:
-        from .utils import parse_murfi_design
-
-        murfi_design_path = Path(murfi_design_path)
-        logger.info(f"Loading MURFI design file: {murfi_design_path}")
-        murfi_design = parse_murfi_design(murfi_design_path)
-
-        # Validate volume count matches
-        if murfi_design["n_volumes"] != n_volumes:
-            raise ValueError(
-                f"MURFI design has {murfi_design['n_volumes']} volumes, but n_volumes={n_volumes}. These must match."
-            )
-
-        # Override task_regressors with MURFI design
-        if murfi_design["task_regressors"].shape[1] > 0:
-            task_regressors = murfi_design["task_regressors"]
-            logger.info(f"Using {task_regressors.shape[1]} task regressor(s) from MURFI design")
-        else:
-            task_regressors = None
-            logger.info("MURFI design has no task regressors (nuisance-only)")
-
-        # Extract external motion diff (used instead of computing from volumes)
-        external_motion_diff = murfi_design["motion_diff"]
-        logger.info(f"Using pre-loaded motion diff from MURFI design ({n_volumes} rows)")
-
     # Initialize coordinator with simulator and sham configuration
     coordinator = NeurofeedbackCoordinator(
         watch_dir=incoming_dir,
@@ -3659,7 +3591,6 @@ def run_feedback_session(
         include_motion_regressors=include_motion_regressors,
         include_wm_regressor=include_wm_regressor,
         include_csf_regressor=include_csf_regressor,
-        external_motion_diff=external_motion_diff,
         dump_algo_vars_path=dump_algo_vars_path,
         smooth_fwhm=smooth_fwhm,
         differential_pair=differential_pair,

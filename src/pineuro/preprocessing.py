@@ -1148,9 +1148,9 @@ def collect_volumes(
     """
     Watch for incoming volumes (DICOM or NIfTI) during scanner acquisition and collect them.
 
-    This function mirrors MURFI's resting_state step - it watches an incoming
-    directory for volumes from the scanner, copies them to an output folder,
-    and returns when the expected number of volumes have been collected.
+    Watches an incoming directory for volumes from the scanner, copies them
+    to an output folder, and returns when the expected number of volumes have
+    been collected.
 
     Supports both DICOM and NIfTI input files. For NIfTI files, also copies
     the JSON sidecar file if present.
@@ -1168,7 +1168,7 @@ def collect_volumes(
     timeout : float, default=300.0
         Maximum time to wait for all volumes (seconds).
     clear_watch_dir : bool, default=True
-        Clear watch_dir before starting (like MURFI's rm -rf tmp/murfi_input).
+        Clear watch_dir before starting.
     clear_output_dir : bool, default=True
         Clear output_dir before starting.
     simulator_source_dir : str or Path, optional
@@ -1242,7 +1242,6 @@ def collect_volumes(
 
     # --- Clear Directories (Optional) ---
     # Clearing ensures we start fresh without leftover files from previous runs.
-    # For real-time use, this mimics MURFI's "rm -rf tmp/murfi_input" pattern.
     if clear_watch_dir and watch_dir.exists():
         for f in watch_dir.iterdir():
             if f.is_file():

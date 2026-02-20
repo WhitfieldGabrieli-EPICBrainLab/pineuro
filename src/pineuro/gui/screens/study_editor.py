@@ -121,7 +121,7 @@ class StudyEditorScreen:
                 "collection_speed": 10.0,  # Speed for localizer/collection
                 "feedback_simulator_speed": 1.0,  # Speed for feedback runs
                 "scanner_dicom_dir": "/BOLD_DICOM",
-                "murfi_design_path": "",  # Path to MURFI design file for external design matrix
+
             },
             "mask": {
                 "n_yeo": 17,
@@ -812,14 +812,6 @@ class StudyEditorScreen:
                 hint_text="Path to DICOM directory for simulator (optional)",
             )
             self.transfer_source_fields.append(field)
-
-        # MURFI design file path (for external design matrix in simulator mode)
-        self.murfi_design_path_field = ft.TextField(
-            width=540,
-            label="MURFI Design File (optional)",
-            value=config["scan"].get("murfi_design_path", ""),
-            hint_text="Path to MURFI design .mat file for external task/motion design",
-        )
 
         # Simulator source mode toggle
         # Determine initial mode based on whether mapping file is set
@@ -1719,7 +1711,7 @@ class StudyEditorScreen:
         Args:
             field: TextField to update with selected file path
             filetypes: List of (description, pattern) tuples for file filter.
-                       Example: [("MURFI Design", "*.mat"), ("All Files", "*.*")]
+                       Example: [("NIfTI Files", "*.nii"), ("All Files", "*.*")]
 
         Returns:
             IconButton that opens file picker
@@ -2729,29 +2721,8 @@ class StudyEditorScreen:
             visible=not is_mapping_mode,
         )
 
-        # MURFI design file section (always visible in simulator mode)
-        self.murfi_design_row = ft.Row(
-            [
-                self.murfi_design_path_field,
-                self._create_file_browse_button(
-                    self.murfi_design_path_field,
-                    filetypes=[("MURFI Design Files", "*.mat"), ("All Files", "*.*")],
-                ),
-            ]
-        )
-        murfi_section = [
-            ft.Divider(),
-            ft.Text("External Design (optional)", size=14, weight=ft.FontWeight.W_500),
-            ft.Text(
-                "Provide a MURFI design file to use pre-computed task regressors and motion parameters",
-                size=11,
-                color=ft.Colors.GREY_600,
-            ),
-            self.murfi_design_row,
-        ]
-
         self.simulator_paths_container = ft.Column(
-            simulator_header + [self.simulator_mapping_container, self.simulator_individual_container] + murfi_section,
+            simulator_header + [self.simulator_mapping_container, self.simulator_individual_container],
             visible=is_simulator,
         )
 
@@ -3032,7 +3003,6 @@ class StudyEditorScreen:
             config["scan"]["collection_speed"] = float(self.collection_speed_field.value)
             config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value)
             config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip()
-            config["scan"]["murfi_design_path"] = self.murfi_design_path_field.value.strip()
             # Only save mapping if in mapping mode
             if self.simulator_source_mode_radio.value == "mapping":
                 config["scan"]["simulator_source_mapping"] = self.simulator_source_mapping_field.value.strip()

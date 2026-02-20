@@ -1394,11 +1394,6 @@ class PipelineRunner:
         # Run feedback session (this will handle DICOM collection + processing)
         # Pass ALL masks so all activations are computed and logged
         try:
-            # Get MURFI design path (only used if non-empty and in simulator mode)
-            murfi_design_path = config["scan"].get("murfi_design_path", "")
-            if not murfi_design_path or not simulator_enabled:
-                murfi_design_path = None
-
             session_info = run_feedback_session(
                 mask_paths=[str(f) for f in all_mask_files],
                 subject=self.participant_id,
@@ -1410,7 +1405,7 @@ class PipelineRunner:
                 n_baseline=n_baseline,
                 n_volumes=n_volumes,
                 tr=tr,
-                task_regressors=task_regressor,  # Pass the computed task regressor (overridden by MURFI if provided)
+                task_regressors=task_regressor,
                 mask_names=all_mask_names,  # All masks for logging
                 use_efficiency_weights=config["feedback"].get("use_efficiency_weights", True),
                 simulator_source_dir=simulator_source_dir,
@@ -1427,7 +1422,6 @@ class PipelineRunner:
                 include_csf_regressor=config["feedback"].get("include_csf_regressor", False),
                 wm_mask_path=wm_mask_path,
                 csf_mask_path=csf_mask_path,
-                murfi_design_path=murfi_design_path,  # External design matrix (MURFI format)
                 smooth_fwhm=config["feedback"].get("smooth_fwhm"),  # Real-time spatial smoothing
                 differential_pair=config["feedback"].get("differential_pair"),  # Configurable differential signal
                 feedback_interval=config["feedback"].get("feedback_interval"),  # Intermittent feedback mode

@@ -972,7 +972,7 @@ class ThermometerTask(BaseTask):
                         block_count=block_idx + 1,
                         block_type=block_types[block_idx],
                         stg_activity=stg_val,
-                        stim_file="murfi",
+                        stim_file="feedback",
                     )
                     in_block = True
                     break
@@ -988,7 +988,7 @@ class ThermometerTask(BaseTask):
                     "activation",
                     block_type=f"intertrial{intertrial_num}",
                     stg_activity=stg_val,
-                    stim_file="murfi",
+                    stim_file="feedback",
                 )
 
     # =========================================================================
