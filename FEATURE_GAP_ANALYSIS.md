@@ -66,11 +66,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 ### ~~A.6 Contributing Guide~~ ✅
 - **Done**: Created `CONTRIBUTING.md` covering development setup, Ruff linting, code conventions, project architecture overview, how to add tasks (plugin system) and atlases (registry), PR process, testing, and platform notes.
 
-### A.8 API Stability & Versioning
-- **Gap**: Version 0.1.0 with no changelog or versioning strategy.
-- **Approach**: Add CHANGELOG.md, follow semantic versioning.
-- **Impact**: MEDIUM
-- **Also update**: `CONTRIBUTING.md` PR Process section — add changelog entry requirement, versioning policy
+### ~~A.8 API Stability & Versioning~~ ✅
+- **Done**: Added CHANGELOG.md (Keep a Changelog format) with [Unreleased] and [0.1.0] baseline sections. Added versioning policy (semver, 0.x = no stability guarantees) and changelog entry requirement to CONTRIBUTING.md PR process.
 
 ---
 
@@ -117,7 +114,7 @@ These items are deferred for later consideration:
 | `analysis/` | ~~1.7 moved validation scripts~~ ✅ |
 | `docs/` | ~~A.1 tutorial~~ ✅, ~~A.2 expanded docs~~ ✅ |
 | `CONTRIBUTING.md` (new) | ~~A.6~~ ✅ |
-| `CHANGELOG.md` (new) | A.8 |
+| `CHANGELOG.md` (new) | ~~A.8~~ ✅ |
 
 ---
 

@@ -178,7 +178,8 @@ ATLAS_SOURCES: dict[str, dict[str, Any]] = {
 3. Run `ruff check .` and `ruff format .` before submitting.
 4. Run `pytest` and ensure all tests pass.
 5. Include a clear description of **what** changed and **why**.
-6. Ensure cross-platform compatibility (Windows, macOS, Linux).
+6. Add a changelog entry to the `[Unreleased]` section of `CHANGELOG.md` under the appropriate heading (`Added`, `Changed`, `Fixed`, `Removed`).
+7. Ensure cross-platform compatibility (Windows, macOS, Linux).
 
 All PRs are checked by CI (GitHub Actions). The following must pass before merge:
 
@@ -186,6 +187,19 @@ All PRs are checked by CI (GitHub Actions). The following must pass before merge
 - **Type check**: `mypy src/pineuro/`
 - **Tests**: `pytest` on Ubuntu/Windows/macOS × Python 3.10/3.11/3.12
 - **Build**: package builds successfully
+
+## Versioning
+
+pineuro follows [Semantic Versioning](https://semver.org/). While at **0.x** (pre-1.0), the API is under active development and may change between minor versions without deprecation warnings. This is standard semver behavior for initial development.
+
+- **0.x.y**: Breaking changes bump the minor version (x); bug fixes bump the patch version (y).
+- **1.0.0 and beyond**: Breaking changes require a major version bump, with deprecation periods for removed API.
+
+Version is tracked in three places — keep them in sync when bumping:
+
+- `pyproject.toml` (`version = "..."`)
+- `src/pineuro/__init__.py` (`__version__ = "..."`)
+- `src/pineuro/gui/__init__.py` (`__version__ = "..."`)
 
 ## Testing
 
