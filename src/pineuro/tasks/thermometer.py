@@ -746,6 +746,42 @@ class ThermometerTask(BaseTask):
 
         return last_rating
 
+    def _build_thermometer_bars(self, n_segments: int, rec_height: float, color: str, *, downward: bool = False):
+        """Build rectangle segments for the thermometer display.
+
+        Parameters
+        ----------
+        n_segments : int
+            Number of bar segments.
+        rec_height : float
+            Height of each segment (positive value).
+        color : str
+            Fill and line color (e.g. "Green", "Red").
+        downward : bool
+            If True, bars extend downward from zero line.
+        """
+        from psychopy import visual
+
+        sign = -1.0 if downward else 1.0
+        recs = []
+        for idx in range(n_segments):
+            rec = visual.ShapeStim(
+                self.win,
+                closeShape=True,
+                vertices=(
+                    (-0.125, sign * idx * rec_height),
+                    (0.125, sign * idx * rec_height),
+                    (0.125, sign * (idx + 1) * rec_height),
+                    (-0.125, sign * (idx + 1) * rec_height),
+                ),
+                depth=-3,
+                opacity=1,
+                fillColor=color,
+                lineColor=color,
+            )
+            recs.append(rec)
+        return recs
+
     def _show_feedback_thermometer(self, block_median: float, block_type: str, duration: float):
         """Display animated thermometer feedback for a block.
 
@@ -761,7 +797,7 @@ class ThermometerTask(BaseTask):
         duration : float
             How long to display the thermometer.
         """
-        from psychopy import core, event, visual
+        from psychopy import core, event
 
         if not self.feedback_mode:
             self._show_fixation(duration)
@@ -775,87 +811,19 @@ class ThermometerTask(BaseTask):
         fb = float(np.clip(block_median, act_min, act_max))
 
         # Build 30 rectangle segments matching original makeFBrecs()
-        recs = []
         n_segments = 30
+        upward = fb >= zero_val
 
-        if block_type == "ignore":
-            if fb >= zero_val:
-                # Positive when should be negative -> Red (bad)
-                rec_height = (fb - zero_val) / (n_segments * (act_max - zero_val)) * 0.5
-                for idx in range(n_segments):
-                    rec = visual.ShapeStim(
-                        self.win,
-                        closeShape=True,
-                        vertices=(
-                            (-0.125, idx * rec_height),
-                            (0.125, idx * rec_height),
-                            (0.125, (idx + 1) * rec_height),
-                            (-0.125, (idx + 1) * rec_height),
-                        ),
-                        depth=-3,
-                        opacity=1,
-                        fillColor="Red",
-                        lineColor="Red",
-                    )
-                    recs.append(rec)
-            else:
-                # Negative when should be negative -> Green (good)
-                rec_height = (fb - zero_val) / (n_segments * (act_min - zero_val)) * 0.5
-                for idx in range(n_segments):
-                    rec = visual.ShapeStim(
-                        self.win,
-                        closeShape=True,
-                        vertices=(
-                            (-0.125, idx * -1 * rec_height),
-                            (0.125, idx * -1 * rec_height),
-                            (0.125, (idx + 1) * -1 * rec_height),
-                            (-0.125, (idx + 1) * -1 * rec_height),
-                        ),
-                        depth=-3,
-                        opacity=1,
-                        fillColor="Green",
-                        lineColor="Green",
-                    )
-                    recs.append(rec)
-        else:  # "listen"
-            if fb >= zero_val:
-                # Positive when should be positive -> Green (good)
-                rec_height = (fb - zero_val) / (n_segments * (act_max - zero_val)) * 0.5
-                for idx in range(n_segments):
-                    rec = visual.ShapeStim(
-                        self.win,
-                        closeShape=True,
-                        vertices=(
-                            (-0.125, idx * rec_height),
-                            (0.125, idx * rec_height),
-                            (0.125, (idx + 1) * rec_height),
-                            (-0.125, (idx + 1) * rec_height),
-                        ),
-                        depth=-3,
-                        opacity=1,
-                        fillColor="Green",
-                        lineColor="Green",
-                    )
-                    recs.append(rec)
-            else:
-                # Negative when should be positive -> Red (bad)
-                rec_height = (fb - zero_val) / (n_segments * (act_min - zero_val)) * 0.5
-                for idx in range(n_segments):
-                    rec = visual.ShapeStim(
-                        self.win,
-                        closeShape=True,
-                        vertices=(
-                            (-0.125, idx * -1 * rec_height),
-                            (0.125, idx * -1 * rec_height),
-                            (0.125, (idx + 1) * -1 * rec_height),
-                            (-0.125, (idx + 1) * -1 * rec_height),
-                        ),
-                        depth=-3,
-                        opacity=1,
-                        fillColor="Red",
-                        lineColor="Red",
-                    )
-                    recs.append(rec)
+        if upward:
+            rec_height = (fb - zero_val) / (n_segments * (act_max - zero_val)) * 0.5
+        else:
+            rec_height = (fb - zero_val) / (n_segments * (act_min - zero_val)) * 0.5
+
+        # Green when feedback matches expectation, Red otherwise
+        is_good = (block_type == "listen" and upward) or (block_type == "ignore" and not upward)
+        feedback_color = "Green" if is_good else "Red"
+
+        recs = self._build_thermometer_bars(n_segments, rec_height, feedback_color, downward=not upward)
 
         # Set top/bottom labels
         self._thermo_top_label.text = "listen to self"
@@ -890,13 +858,7 @@ class ThermometerTask(BaseTask):
             self.win.flip()
             frame_n += 1
 
-        # Determine feedback color for TSV logging
-        if recs:
-            feedback_color = "red" if recs[0].fillColor[0] == 1.0 else "green"
-        else:
-            feedback_color = "n/a"
-
-        return feedback_color
+        return feedback_color.lower()
 
     # =========================================================================
     # Per-TR activation logging (end of run)
@@ -1174,21 +1136,6 @@ class ThermometerTask(BaseTask):
             height=0.06,
             color="white",
         )
-        self._thermo_top_star = visual.TextStim(
-            self.win,
-            text="*",
-            pos=(0.5, 0.5),
-            height=0.5,
-            color="white",
-        )
-        self._thermo_bottom_star = visual.TextStim(
-            self.win,
-            text="*",
-            pos=(0.5, -0.5),
-            height=0.5,
-            color="white",
-        )
-
         # Show task instructions (matching original wording)
         # Only confirm_button advances (original accepted any button box key)
         self.show_instructions(
@@ -1279,8 +1226,6 @@ class ThermometerTask(BaseTask):
             "_thermo_zero_label",
             "_thermo_top_label",
             "_thermo_bottom_label",
-            "_thermo_top_star",
-            "_thermo_bottom_star",
         ]:
             if hasattr(self, attr):
                 delattr(self, attr)

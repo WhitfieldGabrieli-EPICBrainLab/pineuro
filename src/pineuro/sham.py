@@ -168,6 +168,11 @@ class ReplayActivationProvider(ShamActivationProvider):
         return {name: float(row[self._column_mapping[name]]) for name in self.mask_names}
 
 
+def _nan_to_str(val) -> str | None:
+    """Convert a pandas value to str, treating NaN as None."""
+    return None if pd.isna(val) else str(val)
+
+
 def load_randomization(file_path: Path) -> dict[str, dict]:
     """Load subject -> condition assignments from TSV/CSV file.
 
@@ -224,19 +229,8 @@ def load_randomization(file_path: Path) -> dict[str, dict]:
         if condition not in ("real", "sham"):
             raise ValueError(f"Invalid condition '{condition}' for {subject_id}. Must be 'real' or 'sham'")
 
-        matched_participant = row.get("matched_participant")
-        matched_visit = row.get("matched_visit")
-
-        # Convert NaN to None
-        if pd.isna(matched_participant):
-            matched_participant = None
-        else:
-            matched_participant = str(matched_participant)
-
-        if pd.isna(matched_visit):
-            matched_visit = None
-        else:
-            matched_visit = str(matched_visit)
+        matched_participant = _nan_to_str(row.get("matched_participant"))
+        matched_visit = _nan_to_str(row.get("matched_visit"))
 
         result[subject_id] = {
             "condition": condition,

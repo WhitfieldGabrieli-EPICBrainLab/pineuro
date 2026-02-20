@@ -132,7 +132,6 @@ import pydicom  # DICOM header reading
 from nibabel.loadsave import save
 from nibabel.nifti1 import Nifti1Image
 from scipy.ndimage import binary_erosion, generate_binary_structure
-from templateflow import api as tflow  # Standard neuroimaging templates
 
 # --- Module Logger ---
 logger = logging.getLogger(__name__)
@@ -405,6 +404,38 @@ def _gamma_pdf_rate(t: np.ndarray, shape: float, rate: float) -> np.ndarray:
     return np.asarray(pdf)
 
 
+def _compute_hrf_highres(tr: float, duration: float = 32.0) -> np.ndarray:
+    """Compute normalized high-resolution (16 Hz) double-gamma HRF.
+
+    Parameters
+    ----------
+    tr : float
+        Repetition time in seconds (used for rate parameter).
+    duration : float, optional
+        Duration of HRF in seconds. Default is 32s.
+
+    Returns
+    -------
+    hrf_hires : ndarray
+        High-resolution HRF at 16 Hz, normalized to sum to 1.0.
+    """
+    hires_dt = 1.0 / 16.0
+    shape_pos = 6.0
+    shape_neg = 16.0
+    undershoot_ratio = 6.0
+    rate = tr * hires_dt
+
+    n_samples = int(duration / hires_dt)
+    t = np.arange(n_samples, dtype=np.float64)
+    hrf_hires = _gamma_pdf_rate(t, shape_pos, rate) - _gamma_pdf_rate(t, shape_neg, rate) / undershoot_ratio
+
+    hrf_sum = np.sum(hrf_hires)
+    if hrf_sum > 0:
+        hrf_hires = hrf_hires / hrf_sum
+
+    return hrf_hires
+
+
 def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     """Compute canonical double-gamma HRF.
 
@@ -436,28 +467,8 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     >>> hrf = compute_hrf(tr=1.2)
     >>> print(hrf.shape)  # (27,) for 32s duration at TR=1.2
     """
-    # High-resolution sampling for accuracy
-    hires_dt = 1.0 / 16.0  # 16 Hz sampling
-
-    # Double-gamma parameters
-    shape_pos = 6.0  # positive response shape
-    shape_neg = 16.0  # undershoot shape
-    undershoot_ratio = 6.0  # positive-to-negative amplitude ratio
-
-    # Rate parameter depends on TR
-    rate = tr * hires_dt
-
-    # High-resolution time points (in sample units)
-    n_hires_samples = int(duration / hires_dt)
-    t_hires = np.arange(n_hires_samples, dtype=np.float64)
-
-    # Compute high-resolution HRF
-    hrf_hires = _gamma_pdf_rate(t_hires, shape_pos, rate) - _gamma_pdf_rate(t_hires, shape_neg, rate) / undershoot_ratio
-
-    # Normalize to sum to 1.0
-    hrf_sum = np.sum(hrf_hires)
-    if hrf_sum > 0:
-        hrf_hires = hrf_hires / hrf_sum
+    hires_dt = 1.0 / 16.0
+    hrf_hires = _compute_hrf_highres(tr, duration)
 
     # Downsample to TR resolution
     samples_per_tr = int(tr / hires_dt)
@@ -517,28 +528,7 @@ def compute_boxcar_task_regressor(
     >>> regressor = compute_boxcar_task_regressor(n_baseline=25, n_volumes=150, tr=1.2)
     >>> print(regressor.shape)  # (150,)
     """
-    # High-resolution parameters: 16 Hz sampling
-    hires_dt = 1.0 / 16.0
-
-    # Double-gamma parameters
-    shape_pos = 6.0
-    shape_neg = 16.0
-    undershoot_ratio = 6.0
-
-    # Rate parameter depends on TR
-    rate = tr * hires_dt
-
-    # Compute high-resolution HRF (16 Hz, 32 seconds = 512 samples)
-    n_hrf_samples = int(hrf_duration / hires_dt)
-    t_hrf = np.arange(n_hrf_samples, dtype=np.float64)
-    hrf_hires = _gamma_pdf_rate(t_hrf, shape_pos, rate) - _gamma_pdf_rate(t_hrf, shape_neg, rate) / undershoot_ratio
-
-    # Normalize HRF to sum to 1.0
-    hrf_sum = np.sum(hrf_hires)
-    if hrf_sum > 0:
-        hrf_hires = hrf_hires / hrf_sum
-
-    # Use fixed downsample factor of 16 for high-resolution HRF convolution
+    hrf_hires = _compute_hrf_highres(tr, hrf_duration)
     hrf_downsample_factor = 16
 
     # Create high-resolution boxcar
@@ -642,7 +632,7 @@ def is_valid_dicom(file_path: Path) -> bool:
     try:
         pydicom.dcmread(file_path, stop_before_pixels=True)
         return True
-    except Exception:
+    except Exception:  # pydicom raises many exception types for corrupt/non-DICOM files
         return False
 
 
@@ -779,7 +769,7 @@ def is_valid_nifti(file_path: Path) -> bool:
     try:
         nib.load(str(file_path))
         return True
-    except Exception:
+    except Exception:  # nibabel raises various errors for corrupt/non-NIfTI files
         return False
 
 
@@ -1480,6 +1470,13 @@ def apply_xfm(
     logger.info(f"Output: {output_path}")
 
 
+def _get_mni_epi_template() -> Path:
+    """Get MNI152 BOLD reference template path from templateflow."""
+    import templateflow.api as tflow
+
+    return cast(Path, tflow.get("MNI152NLin2009cAsym", resolution=2, desc="fMRIPrep", suffix="boldref"))  # type: ignore
+
+
 def apply_xfm_sform_to_mni(
     input_file: Union[str, Path],
     output_file: Union[str, Path],
@@ -1527,8 +1524,7 @@ def apply_xfm_sform_to_mni(
     if nilearn_interp is None:
         raise ValueError(f"Invalid interpolation: {interp}. Valid options are: {', '.join(interp_map.keys())}")
 
-    # Load MNI152 BOLD reference template from templateflow
-    epi_tpl_path = cast(Path, tflow.get("MNI152NLin2009cAsym", resolution=2, desc="fMRIPrep", suffix="boldref"))  # type: ignore
+    epi_tpl_path = _get_mni_epi_template()
 
     logger.info(f"Resampling to MNI space: {Path(input_file).name}")
     source_img = cast(Nifti1Image, nib.load(str(input_file)))
@@ -1592,8 +1588,7 @@ def compute_xfm_to_mni(
         logger.info("Output files exist and overwrite=False. Skipping MNI registration.")
         return sub2mni_file, [str(p) for p in existing_fwd], [str(p) for p in existing_inv]
 
-    # Load MNI152 BOLD reference template from templateflow
-    epi_tpl_path = cast(Path, tflow.get("MNI152NLin2009cAsym", resolution=2, desc="fMRIPrep", suffix="boldref"))  # type: ignore
+    epi_tpl_path = _get_mni_epi_template()
 
     logger.info(f"Computing MNI transformation (ANTs {type_of_transform})...")
     logger.info(f"Input: {input_file}")

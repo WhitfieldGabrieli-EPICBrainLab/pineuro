@@ -176,9 +176,6 @@ class VolumeSimulator:
         self.delay = self.tr / self.speed
         logger.info(f"Effective delay: {self.delay:.3f}s (speed={self.speed}x)")
 
-        # For backward compatibility, also expose as dicom_files
-        self.dicom_files = self.volume_files
-
     def _sleep_until_deadline(self, deadline: float, stop_event=None) -> float:
         """
         Sleep until the specified deadline time.

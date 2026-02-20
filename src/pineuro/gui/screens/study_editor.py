@@ -3066,7 +3066,6 @@ class StudyEditorScreen:
             config["feedback"]["include_motion_regressors"] = self.motion_regressors_checkbox.value
             config["feedback"]["include_wm_regressor"] = self.wm_regressor_checkbox.value
             config["feedback"]["include_csf_regressor"] = self.csf_regressor_checkbox.value
-            # Remove deprecated keys
             config["feedback"].pop("moco_enabled", None)
             config["feedback"].pop("nuisance_regression", None)
             # Real-time spatial smoothing
