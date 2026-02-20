@@ -5,8 +5,6 @@ Get up and running with pineuro in 5 minutes.
 ## Prerequisites
 
 - Python 3.11+
-- FSL installed and configured
-- dcm2niix installed
 - pineuro installed (`pip install -e /path/to/pineuro`)
 
 ## 1. Preprocess Resting-State Data
@@ -31,8 +29,8 @@ print(f"BOLD reference: {ref_file}")
 
 This will:
 - Convert DICOMs to NIfTI
-- Run motion correction (mcflirt)
-- Extract brain mask (bet)
+- Run motion correction (ANTsPy rigid registration)
+- Extract brain mask (ANTsPy)
 - Generate QC report
 
 ## 2. Extract Network Masks
@@ -111,17 +109,14 @@ The `feedbacklog.tsv` contains columns:
 
 ## Next Steps
 
-- [First Session Tutorial](first-session.md) - Complete walkthrough with explanation
-- [Pipeline Overview](../user-guide/pipeline-overview.md) - Understand the full workflow
-- [Creating Tasks](../task-development/creating-tasks.md) - Build custom feedback displays
+- [First Session Tutorial](first-session.md) — Complete walkthrough with the GUI
+- [Pipeline Overview](../user-guide/pipeline-overview.md) — Understand the full workflow
+- [Creating Tasks](../task-development/creating-tasks.md) — Build custom feedback displays
 
 ## Common Issues
 
 ### "DICOM folder not found"
 Ensure the path to DICOMs is correct and contains .dcm files.
-
-### "mcflirt not found"
-Source FSL: `source $FSLDIR/etc/fslconf/fsl.sh`
 
 ### "No components found with sufficient correlation"
 The ICA may need adjustment. Try:

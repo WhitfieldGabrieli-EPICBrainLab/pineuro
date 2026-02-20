@@ -15,29 +15,18 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 
 ## Installation
 
-### Prerequisites
-
-pineuro requires one external tool:
-
-- **dcm2niix** - For DICOM to NIfTI conversion
-  - Linux: `sudo apt install dcm2niix`
-  - macOS: `brew install dcm2niix`
-  - Windows: `winget install dcm2niix`
-
-All other dependencies (including ANTsPy for registration/motion correction) are installed automatically via pip.
-
-### Install pineuro
-
-**Note:** PsychoPy requires wxPython, which may need to be installed separately before running `pip install`. See [PsychoPy installation docs](https://www.psychopy.org/download.html) if you encounter issues.
+All dependencies are pure pip — no external tools required.
 
 ```bash
 # Clone the repository
 git clone https://github.com/marlvan/pineuro.git
 cd pineuro
 
-# Install in development mode
+# Install (all dependencies included: dcm2niix, ANTsPy, PsychoPy, etc.)
 pip install -e .
 ```
+
+**Note:** PsychoPy requires wxPython, which may need to be installed separately on some platforms. See [PsychoPy installation docs](https://www.psychopy.org/download.html) if you encounter issues.
 
 ## Quick Start
 

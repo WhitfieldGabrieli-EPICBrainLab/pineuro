@@ -54,8 +54,8 @@ dicom_folder = collect_volumes(
 
 **What happens:**
 1. **DICOM → NIfTI**: Convert scanner format to analysis format
-2. **Motion Correction**: Align all volumes to a reference (mcflirt)
-3. **Brain Extraction**: Create mask excluding non-brain tissue (bet)
+2. **Motion Correction**: Align all volumes to a reference (ANTsPy rigid registration)
+3. **Brain Extraction**: Create mask excluding non-brain tissue (ANTsPy)
 4. **Coregistration**: Align multiple runs if present
 
 **Code:**

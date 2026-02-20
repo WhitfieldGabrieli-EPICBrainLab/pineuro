@@ -61,17 +61,11 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 
 ## Accessibility Improvements
 
-### A.1 End-to-End Tutorial with Sample Data
-- **Gap**: README has API examples but no walkthrough tutorial with real data.
-- **Approach**: Tutorial (Markdown in `docs/`) walking through: download OpenNeuro dataset → preprocess → extract masks → run simulated feedback → inspect QC reports. Link to an existing OpenNeuro rt-fMRI dataset rather than hosting custom data.
-- **Impact**: HIGH
-- **Also update**: `CONTRIBUTING.md` — add reference to tutorial and sample data location
+### ~~A.1 End-to-End Tutorial with Sample Data~~ ✅
+- **Done**: Created `docs/getting-started/first-session.md` — full GUI walkthrough using NKI Rockland Sample data (NITRC INDI portal). Covers source mapping setup, study creation, all pipeline phases (preprocessing, mask extraction, 2vol coregistration, feedback with gauge task), and output inspection. Fixed stale docs: removed FSL/external dcm2niix references from installation.md, quickstart.md, pipeline-overview.md, README.md. Fixed GitHub Issues link in index.md.
 
-### A.2 Expand In-Repo Documentation
-- **Gap**: Docs exist but are sparse. No API reference, no FAQ, no troubleshooting.
-- **Approach**: Keep docs in-repo on GitHub (no external hosting site). Expand `docs/` with: comprehensive user guide, API reference, task development guide, FAQ/troubleshooting.
-- **Impact**: HIGH
-- **Also update**: `CONTRIBUTING.md` Architecture section — update doc pointers if `docs/` structure changes
+### ~~A.2 Expand In-Repo Documentation~~ ✅
+- **Done**: Created 10 user guide pages covering every feature: study-configuration.md, preprocessing.md, mask-extraction.md, feedback-sessions.md, tasks.md, sham-and-blinding.md, multi-visit.md, display-setup.md, simulation-mode.md, qc-reports.md. Updated docs/index.md with complete navigation. All task types (gauge, ball, thermometer, fixation, self_other), feedback modes (activation, connectivity, differential, intermittent), mask methods (ICA, GLM, manual ROI), atlas options, sham/blinding, multi-visit, display setup, and output formats documented.
 
 ### A.5 CI/CD Pipeline
 - **Gap**: No automated testing or build pipeline.
@@ -130,7 +124,7 @@ These items are deferred for later consideration:
 | `src/pineuro/display.py` | ~~2.9 remove WSL code~~ ✅ |
 | `pyproject.toml` | 1.7 dev deps, ~~2.9 Windows classifier~~ ✅ |
 | `tests/` (new) | 1.7 formal test suite |
-| `docs/` | A.1 tutorial, A.2 expanded docs |
+| `docs/` | ~~A.1 tutorial~~ ✅, ~~A.2 expanded docs~~ ✅ |
 | `CONTRIBUTING.md` (new) | ~~A.6~~ ✅ |
 | `CHANGELOG.md` (new) | A.8 |
 

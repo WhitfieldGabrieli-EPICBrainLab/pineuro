@@ -22,49 +22,21 @@ python -m venv pineuro_env
 source pineuro_env/bin/activate  # Linux/macOS
 # pineuro_env\Scripts\activate   # Windows
 
-# Install system dependency: dcm2niix
-# Linux:   sudo apt install dcm2niix
-# macOS:   brew install dcm2niix
-# Windows: winget install dcm2niix
-
-# Install pineuro
+# Install pineuro (all dependencies included)
 pip install -e /path/to/pineuro
 ```
 
+All dependencies — including dcm2niix, ANTsPy, PsychoPy, and nilearn — are installed automatically via pip. No external tools are required.
+
 ## Dependencies
 
-### dcm2niix
-
-dcm2niix converts DICOM files to NIfTI format. This is the only external (non-Python) dependency.
-
-**Ubuntu/Debian:**
-```bash
-sudo apt install dcm2niix
-```
-
-**macOS:**
-```bash
-brew install dcm2niix
-```
-
-**Windows:**
-```bash
-winget install dcm2niix
-```
-
-**Verify installation:**
-```bash
-dcm2niix --version  # Should show version
-```
-
-### Python Dependencies
-
-All Python dependencies are installed automatically via pip:
-- antspyx - Motion correction, brain extraction, registration
-- nibabel - NIfTI I/O
-- nilearn - Neuroimaging analysis (ICA, atlas fetching)
-- psychopy - Visual stimulus display
-- flet - GUI framework
+All Python dependencies are installed automatically:
+- **dcm2niix** — DICOM to NIfTI conversion
+- **antspyx** — Motion correction, brain extraction, registration
+- **nibabel** — NIfTI I/O
+- **nilearn** — Neuroimaging analysis (ICA, atlas fetching)
+- **psychopy** — Visual stimulus display
+- **flet** — GUI framework
 - numpy, scipy, pandas, matplotlib, pydicom, pyyaml, screeninfo
 
 ## Development Installation
@@ -85,16 +57,6 @@ source venv/bin/activate  # Linux/macOS
 pip install -e ".[dev]"
 ```
 
-## Verify Installation
-
-Run the test script to verify everything is working:
-
-```bash
-python tests/test.py
-```
-
-This will run through the core pipeline with simulated data.
-
 ## Troubleshooting
 
 ### ANTsPy installation fails
@@ -109,7 +71,11 @@ pip install antspyx --no-cache-dir
 CMAKE_BUILD_PARALLEL_LEVEL=4 pip install antspyx
 ```
 
+### PsychoPy installation issues
+
+PsychoPy requires wxPython, which may need to be installed separately on some platforms. See [PsychoPy installation docs](https://www.psychopy.org/download.html) if you encounter issues.
+
 ## Next Steps
 
-- [Quick Start](quickstart.md) - Run your first preprocessing
-- [First Session](first-session.md) - Complete tutorial
+- [Quick Start](quickstart.md) — Run your first preprocessing
+- [First Session Tutorial](first-session.md) — Complete end-to-end walkthrough
