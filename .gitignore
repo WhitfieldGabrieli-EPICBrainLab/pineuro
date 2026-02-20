@@ -12,5 +12,6 @@ data/
 temp/
 drafts/
 tests/benchmark*
+sourcedata/
 *.egg-info/
 dist/

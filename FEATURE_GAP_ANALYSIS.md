@@ -28,12 +28,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 ### ~~1.6 Broader Atlas Support (AAL, Schaefer, Harvard-Oxford)~~ ✅
 - **Done**: Added `ATLAS_SOURCES` registry with Yeo 7/17, Schaefer 100/400 (7/17-network), Harvard-Oxford Cortical, and AAL (SPM12). On-demand label fetching via `get_atlas_labels()` with caching (eliminates GUI startup lag). Schaefer atlas supported in resting-state ICA pathway (parcels grouped by network for spatial correlation). Generalized `fetch_atlas_mask()` supports all atlas types. Two-tier atlas selection in GUI (atlas → region/network). `network_atlas` param added to `mask_extraction_rest()`, `atlas_source`/`atlas_regions` params added to `mask_extraction_task()` and `MaskConfig`.
 
-### 1.7 Formal Test Suite
-- **Gap**: No pytest-based tests. Only validation scripts (compare_murfi, compare_fmriprep, compare_melodic).
-- **Why**: Essential for open-source credibility, NeuroImage reviewers, and safe refactoring.
-- **Scope**: Large
-- **Module**: New `tests/` directory, `pyproject.toml` (dev deps)
-- **Also update**: `CONTRIBUTING.md` Testing section — replace "no pytest suite yet" with how to run tests, write tests, fixture conventions
+### ~~1.7 Formal Test Suite~~ ✅
+- **Done**: Added comprehensive pytest suite with 10 unit test modules (`test_config`, `test_utils`, `test_feedback`, `test_preprocessing`, `test_mask_extraction`, `test_session`, `test_sham`, `test_tasks`, `test_qc`) plus 3 integration test modules using Rockland_NFB data. Shared fixtures in `conftest.py` (synthetic NIfTI, masks, motion params, feedbacklogs). `IncrementalGLM` tested against batch OLS for numerical accuracy. Integration tests auto-skip when data absent (CI-safe). Markers: `@pytest.mark.slow`, `@pytest.mark.integration`. Default `pytest` excludes integration tests via `addopts`. Validation comparison scripts moved to `analysis/`. Updated `pyproject.toml`, `CONTRIBUTING.md`, `.claude/rules/testing.md`.
 
 ---
 
@@ -116,8 +112,9 @@ These items are deferred for later consideration:
 | `src/pineuro/gui/components/fd_plot.py` | 1.3 motion alerts in GUI |
 | `src/pineuro/sham.py` | ~~2.7 randomization generator~~ ✅ |
 | `src/pineuro/display.py` | ~~2.9 remove WSL code~~ ✅ |
-| `pyproject.toml` | 1.7 dev deps, ~~2.9 Windows classifier~~ ✅ |
-| `tests/` (new) | 1.7 formal test suite |
+| `pyproject.toml` | ~~1.7 dev deps~~ ✅, ~~2.9 Windows classifier~~ ✅ |
+| `tests/` | ~~1.7 formal test suite~~ ✅ |
+| `analysis/` | ~~1.7 moved validation scripts~~ ✅ |
 | `docs/` | ~~A.1 tutorial~~ ✅, ~~A.2 expanded docs~~ ✅ |
 | `CONTRIBUTING.md` (new) | ~~A.6~~ ✅ |
 | `CHANGELOG.md` (new) | A.8 |

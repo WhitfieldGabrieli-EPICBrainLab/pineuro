@@ -189,15 +189,59 @@ All PRs are checked by CI (GitHub Actions). The following must pass before merge
 
 ## Testing
 
-pineuro uses **pytest**. Tests live in `tests/` and are run with:
+pineuro uses **pytest**. Tests live in `tests/` with this structure:
 
-```bash
-pytest              # Run all tests
-pytest -v           # Verbose output
-pytest tests/test_import.py  # Run a specific file
+```
+tests/
+├── conftest.py              # Shared fixtures (synthetic NIfTI, masks, etc.)
+├── test_import.py           # Smoke test
+├── test_config.py           # Platform detection
+├── test_utils.py            # Utilities, timing, file I/O, masking
+├── test_feedback.py         # IncrementalGLM, FeedbackEstimator
+├── test_preprocessing.py    # Pipeline steps (concat, smoothing, filtering)
+├── test_mask_extraction.py  # ICA, GLM, atlas workflows
+├── test_session.py          # Config dataclasses, visit management
+├── test_sham.py             # Randomization, replay providers
+├── test_tasks.py            # Plugin registry, designs, session state
+├── test_qc.py               # QC reports and plotting
+└── integration/             # Real-data tests (require Rockland_NFB)
+    ├── conftest.py          # Data path fixtures (auto-skip if absent)
+    ├── test_preprocessing_integration.py
+    ├── test_mask_extraction_integration.py
+    └── test_feedback_integration.py
 ```
 
-When adding new functionality, include tests in `tests/test_<module>.py`. The validation comparison scripts (`compare_*.py`) remain for full-pipeline validation against reference outputs.
+### Running tests
+
+```bash
+pytest                           # Unit tests only (default, CI-safe)
+pytest -v                        # Verbose output
+pytest tests/test_feedback.py    # Run a specific file
+pytest -k "test_glm"            # Run tests matching a keyword
+pytest -m integration            # Integration tests (requires Rockland_NFB data)
+pytest -m "integration and slow" # All integration tests
+```
+
+### Markers
+
+- `@pytest.mark.slow` — tests taking >10 seconds
+- `@pytest.mark.integration` — requires Rockland_NFB data in `sourcedata/`
+
+### Writing tests
+
+- Place unit tests in `tests/test_<module>.py`
+- Import from submodules directly: `from pineuro.feedback import IncrementalGLM`
+- Use conftest fixtures for synthetic NIfTI data (e.g., `synthetic_nifti_4d`, `sample_mask`)
+- Mock heavy dependencies (ANTsPy, nilearn ICA) for unit tests; test them for real in `integration/`
+- Use `assert` freely (ruff S101 is ignored in test files)
+
+### Integration test data
+
+Integration tests use [NKI Rockland Sample](https://fcon_1000.projects.nitrc.org/indi/pro/nki.html) DICOM data placed in `sourcedata/Rockland_NFB/`. This data is excluded from git (access is controlled by Rockland). Tests auto-skip when data is absent.
+
+### Validation comparison scripts
+
+The `analysis/` directory contains standalone validation scripts for comparing pineuro output against reference tools (fMRIPrep, MELODIC, MURFI). These are separate from pytest.
 
 ## Platform Notes
 

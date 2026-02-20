@@ -15,7 +15,7 @@ Requires:
 Usage:
     # Run comparison for all subjects
     python compare_fmriprep_pineuro.py compare \
-        --csv tests/remind_test_data.csv \
+        --csv analysis/remind_test_data.csv \
         --output-dir /data/output \
         --fmriprep-dir /projects/remind/derivatives/fmriprep/fmriprep-23.2.1
 

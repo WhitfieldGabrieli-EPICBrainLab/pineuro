@@ -72,6 +72,8 @@ fixable = ["I", "UP", "E", "W", "F401"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/*.py" = ["T20", "S101", "INP001", "E402"]
+"tests/**/*.py" = ["T20", "S101", "INP001", "E402"]
+"analysis/*.py" = ["T20", "S101", "INP001", "E402"]
 "src/pineuro/gui/**/*.py" = ["B006"]
 "src/pineuro/tasks/*.py" = ["E402"]
 
@@ -92,6 +94,11 @@ docstring-code-format = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (>10s)",
+    "integration: requires Rockland_NFB test data",
+]
+addopts = "-m 'not integration'"
 
 # ---------------------------------------------------------------------------
 # mypy — basic type checking

@@ -10,7 +10,7 @@ Usage:
 
     # Then: run comparison (after GUI mask approval)
     python compare_murfi_pineuro.py compare \
-        --csv tests/remind_test_data.csv \
+        --csv analysis/remind_test_data.csv \
         --output-dir /data/output \
         --murfi-sif /path/to/murfi.sif
 

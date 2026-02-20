@@ -15,13 +15,13 @@ Requires:
 Usage:
     # Stage 1: Run MELODIC + mask extraction on fMRIPrep data
     python compare_melodic_pineuro.py setup \
-        --csv tests/remind_test_data.csv \
+        --csv analysis/remind_test_data.csv \
         --output-dir /data/output \
         --fmriprep-dir /projects/remind/derivatives/fmriprep/fmriprep-23.2.1
 
     # Stage 2: Compare masks
     python compare_melodic_pineuro.py compare \
-        --csv tests/remind_test_data.csv \
+        --csv analysis/remind_test_data.csv \
         --output-dir /data/output \
         --fmriprep-dir /projects/remind/derivatives/fmriprep/fmriprep-23.2.1
 
