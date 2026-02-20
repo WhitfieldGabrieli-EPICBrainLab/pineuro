@@ -1,2 +1,0 @@
-[console_scripts]
-pineuro-gui = pineuro.gui.app:main
