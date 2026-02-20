@@ -91,8 +91,6 @@ class ThermometerTask(BaseTask):
         Audio file paths in the CSV are resolved relative to this directory.
     feedback_mode : bool
         True for NFB runs (show thermometer), False for transfer runs.
-    baseline_duration : float
-        Initial baseline fixation duration in seconds.
     instruction_duration : float
         Duration of instruction prompt before each block.
     voice_duration : float
@@ -127,7 +125,6 @@ class ThermometerTask(BaseTask):
         mask_names: list[str] | None = None,
         stim_dir: str = "",
         feedback_mode: bool = True,
-        baseline_duration: float = 30.0,
         instruction_duration: float = 2.0,
         voice_duration: float = 3.5,
         isi_duration: float = 0.5,
@@ -166,7 +163,6 @@ class ThermometerTask(BaseTask):
         self.confirm_button = confirm_button
 
         # Timing parameters
-        self.baseline_duration = baseline_duration
         self.instruction_duration = instruction_duration
         self.voice_duration = voice_duration
         self.isi_duration = isi_duration
@@ -442,6 +438,31 @@ class ThermometerTask(BaseTask):
                 self.win.flip()
             else:
                 core.wait(0.01)
+
+    def _wait_for_baseline_end(self):
+        """Show fixation cross until coordinator's ``is_baseline`` flips to False."""
+        from psychopy import core, event
+
+        while self._running:
+            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
+                raise KeyboardInterrupt("Stopped by user")
+            if hasattr(self, "coordinator") and self.coordinator.is_complete():
+                break
+
+            data = self.get_latest_data()
+            is_baseline = data.get("is_baseline", True)
+            if not is_baseline:
+                break
+
+            self._fixation.draw()
+            self._capture_and_emit_screenshot()
+            self.win.flip()
+
+            keys = event.getKeys(keyList=["escape"])
+            if keys:
+                raise KeyboardInterrupt("Escaped")
+
+            core.wait(0.01)
 
     def _show_fixation(self, duration: float):
         """Display fixation cross for a given duration, updating GUI each frame."""
@@ -1202,10 +1223,11 @@ class ThermometerTask(BaseTask):
 
             self._task_clock = core.Clock()
 
-            # Initial baseline
+            # Initial baseline (driven by coordinator's n_baseline)
             onset = self._task_clock.getTime()
-            self._show_fixation(self.baseline_duration)
-            self._record_event(onset, self.baseline_duration, "baseline", block_type="baseline", visual_content="+")
+            self._wait_for_baseline_end()
+            baseline_dur = self._task_clock.getTime() - onset
+            self._record_event(onset, baseline_dur, "baseline", block_type="baseline", visual_content="+")
 
             # Block loop
             for block_idx, block_info in enumerate(self._blocks):
@@ -1296,15 +1318,6 @@ THERMOMETER_METADATA = TaskMetadata(
             type="str",
             default="",
             hint="Directory containing condition CSV files (auto-discovered by participant/run) and audio files referenced in the CSVs.",
-        ),
-        TaskParameter(
-            key="baseline_duration",
-            label="Baseline Duration (s)",
-            type="float",
-            default=30.0,
-            min_value=0.0,
-            max_value=120.0,
-            hint="Initial baseline fixation period",
         ),
         TaskParameter(
             key="instruction_duration",

@@ -8,6 +8,7 @@ Key Classes
 -----------
 BaseTask : Abstract base class for all neurofeedback tasks
 BallTask : Example task with dual-network feedback and ball movement
+GaugeTask : Analog gauge (brain-o-meter) with differential feedback
 SessionState : Persistent state management for multi-run sessions
 ActivationSmoother : Exponential moving average smoother
 ActivationNormalizer : Percentile-based activation normalizer
@@ -178,6 +179,7 @@ def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
 from .ball import BallTask  # Registers "ball" task
 from .fixation import FixationTask  # Registers "fixation" localizer task
 from .self_other import SelfOtherTask  # Registers "self_other" localizer task
+from .gauge import GaugeTask  # Registers "gauge" task
 from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
 
 __all__ = [
@@ -186,6 +188,7 @@ __all__ = [
     "BaseTask",
     "BaseLocalizerTask",
     "BallTask",
+    "GaugeTask",
     "ThermometerTask",
     "SelfOtherTask",
     "FixationTask",
