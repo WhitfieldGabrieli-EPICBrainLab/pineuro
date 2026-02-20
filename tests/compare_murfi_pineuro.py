@@ -53,10 +53,10 @@ from setup_validation import (
 # =============================================================================
 
 
-def check_2vol_coreg_complete(subject_dir: Path) -> bool:
-    """Check if 2vol coregistration is complete."""
-    mask_dir = get_feedback_dir(subject_dir) / "01_2vol" / "masks"
-    masks = list(mask_dir.glob("*_thr_to_task-2vol*.nii.gz"))
+def check_reference_coreg_complete(subject_dir: Path) -> bool:
+    """Check if reference coregistration is complete."""
+    mask_dir = get_feedback_dir(subject_dir) / "01_reference" / "masks"
+    masks = list(mask_dir.glob("*_thr_to_task-reference*.nii.gz"))
     return len(masks) >= 2
 
 
@@ -107,36 +107,36 @@ def check_comparison_complete(subject_dir: Path, run: int) -> bool:
 
 
 # =============================================================================
-# 2vol Coregistration
+# Reference Coregistration
 # =============================================================================
 
 
-def run_2vol_coregistration(
+def run_reference_coregistration(
     subject: str,
     subject_dir: Path,
     mask_files: list[Path],
     ref_file: Path,
     overwrite: bool = False,
 ) -> dict[str, Path]:
-    """Coregister masks to 2vol_realtime scanner position."""
-    from pineuro import coregister_2vol
+    """Coregister masks to reference_realtime scanner position."""
+    from pineuro import coregister_reference
 
     collection_dir = get_collection_dir(subject_dir)
     feedback_dir = get_feedback_dir(subject_dir)
-    twovol_dir = collection_dir / "task-2vol_run-01"
+    reference_dir = collection_dir / "task-reference_run-01"
 
     print(f"\n{'=' * 60}")
-    print("2VOL REALTIME COREGISTRATION")
+    print("REFERENCE REALTIME COREGISTRATION")
     print("=" * 60)
 
-    coreg_masks = coregister_2vol(
+    coreg_masks = coregister_reference(
         participant_id=subject,
         root_dir=str(feedback_dir),
-        input_dicom=twovol_dir,
+        input_dicom=reference_dir,
         network_files=mask_files,
         ref_file=ref_file,
         overwrite=overwrite,
-        output_subdir="01_2vol",
+        output_subdir="01_reference",
     )
 
     print("\nCoregistration complete:")
@@ -526,11 +526,11 @@ def parse_murfi_log(log_path: Path, n_volumes: int) -> pd.DataFrame:
 
 
 def find_masks(subject_dir: Path) -> dict[str, Path]:
-    """Find coregistered masks in feedback/01_2vol/masks/."""
-    mask_dir = get_feedback_dir(subject_dir) / "01_2vol" / "masks"
+    """Find coregistered masks in feedback/01_reference/masks/."""
+    mask_dir = get_feedback_dir(subject_dir) / "01_reference" / "masks"
     masks = {}
 
-    for mask_path in mask_dir.glob("*_thr_to_task-2vol*.nii.gz"):
+    for mask_path in mask_dir.glob("*_thr_to_task-reference*.nii.gz"):
         name = mask_path.name
         if "_ContA_" in name:
             masks["ContA"] = mask_path
@@ -864,14 +864,14 @@ def cmd_compare(args: argparse.Namespace) -> None:
         print(f"# COMPARE: {config.subject}")
         print(f"{'#' * 60}")
 
-        # Run 2vol coregistration if needed
-        if not check_2vol_coreg_complete(subject_dir):
-            print("\nRunning 2vol coregistration...")
+        # Run reference coregistration if needed
+        if not check_reference_coreg_complete(subject_dir):
+            print("\nRunning reference coregistration...")
             mask_dir = get_mask_extraction_dir(subject_dir) / "03_masks"
             mask_files = sorted(mask_dir.glob("*_thr.nii.gz"))
             preproc_dir = get_preprocessing_dir(subject_dir)
             ref_file = preproc_dir / f"{config.subject}_task-rest_boldref.nii.gz"
-            run_2vol_coregistration(config.subject, subject_dir, mask_files, ref_file, overwrite=False)
+            run_reference_coregistration(config.subject, subject_dir, mask_files, ref_file, overwrite=False)
 
         # Run comparison for each feedback run
         for run in range(1, len(config.feedback_runs) + 1):
@@ -918,14 +918,14 @@ def cmd_status(args: argparse.Namespace) -> None:
         subject_dir = args.output_dir / subject
 
         approved = check_masks_approved(subject_dir)
-        twovol_done = check_2vol_coreg_complete(subject_dir)
+        reference_done = check_reference_coreg_complete(subject_dir)
         comp_done = sum(check_comparison_complete(subject_dir, r) for r in range(1, n_runs + 1))
 
         if not check_mask_extraction_complete(subject_dir):
             status = "needs setup"
         elif not approved:
             status = "needs approval"
-        elif not twovol_done:
+        elif not reference_done:
             status = "ready for compare"
         elif comp_done < n_runs:
             status = f"compare: {comp_done}/{n_runs}"

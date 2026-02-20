@@ -2328,7 +2328,7 @@ class NeurofeedbackCoordinator:
             "queue_depth": [],
         }
 
-        # DICOM collection directory (for unified collection with rest/2vol)
+        # DICOM collection directory (for unified collection with rest/reference)
         self._dicom_collection_dir = Path(dicom_collection_dir)
         self._dicom_collection_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2709,7 +2709,7 @@ class NeurofeedbackCoordinator:
             self._tr = get_tr_from_volume(volume_path)
             logger.info(f"Extracted TR from volume: {self._tr}s")
 
-        # Copy volume to collection directory (for unified collection with rest/2vol)
+        # Copy volume to collection directory (for unified collection with rest/reference)
         try:
             dest_path = self._dicom_collection_dir / volume_path.name
             shutil.copy2(volume_path, dest_path)
@@ -3287,7 +3287,7 @@ def run_feedback_session(
     output_dir : Path or str
         Base directory for all outputs (NIfTI conversions, logs, etc.).
     collection_dir : Path or str
-        Directory for collecting raw volumes (consistent with rest/2vol collection).
+        Directory for collecting raw volumes (consistent with rest/reference collection).
         Volumes are copied to collection_dir/{task}_run-{XX}/ and incoming_dir
         defaults to collection_dir/incoming. This provides a unified collection
         structure for all scan types.

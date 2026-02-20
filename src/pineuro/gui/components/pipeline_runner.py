@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pineuro.feedback import get_slot_run_info, run_feedback_session
-from pineuro.mask_extraction import coregister_2vol, generate_2vol_qc_overlays, mask_extraction_rest
+from pineuro.mask_extraction import coregister_reference, generate_reference_qc_overlays, mask_extraction_rest
 from pineuro.preprocessing import collect_dicoms, preprocessing
 from pineuro.session import get_localizer_run_info
 from pineuro.sham import (
@@ -103,7 +103,7 @@ class PipelineRunner:
         collection_dir : Path
             Collection directory to scan
         task : str
-            Task name (e.g., 'task-rest', 'task-2vol')
+            Task name (e.g., 'task-rest', 'task-reference')
         run : int
             Run number
         expected_volumes : int
@@ -204,8 +204,8 @@ class PipelineRunner:
             logger.info(f"Executing step: {step_id}")
 
             # Execute the appropriate step
-            if step_id == "2vol_initial":
-                self._run_2vol_initial()
+            if step_id == "reference_initial":
+                self._run_reference_initial()
             elif step_id.startswith("rest_run_"):
                 # Handle dynamic rest run steps (rest_run_1, rest_run_2, etc.)
                 run_num = int(step_id.split("_")[-1])
@@ -216,8 +216,8 @@ class PipelineRunner:
                 self._run_mask_extraction()
             elif step_id == "coregistration":
                 self._run_coregistration(run_id=1)
-            elif step_id == "2vol_realtime":
-                self._run_2vol_realtime()
+            elif step_id == "reference_realtime":
+                self._run_reference_realtime()
             elif step_id == "coregistration_realtime":
                 self._run_coregistration(run_id=2)
             elif step_id.startswith("transfer_") or step_id.startswith("feedback_"):
@@ -258,41 +258,41 @@ class PipelineRunner:
         sham_config = self.config.get("sham", {})
         return sham_config.get("enabled", False) and sham_config.get("blind_mode", False)
 
-    def _run_2vol_initial(self) -> None:
-        """Collect initial 2vol for positioning verification."""
+    def _run_reference_initial(self) -> None:
+        """Collect initial reference scan for positioning verification."""
         config = self.config
 
-        # Check if 2vol initial is enabled
-        if not config["scan"].get("twovol_initial_enabled", True):
-            self._emit_progress("2vol initial collection is disabled, skipping...")
+        # Check if reference initial is enabled
+        if not config["scan"].get("reference_initial_enabled", True):
+            self._emit_progress("Reference initial collection is disabled, skipping...")
             return
 
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
 
         # Get number of volumes (use new field, fall back to legacy)
-        n_volumes = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+        n_volumes = config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(
-            collection_dir=collection_dir, task="task-2vol", run=1, expected_volumes=n_volumes
+            collection_dir=collection_dir, task="task-reference", run=1, expected_volumes=n_volumes
         )
         acq = run_info["acq"]
 
-        self._emit_progress(f"Collecting initial 2vol DICOMs (acq-{acq:02d})...")
+        self._emit_progress(f"Collecting initial reference DICOMs (acq-{acq:02d})...")
         if run_info["existing_acqs"]:
             self._emit_progress(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
 
-        output_dir = collection_dir / f"task-2vol_acq-{acq:02d}_run-01"
+        output_dir = collection_dir / f"task-reference_acq-{acq:02d}_run-01"
 
         # Determine simulator vs real-time mode
         simulator_enabled = config["scan"].get("simulator_enabled", True)
 
         if simulator_enabled:
             # Simulator mode: create temp watch dir and use source DICOMs
-            watch_dir = base_dir / "tmp" / "incoming_2vol_initial"
+            watch_dir = base_dir / "tmp" / "incoming_reference_initial"
             watch_dir.mkdir(parents=True, exist_ok=True)
-            simulator_source_dir = config["scan"].get("twovol_initial_dicoms", "")
+            simulator_source_dir = config["scan"].get("reference_initial_dicoms", "")
 
             # Try mapping file if individual field is empty
             if not simulator_source_dir:
@@ -302,12 +302,12 @@ class PipelineRunner:
                         from pineuro.session import SimulatorSourceMapping
 
                         mapping = SimulatorSourceMapping.from_file(Path(mapping_path))
-                        resolved = mapping.get_source(self.participant_id, "2vol_initial")
+                        resolved = mapping.get_source(self.participant_id, "reference_initial")
                         if resolved is not None:
                             simulator_source_dir = str(resolved)
-                            logger.info(f"2vol_initial source from mapping: {simulator_source_dir}")
+                            logger.info(f"reference_initial source from mapping: {simulator_source_dir}")
                     except Exception as e:
-                        logger.warning(f"Failed to resolve 2vol_initial from mapping: {e}")
+                        logger.warning(f"Failed to resolve reference_initial from mapping: {e}")
 
             simulator_speed = config["scan"].get("collection_speed", 10.0)
         else:
@@ -850,21 +850,21 @@ class PipelineRunner:
             self._emit_progress("WM/CSF tissue masks created")
 
     def _run_coregistration(self, run_id: int = 1) -> None:
-        """Coregister masks to 2vol feedback space.
+        """Coregister masks to reference feedback space.
 
         Args:
             run_id: Run number (1 for initial, 2 for realtime)
         """
         config = self.config
 
-        # Check if 2vol is enabled for this run
+        # Check if reference is enabled for this run
         if run_id == 1:
-            if not config["scan"].get("twovol_initial_enabled", True):
-                self._emit_progress("2vol initial coregistration is disabled, skipping...")
+            if not config["scan"].get("reference_initial_enabled", True):
+                self._emit_progress("Reference initial coregistration is disabled, skipping...")
                 return
         else:
-            if not config["scan"].get("twovol_realtime_enabled", True):
-                self._emit_progress("2vol realtime coregistration is disabled, skipping...")
+            if not config["scan"].get("reference_realtime_enabled", True):
+                self._emit_progress("Reference realtime coregistration is disabled, skipping...")
                 return
 
         config = self.config
@@ -878,16 +878,16 @@ class PipelineRunner:
         is_mask_reuse = visit_config.get("mask_source") == "reuse"
         mask_source_visit = visit_config.get("mask_source_visit")
 
-        # Determine actual 2vol run number
-        # In mask reuse mode, realtime (run_id=2 from caller) uses 2vol run-01 (since no initial 2vol)
-        # In standard mode, run_id directly maps to 2vol run number
+        # Determine actual reference run number
+        # In mask reuse mode, realtime (run_id=2 from caller) uses reference run-01 (since no initial reference)
+        # In standard mode, run_id directly maps to reference run number
         if is_mask_reuse and run_id == 2:
-            actual_2vol_run = 1
+            actual_reference_run = 1
         else:
-            actual_2vol_run = run_id
+            actual_reference_run = run_id
 
-        run_str = f"run-{actual_2vol_run:02d}"
-        self._emit_progress(f"Coregistering network masks to 2vol {run_str}...")
+        run_str = f"run-{actual_reference_run:02d}"
+        self._emit_progress(f"Coregistering network masks to reference {run_str}...")
 
         # For QC overlay generation, we need the mask_extraction_dir where ICA outputs are
         source_mask_extraction_dir = None
@@ -921,21 +921,21 @@ class PipelineRunner:
             if not masks_dir.exists():
                 masks_dir = mask_extraction_dir / "02_masks"
 
-        # Find the most recent complete 2vol collection for this run
-        n_volumes = config["scan"].get("twovol_n_volumes", 2)
+        # Find the most recent complete reference collection for this run
+        n_volumes = config["scan"].get("reference_n_volumes", 2)
         collections = self.find_available_collections(
-            collection_dir=base_dir / "collection", task="task-2vol", run=actual_2vol_run, expected_volumes=n_volumes
+            collection_dir=base_dir / "collection", task="task-reference", run=actual_reference_run, expected_volumes=n_volumes
         )
         if not collections:
-            raise ValueError(f"No 2vol collection found for run {actual_2vol_run}")
+            raise ValueError(f"No reference collection found for run {actual_reference_run}")
 
         # Use highest complete acq (or highest incomplete if none complete)
         complete = [c for c in collections if c["is_complete"]]
         selected = complete[0] if complete else collections[0]
-        twovol_dicom = selected["path"]
+        reference_dicom = selected["path"]
 
         if not selected["is_complete"]:
-            logger.warning(f"Using incomplete 2vol collection: {selected['n_volumes']}/{n_volumes} volumes")
+            logger.warning(f"Using incomplete reference collection: {selected['n_volumes']}/{n_volumes} volumes")
 
         # Get network mask files (thresholded only)
         network_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
@@ -960,103 +960,103 @@ class PipelineRunner:
                 self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
 
         all_mask_files_for_coreg = [str(f) for f in network_files] + [str(f) for f in tissue_mask_files]
-        self._emit_progress(f"Coregistering {len(all_mask_files_for_coreg)} masks to 2vol {run_str}...")
+        self._emit_progress(f"Coregistering {len(all_mask_files_for_coreg)} masks to reference {run_str}...")
 
-        # Initial 2vol (run-01) goes to mask_extraction, realtime (run-02+) goes to feedback
+        # Initial reference (run-01) goes to mask_extraction, realtime (run-02+) goes to feedback
         if run_id == 1:
             root_dir = mask_extraction_dir
-            output_subdir = "04_2vol"
+            output_subdir = "04_reference"
         else:
             root_dir = feedback_dir
-            output_subdir = "01_2vol"
+            output_subdir = "01_reference"
 
-        coreg_masks = coregister_2vol(
+        coreg_masks = coregister_reference(
             participant_id=self.participant_id,
             root_dir=root_dir,
-            input_dicom=twovol_dicom,
+            input_dicom=reference_dicom,
             network_files=all_mask_files_for_coreg,
             ref_file=str(ref_file),
-            run_id=actual_2vol_run,
+            run_id=actual_reference_run,
             overwrite=True,
             output_subdir=output_subdir,
         )
 
-        self._emit_progress(f"Coregistered {len(coreg_masks)} masks to 2vol {run_str}")
+        self._emit_progress(f"Coregistered {len(coreg_masks)} masks to reference {run_str}")
 
-        # Generate 2vol QC overlays for visual approval
-        self._emit_progress(f"Generating 2vol QC overlays for {run_str}...")
+        # Generate reference QC overlays for visual approval
+        self._emit_progress(f"Generating reference QC overlays for {run_str}...")
         try:
-            # Determine session_dir and twovol_subdir based on run_id
-            # For run-01 (initial): session_dir is mask_extraction, subdir is 04_2vol
-            # For run-02 (realtime): session_dir is feedback, subdir is 01_2vol
+            # Determine session_dir and reference_subdir based on run_id
+            # For run-01 (initial): session_dir is mask_extraction, subdir is 04_reference
+            # For run-02 (realtime): session_dir is feedback, subdir is 01_reference
             if run_id == 1:
                 session_dir = mask_extraction_dir
-                twovol_subdir = "04_2vol"
+                reference_subdir = "04_reference"
             else:
                 session_dir = feedback_dir
-                twovol_subdir = "01_2vol"
+                reference_subdir = "01_reference"
 
             # For QC overlays, use the mask_extraction_dir where ICA outputs are located
             # In mask reuse mode, this is the source visit's mask_extraction_dir
             qc_mask_extraction_dir = source_mask_extraction_dir if source_mask_extraction_dir else mask_extraction_dir
 
-            generate_2vol_qc_overlays(
+            generate_reference_qc_overlays(
                 participant_id=self.participant_id,
                 session_dir=session_dir,
                 ref_file=ref_file,
                 mask_extraction_dir=qc_mask_extraction_dir,
                 network_coreg_files=coreg_masks,
-                run_str=str(actual_2vol_run).zfill(2),
+                run_str=str(actual_reference_run).zfill(2),
                 n_yeo=config["mask"]["n_yeo"],
                 overwrite=True,
-                twovol_subdir=twovol_subdir,
+                reference_subdir=reference_subdir,
             )
-            self._emit_progress(f"QC overlays generated for 2vol {run_str}")
+            self._emit_progress(f"QC overlays generated for reference {run_str}")
         except Exception as e:
-            logger.warning(f"2vol QC overlay generation failed: {e}")
+            logger.warning(f"Reference QC overlay generation failed: {e}")
             self._emit_progress(f"Warning: QC overlay generation failed: {e}")
 
-    def _run_2vol_realtime(self) -> None:
-        """Collect real-time 2vol before feedback session."""
+    def _run_reference_realtime(self) -> None:
+        """Collect real-time reference scan before feedback session."""
         config = self.config
 
-        # Check if 2vol realtime is enabled
-        if not config["scan"].get("twovol_realtime_enabled", True):
-            self._emit_progress("2vol realtime collection is disabled, skipping...")
+        # Check if reference realtime is enabled
+        if not config["scan"].get("reference_realtime_enabled", True):
+            self._emit_progress("Reference realtime collection is disabled, skipping...")
             return
 
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
 
-        # In mask reuse mode, realtime 2vol is run-01 (no initial 2vol)
-        # In standard mode, realtime 2vol is run-02 (after initial 2vol)
+        # In mask reuse mode, realtime reference is run-01 (no initial reference)
+        # In standard mode, realtime reference is run-02 (after initial reference)
         visit_config = config.get("visit", {})
         is_mask_reuse = visit_config.get("mask_source") == "reuse"
         run_id = 1 if is_mask_reuse else 2
 
         # Get number of volumes (use new field, fall back to legacy)
-        n_volumes = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+        n_volumes = config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(
-            collection_dir=collection_dir, task="task-2vol", run=run_id, expected_volumes=n_volumes
+            collection_dir=collection_dir, task="task-reference", run=run_id, expected_volumes=n_volumes
         )
         acq = run_info["acq"]
 
-        self._emit_progress(f"Collecting real-time 2vol DICOMs (acq-{acq:02d}, run-{run_id:02d})...")
+        self._emit_progress(f"Collecting real-time reference DICOMs (acq-{acq:02d}, run-{run_id:02d})...")
         if run_info["existing_acqs"]:
             self._emit_progress(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
 
-        output_dir = collection_dir / f"task-2vol_acq-{acq:02d}_run-{run_id:02d}"
+        output_dir = collection_dir / f"task-reference_acq-{acq:02d}_run-{run_id:02d}"
 
         # Determine simulator vs real-time mode
         simulator_enabled = config["scan"].get("simulator_enabled", True)
 
         if simulator_enabled:
             # Simulator mode: create temp watch dir and use source DICOMs
-            watch_dir = base_dir / "tmp" / "incoming_2vol_realtime"
+            watch_dir = base_dir / "tmp" / "incoming_reference_realtime"
             watch_dir.mkdir(parents=True, exist_ok=True)
-            simulator_source_dir = config["scan"].get("twovol_realtime_dicoms", "")
+            simulator_source_dir = config["scan"].get("reference_realtime_dicoms", "")
 
             # Try mapping file if individual field is empty
             if not simulator_source_dir:
@@ -1066,12 +1066,12 @@ class PipelineRunner:
                         from pineuro.session import SimulatorSourceMapping
 
                         mapping = SimulatorSourceMapping.from_file(Path(mapping_path))
-                        resolved = mapping.get_source(self.participant_id, "2vol_realtime")
+                        resolved = mapping.get_source(self.participant_id, "reference_realtime")
                         if resolved is not None:
                             simulator_source_dir = str(resolved)
-                            logger.info(f"2vol_realtime source from mapping: {simulator_source_dir}")
+                            logger.info(f"reference_realtime source from mapping: {simulator_source_dir}")
                     except Exception as e:
-                        logger.warning(f"Failed to resolve 2vol_realtime from mapping: {e}")
+                        logger.warning(f"Failed to resolve reference_realtime from mapping: {e}")
 
             simulator_speed = config["scan"].get("collection_speed", 10.0)
         else:
@@ -1130,7 +1130,7 @@ class PipelineRunner:
 
         self._emit_progress(f"Starting {task_type} run-{task_run_number:02d} acq-{task_acq:02d}...")
 
-        # Get mask files - use 2vol-coregistered masks if realtime 2vol is enabled,
+        # Get mask files - use reference-coregistered masks if realtime reference is enabled,
         # otherwise use boldref space masks from mask extraction
         task_config = config.get("task", {})
         feedback_task_type = task_config.get("task_type", "ball")
@@ -1161,20 +1161,20 @@ class PipelineRunner:
 
         self._emit_progress(f"Task networks: {real_mask_names}")
 
-        twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
+        reference_realtime_enabled = config["scan"].get("reference_realtime_enabled", True)
 
-        # Determine 2vol run number for mask file pattern
-        # In mask reuse mode, 2vol is run-01 (no initial 2vol)
-        # In standard mode, 2vol is run-02 (after initial 2vol)
+        # Determine reference run number for mask file pattern
+        # In mask reuse mode, reference is run-01 (no initial reference)
+        # In standard mode, reference is run-02 (after initial reference)
         visit_config = config.get("visit", {})
         is_mask_reuse = visit_config.get("mask_source") == "reuse"
-        realtime_2vol_run = 1 if is_mask_reuse else 2
+        realtime_reference_run = 1 if is_mask_reuse else 2
 
-        if twovol_realtime_enabled:
-            # Use 2vol-coregistered masks
-            masks_dir = feedback_dir / "01_2vol" / "masks"
-            pattern_template = f"*_{{mask_name}}_thr_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz"
-            mask_space = f"2vol run-{realtime_2vol_run:02d}"
+        if reference_realtime_enabled:
+            # Use reference-coregistered masks
+            masks_dir = feedback_dir / "01_reference" / "masks"
+            pattern_template = f"*_{{mask_name}}_thr_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz"
+            mask_space = f"reference run-{realtime_reference_run:02d}"
         else:
             # Use boldref space masks from mask extraction
             masks_dir = mask_extraction_dir / "03_masks"
@@ -1190,9 +1190,9 @@ class PipelineRunner:
         csf_mask_path = None
         fb_cfg = config.get("feedback", {})
         if fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False):
-            if twovol_realtime_enabled:
-                wm_matches = list(masks_dir.glob(f"*_tissue_wm_mask_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz"))
-                csf_matches = list(masks_dir.glob(f"*_tissue_csf_mask_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz"))
+            if reference_realtime_enabled:
+                wm_matches = list(masks_dir.glob(f"*_tissue_wm_mask_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz"))
+                csf_matches = list(masks_dir.glob(f"*_tissue_csf_mask_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz"))
             else:
                 tissue_dir = mask_extraction_dir / "05_tissue"
                 wm_matches = list(tissue_dir.glob("*_tissue_wm_mask.nii.gz")) if tissue_dir.exists() else []

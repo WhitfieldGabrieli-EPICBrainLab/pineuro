@@ -14,15 +14,15 @@ The first visit runs the full pipeline:
 1. Localizer collection (resting-state or task)
 2. Preprocessing
 3. Mask extraction (ICA or GLM)
-4. 2-volume reference collection
-5. Mask coregistration to 2vol space
+4. Reference scan collection
+5. Mask coregistration to reference space
 6. Feedback runs
 
 ### Follow-Up Visits (Reuse Masks)
 
 Subsequent visits can reuse masks from a previous visit:
-1. 2-volume reference collection (new head position)
-2. Mask coregistration (align previous masks to current 2vol)
+1. Reference scan collection (new head position)
+2. Mask coregistration (align previous masks to current reference scan)
 3. Feedback runs
 
 This skips the localizer, preprocessing, and mask extraction steps entirely — saving significant time.
@@ -39,8 +39,8 @@ base_dir/sub-001/
 │   ├── mask_extraction/
 │   └── feedback/
 ├── ses-02/
-│   ├── collection/         # Only 2vol + feedback DICOMs
-│   ├── preprocessing/      # Only 2vol preprocessing
+│   ├── collection/         # Only reference + feedback DICOMs
+│   ├── preprocessing/      # Only reference preprocessing
 │   └── feedback/           # Feedback with reused masks
 └── ses-03/
     └── ...
@@ -59,7 +59,7 @@ When creating a new visit, you specify:
 
 ## Coregistration Between Visits
 
-Head position changes between sessions. The 2-volume reference scan at the start of each visit captures the new head position. pineuro computes a rigid registration between the original mask reference and the new 2-volume reference, then applies the transform to all masks.
+Head position changes between sessions. The reference scan at the start of each visit captures the new head position. pineuro computes a rigid registration between the original mask reference and the new reference scan, then applies the transform to all masks.
 
 This ensures the same functional regions are targeted across visits, even with different head positions.
 

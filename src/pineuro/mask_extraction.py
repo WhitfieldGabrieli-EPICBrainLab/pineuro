@@ -181,7 +181,7 @@ from pineuro.utils import (
     compute_xfm,  # Compute transformation matrix
     compute_xfm_to_mni,  # Compute transform to MNI space
     # DICOM helpers
-    dicom_to_nifti,  # DICOM conversion (for 2vol coregistration)
+    dicom_to_nifti,  # DICOM conversion (for reference coregistration)
     # Atlas helpers
     get_yeo_labels,  # Get Yeo network names (7 or 17 networks)
 )
@@ -2469,7 +2469,7 @@ def mask_extraction_task(
     See Also
     --------
     mask_extraction_rest : ICA-based extraction from resting-state data
-    coregister_2vol : Align masks to feedback scanner position
+    coregister_reference : Align masks to feedback scanner position
     fetch_atlas_mask : Fetch anatomical atlas regions from nilearn
     cluster_threshold_stat_map : Iterative cluster thresholding algorithm
     """
@@ -2950,7 +2950,7 @@ def import_manual_masks(
     ref_file : str or Path
         Native-space BOLD/EPI reference volume. Used as the registration
         target for ``"anat"`` and ``"mni"`` modes, and later by
-        ``coregister_2vol()``.
+        ``coregister_reference()``.
     mask_space : str
         Input space of the masks:
 
@@ -3134,23 +3134,21 @@ def import_manual_masks(
 
 
 # =============================================================================
-# SECTION 4: 2-VOLUME COREGISTRATION
+# SECTION 4: REFERENCE SCAN COREGISTRATION
 # =============================================================================
 # Between sessions, the participant's head position in the scanner may change.
-# The "2-volume" coregistration addresses this by:
+# The reference scan coregistration addresses this by:
 #
-# 1. Acquiring a brief (2-volume) EPI scan at the start of each new session
+# 1. Acquiring a brief reference EPI scan at the start of each new session
+#    (typically 2-4 volumes)
 # 2. Registering this to the original resting-state reference
 # 3. Applying the inverse transform to bring masks into the new position
 #
 # This ensures the network masks align with the participant's current brain
 # position, even if they've moved since the original resting-state scan.
-#
-# The name "2vol" refers to the minimal acquisition needed - just 2 volumes
-# are enough to create a reliable registration target (averaged to reduce noise).
 
 
-def coregister_2vol(
+def coregister_reference(
     participant_id: str,
     root_dir: Union[str, Path],
     input_dicom: Union[str, Path],
@@ -3158,11 +3156,11 @@ def coregister_2vol(
     ref_file: Union[str, Path],
     overwrite: bool = False,
     run_id: int | None = None,
-    output_subdir: str = "01_2vol",
+    output_subdir: str = "01_reference",
 ) -> list[Path]:
     """
     Coregister extracted networks to participant's current position in the scanner
-    using a two volume (2vol) acquisition.
+    using a reference scan acquisition.
 
     Parameters
     ----------
@@ -3183,9 +3181,9 @@ def coregister_2vol(
         Explicit run number to use. If None, derived from the DICOM folder
         name (run-XX). Falls back to the latest run (max of existing outputs
         and inferred run), or the next available run if none are found.
-    output_subdir : str, default="01_2vol"
-        Subdirectory name under root_dir for outputs. Use "04_2vol" for
-        initial coregistration (mask_extraction), "01_2vol" for realtime
+    output_subdir : str, default="01_reference"
+        Subdirectory name under root_dir for outputs. Use "04_reference" for
+        initial coregistration (mask_extraction), "01_reference" for realtime
         coregistration (feedback).
 
     Returns
@@ -3235,9 +3233,9 @@ def coregister_2vol(
     if not ref_file.exists():
         raise FileNotFoundError(f"File not found: {ref_file}")
 
-    # Step 1: Determine run number (use latest 2vol if multiple exist)
-    twovol_dir = root_dir / output_subdir
-    twovol_dir.mkdir(parents=True, exist_ok=True)
+    # Step 1: Determine run number (use latest reference if multiple exist)
+    reference_dir = root_dir / output_subdir
+    reference_dir.mkdir(parents=True, exist_ok=True)
 
     def _extract_run_number_from_path(path: Path) -> int | None:
         for part in reversed(path.parts):
@@ -3251,7 +3249,7 @@ def coregister_2vol(
 
     pattern = re.compile(r"run-(\d+)")
     existing_runs: list[int] = []
-    for file in twovol_dir.glob(f"{participant_id}_task-2vol_run-*.nii.gz"):
+    for file in reference_dir.glob(f"{participant_id}_task-reference_run-*.nii.gz"):
         match = pattern.search(file.stem)
         if match:
             try:
@@ -3272,32 +3270,32 @@ def coregister_2vol(
         run_number = (latest_existing_run or 0) + 1
 
     run_str = str(run_number).zfill(2)
-    logger.info(f"Using 2vol run {run_str} (existing runs: {sorted(existing_runs) if existing_runs else 'none'})")
+    logger.info(f"Using reference run {run_str} (existing runs: {sorted(existing_runs) if existing_runs else 'none'})")
 
     # Step 2: Convert DICOMs to NIfTI
     nifti_file = dicom_to_nifti(
         dicom_dir=input_path,
-        output_dir=twovol_dir,
-        output_name=f"{participant_id}_task-2vol_run-{run_str}",
+        output_dir=reference_dir,
+        output_name=f"{participant_id}_task-reference_run-{run_str}",
         overwrite=overwrite,
     )
 
     # Step 3: Compute mean
-    mean_file = twovol_dir / Path(f"{participant_id}_task-2vol_run-{run_str}_mean.nii.gz")
+    mean_file = reference_dir / Path(f"{participant_id}_task-reference_run-{run_str}_mean.nii.gz")
     compute_mean(input_file=nifti_file, output_file=mean_file, overwrite=overwrite)
 
     # Step 4: Compute transformation (ANTs, ~28x faster than FLIRT)
-    xfm_dir = twovol_dir / "xfm"
-    output_prefix = xfm_dir / Path(f"{participant_id}_boldref_to_task-2vol_run-{run_str}_mean")
+    xfm_dir = reference_dir / "xfm"
+    output_prefix = xfm_dir / Path(f"{participant_id}_boldref_to_task-reference_run-{run_str}_mean")
     _, xfm_files = compute_xfm(
         moving=ref_file, fixed=mean_file, output_prefix=output_prefix, type_of_transform="Rigid", overwrite=overwrite
     )
 
     # Step 5: Apply transformation
-    mask_dir = twovol_dir / "masks"
+    mask_dir = reference_dir / "masks"
     network_coreg_files = []
     for network in network_paths:
-        output_file = mask_dir / (network.with_suffix("").stem + f"_to_task-2vol_run-{run_str}_mean.nii.gz")
+        output_file = mask_dir / (network.with_suffix("").stem + f"_to_task-reference_run-{run_str}_mean.nii.gz")
         apply_xfm(
             moving=network,
             fixed=mean_file,
@@ -3311,7 +3309,7 @@ def coregister_2vol(
     return network_coreg_files
 
 
-def generate_2vol_qc_overlays(
+def generate_reference_qc_overlays(
     participant_id: str,
     session_dir: Path,
     ref_file: Path,
@@ -3320,10 +3318,11 @@ def generate_2vol_qc_overlays(
     run_str: str,
     n_yeo: int = 17,
     overwrite: bool = False,
-    twovol_subdir: str = "01_2vol",
+    reference_subdir: str = "01_reference",
 ) -> None:
     """
-    Generate QC overlays in 2vol space using the Yeo atlas warped to 2vol.
+    Generate QC overlays in reference space using the Yeo atlas warped to
+    the reference scan.
 
     Parameters
     ----------
@@ -3343,50 +3342,50 @@ def generate_2vol_qc_overlays(
         Yeo parcellation (7 or 17 networks)
     overwrite : bool, default=False
         If True, overwrite existing files
-    twovol_subdir : str, default="01_2vol"
-        Subdirectory name under session_dir where 2vol outputs are stored.
-        Use "04_2vol" for initial coregistration (mask_extraction),
-        "01_2vol" for realtime coregistration (feedback).
+    reference_subdir : str, default="01_reference"
+        Subdirectory name under session_dir where reference outputs are stored.
+        Use "04_reference" for initial coregistration (mask_extraction),
+        "01_reference" for realtime coregistration (feedback).
     """
     if not network_coreg_files:
         return
 
-    twovol_dir = session_dir / twovol_subdir
-    mean_file = twovol_dir / f"{participant_id}_task-2vol_run-{run_str}_mean.nii.gz"
+    reference_dir = session_dir / reference_subdir
+    mean_file = reference_dir / f"{participant_id}_task-reference_run-{run_str}_mean.nii.gz"
     if not mean_file.exists():
-        logger.info(f"Skipping 2vol QC overlays; mean file not found at {mean_file}")
+        logger.info(f"Skipping reference QC overlays; mean file not found at {mean_file}")
         return
 
-    xfm_dir = twovol_dir / "xfm"
-    xfm_files = sorted(xfm_dir.glob(f"{participant_id}_boldref_to_task-2vol_run-{run_str}_mean_*"))
+    xfm_dir = reference_dir / "xfm"
+    xfm_files = sorted(xfm_dir.glob(f"{participant_id}_boldref_to_task-reference_run-{run_str}_mean_*"))
     if not xfm_files:
-        logger.info(f"Skipping 2vol QC overlays; transforms not found in {xfm_dir}")
+        logger.info(f"Skipping reference QC overlays; transforms not found in {xfm_dir}")
         return
 
-    # Warp Yeo atlas to 2vol space if available (ICA workflow).
+    # Warp Yeo atlas to reference space if available (ICA workflow).
     # For task-based workflows the Yeo atlas may not exist; in that case
     # we skip atlas warping and use the mask itself for slice selection.
     yeo_sub = mask_extraction_dir / "02_mnireg" / f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz"
-    atlas_2vol = None
+    atlas_reference = None
     labels: list[str] = []
     if yeo_sub.exists():
-        atlas_2vol = twovol_dir / "masks" / f"Yeo_to_task-2vol_run-{run_str}_mean.nii.gz"
+        atlas_reference = reference_dir / "masks" / f"Yeo_to_task-reference_run-{run_str}_mean.nii.gz"
         apply_xfm(
             moving=yeo_sub,
             fixed=mean_file,
             transform_files=xfm_files,
-            output_file=atlas_2vol,
+            output_file=atlas_reference,
             interpolator="nearestNeighbor",
             overwrite=overwrite,
         )
-        atlas_data = load(atlas_2vol).get_fdata()
+        atlas_data = load(atlas_reference).get_fdata()
         n_labels = int(np.max(atlas_data))
         labels = get_yeo_labels(n_networks=17 if n_labels > 7 else 7)
     else:
         logger.info(f"Yeo atlas not found at {yeo_sub}; using mask-based slice selection")
 
     qc_dir = session_dir.parent / "qc"
-    overlays_dir = qc_dir / "overlays" / "2vol"
+    overlays_dir = qc_dir / "overlays" / "reference"
     overlays: list[tuple[str, Path]] = []
     for network in network_coreg_files:
         stem = network.stem
@@ -3396,7 +3395,7 @@ def generate_2vol_qc_overlays(
             target = stem
 
         atlas_slices = qc.select_slices_from_atlas(
-            atlas_path=atlas_2vol if atlas_2vol else network,
+            atlas_path=atlas_reference if atlas_reference else network,
             labels=labels,
             target_label=str(target),
             top_n_per_plane=1,
@@ -3408,22 +3407,22 @@ def generate_2vol_qc_overlays(
             ref_path=mean_file,
             out_path=overlay_png,
             slices=atlas_slices,
-            title=f"{target} (2vol run {run_str})",
+            title=f"{target} (reference run {run_str})",
         )
         overlays.append((target, overlay_png))
 
-    # Regenerate QC report to include 2vol overlays
-    logger.info(f"Generated {len(overlays)} 2vol overlays in {overlays_dir}")
+    # Regenerate QC report to include reference overlays
+    logger.info(f"Generated {len(overlays)} reference overlays in {overlays_dir}")
 
     # Extract network names from the overlay list
     network_names = [name for name, _ in overlays]
 
-    # Regenerate report with 2vol overlays. Use the ICA report generator
-    # (which knows about 2vol overlays); for task-based workflows this may
+    # Regenerate report with reference overlays. Use the ICA report generator
+    # (which knows about reference overlays); for task-based workflows this may
     # fail gracefully since there are no ICA outputs, but the overlay PNGs
     # are already written and available for the QC viewer.
     try:
-        logger.info("Regenerating QC report with 2vol overlays...")
+        logger.info("Regenerating QC report with reference overlays...")
         qc.generate_mask_extraction_report(
             mask_extraction_dir=mask_extraction_dir,
             participant_id=participant_id,

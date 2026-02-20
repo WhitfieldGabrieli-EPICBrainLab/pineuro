@@ -105,13 +105,13 @@ class StudyEditorScreen:
                 # Feedback parameters
                 "feedback_tr": 1.2,
                 "feedback_n_volumes": 150,
-                # 2vol parameters (independently optional, always 2 volumes)
-                "twovol_initial_enabled": True,
-                "twovol_initial_n_volumes": 2,
-                "twovol_realtime_enabled": True,
-                "twovol_realtime_n_volumes": 2,
-                "twovol_initial_dicoms": "",
-                "twovol_realtime_dicoms": "",
+                # Reference scan parameters
+                "reference_initial_enabled": True,
+                "reference_initial_n_volumes": 2,
+                "reference_realtime_enabled": True,
+                "reference_realtime_n_volumes": 2,
+                "reference_initial_dicoms": "",
+                "reference_realtime_dicoms": "",
                 # Simulator/acquisition
                 "localizer_source_dicoms": ["", ""],
                 "feedback_source_dicoms": ["", ""],  # Per-run feedback DICOM sources
@@ -307,18 +307,38 @@ class StudyEditorScreen:
             on_change=self._on_localizer_n_runs_changed,
         )
 
-        # 2vol Initial settings (for Localizer tab)
-        self.twovol_initial_enabled_checkbox = ft.Checkbox(
+        # Reference Initial settings (for Localizer tab)
+        self.reference_initial_enabled_checkbox = ft.Checkbox(
             label="Enable Initial Reference Scan",
-            value=config["scan"].get("twovol_initial_enabled", True),
-            on_change=self._on_twovol_initial_enabled_changed,
+            value=config["scan"].get("reference_initial_enabled", True),
+            on_change=self._on_reference_initial_enabled_changed,
         )
 
-        # 2vol Realtime settings (for Feedback tab)
-        self.twovol_realtime_enabled_checkbox = ft.Checkbox(
+        self.reference_initial_n_volumes_field = ft.TextField(
+            width=200,
+            label="Number of volumes",
+            value=str(config["scan"].get("reference_initial_n_volumes", 2)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=lambda _: self._validate_field(
+                "reference_initial_n_volumes", self.reference_initial_n_volumes_field, validate_positive_int
+            ),
+        )
+
+        # Reference Realtime settings (for Feedback tab)
+        self.reference_realtime_enabled_checkbox = ft.Checkbox(
             label="Enable Real-Time Reference Scan",
-            value=config["scan"].get("twovol_realtime_enabled", True),
-            on_change=self._on_twovol_realtime_enabled_changed,
+            value=config["scan"].get("reference_realtime_enabled", True),
+            on_change=self._on_reference_realtime_enabled_changed,
+        )
+
+        self.reference_realtime_n_volumes_field = ft.TextField(
+            width=200,
+            label="Number of volumes",
+            value=str(config["scan"].get("reference_realtime_n_volumes", 2)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            on_change=lambda _: self._validate_field(
+                "reference_realtime_n_volumes", self.reference_realtime_n_volumes_field, validate_positive_int
+            ),
         )
 
         # Create localizer task parameter fields
@@ -759,17 +779,17 @@ class StudyEditorScreen:
             )
             self.localizer_source_fields.append(field)
 
-        self.twovol_initial_field = ft.TextField(
+        self.reference_initial_field = ft.TextField(
             width=540,
             label="Initial Reference Scan source DICOMs",
-            value=config["scan"].get("twovol_initial_dicoms", ""),
+            value=config["scan"].get("reference_initial_dicoms", ""),
             hint_text="Path to DICOM directory for simulator (optional)",
         )
 
-        self.twovol_realtime_field = ft.TextField(
+        self.reference_realtime_field = ft.TextField(
             width=540,
             label="Real-Time Reference Scan source DICOMs",
-            value=config["scan"].get("twovol_realtime_dicoms", ""),
+            value=config["scan"].get("reference_realtime_dicoms", ""),
             hint_text="Path to DICOM directory for simulator (optional)",
         )
 
@@ -1589,28 +1609,28 @@ class StudyEditorScreen:
                 row.visible = i < n_runs
                 row.update()
 
-    def _on_twovol_initial_enabled_changed(self, e):
-        """Handle 2vol initial enable checkbox change - update paths tab."""
-        enabled = self.twovol_initial_enabled_checkbox.value
+    def _on_reference_initial_enabled_changed(self, e):
+        """Handle reference initial enable checkbox change - update paths tab."""
+        enabled = self.reference_initial_enabled_checkbox.value
 
         # Update paths tab row visibility if it has been built
-        if hasattr(self, "twovol_initial_row"):
-            self.twovol_initial_row.visible = enabled
-            self.twovol_initial_row.update()
+        if hasattr(self, "reference_initial_row"):
+            self.reference_initial_row.visible = enabled
+            self.reference_initial_row.update()
 
-    def _on_twovol_realtime_enabled_changed(self, e):
-        """Handle 2vol realtime enable checkbox change - update paths tab and note."""
-        enabled = self.twovol_realtime_enabled_checkbox.value
+    def _on_reference_realtime_enabled_changed(self, e):
+        """Handle reference realtime enable checkbox change - update paths tab and note."""
+        enabled = self.reference_realtime_enabled_checkbox.value
 
         # Update paths tab row visibility if it has been built
-        if hasattr(self, "twovol_realtime_row"):
-            self.twovol_realtime_row.visible = enabled
-            self.twovol_realtime_row.update()
+        if hasattr(self, "reference_realtime_row"):
+            self.reference_realtime_row.visible = enabled
+            self.reference_realtime_row.update()
 
         # Show/hide note when disabled
-        if hasattr(self, "twovol_realtime_note"):
-            self.twovol_realtime_note.visible = not enabled
-            self.twovol_realtime_note.update()
+        if hasattr(self, "reference_realtime_note"):
+            self.reference_realtime_note.visible = not enabled
+            self.reference_realtime_note.update()
 
     def _on_max_feedback_runs_changed(self, e):
         """Handle max_feedback_runs field change - update paths tab visibility."""
@@ -2171,7 +2191,8 @@ class StudyEditorScreen:
                     self.cluster_settings_section,
                     ft.Divider(),
                     ft.Text("Initial Reference Scan", size=16, weight=ft.FontWeight.BOLD),
-                    self.twovol_initial_enabled_checkbox,
+                    self.reference_initial_enabled_checkbox,
+                    self.reference_initial_n_volumes_field,
                     ft.Text(
                         "Collects a quick reference scan before localizer runs for positioning verification.",
                         size=11,
@@ -2249,7 +2270,7 @@ class StudyEditorScreen:
         Order follows workflow sequence:
         1. Scan Parameters
         2. Session Structure
-        3. 2vol Realtime Reference
+        3. Real-Time Reference Scan
         4. Task-Specific Parameters
         5. Sham/Control Conditions
         """
@@ -2320,9 +2341,9 @@ class StudyEditorScreen:
             visible=True,  # Always visible for all tasks
         )
 
-        # 2vol Realtime section
-        # Create note for when 2vol is disabled
-        self.twovol_realtime_note = ft.Container(
+        # Reference Realtime section
+        # Create note for when reference scan is disabled
+        self.reference_realtime_note = ft.Container(
             content=ft.Text(
                 "When disabled, feedback uses masks from subject boldref space (no day-of registration).",
                 size=12,
@@ -2330,13 +2351,14 @@ class StudyEditorScreen:
             bgcolor=ft.Colors.AMBER_100,
             padding=10,
             border_radius=5,
-            visible=not self.twovol_realtime_enabled_checkbox.value,
+            visible=not self.reference_realtime_enabled_checkbox.value,
         )
 
-        twovol_section = [
+        reference_section = [
             ft.Text("Real-Time Reference Scan", size=16, weight=ft.FontWeight.BOLD),
-            self.twovol_realtime_enabled_checkbox,
-            self.twovol_realtime_note,
+            self.reference_realtime_enabled_checkbox,
+            self.reference_realtime_n_volumes_field,
+            self.reference_realtime_note,
             ft.Text(
                 "Collects a quick reference scan before feedback runs for day-of registration.",
                 size=11,
@@ -2361,7 +2383,7 @@ class StudyEditorScreen:
             content=ft.Column(
                 scanner_section
                 + [self.session_structure_section]
-                + twovol_section
+                + reference_section
                 + [self.task_specific_section]
                 + [sham_section],
                 scroll=ft.ScrollMode.AUTO,
@@ -2624,15 +2646,15 @@ class StudyEditorScreen:
             )
             self.localizer_source_rows.append(row)
 
-        # Create 2vol rows with visibility based on enable checkboxes
-        self.twovol_initial_row = ft.Row(
-            [self.twovol_initial_field, self._create_browse_button(self.twovol_initial_field)],
-            visible=self.twovol_initial_enabled_checkbox.value,
+        # Create reference rows with visibility based on enable checkboxes
+        self.reference_initial_row = ft.Row(
+            [self.reference_initial_field, self._create_browse_button(self.reference_initial_field)],
+            visible=self.reference_initial_enabled_checkbox.value,
         )
 
-        self.twovol_realtime_row = ft.Row(
-            [self.twovol_realtime_field, self._create_browse_button(self.twovol_realtime_field)],
-            visible=self.twovol_realtime_enabled_checkbox.value,
+        self.reference_realtime_row = ft.Row(
+            [self.reference_realtime_field, self._create_browse_button(self.reference_realtime_field)],
+            visible=self.reference_realtime_enabled_checkbox.value,
         )
 
         # Create transfer source rows (visibility based on use_transfer_runs)
@@ -2681,7 +2703,7 @@ class StudyEditorScreen:
         self.simulator_mapping_container = ft.Column(
             [
                 ft.Text(
-                    "Columns: subject, rest1, rest2, ..., 2vol_realtime, feedback_run-01, ...",
+                    "Columns: subject, rest1, rest2, ..., reference_realtime, feedback_run-01, ...",
                     size=11,
                     color=ft.Colors.GREY_600,
                 ),
@@ -2697,10 +2719,10 @@ class StudyEditorScreen:
         individual_content.append(ft.Text("Localizer Runs", size=14, weight=ft.FontWeight.BOLD))
         individual_content.extend(self.localizer_source_rows)
 
-        # 2vol section
+        # Reference section
         individual_content.append(ft.Text("Reference Scans", size=14, weight=ft.FontWeight.BOLD))
-        individual_content.append(self.twovol_initial_row)
-        individual_content.append(self.twovol_realtime_row)
+        individual_content.append(self.reference_initial_row)
+        individual_content.append(self.reference_realtime_row)
 
         # Transfer section
         self.transfer_section_header = ft.Text(
@@ -2988,11 +3010,11 @@ class StudyEditorScreen:
             config["scan"]["localizer_n_runs"] = int(self.localizer_n_runs_field.value)
             config["scan"]["localizer_task_type"] = self.localizer_task_type_dropdown.value
 
-            # 2vol parameters (always 2 volumes)
-            config["scan"]["twovol_initial_enabled"] = self.twovol_initial_enabled_checkbox.value
-            config["scan"]["twovol_initial_n_volumes"] = 2
-            config["scan"]["twovol_realtime_enabled"] = self.twovol_realtime_enabled_checkbox.value
-            config["scan"]["twovol_realtime_n_volumes"] = 2
+            # Reference scan parameters
+            config["scan"]["reference_initial_enabled"] = self.reference_initial_enabled_checkbox.value
+            config["scan"]["reference_initial_n_volumes"] = int(self.reference_initial_n_volumes_field.value)
+            config["scan"]["reference_realtime_enabled"] = self.reference_realtime_enabled_checkbox.value
+            config["scan"]["reference_realtime_n_volumes"] = int(self.reference_realtime_n_volumes_field.value)
 
             # Feedback parameters
             config["scan"]["feedback_tr"] = float(self.feedback_tr_field.value)
@@ -3246,8 +3268,8 @@ class StudyEditorScreen:
         config["scan"]["localizer_source_dicoms"] = [
             field.value.strip() for field in self.localizer_source_fields[:n_localizer_runs]
         ]
-        config["scan"]["twovol_initial_dicoms"] = self.twovol_initial_field.value.strip()
-        config["scan"]["twovol_realtime_dicoms"] = self.twovol_realtime_field.value.strip()
+        config["scan"]["reference_initial_dicoms"] = self.reference_initial_field.value.strip()
+        config["scan"]["reference_realtime_dicoms"] = self.reference_realtime_field.value.strip()
 
         # Update feedback source paths (per-run)
         try:

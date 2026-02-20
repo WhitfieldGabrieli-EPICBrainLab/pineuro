@@ -309,7 +309,7 @@ class VisitSelectionDialog:
                     color=ft.Colors.GREY_600,
                 ),
                 ft.Text(
-                    "• 'Reuse masks': Skips localizer, only collects 2vol for coregistration",
+                    "• 'Reuse masks': Skips localizer, only collects reference scan for coregistration",
                     size=11,
                     color=ft.Colors.GREY_600,
                 ),

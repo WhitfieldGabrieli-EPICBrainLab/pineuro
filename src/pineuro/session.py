@@ -59,7 +59,7 @@ Multi-visit with fresh masks:
 Multi-visit with mask reuse:
 1. Create SessionConfig with PathConfig(visit_id='ses-02') and
    VisitConfig(mask_source='reuse', mask_source_visit='ses-01')
-2. Call setup_session() - only runs 2vol collection + coregistration
+2. Call setup_session() - only runs reference collection + coregistration
 3. Run feedback session
 
 Dependencies
@@ -113,8 +113,8 @@ class SimulatorSourceMapping:
     The mapping file should have these column names:
     - subject: Subject/participant identifier (required, first column)
     - rest1, rest2, ...: Localizer run DICOM sources
-    - 2vol_initial: Initial 2-vol reference DICOM source
-    - 2vol_realtime: Realtime 2-vol reference DICOM source
+    - reference_initial: Initial reference scan DICOM source
+    - reference_realtime: Realtime reference scan DICOM source
     - feedback_run-01, feedback_run-02, ...: Feedback run DICOM sources
     - transfer_run-01, transfer_run-02, ...: Transfer run DICOM sources
 
@@ -190,7 +190,7 @@ class SimulatorSourceMapping:
         subject : str
             Subject/participant identifier
         run_type : str
-            Run type column name (e.g., 'rest1', 'feedback_run-01', '2vol_realtime')
+            Run type column name (e.g., 'rest1', 'feedback_run-01', 'reference_realtime')
 
         Returns
         -------
@@ -493,20 +493,20 @@ class ScanConfig:
         Number of volumes per feedback run
     localizer_source_dicoms : list[Path]
         Source DICOM folders for localizer runs (for simulator)
-    twovol_initial_enabled : bool
-        Whether to collect initial 2vol reference (before localizer)
-    twovol_initial_n_volumes : int
-        Number of volumes for initial 2vol acquisition
-    twovol_realtime_enabled : bool
-        Whether to collect realtime 2vol reference (before feedback)
-    twovol_realtime_n_volumes : int
-        Number of volumes for realtime 2vol acquisition
-    twovol_dicoms : Path, optional
-        Default 2vol DICOM source
-    twovol_initial_dicoms : Path, optional
-        2vol DICOM source for initial (pre-scan) acquisition
-    twovol_realtime_dicoms : Path, optional
-        2vol DICOM source for real-time (day-of) acquisition
+    reference_initial_enabled : bool
+        Whether to collect initial reference scan (before localizer)
+    reference_initial_n_volumes : int
+        Number of volumes for initial reference acquisition
+    reference_realtime_enabled : bool
+        Whether to collect realtime reference scan (before feedback)
+    reference_realtime_n_volumes : int
+        Number of volumes for realtime reference acquisition
+    reference_dicoms : Path, optional
+        Default reference DICOM source
+    reference_initial_dicoms : Path, optional
+        Reference DICOM source for initial (pre-scan) acquisition
+    reference_realtime_dicoms : Path, optional
+        Reference DICOM source for real-time (day-of) acquisition
     feedback_dicoms : Path, optional
         Source DICOM folder for feedback runs (for simulator)
     simulator_source_mapping : Path, optional
@@ -528,17 +528,17 @@ class ScanConfig:
     feedback_tr: float = 1.2
     feedback_n_volumes: int = 150
 
-    # 2vol parameters (independently optional)
-    twovol_initial_enabled: bool = True
-    twovol_initial_n_volumes: int = 2
-    twovol_realtime_enabled: bool = True
-    twovol_realtime_n_volumes: int = 2
+    # Reference scan parameters (independently optional)
+    reference_initial_enabled: bool = True
+    reference_initial_n_volumes: int = 2
+    reference_realtime_enabled: bool = True
+    reference_realtime_n_volumes: int = 2
 
     # DICOM sources (for simulator)
     localizer_source_dicoms: list[Path] = field(default_factory=list)
-    twovol_dicoms: Path | None = None
-    twovol_initial_dicoms: Path | None = None
-    twovol_realtime_dicoms: Path | None = None
+    reference_dicoms: Path | None = None
+    reference_initial_dicoms: Path | None = None
+    reference_realtime_dicoms: Path | None = None
     feedback_dicoms: Path | None = None
     simulator_source_mapping: Path | None = None
     collection_speed: float = 10.0
@@ -546,14 +546,14 @@ class ScanConfig:
 
     # Legacy aliases
     @property
-    def twovol_n_volumes(self) -> int:
-        """Alias for twovol_initial_n_volumes (backward compatibility)."""
-        return self.twovol_initial_n_volumes
+    def reference_n_volumes(self) -> int:
+        """Alias for reference_initial_n_volumes (backward compatibility)."""
+        return self.reference_initial_n_volumes
 
     @property
-    def twovol_max_runs(self) -> int:
-        """Legacy alias - returns 2 if both 2vol enabled, 1 if only one, 0 if none."""
-        return int(self.twovol_initial_enabled) + int(self.twovol_realtime_enabled)
+    def reference_max_runs(self) -> int:
+        """Legacy alias - returns 2 if both reference enabled, 1 if only one, 0 if none."""
+        return int(self.reference_initial_enabled) + int(self.reference_realtime_enabled)
 
     # Legacy aliases (for backward compatibility)
     @property
@@ -584,12 +584,12 @@ class ScanConfig:
     def __post_init__(self):
         """Convert all DICOM source paths to Path objects."""
         self.localizer_source_dicoms = [Path(p) for p in self.localizer_source_dicoms]
-        if self.twovol_dicoms is not None:
-            self.twovol_dicoms = Path(self.twovol_dicoms)
-        if self.twovol_initial_dicoms is not None:
-            self.twovol_initial_dicoms = Path(self.twovol_initial_dicoms)
-        if self.twovol_realtime_dicoms is not None:
-            self.twovol_realtime_dicoms = Path(self.twovol_realtime_dicoms)
+        if self.reference_dicoms is not None:
+            self.reference_dicoms = Path(self.reference_dicoms)
+        if self.reference_initial_dicoms is not None:
+            self.reference_initial_dicoms = Path(self.reference_initial_dicoms)
+        if self.reference_realtime_dicoms is not None:
+            self.reference_realtime_dicoms = Path(self.reference_realtime_dicoms)
         if self.feedback_dicoms is not None:
             self.feedback_dicoms = Path(self.feedback_dicoms)
         if self.simulator_source_mapping is not None:
@@ -882,15 +882,15 @@ class SelectedAcquisitions:
     """
 
     localizer: dict[int, int] = None  # run_num -> acq_num for localizer runs
-    twovol: dict[int, int] = None  # run_num -> acq_num for 2vol scans
+    reference: dict[int, int] = None  # run_num -> acq_num for reference scans
     feedback: dict[str, dict] = None  # step_id -> {run, acq} for feedback runs
 
     def __post_init__(self):
         """Initialize empty dicts if None."""
         if self.localizer is None:
             self.localizer = {}
-        if self.twovol is None:
-            self.twovol = {}
+        if self.reference is None:
+            self.reference = {}
         if self.feedback is None:
             self.feedback = {}
 
@@ -1062,8 +1062,8 @@ class SessionConfig:
         run_type : str
             Run type identifier. Supported values:
             - 'rest1', 'rest2', ...: Localizer runs
-            - '2vol_initial': Initial 2-vol reference
-            - '2vol_realtime': Realtime 2-vol reference
+            - 'reference_initial': Initial reference scan
+            - 'reference_realtime': Realtime reference scan
             - 'feedback_run-01', 'feedback_run-02', ...: Feedback runs
             - 'transfer_run-01', 'transfer_run-02', ...: Transfer runs
 
@@ -1097,10 +1097,10 @@ class SessionConfig:
                     return self.scan.localizer_source_dicoms[run_num - 1]
             except (ValueError, IndexError):
                 pass
-        elif run_type == "2vol_initial":
-            return self.scan.twovol_initial_dicoms or self.scan.twovol_dicoms
-        elif run_type == "2vol_realtime":
-            return self.scan.twovol_realtime_dicoms or self.scan.twovol_dicoms
+        elif run_type == "reference_initial":
+            return self.scan.reference_initial_dicoms or self.scan.reference_dicoms
+        elif run_type == "reference_realtime":
+            return self.scan.reference_realtime_dicoms or self.scan.reference_dicoms
         elif run_type.startswith("feedback_run-") or run_type.startswith("transfer_run-"):
             # All feedback/transfer runs fall back to feedback_dicoms
             return self.scan.feedback_dicoms
@@ -1183,7 +1183,7 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
     collection_dir : Path
         Directory containing collection folders
     task_name : str
-        Task name prefix (e.g., 'rest', '2vol')
+        Task name prefix (e.g., 'rest', 'reference')
 
     Returns
     -------
@@ -1202,7 +1202,7 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
 
 
 def get_localizer_run_info(collection_dir: Path, task: str, run: int, expected_volumes: int) -> dict:
-    """Get run info for localizer/2vol with retry detection using acq entity.
+    """Get run info for localizer/reference with retry detection using acq entity.
 
     Scans for existing {task}_acq-*_run-{run:02d} folders and determines
     next acq number. Previous attempts are preserved in place.
@@ -1212,7 +1212,7 @@ def get_localizer_run_info(collection_dir: Path, task: str, run: int, expected_v
     collection_dir : Path
         Collection directory to scan
     task : str
-        Task name (e.g., 'rest', '2vol', 'self_other')
+        Task name (e.g., 'rest', 'reference', 'self_other')
     run : int
         Run number
     expected_volumes : int
@@ -1479,7 +1479,7 @@ def run_dicom_collection(
     start_run: int | None = None,
     max_runs: int | None = None,
 ) -> list[Path]:
-    """Collect DICOMs for a task (rest, 2vol, etc.) using scanner or simulator.
+    """Collect DICOMs for a task (rest, reference, etc.) using scanner or simulator.
 
     Parameters
     ----------
@@ -1750,10 +1750,10 @@ def run_coregistration(
     config: SessionConfig,
     network_files: list[Path],
     ref_file: Path,
-    twovol_dicom_dir: Path | None = None,
+    reference_dicom_dir: Path | None = None,
     overwrite: bool = False,
 ) -> list[Path]:
-    """Coregister masks to feedback (2vol) space.
+    """Coregister masks to feedback (reference) space.
 
     Parameters
     ----------
@@ -1763,8 +1763,8 @@ def run_coregistration(
         Paths to network mask files
     ref_file : Path
         BOLD reference from preprocessing
-    twovol_dicom_dir : Path, optional
-        Collected 2vol DICOM directory
+    reference_dicom_dir : Path, optional
+        Collected reference DICOM directory
     overwrite : bool
         Whether to rerun even if outputs exist
 
@@ -1773,14 +1773,14 @@ def run_coregistration(
     list[Path]
         Paths to coregistered mask files
     """
-    from .mask_extraction import coregister_2vol
+    from .mask_extraction import coregister_reference
 
     logger.info("")
     logger.info("=" * 60)
     logger.info("COREGISTER MASKS TO FEEDBACK SPACE")
     logger.info("=" * 60)
 
-    twovol_dir = twovol_dicom_dir or config.resolve_simulator_source("2vol_realtime")
+    reference_dir = reference_dicom_dir or config.resolve_simulator_source("reference_realtime")
 
     # Append tissue masks to the coregistration list if nuisance regression enabled
     all_files = list(network_files)
@@ -1796,21 +1796,21 @@ def run_coregistration(
             all_files.append(wm_src)
             tissue_indices["csf"] = len(all_files)
             all_files.append(csf_src)
-            logger.info("Including WM/CSF tissue masks in 2vol coregistration")
+            logger.info("Including WM/CSF tissue masks in reference coregistration")
         else:
             logger.warning(
                 f"Nuisance regression enabled but tissue masks not found in {tissue_dir}. "
                 "Run mask extraction first."
             )
 
-    coreg_files = coregister_2vol(
+    coreg_files = coregister_reference(
         participant_id=config.paths.participant_id,
         root_dir=str(config.paths.mask_extraction_dir),
-        input_dicom=str(twovol_dir),
+        input_dicom=str(reference_dir),
         network_files=all_files,
         ref_file=ref_file,
         overwrite=overwrite,
-        output_subdir="04_2vol",
+        output_subdir="04_reference",
     )
 
     # Split results: network masks returned to caller, tissue paths stored in config
@@ -1826,12 +1826,12 @@ def run_coregistration(
 
 def setup_visit_with_reused_masks(
     config: SessionConfig,
-    twovol_dicoms: Path,
+    reference_dicoms: Path,
     overwrite: bool = False,
 ) -> list[Path]:
     """Set up a visit that reuses masks from a previous visit.
 
-    This is used when config.visit.mask_source='reuse'. Only collects 2vol
+    This is used when config.visit.mask_source='reuse'. Only collects reference
     and coregisters masks from the source visit - skips localizer, preprocessing,
     and mask extraction.
 
@@ -1839,17 +1839,17 @@ def setup_visit_with_reused_masks(
     ----------
     config : SessionConfig
         Session configuration with visit.mask_source='reuse'
-    twovol_dicoms : Path
-        Path to collected 2vol DICOMs for this visit
+    reference_dicoms : Path
+        Path to collected reference DICOMs for this visit
     overwrite : bool
         Whether to overwrite existing coregistration outputs
 
     Returns
     -------
     list[Path]
-        Coregistered mask files in current visit's feedback/01_2vol/masks/
+        Coregistered mask files in current visit's feedback/01_reference/masks/
     """
-    from .mask_extraction import coregister_2vol
+    from .mask_extraction import coregister_reference
 
     logger.info("")
     logger.info("=" * 60)
@@ -1878,21 +1878,21 @@ def setup_visit_with_reused_masks(
     logger.info(f"Found {len(source_masks)} masks from {source_visit}")
     logger.info(f"Reference file: {source_ref}")
 
-    # Coregister source masks to current visit's 2vol
+    # Coregister source masks to current visit's reference
     # Output goes to session_dir (feedback/) instead of mask_extraction_dir
-    coreg_masks = coregister_2vol(
+    coreg_masks = coregister_reference(
         participant_id=config.paths.participant_id,
         root_dir=str(config.paths.session_dir),  # feedback/ directory
-        input_dicom=str(twovol_dicoms),
+        input_dicom=str(reference_dicoms),
         network_files=source_masks,
         ref_file=source_ref,
-        output_subdir="01_2vol",
+        output_subdir="01_reference",
         overwrite=overwrite,
     )
 
     # Copy mask_selections.json from source visit for reference
     source_selections = source_masks[0].parent / "mask_selections.json"
-    dest_dir = config.paths.session_dir / "01_2vol"
+    dest_dir = config.paths.session_dir / "01_reference"
     dest_dir.mkdir(parents=True, exist_ok=True)
     if source_selections.exists():
         dest_selections = dest_dir / "mask_selections.json"
@@ -1917,7 +1917,7 @@ def setup_session(
 
     This should be run once per participant/visit before the feedback session.
     For visits with mask_source='reuse', skips localizer/preprocessing/extraction
-    and only runs 2vol collection + coregistration.
+    and only runs reference collection + coregistration.
 
     Parameters
     ----------
@@ -1945,53 +1945,53 @@ def setup_session(
     if config.visit and config.visit.mask_source == "reuse":
         logger.info(f"Visit {config.visit.visit_id}: Reusing masks from {config.visit.mask_source_visit}")
 
-        # Only need 2vol collection for mask reuse
-        twovol_source = config.resolve_simulator_source("2vol_realtime")
+        # Only need reference collection for mask reuse
+        reference_source = config.resolve_simulator_source("reference_realtime")
         if skip_collection:
-            logger.info("Skipping 2vol collection (using source DICOMs directly)")
-            twovol_dicoms = twovol_source
+            logger.info("Skipping reference collection (using source DICOMs directly)")
+            reference_dicoms = reference_source
         else:
-            twovol_list = run_dicom_collection(
+            reference_list = run_dicom_collection(
                 config,
                 use_simulator=use_simulator,
-                task_name="2vol",
-                source_dirs=[twovol_source] if twovol_source else [],
-                n_volumes_list=[config.scan.twovol_n_volumes],
+                task_name="reference",
+                source_dirs=[reference_source] if reference_source else [],
+                n_volumes_list=[config.scan.reference_n_volumes],
                 start_run=1,
                 max_runs=1,
             )
-            twovol_dicoms = twovol_list[0]
+            reference_dicoms = reference_list[0]
 
-        return setup_visit_with_reused_masks(config, twovol_dicoms, overwrite=overwrite)
+        return setup_visit_with_reused_masks(config, reference_dicoms, overwrite=overwrite)
 
     # Manual ROI import: skip localizer + preprocessing, just import + coregister
     if config.mask.localizer_type == "manual":
         if config.visit:
             logger.info(f"Visit {config.visit.visit_id}: Manual ROI import")
 
-        # Step 0: Initial 2vol (still needed for coregistration)
-        initial_twovol_source = config.resolve_simulator_source("2vol_initial")
+        # Step 0: Initial reference (still needed for coregistration)
+        initial_reference_source = config.resolve_simulator_source("reference_initial")
         if skip_collection:
-            logger.info("Skipping initial 2vol collection (using source DICOMs directly)")
-            initial_twovol = [initial_twovol_source]
+            logger.info("Skipping initial reference collection (using source DICOMs directly)")
+            initial_reference = [initial_reference_source]
         else:
-            initial_twovol = run_dicom_collection(
+            initial_reference = run_dicom_collection(
                 config,
                 use_simulator=use_simulator,
-                task_name="2vol",
-                source_dirs=[initial_twovol_source] if initial_twovol_source else [],
-                n_volumes_list=[config.scan.twovol_n_volumes],
+                task_name="reference",
+                source_dirs=[initial_reference_source] if initial_reference_source else [],
+                n_volumes_list=[config.scan.reference_n_volumes],
                 start_run=None,
-                max_runs=config.scan.twovol_max_runs,
+                max_runs=config.scan.reference_max_runs,
             )
 
         # Step 1: Import manual masks (no localizer or preprocessing needed)
         ref_file = config.mask.manual_ref_file
         network_files = run_mask_extraction(config, None, None, ref_file, overwrite)
 
-        # Step 2: Coregistration to initial 2vol
+        # Step 2: Coregistration to initial reference
         coreg_mask_files = run_coregistration(
-            config, network_files, ref_file, twovol_dicom_dir=initial_twovol[0], overwrite=overwrite
+            config, network_files, ref_file, reference_dicom_dir=initial_reference[0], overwrite=overwrite
         )
 
         logger.info("")
@@ -2005,20 +2005,20 @@ def setup_session(
     if config.visit:
         logger.info(f"Visit {config.visit.visit_id}: Computing new masks")
 
-    # Step 0: Initial 2vol (pre-scan positioning check)
-    initial_twovol_source = config.resolve_simulator_source("2vol_initial")
+    # Step 0: Initial reference (pre-scan positioning check)
+    initial_reference_source = config.resolve_simulator_source("reference_initial")
     if skip_collection:
-        logger.info("Skipping initial 2vol collection (using source DICOMs directly)")
-        initial_twovol = [initial_twovol_source]
+        logger.info("Skipping initial reference collection (using source DICOMs directly)")
+        initial_reference = [initial_reference_source]
     else:
-        initial_twovol = run_dicom_collection(
+        initial_reference = run_dicom_collection(
             config,
             use_simulator=use_simulator,
-            task_name="2vol",
-            source_dirs=[initial_twovol_source] if initial_twovol_source else [],
-            n_volumes_list=[config.scan.twovol_n_volumes],
+            task_name="reference",
+            source_dirs=[initial_reference_source] if initial_reference_source else [],
+            n_volumes_list=[config.scan.reference_n_volumes],
             start_run=None,
-            max_runs=config.scan.twovol_max_runs,
+            max_runs=config.scan.reference_max_runs,
         )
 
     # Step 1: Resting-state collection
@@ -2043,9 +2043,9 @@ def setup_session(
     # Step 3: Mask extraction
     network_files = run_mask_extraction(config, preproc_file, mask_file, ref_file, overwrite)
 
-    # Step 4: Coregistration to initial 2vol
+    # Step 4: Coregistration to initial reference
     coreg_mask_files = run_coregistration(
-        config, network_files, ref_file, twovol_dicom_dir=initial_twovol[0], overwrite=overwrite
+        config, network_files, ref_file, reference_dicom_dir=initial_reference[0], overwrite=overwrite
     )
 
     logger.info("")
@@ -2269,7 +2269,7 @@ def coregister_before_first_transfer(
     mask_files: list[Path],
     use_simulator: bool = True,
 ) -> list[Path]:
-    """Acquire a second 2vol and re-coregister masks right before the first transfer.
+    """Acquire a second reference and re-coregister masks right before the first transfer.
 
     Parameters
     ----------
@@ -2292,7 +2292,7 @@ def coregister_before_first_transfer(
 
     logger.info("")
     logger.info("=" * 60)
-    logger.info("REAL-TIME 2VOL + COREG (pre-transfer)")
+    logger.info("REAL-TIME REFERENCE + COREG (pre-transfer)")
     logger.info("=" * 60)
 
     network_files = [Path(f) for f in mask_files]
@@ -2301,43 +2301,43 @@ def coregister_before_first_transfer(
     if not ref_file.exists():
         raise FileNotFoundError(f"Reference file not found at {ref_file}; run preprocessing before coregistration.")
 
-    twovol_realtime_source = config.resolve_simulator_source("2vol_realtime")
-    twovol_dicoms = run_dicom_collection(
+    reference_realtime_source = config.resolve_simulator_source("reference_realtime")
+    reference_dicoms = run_dicom_collection(
         config,
         use_simulator=use_simulator,
-        task_name="2vol",
-        source_dirs=[twovol_realtime_source] if twovol_realtime_source else [],
-        n_volumes_list=[config.scan.twovol_n_volumes],
+        task_name="reference",
+        source_dirs=[reference_realtime_source] if reference_realtime_source else [],
+        n_volumes_list=[config.scan.reference_n_volumes],
         start_run=None,
-        max_runs=config.scan.twovol_max_runs,
+        max_runs=config.scan.reference_max_runs,
     )
 
     coreg_mask_files = run_coregistration(
         config,
         network_files,
         ref_file,
-        twovol_dicom_dir=twovol_dicoms[0],
+        reference_dicom_dir=reference_dicoms[0],
         overwrite=True,
     )
 
-    # Generate 2vol QC overlays (only at this pre-transfer step)
+    # Generate reference QC overlays (only at this pre-transfer step)
     try:
-        from .mask_extraction import generate_2vol_qc_overlays
+        from .mask_extraction import generate_reference_qc_overlays
 
         run_str = re.search(r"run-(\d+)", coreg_mask_files[0].stem).group(1) if coreg_mask_files else "01"  # type: ignore
-        generate_2vol_qc_overlays(
+        generate_reference_qc_overlays(
             participant_id=config.paths.participant_id,
-            session_dir=config.paths.mask_extraction_dir,  # 2vol outputs are in mask_extraction/04_2vol
+            session_dir=config.paths.mask_extraction_dir,  # reference outputs are in mask_extraction/04_reference
             ref_file=ref_file,
             mask_extraction_dir=config.paths.mask_extraction_dir,
             network_coreg_files=coreg_mask_files,
             run_str=run_str,
             n_yeo=config.mask.n_yeo,
             overwrite=True,
-            twovol_subdir="04_2vol",  # Match the output_subdir used in coregister_2vol
+            reference_subdir="04_reference",  # Match the output_subdir used in coregister_reference
         )
     except Exception as e:
-        logger.warning(f"2vol QC overlay generation skipped: {e}")
+        logger.warning(f"Reference QC overlay generation skipped: {e}")
 
     return [Path(f) for f in coreg_mask_files]
 

@@ -20,7 +20,7 @@ A typical neurofeedback study follows this workflow:
 │                      TRAINING PHASE                                  │
 │  (Multiple sessions over days/weeks)                                │
 │                                                                      │
-│  4. 2-Volume Coregistration  →  5. Real-Time      →  6. Display    │
+│  4. Reference Coregistration →  5. Real-Time      →  6. Display    │
 │     (Align to current head       Feedback             & Task        │
 │      position)                   (GLM estimation)                   │
 └─────────────────────────────────────────────────────────────────────┘
@@ -124,29 +124,29 @@ masks/
 └── qc/                     # QC report with overlays
 ```
 
-### 4. 2-Volume Coregistration
+### 4. Reference Coregistration
 
 **Purpose:** Align masks to participant's current head position.
 
 **Why needed:**
 - Between sessions, head position changes
 - Masks from session 1 won't align with session 2 data
-- Quick 2-volume scan provides registration target
+- A short reference scan (typically 2-4 volumes) provides registration target
 
 **What happens:**
-1. Acquire 2 EPI volumes at start of new session
+1. Acquire a short reference scan (typically 2-4 EPI volumes) at start of new session
 2. Average to create registration target
 3. Compute transform from original reference
 4. Apply inverse transform to masks
 
 **Code:**
 ```python
-from pineuro import coregister_2vol
+from pineuro import coregister_reference
 
-aligned_masks = coregister_2vol(
+aligned_masks = coregister_reference(
     participant_id='sub-01',
     root_dir='/data/sub-01/feedback',
-    input_dicom='/scanner/2vol_dicoms',
+    input_dicom='/scanner/reference_dicoms',
     network_files=list(mask_files.values()),
     ref_file=ref_file,
 )
@@ -216,7 +216,7 @@ Scanner → collect_volumes() → preprocessing() → mask_extraction_rest()
                                                           ↓
                                                     Network Masks
                                                           ↓
-Scanner → coregister_2vol() → run_feedback_session() → Display Task
+Scanner → coregister_reference() → run_feedback_session() → Display Task
                                       ↓
                                   TSV Logs
 ```

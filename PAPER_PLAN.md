@@ -263,7 +263,7 @@ tests/compare_fmriprep_melodic.py
 ### Minimum for Publication
 - **N = 10 participants** with complete sessions:
   - 2x resting-state runs (200 volumes each)
-  - 2vol reference scan
+  - Reference scan (typically 2-4 volumes)
   - 3+ feedback runs (150 volumes each)
 - Varied data quality (some high-motion subjects)
 

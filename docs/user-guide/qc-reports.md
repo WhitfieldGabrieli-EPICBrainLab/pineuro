@@ -19,7 +19,7 @@ Contains:
 - **Correlation heatmap** — Spatial correlation between each ICA component and each atlas network. Shows which component was selected for each target.
 - **Selected mask overlays** — Thresholded masks overlaid on the participant's anatomy in axial/coronal/sagittal views
 - **Alternative component overlays** — All other ICA components for each target network, so you can verify the auto-selection or identify a better match
-- **2vol coregistered overlays** — Masks after coregistration to the feedback session reference, verifying alignment
+- **Reference coregistered overlays** — Masks after coregistration to the feedback session reference, verifying alignment
 
 The Participant Workflow GUI also shows overlay thumbnails for quick visual verification before proceeding to feedback.
 

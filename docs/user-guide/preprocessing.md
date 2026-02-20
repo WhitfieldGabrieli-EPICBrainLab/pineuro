@@ -66,15 +66,15 @@ preprocessing/
     └── sub-001_task-rest_preprocessing_qc.html
 ```
 
-## 2-Volume Reference Scans
+## Reference Scans
 
 Two types of reference scans are supported:
 
-**Initial 2vol** — Collected at the very start of the session, before any localizer. Provides a geometric reference for preprocessing. Useful when the localizer scan geometry differs from the feedback scan.
+**Initial Reference** — Collected at the very start of the session, before any localizer. Provides a geometric reference for preprocessing. Useful when the localizer scan geometry differs from the feedback scan.
 
-**Real-time 2vol** — Collected at the start of the feedback session (potentially on a different day). Used to coregister masks from the localizer session to the current head position.
+**Real-time Reference** — Collected at the start of the feedback session (potentially on a different day). Used to coregister masks from the localizer session to the current head position.
 
-Both are configured in the Study Editor Scan tab. The 2-volume reference is averaged to create a mean image, and ANTs registration computes the transform needed to align masks.
+Both are configured in the Study Editor Scan tab. The reference scan (typically 2-4 volumes) is averaged to create a mean image, and ANTs registration computes the transform needed to align masks.
 
 ## Overwrite Behavior
 
@@ -88,5 +88,5 @@ All preprocessing steps default to `overwrite=False`. If output files already ex
 | Localizer TR | Scan tab → Localizer TR | e.g., `1.4` |
 | Localizer volumes | Scan tab → Volumes | e.g., `404` |
 | Number of runs | Scan tab → Runs | e.g., `1` or `2` |
-| 2vol initial | Scan tab → Initial 2vol | Enable/disable |
-| 2vol real-time | Scan tab → Real-time 2vol | Enable/disable |
+| Reference initial | Scan tab → Initial Reference | Enable/disable |
+| Reference real-time | Scan tab → Real-time Reference | Enable/disable |

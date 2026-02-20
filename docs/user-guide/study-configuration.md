@@ -32,9 +32,9 @@ Configure acquisition parameters for each scan type:
 - **TR** — Repetition time for feedback runs
 - **Volumes** — Expected volumes per feedback run
 
-**2-Volume Reference Scans**
-- **Initial 2vol** — Collected before the localizer (preprocessing reference). Enable if your protocol acquires a reference scan at session start.
-- **Real-time 2vol** — Collected before feedback runs (coregistration reference). Enable to align masks to current head position.
+**Reference Scans**
+- **Initial Reference** — Collected before the localizer (preprocessing reference). Enable if your protocol acquires a reference scan at session start.
+- **Real-time Reference** — Collected before feedback runs (coregistration reference). Enable to align masks to current head position.
 
 ### Simulator
 

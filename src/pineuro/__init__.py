@@ -11,7 +11,7 @@ collect_volumes : Watch for and collect incoming scanner volumes (DICOM or NIfTI
 collect_dicoms : Alias for collect_volumes (backward compatibility)
 mask_extraction_rest : Extract network masks using ICA and Yeo atlas
 mask_extraction_task : Extract network masks using GLM contrasts from task localizer
-coregister_2vol : Coregister masks to real-time scanner position
+coregister_reference : Coregister masks to real-time scanner position
 
 Task Framework
 --------------
@@ -89,7 +89,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "mask_extraction_rest": (".mask_extraction", "mask_extraction_rest"),
     "mask_extraction_task": (".mask_extraction", "mask_extraction_task"),
     "import_manual_masks": (".mask_extraction", "import_manual_masks"),
-    "coregister_2vol": (".mask_extraction", "coregister_2vol"),
+    "coregister_reference": (".mask_extraction", "coregister_reference"),
     "create_tissue_masks": (".mask_extraction", "create_tissue_masks"),
     "ATLAS_SOURCES": (".atlas_registry", "ATLAS_SOURCES"),
     "get_atlas_labels": (".mask_extraction", "get_atlas_labels"),
@@ -184,7 +184,7 @@ __all__ = [
     "mask_extraction_rest",
     "mask_extraction_task",
     "import_manual_masks",
-    "coregister_2vol",
+    "coregister_reference",
     "ATLAS_SOURCES",
     "get_atlas_labels",
     # Task classes

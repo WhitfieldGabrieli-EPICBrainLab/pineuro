@@ -9,7 +9,7 @@ We use the NKI Rockland Sample neurofeedback dataset as example data, but the sa
 - **pineuro installed** — see [Installation](installation.md)
 - **Sample DICOM data** — This tutorial uses DICOMs from the Enhanced NKI Rockland Sample, available through the [INDI data portal](https://fcon_1000.projects.nitrc.org/indi/enhanced/). Each subject should have three scan directories:
   - `rest_1400/` — Resting-state scan (TR=1.4s, ~404 volumes)
-  - `mask/` — 2-volume reference scan (TR=2.0s, 2 volumes)
+  - `mask/` — Reference scan (TR=2.0s, typically 2-4 volumes)
   - `dmn_tracking_test/` — Neurofeedback run (TR=2.0s, ~412 volumes)
 
 ## Step 1: Create a Source Mapping File
@@ -17,7 +17,7 @@ We use the NKI Rockland Sample neurofeedback dataset as example data, but the sa
 The source mapping tells pineuro's simulator where to find DICOMs for each participant. Create a tab-separated file (e.g., `subject_mapping.tsv`):
 
 ```
-subject	rest1	2vol_realtime	feedback_run-01
+subject	rest1	reference_realtime	feedback_run-01
 sub-rockland01	/path/to/A00059346/rest_1400	/path/to/A00059346/mask	/path/to/A00059346/dmn_tracking_test
 sub-rockland02	/path/to/A00059428/rest_1400	/path/to/A00059428/mask	/path/to/A00059428/dmn_tracking_test
 ```
@@ -28,7 +28,7 @@ Each row maps a participant ID to the DICOM directories for that subject. Column
 |--------|---------|
 | `subject` | Participant ID you'll enter in the GUI |
 | `rest1` | Resting-state DICOM directory (localizer) |
-| `2vol_realtime` | 2-volume reference scan directory |
+| `reference_realtime` | Reference scan directory (typically 2-4 volumes) |
 | `feedback_run-01` | Feedback run DICOM directory |
 
 ## Step 2: Create a Study
@@ -52,7 +52,7 @@ Configure the scan parameters to match the Rockland dataset:
 
 - **Localizer**: TR = `1.4`, Volumes = `404`, Runs = `1`, Task Type = `rest`
 - **Feedback**: TR = `2.0`, Volumes = `412`
-- **2-Volume Reference**: Enable "Real-time 2vol" (disable "Initial 2vol" — Rockland only has one reference scan)
+- **Reference Scans**: Enable "Real-time Reference" (disable "Initial Reference" — Rockland only has one reference scan)
 - **Simulator**: Check "Enable Simulator", set source mapping to your `subject_mapping.tsv`, Collection Speed = `10.0` (10x real-time)
 - **Feedback Simulator Speed**: `1.0` (real-time) for a realistic test, or `10.0` to run quickly
 
@@ -112,10 +112,10 @@ This step takes several minutes depending on your hardware.
 
 After this step, you can review the mask QC report to verify the selected components look reasonable.
 
-### Phase 4: 2-Volume Reference + Coregistration
+### Phase 4: Reference Scan + Coregistration
 
-1. **2vol Collection** — Simulator copies the 2-volume reference scan
-2. **Mask Coregistration** — Aligns network masks to the current head position using the 2-volume reference
+1. **Reference Collection** — Simulator copies the reference scan
+2. **Mask Coregistration** — Aligns network masks to the current head position using the reference scan
 
 ### Phase 5: Feedback Run
 
@@ -140,7 +140,7 @@ After the session completes, the output directory for `sub-rockland01` contains:
 data/sub-rockland01/
 ├── collection/                          # Raw collected DICOMs
 │   ├── task-rest_acq-01_run-01/         # Resting-state DICOMs
-│   ├── task-2vol_acq-01_run-02/         # 2-volume reference DICOMs
+│   ├── task-reference_acq-01_run-02/     # Reference scan DICOMs
 │   └── feedback_acq-01_run-01/          # Feedback run DICOMs
 │
 ├── preprocessing/
@@ -165,7 +165,7 @@ data/sub-rockland01/
 │   └── 05_tissue/                       # WM and CSF masks for nuisance regression
 │
 ├── feedback/
-│   ├── 01_2vol/                         # 2-volume reference + coregistered masks
+│   ├── 01_reference/                    # Reference scan + coregistered masks
 │   │   ├── masks/                       # Network masks aligned to feedback session
 │   │   └── xfm/                         # Registration transforms
 │   └── 02_feedback_output/
@@ -179,7 +179,7 @@ data/sub-rockland01/
 │
 ├── qc/                                  # Master QC directory
 │   ├── sub-rockland01_mask_extraction_qc.html  # Mask QC with overlay images
-│   └── overlays/                        # Mask overlay PNGs (subject, 2vol, alternatives)
+│   └── overlays/                        # Mask overlay PNGs (subject, reference, alternatives)
 │
 └── logs/                                # Session logs
 ```
@@ -206,7 +206,7 @@ data/sub-rockland01/
 
 - **Run more participants** — Enter a different participant ID (e.g., `sub-rockland02`) and run the same pipeline. The source mapping automatically selects the correct DICOMs.
 - **Adjust parameters** — Edit the study to change ICA components, threshold values, or task settings. Re-run with `overwrite=False` to skip completed steps.
-- **Multi-visit studies** — Enable multi-visit mode in the study editor to reuse masks across sessions with 2-volume coregistration.
+- **Multi-visit studies** — Enable multi-visit mode in the study editor to reuse masks across sessions with reference scan coregistration.
 - **Sham conditions** — Enable sham mode to deliver alternative mask feedback or replay data for control participants.
 
 See the [Pipeline Overview](../user-guide/pipeline-overview.md) for details on each processing stage.

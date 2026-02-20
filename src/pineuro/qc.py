@@ -15,7 +15,7 @@ generate_preprocessing_report : Create QC report for preprocessing stage
 
 generate_mask_extraction_report : Create QC report for mask extraction stage
     Visualizes ICA components, network-Yeo correlations, mask overlays
-    in multiple spaces (subject, MNI, 2vol), and mask metrics.
+    in multiple spaces (subject, MNI, reference), and mask metrics.
 
 generate_feedback_report : Create QC report for feedback sessions
     Visualizes activation timeseries, framewise displacement, design
@@ -68,7 +68,7 @@ All reports follow a consistent output pattern:
     └── overlays/                   # Mask overlay images
         ├── subject/                # Subject space overlays
         ├── mni/                    # MNI space overlays (if generated)
-        └── 2vol/                   # Feedback space overlays
+        └── reference/               # Feedback space overlays
 
 Design Philosophy
 -----------------
@@ -1578,73 +1578,73 @@ def generate_mask_extraction_report(
     # MNI space overlays removed for performance optimization
     # (was taking ~15-20s per network with no significant QC benefit)
 
-    # 2vol space overlays (feedback coregistration)
-    # Check both locations: initial 2vol in mask_extraction/04_2vol, realtime in feedback/01_2vol
-    initial_twovol_dir = mask_extraction_dir / "04_2vol"
+    # Reference space overlays (feedback coregistration)
+    # Check both locations: initial reference in mask_extraction/04_reference, realtime in feedback/01_reference
+    initial_reference_dir = mask_extraction_dir / "04_reference"
     feedback_dir = mask_extraction_dir.parent / "feedback"
-    realtime_twovol_dir = feedback_dir / "01_2vol" if feedback_dir.exists() else None
+    realtime_reference_dir = feedback_dir / "01_reference" if feedback_dir.exists() else None
 
-    # Use initial 2vol dir if it exists, otherwise fall back to realtime location
-    twovol_dir = initial_twovol_dir if initial_twovol_dir.exists() else realtime_twovol_dir
+    # Use initial reference dir if it exists, otherwise fall back to realtime location
+    reference_dir = initial_reference_dir if initial_reference_dir.exists() else realtime_reference_dir
 
-    if twovol_dir and twovol_dir.exists() and network_masks:
-        twovol_overlay_dir = overlays_dir / "2vol"
-        twovol_overlay_dir.mkdir(parents=True, exist_ok=True)
+    if reference_dir and reference_dir.exists() and network_masks:
+        reference_overlay_dir = overlays_dir / "reference"
+        reference_overlay_dir.mkdir(parents=True, exist_ok=True)
 
-        # Find 2vol mean files (one per feedback run)
-        twovol_mean_files = sorted(glob(str(twovol_dir / f"{participant_id}_task-2vol_run-*_mean.nii.gz")))
+        # Find reference mean files (one per feedback run)
+        reference_mean_files = sorted(glob(str(reference_dir / f"{participant_id}_task-reference_run-*_mean.nii.gz")))
 
-        if twovol_mean_files:
-            # Find Yeo atlas warped to 2vol space
-            twovol_masks_dir = twovol_dir / "masks"
+        if reference_mean_files:
+            # Find Yeo atlas warped to reference space
+            reference_masks_dir = reference_dir / "masks"
 
-            for mean_file in twovol_mean_files:
+            for mean_file in reference_mean_files:
                 mean_path = Path(mean_file)
                 run_str = mean_path.stem.split("_run-")[1].replace("_mean", "")
 
                 # Find corresponding Yeo atlas
-                yeo_2vol = twovol_masks_dir / f"Yeo_to_task-2vol_run-{run_str}_mean.nii.gz"
+                yeo_reference = reference_masks_dir / f"Yeo_to_task-reference_run-{run_str}_mean.nii.gz"
 
-                if not yeo_2vol.exists():
-                    logger.warning(f"Yeo atlas not found for 2vol run {run_str}: {yeo_2vol}")
+                if not yeo_reference.exists():
+                    logger.warning(f"Yeo atlas not found for reference run {run_str}: {yeo_reference}")
                     continue
 
                 for network, mask_path in network_masks.items():
                     # Find warped mask for this run
-                    mask_2vol = (
-                        twovol_masks_dir / f"{participant_id}_{network}_thr_to_task-2vol_run-{run_str}_mean.nii.gz"
+                    mask_reference = (
+                        reference_masks_dir / f"{participant_id}_{network}_thr_to_task-reference_run-{run_str}_mean.nii.gz"
                     )
 
-                    if not mask_2vol.exists():
-                        logger.warning(f"2vol mask not found for {network}, run {run_str}: {mask_2vol}")
+                    if not mask_reference.exists():
+                        logger.warning(f"Reference mask not found for {network}, run {run_str}: {mask_reference}")
                         continue
 
-                    overlay_png = twovol_overlay_dir / f"{participant_id}_{network}_run-{run_str}_overlay.png"
+                    overlay_png = reference_overlay_dir / f"{participant_id}_{network}_run-{run_str}_overlay.png"
                     if overwrite or not overlay_png.exists():
-                        logger.info(f"Generating {network} overlay (2vol run {run_str})")
+                        logger.info(f"Generating {network} overlay (reference run {run_str})")
 
                         # Get mask summary for voxel count
-                        summary = summarize_mask(mask_2vol, name=network)
+                        summary = summarize_mask(mask_reference, name=network)
 
                         # Select slices using warped mask
-                        atlas_slices_2vol = select_slices_from_atlas(
-                            atlas_path=yeo_2vol,
+                        atlas_slices_reference = select_slices_from_atlas(
+                            atlas_path=yeo_reference,
                             labels=labels,
                             target_label=network,
                             top_n_per_plane=1,
-                            mask_path=mask_2vol,
+                            mask_path=mask_reference,
                         )
 
                         plot_mask_overlay_tripanel(
-                            mask_path=mask_2vol,
+                            mask_path=mask_reference,
                             ref_path=mean_path,
                             out_path=overlay_png,
-                            slices=atlas_slices_2vol,
-                            title=f"{network} (2vol run {run_str}, {summary.voxels} voxels)",
+                            slices=atlas_slices_reference,
+                            title=f"{network} (reference run {run_str}, {summary.voxels} voxels)",
                         )
 
-    # Display overlays in report (subject and 2vol - MNI removed for performance)
-    overlay_spaces = [("BOLD reference", subject_overlay_dir), ("2vol feedback", overlays_dir / "2vol")]
+    # Display overlays in report (subject and reference - MNI removed for performance)
+    overlay_spaces = [("BOLD reference", subject_overlay_dir), ("Reference feedback", overlays_dir / "reference")]
 
     for space_name, overlay_dir in overlay_spaces:
         if overlay_dir.exists():
@@ -1654,8 +1654,8 @@ def generate_mask_extraction_report(
                 grid_items = []
                 for overlay_path in overlays:
                     overlay_file = Path(overlay_path)
-                    # For 2vol, network name includes run info
-                    if space_name == "2vol feedback":
+                    # For reference, network name includes run info
+                    if space_name == "Reference feedback":
                         # Extract network_run-XX from filename
                         stem = overlay_file.stem.replace(f"{participant_id}_", "").replace("_overlay", "")
                         grid_items.append(

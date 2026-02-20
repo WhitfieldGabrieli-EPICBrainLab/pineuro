@@ -15,8 +15,8 @@ In the Study Editor Scan tab:
 The recommended way to specify DICOM sources for multiple participants. Create a TSV or CSV file with one row per participant:
 
 ```
-subject	rest1	rest2	2vol_initial	2vol_realtime	feedback_run-01	feedback_run-02	transfer_run-01	transfer_run-02
-sub-001	/data/dicoms/sub-001/rest1	/data/dicoms/sub-001/rest2	/data/dicoms/sub-001/2vol_init	/data/dicoms/sub-001/2vol_rt	/data/dicoms/sub-001/feedback1	/data/dicoms/sub-001/feedback2	/data/dicoms/sub-001/transfer1	/data/dicoms/sub-001/transfer2
+subject	rest1	rest2	reference_initial	reference_realtime	feedback_run-01	feedback_run-02	transfer_run-01	transfer_run-02
+sub-001	/data/dicoms/sub-001/rest1	/data/dicoms/sub-001/rest2	/data/dicoms/sub-001/reference_init	/data/dicoms/sub-001/reference_rt	/data/dicoms/sub-001/feedback1	/data/dicoms/sub-001/feedback2	/data/dicoms/sub-001/transfer1	/data/dicoms/sub-001/transfer2
 sub-002	/data/dicoms/sub-002/rest1	...
 ```
 
@@ -26,16 +26,16 @@ sub-002	/data/dicoms/sub-002/rest1	...
 |--------|---------|
 | `subject` | Participant ID entered in the GUI |
 | `rest1`, `rest2` | Localizer runs 1 and 2 |
-| `2vol_initial` | Initial 2-volume reference scan |
-| `2vol_realtime` | Real-time 2-volume reference scan |
+| `reference_initial` | Initial reference scan (typically 2-4 volumes) |
+| `reference_realtime` | Real-time reference scan (typically 2-4 volumes) |
 | `feedback_run-01`, `feedback_run-02` | Feedback run DICOMs |
 | `transfer_run-01`, `transfer_run-02` | Transfer run DICOMs |
 
 Only include columns for the scans your study uses. For example, if you have 1 localizer run and 1 feedback run with no transfer runs:
 
 ```
-subject	rest1	2vol_realtime	feedback_run-01
-sub-001	/data/rest	/data/2vol	/data/feedback
+subject	rest1	reference_realtime	feedback_run-01
+sub-001	/data/rest	/data/reference	/data/feedback
 ```
 
 Set the source mapping path in the Study Editor Scan tab → **Source Mapping**.
@@ -46,7 +46,7 @@ Alternatively, specify DICOM directories directly in the Study Editor for each r
 - **Localizer Source DICOMs** — One path per localizer run
 - **Feedback Source DICOMs** — One path per feedback run
 - **Transfer Source DICOMs** — One path per transfer run
-- **2vol Initial/Realtime DICOMs** — One path each
+- **Reference Initial/Realtime DICOMs** — One path each
 
 This approach doesn't support per-participant mapping, so it's best for single-participant testing.
 

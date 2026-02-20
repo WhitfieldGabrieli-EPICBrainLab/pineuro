@@ -13,11 +13,8 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 ### ~~1.1 Multi-Vendor Scanner Support~~ ✅
 - **Done**: Replaced binary `moco_enabled` flag with 3-way `motion_correction` mode: `"siemens_moco"` (parse from JSON sidecar), `"software"` (ANTsPy registration, ~400-500ms/vol, any scanner), `"none"` (disabled). Motion correction decoupled from GLM — each nuisance regressor (drift, 6 motion params, WM mean, CSF mean) is independently toggleable. Intercept always included. GUI: motion correction dropdown + individual regressor checkboxes (motion checkbox auto-disabled when mode is "none"). Dynamic design matrix columns match active regressors. FD = NaN when motion correction disabled; FD plot gracefully skips NaN. Backward compatible: old `moco_enabled` and `nuisance_regression` config keys auto-migrated.
 
-### 1.2 Real-Time Nuisance Regression (WM/CSF Signals)
-- **Gap**: No white matter or CSF signal regression. Current nuisance model: intercept + drift + 6 motion params.
-- **Why**: RTPSpy demonstrates <400ms with WM/CSF regression. CRED-nf encourages comprehensive confound removal (Sulzer et al. 2013).
-- **Scope**: Medium
-- **Module**: `feedback.py` (`FeedbackEstimator._build_design_row`), `preprocessing.py`
+### ~~1.2 Real-Time Nuisance Regression (WM/CSF Signals)~~ ✅
+- **Done**: Added `create_tissue_masks()` to `mask_extraction.py` using ANTsPy segmentation (Atropos 3-class). WM and CSF mean signals added as independently toggleable nuisance regressors in `FeedbackEstimator` design matrix (`use_wm_regressor`, `use_csf_regressor`). `FeedbackConfig` extended with `wm_mask_path`/`csf_mask_path`. Tissue masks auto-created during preprocessing, coregistered per-run, and resolved automatically by session orchestration. GUI checkboxes in Study Editor feedback tab. WM/CSF means logged per-volume in `feedbacklog.tsv`.
 
 ### ~~1.3 Real-Time QC Metrics: tSNR, DVARS, Motion Alerts~~ ✅
 - **Done**: Added real-time tSNR (Welford's online algorithm, median across voxels) and DVARS (RMS of temporal derivative across mask voxels) to `FeedbackEstimator`. Both metrics logged per-volume in `feedbacklog.tsv` (`dvars` and `tsnr` columns). DVARS displayed in real-time via `DVARSPlot` chart in monitoring panel. tSNR displayed as color-coded text indicator (green ≥40, orange ≥20, red <20). Post-run summary dialog includes Signal Quality card with DVARS stats and tSNR quality rating. QC report includes DVARS timeseries plot and tSNR/DVARS stats in summary box. FD monitoring with in-run alerting was already implemented.
@@ -62,7 +59,7 @@ This review compares pineuro against the fMRI neurofeedback literature (CRED-nf 
 ## Accessibility Improvements
 
 ### ~~A.1 End-to-End Tutorial with Sample Data~~ ✅
-- **Done**: Created `docs/getting-started/first-session.md` — full GUI walkthrough using NKI Rockland Sample data (NITRC INDI portal). Covers source mapping setup, study creation, all pipeline phases (preprocessing, mask extraction, 2vol coregistration, feedback with gauge task), and output inspection. Fixed stale docs: removed FSL/external dcm2niix references from installation.md, quickstart.md, pipeline-overview.md, README.md. Fixed GitHub Issues link in index.md.
+- **Done**: Created `docs/getting-started/first-session.md` — full GUI walkthrough using NKI Rockland Sample data (NITRC INDI portal). Covers source mapping setup, study creation, all pipeline phases (preprocessing, mask extraction, reference coregistration, feedback with gauge task), and output inspection. Fixed stale docs: removed FSL/external dcm2niix references from installation.md, quickstart.md, pipeline-overview.md, README.md. Fixed GitHub Issues link in index.md.
 
 ### ~~A.2 Expand In-Repo Documentation~~ ✅
 - **Done**: Created 10 user guide pages covering every feature: study-configuration.md, preprocessing.md, mask-extraction.md, feedback-sessions.md, tasks.md, sham-and-blinding.md, multi-visit.md, display-setup.md, simulation-mode.md, qc-reports.md. Updated docs/index.md with complete navigation. All task types (gauge, ball, thermometer, fixation, self_other), feedback modes (activation, connectivity, differential, intermittent), mask methods (ICA, GLM, manual ROI), atlas options, sham/blinding, multi-visit, display setup, and output formats documented.
@@ -114,10 +111,10 @@ These items are deferred for later consideration:
 
 | File | Changes |
 |------|---------|
-| `src/pineuro/feedback.py` | 1.1 vendor parsing, 1.2 WM/CSF regressors, 1.3 QC metrics, ~~1.4 differential feedback~~ ✅, ~~2.1 smoothing~~ ✅, ~~2.2 connectivity estimator~~ ✅, ~~2.3 intermittent mode~~ ✅ |
+| `src/pineuro/feedback.py` | 1.1 vendor parsing, ~~1.2 WM/CSF regressors~~ ✅, 1.3 QC metrics, ~~1.4 differential feedback~~ ✅, ~~2.1 smoothing~~ ✅, ~~2.2 connectivity estimator~~ ✅, ~~2.3 intermittent mode~~ ✅ |
 | `src/pineuro/session.py` | Config dataclass extensions for all new features |
 | `src/pineuro/mask_extraction.py` | ~~1.5 manual ROI import~~ ✅, ~~1.6 atlas registry expansion~~ ✅ |
-| `src/pineuro/preprocessing.py` | 1.1 vendor auto-detection, 1.2 WM/CSF mask extraction |
+| `src/pineuro/preprocessing.py` | 1.1 vendor auto-detection, ~~1.2 WM/CSF mask extraction~~ ✅ |
 | `src/pineuro/qc.py` | 1.3 tSNR/DVARS reporting |
 | `src/pineuro/gui/components/fd_plot.py` | 1.3 motion alerts in GUI |
 | `src/pineuro/sham.py` | ~~2.7 randomization generator~~ ✅ |

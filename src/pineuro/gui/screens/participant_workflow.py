@@ -9,9 +9,9 @@ single participant:
 - QC report viewing
 
 The workflow is divided into four main sections:
-1. Localizer Session: Initial 2vol collection and localizer task/rest collection
-2. Mask Extraction: Preprocessing, network mask extraction (ICA or GLM), and coregistration to 2vol
-3. Feedback Session: Real-time 2vol collection and feedback runs
+1. Localizer Session: Initial Reference collection and localizer task/rest collection
+2. Mask Extraction: Preprocessing, network mask extraction (ICA or GLM), and coregistration to reference
+3. Feedback Session: Real-time Reference collection and feedback runs
 4. Quality Control: View QC reports for each phase
 
 Status is automatically detected based on output file existence, allowing sessions
@@ -1024,7 +1024,7 @@ class ParticipantWorkflowScreen:
 
         Args:
             collection_dir: Parent collection directory
-            task: Task prefix (e.g., 'task-rest', 'task-2vol')
+            task: Task prefix (e.g., 'task-rest', 'task-reference')
             run: Run number
             expected_volumes: Expected number of volumes
 
@@ -1333,8 +1333,8 @@ class ParticipantWorkflowScreen:
 
         # Get dynamic configuration values
         n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
-        twovol_initial_enabled = config["scan"].get("twovol_initial_enabled", True)
-        twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
+        reference_initial_enabled = config["scan"].get("reference_initial_enabled", True)
+        reference_realtime_enabled = config["scan"].get("reference_realtime_enabled", True)
 
         # Check if this is a mask-reuse visit
         visit_config = config.get("visit", {})
@@ -1350,10 +1350,10 @@ class ParticipantWorkflowScreen:
         use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
 
         if is_mask_reuse:
-            # Mask reuse mode: only need 2vol + coregistration + feedback
+            # Mask reuse mode: only need reference + coregistration + feedback
             # Skip localizer, preprocessing, mask extraction
-            if twovol_realtime_enabled:
-                steps.extend(["2vol_realtime", "coregistration_realtime"])
+            if reference_realtime_enabled:
+                steps.extend(["reference_realtime", "coregistration_realtime"])
             # Add transfer and feedback steps dynamically
             if use_transfer_runs:
                 steps.append("transfer_1")
@@ -1363,8 +1363,8 @@ class ParticipantWorkflowScreen:
                 steps.append("transfer_2")
         else:
             # Standard mode: full pipeline
-            if twovol_initial_enabled:
-                steps.append("2vol_initial")
+            if reference_initial_enabled:
+                steps.append("reference_initial")
             # Add rest runs dynamically
             for i in range(1, n_localizer_runs + 1):
                 steps.append(f"rest_run_{i}")
@@ -1374,11 +1374,11 @@ class ParticipantWorkflowScreen:
                     "mask_extraction",
                 ]
             )
-            # Add coregistration only if initial 2vol is enabled
-            if twovol_initial_enabled:
+            # Add coregistration only if initial reference is enabled
+            if reference_initial_enabled:
                 steps.append("coregistration")
-            if twovol_realtime_enabled:
-                steps.extend(["2vol_realtime", "coregistration_realtime"])
+            if reference_realtime_enabled:
+                steps.extend(["reference_realtime", "coregistration_realtime"])
             # Add transfer and feedback steps dynamically
             if use_transfer_runs:
                 steps.append("transfer_1")
@@ -1392,12 +1392,12 @@ class ParticipantWorkflowScreen:
 
         # Only check localizer/preprocessing/mask extraction steps if NOT in mask reuse mode
         if not is_mask_reuse:
-            # Check 2vol initial collection (only if enabled)
+            # Check reference initial collection (only if enabled)
             collection_dir = base_dir / "collection"
-            if twovol_initial_enabled:
-                n_vols = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
-                status = self._check_acq_collection_status(collection_dir, "task-2vol", 1, n_vols)
-                self.step_statuses["2vol_initial"] = status
+            if reference_initial_enabled:
+                n_vols = config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
+                status = self._check_acq_collection_status(collection_dir, "task-reference", 1, n_vols)
+                self.step_statuses["reference_initial"] = status
 
             # Check localizer run collections dynamically
             expected_vols = config["scan"].get("localizer_n_volumes")
@@ -1441,12 +1441,12 @@ class ParticipantWorkflowScreen:
             else:
                 self.step_statuses["mask_approval"] = StepStatus.PENDING
 
-            # Check coregistration (2vol) outputs - initial (run-01) is in mask_extraction/04_2vol
-            initial_twovol_masks_dir = mask_extraction_dir / "04_2vol" / "masks"
+            # Check coregistration (reference) outputs - initial (run-01) is in mask_extraction/04_reference
+            initial_reference_masks_dir = mask_extraction_dir / "04_reference" / "masks"
 
             if (
-                initial_twovol_masks_dir.exists()
-                and len(list(initial_twovol_masks_dir.glob("*_to_task-2vol_run-01_*.nii.gz"))) > 0
+                initial_reference_masks_dir.exists()
+                and len(list(initial_reference_masks_dir.glob("*_to_task-reference_run-01_*.nii.gz"))) > 0
             ):
                 self.step_statuses["coregistration"] = StepStatus.COMPLETE
 
@@ -1455,25 +1455,25 @@ class ParticipantWorkflowScreen:
         if is_mask_reuse:
             mask_extraction_dir = base_dir / "mask_extraction"  # Still needed for path references
 
-        # Check 2vol realtime collection (only if enabled)
+        # Check reference realtime collection (only if enabled)
         collection_dir = base_dir / "collection"
-        if twovol_realtime_enabled:
-            # In mask reuse mode, 2vol is run-01 (no initial 2vol)
-            # In standard mode, 2vol is run-02 (after initial 2vol)
-            realtime_2vol_run = 1 if is_mask_reuse else 2
-            n_vols = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
-            status = self._check_acq_collection_status(collection_dir, "task-2vol", realtime_2vol_run, n_vols)
-            self.step_statuses["2vol_realtime"] = status
+        if reference_realtime_enabled:
+            # In mask reuse mode, reference is run-01 (no initial reference)
+            # In standard mode, reference is run-02 (after initial reference)
+            realtime_reference_run = 1 if is_mask_reuse else 2
+            n_vols = config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
+            status = self._check_acq_collection_status(collection_dir, "task-reference", realtime_reference_run, n_vols)
+            self.step_statuses["reference_realtime"] = status
 
-            # Check coregistration_realtime outputs - realtime is in feedback/01_2vol
-            realtime_twovol_masks_dir = feedback_dir / "01_2vol" / "masks"
+            # Check coregistration_realtime outputs - realtime is in feedback/01_reference
+            realtime_reference_masks_dir = feedback_dir / "01_reference" / "masks"
             if (
-                realtime_twovol_masks_dir.exists()
-                and len(list(realtime_twovol_masks_dir.glob(f"*_to_task-2vol_run-{realtime_2vol_run:02d}_*.nii.gz")))
+                realtime_reference_masks_dir.exists()
+                and len(list(realtime_reference_masks_dir.glob(f"*_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz")))
                 > 0
             ):
                 self.step_statuses["coregistration_realtime"] = StepStatus.COMPLETE
-        # Note: When 2vol realtime is disabled, those steps are not in the steps list,
+        # Note: When reference realtime is disabled, those steps are not in the steps list,
         # so we don't need to mark them as complete
 
         # Check feedback runs (transfer and feedback) using slot-based naming
@@ -1531,12 +1531,12 @@ class ParticipantWorkflowScreen:
             return "localizer"
 
         step_to_session = {
-            "2vol_initial": "localizer",
+            "reference_initial": "localizer",
             "preprocessing": "mask_extraction",
             "mask_extraction": "mask_extraction",
             "mask_approval": "mask_extraction",
             "coregistration": "mask_extraction",
-            "2vol_realtime": "feedback",
+            "reference_realtime": "feedback",
             "coregistration_realtime": "feedback",
             "transfer_1": "feedback",
             "feedback_1": "feedback",
@@ -1606,7 +1606,7 @@ class ParticipantWorkflowScreen:
             steps_requiring_preprocessing = [
                 "mask_extraction",
                 "coregistration",
-                "2vol_realtime",
+                "reference_realtime",
                 "coregistration_realtime",
             ]
             # Also check for feedback/transfer steps (dynamic)
@@ -1618,7 +1618,7 @@ class ParticipantWorkflowScreen:
             # Gate 2: Mask approval required for coregistration and all subsequent steps
             gated_steps = [
                 "coregistration",
-                "2vol_realtime",
+                "reference_realtime",
                 "coregistration_realtime",
             ]
             # Also check for feedback/transfer steps (dynamic)
@@ -1657,15 +1657,15 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
         controls = []
 
-        # Add Initial 2vol section only if enabled
-        if config["scan"].get("twovol_initial_enabled", True):
+        # Add Initial Reference section only if enabled
+        if config["scan"].get("reference_initial_enabled", True):
             controls.extend(
                 [
-                    ft.Text("Initial 2vol", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Initial Reference", size=14, weight=ft.FontWeight.W_500),
                     self._create_step_button(
-                        "2vol_initial",
+                        "reference_initial",
                         "Collect",
-                        lambda e: self._on_step_clicked("2vol_initial"),
+                        lambda e: self._on_step_clicked("reference_initial"),
                     ),
                     ft.Divider(),
                 ]
@@ -1771,16 +1771,16 @@ class ParticipantWorkflowScreen:
                     )
                 )
 
-        # Add coregistration section only if initial 2vol is enabled
+        # Add coregistration section only if initial reference is enabled
         config = self.study_config.session_config
-        if config["scan"].get("twovol_initial_enabled", True):
+        if config["scan"].get("reference_initial_enabled", True):
             controls.extend(
                 [
                     ft.Divider(),
                     ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
                     self._create_step_button(
                         "coregistration",
-                        "Coregister to 2vol",
+                        "Coregister to Reference",
                         lambda e: self._on_step_clicked("coregistration"),
                     ),
                 ]
@@ -1821,15 +1821,15 @@ class ParticipantWorkflowScreen:
         # Build controls list
         controls = []
 
-        # Add Real-time 2vol section only if enabled
-        if config["scan"].get("twovol_realtime_enabled", True):
+        # Add Real-time Reference section only if enabled
+        if config["scan"].get("reference_realtime_enabled", True):
             controls.extend(
                 [
-                    ft.Text("Real-time 2vol", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Real-time Reference", size=14, weight=ft.FontWeight.W_500),
                     self._create_step_button(
-                        "2vol_realtime",
+                        "reference_realtime",
                         "Collect",
-                        lambda e: self._on_step_clicked("2vol_realtime"),
+                        lambda e: self._on_step_clicked("reference_realtime"),
                     ),
                     ft.Divider(),
                     ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
@@ -2251,17 +2251,17 @@ class ParticipantWorkflowScreen:
         from ..components.qc_plot_viewer import QCPlotViewer
 
         # Get appropriate plots based on approval type
-        # Initial: show ICA, subject space, and 2vol overlays (full mask extraction review)
-        # Realtime: show ONLY 2vol overlays (since ICA and subject space didn't change)
+        # Initial: show ICA, subject space, and reference overlays (full mask extraction review)
+        # Realtime: show ONLY reference overlays (since ICA and subject space didn't change)
         if approval_type == "initial":
             plots = self.qc_manager.get_mask_extraction_plots()
-            title = "Initial 2vol QC - Review Required"
+            title = "Initial Reference QC - Review Required"
         else:
-            # In mask reuse mode, realtime 2vol is run-01 (no initial 2vol collection)
-            # In standard mode, realtime 2vol is run-02
+            # In mask reuse mode, realtime reference is run-01 (no initial reference collection)
+            # In standard mode, realtime reference is run-02
             run_id = 1 if self._is_mask_reuse_mode else 2
-            plots = self.qc_manager.get_2vol_qc_plots(run_id=run_id)
-            title = "Real-time 2vol QC"
+            plots = self.qc_manager.get_reference_qc_plots(run_id=run_id)
+            title = "Real-time Reference QC"
 
         # Filter out combined hemisphere mask from plots when using hemisphere_split sham mode
         # (we only want to show left/right splits, not the combined one)
@@ -2281,16 +2281,16 @@ class ParticipantWorkflowScreen:
 
         html_path = self.qc_manager.get_mask_extraction_qc()
 
-        # Initial 2vol requires approval (gates subsequent steps)
-        # Realtime 2vol is view-only (initial approval already unlocked the pipeline)
+        # Initial Reference requires approval (gates subsequent steps)
+        # Realtime reference is view-only (initial approval already unlocked the pipeline)
         if approval_type == "initial":
 
             def on_approve():
                 self._set_qc_approved(approval_type, True)
-                self._add_log("[SUCCESS] Initial 2vol QC approved")
+                self._add_log("[SUCCESS] Initial Reference QC approved")
                 self._refresh_step_list()
                 _snack = ft.SnackBar(
-                    ft.Text("Initial coregistration approved! You can now collect real-time 2vol."),
+                    ft.Text("Initial coregistration approved! You can now collect real-time reference."),
                     bgcolor=ft.Colors.GREEN,
                 )
                 _snack.open = True
@@ -2298,7 +2298,7 @@ class ParticipantWorkflowScreen:
                 self.page.update()
 
             def on_reject():
-                self._add_log("[WARNING] Initial 2vol QC rejected")
+                self._add_log("[WARNING] Initial Reference QC rejected")
                 _snack = ft.SnackBar(
                     ft.Text("Masks rejected. Please review and re-run coregistration."), bgcolor=ft.Colors.ORANGE
                 )
@@ -2333,17 +2333,17 @@ class ParticipantWorkflowScreen:
         """
         from ..components.qc_plot_viewer import QCPlotViewer
 
-        # Get 2vol overlay plots - use run_id=1 for initial, run_id=2 for realtime
-        # In mask reuse mode, realtime 2vol is run-01 (no initial 2vol collection)
+        # Get reference overlay plots - use run_id=1 for initial, run_id=2 for realtime
+        # In mask reuse mode, realtime reference is run-01 (no initial reference collection)
         if qc_type == "initial":
             run_id = 1
-            title = "Initial 2vol Coregistration QC"
+            title = "Initial Reference Coregistration QC"
         else:
-            # In mask reuse mode, realtime 2vol is run-01
+            # In mask reuse mode, realtime reference is run-01
             run_id = 1 if self._is_mask_reuse_mode else 2
-            title = "Real-time 2vol Coregistration QC"
+            title = "Real-time Reference Coregistration QC"
 
-        plots = self.qc_manager.get_2vol_qc_plots(run_id=run_id)
+        plots = self.qc_manager.get_reference_qc_plots(run_id=run_id)
 
         # Filter out combined hemisphere mask from plots when using hemisphere_split sham mode
         sham_config = self.study_config.session_config.get("sham", {})
@@ -2710,7 +2710,7 @@ class ParticipantWorkflowScreen:
         outputs_exist = step_info.get("outputs_exist", False)
         overwrite_warning = None
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-        is_collection = step_id.startswith("rest_run_") or step_id in ("2vol_initial", "2vol_realtime")
+        is_collection = step_id.startswith("rest_run_") or step_id in ("reference_initial", "reference_realtime")
         if outputs_exist:
             if is_collection or is_feedback_transfer:
                 # Collection and feedback steps use acq numbering - previous data is archived
@@ -2918,7 +2918,7 @@ class ParticipantWorkflowScreen:
         is_mask_reuse = visit_config.get("mask_source") == "reuse"
         mask_source_visit = visit_config.get("mask_source_visit")
 
-        # In mask reuse mode, 2vol is run-01 (no initial 2vol)
+        # In mask reuse mode, reference is run-01 (no initial reference)
         run_num = 1 if is_mask_reuse else 2
 
         if is_mask_reuse and mask_source_visit:
@@ -2927,27 +2927,27 @@ class ParticipantWorkflowScreen:
             source_visit_dir = study_base_dir / self.participant_id / mask_source_visit
             me_dir = source_visit_dir / "mask_extraction"
             input_masks_path = me_dir / "03_masks" if (me_dir / "03_masks").exists() else me_dir / "02_masks"
-            description = f"Register network masks from {mask_source_visit} to real-time 2vol space for feedback runs."
+            description = f"Register network masks from {mask_source_visit} to real-time reference space for feedback runs."
         else:
             # Standard mode: masks come from current visit
             me_dir = base_dir / "mask_extraction"
             input_masks_path = me_dir / "03_masks" if (me_dir / "03_masks").exists() else me_dir / "02_masks"
-            description = "Register network masks to real-time 2vol space for feedback runs."
+            description = "Register network masks to real-time reference space for feedback runs."
 
         return {
-            "label": "Coregister to Real-time 2vol",
+            "label": "Coregister to Real-time Reference",
             "description": description,
             "parameters": {
                 "Input Masks": input_masks_path,
-                "Target": f"2vol run-{run_num:02d}",
-                "Output": base_dir / "feedback" / "01_2vol" / "masks",
+                "Target": f"reference run-{run_num:02d}",
+                "Output": base_dir / "feedback" / "01_reference" / "masks",
             },
-            "output_path": base_dir / "feedback" / "01_2vol" / "masks",
-            "output_pattern": f"*_to_task-2vol_run-{run_num:02d}_*.nii.gz",
+            "output_path": base_dir / "feedback" / "01_reference" / "masks",
+            "output_pattern": f"*_to_task-reference_run-{run_num:02d}_*.nii.gz",
         }
 
-    def _get_2vol_initial_step_info(self, config: dict, base_dir: Path) -> dict:
-        """Get step info for initial 2vol collection with acq tracking.
+    def _get_reference_initial_step_info(self, config: dict, base_dir: Path) -> dict:
+        """Get step info for initial reference collection with acq tracking.
 
         Args:
             config: Session configuration
@@ -2956,23 +2956,23 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step information
         """
-        enabled = config["scan"].get("twovol_initial_enabled", True)
+        enabled = config["scan"].get("reference_initial_enabled", True)
 
         if not enabled:
             return {
-                "label": "Collect Initial 2vol (Disabled)",
-                "description": "Initial 2vol collection is disabled in study configuration.",
+                "label": "Collect Initial Reference (Disabled)",
+                "description": "Initial Reference collection is disabled in study configuration.",
                 "parameters": {"Status": "Disabled"},
                 "output_path": base_dir / "collection",
-                "output_pattern": "task-2vol_acq-*_run-01",
+                "output_pattern": "task-reference_acq-*_run-01",
             }
 
-        n_vols = config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+        n_vols = config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
         collection_dir = base_dir / "collection"
 
         run_info = get_localizer_run_info(
             collection_dir=collection_dir,
-            task="task-2vol",
+            task="task-reference",
             run=1,
             expected_volumes=n_vols,
         )
@@ -2983,18 +2983,18 @@ class ParticipantWorkflowScreen:
             description += f" Previous attempts ({attempts_str}) will be preserved."
 
         info = {
-            "label": "Collect Initial 2vol",
+            "label": "Collect Initial Reference",
             "description": description,
             "parameters": {
-                "Task": "2vol (run-01)",
+                "Task": "reference (run-01)",
                 "Attempt": f"acq-{run_info['acq']:02d}",
                 "Volumes": n_vols,
-                "Source": config["scan"]["twovol_initial_dicoms"],
-                "Output": base_dir / "collection" / f"task-2vol_acq-{run_info['acq']:02d}_run-01",
+                "Source": config["scan"]["reference_initial_dicoms"],
+                "Output": base_dir / "collection" / f"task-reference_acq-{run_info['acq']:02d}_run-01",
                 "Enabled": "Yes",
             },
             "output_path": base_dir / "collection",
-            "output_pattern": "task-2vol_acq-*_run-01",
+            "output_pattern": "task-reference_acq-*_run-01",
         }
         if run_info["existing_acqs"]:
             attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
@@ -3002,8 +3002,8 @@ class ParticipantWorkflowScreen:
 
         return info
 
-    def _get_2vol_realtime_step_info(self, config: dict, base_dir: Path) -> dict:
-        """Get step info for realtime 2vol collection, handling mask reuse mode.
+    def _get_reference_realtime_step_info(self, config: dict, base_dir: Path) -> dict:
+        """Get step info for realtime reference collection, handling mask reuse mode.
 
         Args:
             config: Session configuration
@@ -3012,30 +3012,30 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step information
         """
-        twovol_enabled = config["scan"].get("twovol_realtime_enabled", True)
+        reference_enabled = config["scan"].get("reference_realtime_enabled", True)
 
         # Check for mask reuse mode
         visit_config = config.get("visit", {})
         is_mask_reuse = visit_config.get("mask_source") == "reuse"
 
-        # In mask reuse mode, 2vol is run-01 (no initial 2vol)
+        # In mask reuse mode, reference is run-01 (no initial reference)
         run_num = 1 if is_mask_reuse else 2
 
-        if not twovol_enabled:
+        if not reference_enabled:
             return {
-                "label": "Collect Real-time 2vol (Disabled)",
-                "description": "Real-time 2vol collection is disabled. Feedback will use masks from subject boldref space.",
+                "label": "Collect Real-time Reference (Disabled)",
+                "description": "Real-time Reference collection is disabled. Feedback will use masks from subject boldref space.",
                 "parameters": {"Status": "Disabled - using boldref masks"},
                 "output_path": base_dir / "collection",
-                "output_pattern": f"task-2vol_acq-*_run-{run_num:02d}",
+                "output_pattern": f"task-reference_acq-*_run-{run_num:02d}",
             }
 
-        n_vols = config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+        n_vols = config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
         collection_dir = base_dir / "collection"
 
         run_info = get_localizer_run_info(
             collection_dir=collection_dir,
-            task="task-2vol",
+            task="task-reference",
             run=run_num,
             expected_volumes=n_vols,
         )
@@ -3046,18 +3046,18 @@ class ParticipantWorkflowScreen:
             description += f" Previous attempts ({attempts_str}) will be preserved."
 
         info = {
-            "label": "Collect Real-time 2vol",
+            "label": "Collect Real-time Reference",
             "description": description,
             "parameters": {
-                "Task": f"2vol (run-{run_num:02d})",
+                "Task": f"reference (run-{run_num:02d})",
                 "Attempt": f"acq-{run_info['acq']:02d}",
                 "Volumes": n_vols,
-                "Source": config["scan"]["twovol_realtime_dicoms"],
-                "Output": base_dir / "collection" / f"task-2vol_acq-{run_info['acq']:02d}_run-{run_num:02d}",
+                "Source": config["scan"]["reference_realtime_dicoms"],
+                "Output": base_dir / "collection" / f"task-reference_acq-{run_info['acq']:02d}_run-{run_num:02d}",
                 "Enabled": "Yes",
             },
             "output_path": base_dir / "collection",
-            "output_pattern": f"task-2vol_acq-*_run-{run_num:02d}",
+            "output_pattern": f"task-reference_acq-*_run-{run_num:02d}",
         }
         if run_info["existing_acqs"]:
             attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
@@ -3112,7 +3112,7 @@ class ParticipantWorkflowScreen:
         localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
         loc_task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
         step_info_map = {
-            "2vol_initial": self._get_2vol_initial_step_info(config, base_dir),
+            "reference_initial": self._get_reference_initial_step_info(config, base_dir),
             "preprocessing": {
                 "label": "Run Preprocessing",
                 "description": "Motion correction, brain extraction, and coregistration of localizer runs.",
@@ -3125,17 +3125,17 @@ class ParticipantWorkflowScreen:
             },
             "mask_extraction": self._get_mask_extraction_step_info(config, base_dir),
             "coregistration": {
-                "label": "Coregister to 2vol",
-                "description": "Register network masks from rest space to 2vol feedback space.",
+                "label": "Coregister to Reference",
+                "description": "Register network masks from rest space to reference feedback space.",
                 "parameters": {
                     "Input Masks": base_dir / "mask_extraction" / "03_masks",
-                    "Target": "2vol run-01",
-                    "Output": base_dir / "mask_extraction" / "04_2vol" / "masks",
+                    "Target": "reference run-01",
+                    "Output": base_dir / "mask_extraction" / "04_reference" / "masks",
                 },
-                "output_path": base_dir / "mask_extraction" / "04_2vol" / "masks",
-                "output_pattern": "*_to_task-2vol_run-01_*.nii.gz",
+                "output_path": base_dir / "mask_extraction" / "04_reference" / "masks",
+                "output_pattern": "*_to_task-reference_run-01_*.nii.gz",
             },
-            "2vol_realtime": self._get_2vol_realtime_step_info(config, base_dir),
+            "reference_realtime": self._get_reference_realtime_step_info(config, base_dir),
             "coregistration_realtime": self._get_coregistration_realtime_step_info(config, base_dir),
             "transfer_1": {
                 "label": "Transfer Run 1",
@@ -4043,7 +4043,7 @@ class ParticipantWorkflowScreen:
                     expand=True,
                 )
 
-            elif step_id in ["2vol_initial", "2vol_realtime"] or is_rest_run_step:
+            elif step_id in ["reference_initial", "reference_realtime"] or is_rest_run_step:
                 # Collection progress panel with DICOM preview
                 n_volumes = self._get_collection_n_volumes(step_id)
                 tr = config["scan"].get("tr")
@@ -4156,12 +4156,12 @@ class ParticipantWorkflowScreen:
                 return f"Collect Rest Run {run_num}"
 
         labels = {
-            "2vol_initial": "Collect Initial 2vol",
+            "reference_initial": "Collect Initial Reference",
             "preprocessing": "Run Preprocessing",
             "mask_extraction": "Extract Masks",
-            "coregistration": "Coregister to 2vol",
-            "2vol_realtime": "Collect Real-time 2vol",
-            "coregistration_realtime": "Coregister to Real-time 2vol",
+            "coregistration": "Coregister to Reference",
+            "reference_realtime": "Collect Real-time Reference",
+            "coregistration_realtime": "Coregister to Real-time Reference",
             "transfer_1": "Transfer Run 1",
             "transfer_2": "Transfer Run 2",
         }
@@ -4182,11 +4182,11 @@ class ParticipantWorkflowScreen:
         """
         config = self.study_config.session_config
 
-        if step_id == "2vol_initial":
-            return config["scan"].get("twovol_initial_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+        if step_id == "reference_initial":
+            return config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
 
-        elif step_id == "2vol_realtime":
-            return config["scan"].get("twovol_realtime_n_volumes", config["scan"].get("twovol_n_volumes", 2))
+        elif step_id == "reference_realtime":
+            return config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
 
         elif step_id.startswith("rest_run_"):
             # Use new localizer_n_volumes, fall back to legacy
@@ -4510,16 +4510,16 @@ class ParticipantWorkflowScreen:
         # Build dynamic workflow order based on configuration
         config = self.study_config.session_config
         n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
-        twovol_initial_enabled = config["scan"].get("twovol_initial_enabled", True)
-        twovol_realtime_enabled = config["scan"].get("twovol_realtime_enabled", True)
+        reference_initial_enabled = config["scan"].get("reference_initial_enabled", True)
+        reference_realtime_enabled = config["scan"].get("reference_realtime_enabled", True)
 
         workflow = []
 
         # In mask reuse mode, skip localizer and mask extraction steps
         if not self._is_mask_reuse_mode:
-            # Add Initial 2vol if enabled
-            if twovol_initial_enabled:
-                workflow.append(("2vol_initial", "Collect Initial 2vol"))
+            # Add Initial Reference if enabled
+            if reference_initial_enabled:
+                workflow.append(("reference_initial", "Collect Initial Reference"))
 
             # Add localizer runs dynamically
             for run_num in range(1, n_localizer_runs + 1):
@@ -4535,16 +4535,16 @@ class ParticipantWorkflowScreen:
                 ]
             )
 
-            # Add coregistration only if initial 2vol is enabled
-            if twovol_initial_enabled:
-                workflow.append(("coregistration", "Coregister to 2vol"))
+            # Add coregistration only if initial reference is enabled
+            if reference_initial_enabled:
+                workflow.append(("coregistration", "Coregister to Reference"))
 
-        # Add realtime 2vol if enabled
-        if twovol_realtime_enabled:
+        # Add realtime reference if enabled
+        if reference_realtime_enabled:
             workflow.extend(
                 [
-                    ("2vol_realtime", "Collect Real-time 2vol"),
-                    ("coregistration_realtime", "Coregister to Real-time 2vol"),
+                    ("reference_realtime", "Collect Real-time Reference"),
+                    ("coregistration_realtime", "Coregister to Real-time Reference"),
                 ]
             )
 

@@ -127,7 +127,7 @@ class QCReportManager:
         return None
 
     def get_coregistration_qc(self, run_id: int = 1) -> Path | None:
-        """Get path to 2vol coregistration QC report.
+        """Get path to reference coregistration QC report.
 
         Args:
             run_id: Run number (1 for initial, 2 for realtime)
@@ -137,17 +137,17 @@ class QCReportManager:
         """
         # Coregistration QC location depends on run
         if run_id == 1:
-            qc_dir = self.base_dir / "mask_extraction" / "04_2vol" / "qc"
+            qc_dir = self.base_dir / "mask_extraction" / "04_reference" / "qc"
         else:
-            qc_dir = self.base_dir / "feedback" / "01_2vol" / "qc"
+            qc_dir = self.base_dir / "feedback" / "01_reference" / "qc"
 
         # Try standard naming
-        report_path = qc_dir / f"{self.participant_id}_2vol_run-{run_id:02d}_qc.html"
+        report_path = qc_dir / f"{self.participant_id}_reference_run-{run_id:02d}_qc.html"
         if report_path.exists():
             return report_path
 
         # Try alternative patterns
-        for pattern in ["*2vol*qc.html", "*coreg*qc.html"]:
+        for pattern in ["*reference*qc.html", "*coreg*qc.html"]:
             matches = list(qc_dir.glob(pattern))
             if matches:
                 return matches[0]
@@ -225,12 +225,12 @@ class QCReportManager:
                 "path": self.get_mask_extraction_qc(),
             },
             {
-                "name": "Initial 2vol Coregistration",
+                "name": "Initial Reference Coregistration",
                 "type": "coregistration_initial",
                 "path": self.get_coregistration_qc(run_id=1),
             },
             {
-                "name": "Realtime 2vol Coregistration",
+                "name": "Realtime Reference Coregistration",
                 "type": "coregistration_realtime",
                 "path": self.get_coregistration_qc(run_id=2),
             },
@@ -363,34 +363,34 @@ class QCReportManager:
                 network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
                 plots.append((f"{network} Mask (MNI Space)", overlay))
 
-        # 2vol overlays (coregistration) - only run-01 for initial QC
-        twovol_dir = qc_dir / "overlays" / "2vol"
-        if twovol_dir.exists():
-            for overlay in sorted(twovol_dir.glob("*_overlay.png")):
+        # Reference overlays (coregistration) - only run-01 for initial QC
+        reference_dir = qc_dir / "overlays" / "reference"
+        if reference_dir.exists():
+            for overlay in sorted(reference_dir.glob("*_overlay.png")):
                 # Only include run-01 overlays for initial mask extraction QC
                 if "run-01" not in overlay.stem:
                     continue
-                # Extract network name (e.g., "DefaultA" from "sub-01_DefaultA_thr_to_task-2vol_run-01_mean_overlay")
+                # Extract network name (e.g., "DefaultA" from "sub-01_DefaultA_thr_to_task-reference_run-01_mean_overlay")
                 network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
-                # Clean up the network name to remove the thr_to_task-2vol_run-XX_mean suffix
-                if "_thr_to_task-2vol" in network:
-                    network = network.split("_thr_to_task-2vol")[0]
-                plots.append((f"{network} Mask (2vol Space)", overlay))
+                # Clean up the network name to remove the thr_to_task-reference_run-XX_mean suffix
+                if "_thr_to_task-reference" in network:
+                    network = network.split("_thr_to_task-reference")[0]
+                plots.append((f"{network} Mask (Reference Space)", overlay))
 
         return plots
 
-    def get_2vol_qc_plots(self, run_id: int = 2) -> list[tuple[str, Path]]:
-        """Get ONLY 2vol coregistration QC plots for a specific run.
+    def get_reference_qc_plots(self, run_id: int = 2) -> list[tuple[str, Path]]:
+        """Get ONLY reference coregistration QC plots for a specific run.
 
         Use this for realtime coregistration approval where only
-        the 2vol overlays are relevant (ICA and subject space didn't change).
+        the reference overlays are relevant (ICA and subject space didn't change).
 
         Args:
             run_id: Run number to filter overlays (default 2 for realtime).
                     Only overlays containing "run-{run_id:02d}" in filename are included.
 
         Returns:
-            List of (label, path) tuples for 2vol overlay images
+            List of (label, path) tuples for reference overlay images
         """
         plots = []
         run_pattern = f"run-{run_id:02d}"
@@ -402,22 +402,22 @@ class QCReportManager:
             logger.debug(f"QC directory not found: {qc_dir}")
             return plots
 
-        # 2vol overlays only - filter by run number
-        twovol_dir = qc_dir / "overlays" / "2vol"
-        if twovol_dir.exists():
-            for overlay in sorted(twovol_dir.glob("*_overlay.png")):
+        # Reference overlays only - filter by run number
+        reference_dir = qc_dir / "overlays" / "reference"
+        if reference_dir.exists():
+            for overlay in sorted(reference_dir.glob("*_overlay.png")):
                 # Only include overlays for the specified run
                 if run_pattern not in overlay.stem:
                     continue
-                # Extract network name (e.g., "DefaultA" from "sub-01_DefaultA_thr_to_task-2vol_run-02_mean_overlay")
+                # Extract network name (e.g., "DefaultA" from "sub-01_DefaultA_thr_to_task-reference_run-02_mean_overlay")
                 network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
-                # Clean up the network name to remove the thr_to_task-2vol_run-XX_mean suffix
-                if "_thr_to_task-2vol" in network:
-                    network = network.split("_thr_to_task-2vol")[0]
-                plots.append((f"{network} Mask (2vol Space)", overlay))
+                # Clean up the network name to remove the thr_to_task-reference_run-XX_mean suffix
+                if "_thr_to_task-reference" in network:
+                    network = network.split("_thr_to_task-reference")[0]
+                plots.append((f"{network} Mask (Reference Space)", overlay))
 
         if not plots:
-            logger.debug(f"No 2vol overlay plots found in {twovol_dir} for {run_pattern}")
+            logger.debug(f"No reference overlay plots found in {reference_dir} for {run_pattern}")
 
         return plots
 

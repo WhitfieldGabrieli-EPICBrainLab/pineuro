@@ -38,7 +38,7 @@ datetime, pathlib, typing
 
 Notes
 -----
-Generated scripts handle cleanup of stale outputs (04_2vol/, qc/) to prevent
+Generated scripts handle cleanup of stale outputs (04_reference/, qc/) to prevent
 inconsistent state when masks are regenerated. The approval marker
 (.masks_approved) is also removed, requiring re-approval after regeneration.
 
@@ -161,11 +161,11 @@ from pineuro.qc import generate_alternative_overlays, generate_yeo_network_overl
 def clean_stale_outputs(root_dir: Path):
     """Remove directories and files that would become stale after regenerating masks.
 
-    - 04_2vol/: Coregistered masks from localizer session (must be re-run)
+    - 04_reference/: Coregistered masks from localizer session (must be re-run)
     - qc/: QC report and overlays (regenerated at the end)
     - .masks_approved: Approval marker (masks need re-approval after regeneration)
     """
-    stale_dirs = ["04_2vol", "qc"]
+    stale_dirs = ["04_reference", "qc"]
     for dirname in stale_dirs:
         dir_path = root_dir / dirname
         if dir_path.exists():
@@ -320,7 +320,7 @@ def main():
     if not qc_only:
         print()
         print("NOTE: Masks require re-approval in the GUI before proceeding.")
-        print("The 04_2vol/ directory was also removed because it contained")
+        print("The 04_reference/ directory was also removed because it contained")
         print("coregistered masks from the previous pipeline run.")
 
 
@@ -588,7 +588,7 @@ from pineuro import qc
 
 def clean_stale_outputs(root_dir: Path):
     """Remove stale outputs from previous runs."""
-    for dirname in ["04_2vol", "qc"]:
+    for dirname in ["04_reference", "qc"]:
         dir_path = root_dir / dirname
         if dir_path.exists():
             print(f"  Removing stale directory: {{dirname}}/")

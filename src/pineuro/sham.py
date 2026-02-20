@@ -398,7 +398,7 @@ def resolve_sham_masks(
     alternative_mask_targets: list[str],
     mask_extraction_dir: Path,
     participant_id: str,
-    twovol_subdir: str = "04_2vol",
+    reference_subdir: str = "04_reference",
     sham_mask_mode: str = "two_networks",
     hemisphere_network: str | None = None,
     target_hemisphere: str = "right",
@@ -421,8 +421,8 @@ def resolve_sham_masks(
         Directory containing mask extraction outputs
     participant_id : str
         Participant identifier
-    twovol_subdir : str
-        Subdirectory containing 2vol-coregistered masks (default: "04_2vol")
+    reference_subdir : str
+        Subdirectory containing reference-coregistered masks (default: "04_reference")
     sham_mask_mode : str
         Mode for mask selection: "two_networks" or "hemisphere_split"
     hemisphere_network : str, optional
@@ -444,10 +444,10 @@ def resolve_sham_masks(
         If hemisphere_split mode is used without hemisphere_network
     """
     mask_extraction_dir = Path(mask_extraction_dir)
-    masks_dir = mask_extraction_dir / twovol_subdir / "masks"
+    masks_dir = mask_extraction_dir / reference_subdir / "masks"
 
     if not masks_dir.exists():
-        # Try looking in 03_masks directly (for non-2vol-registered masks)
+        # Try looking in 03_masks directly (for non-reference-registered masks)
         masks_dir = mask_extraction_dir / "03_masks"
 
     # Build target list based on mode
@@ -473,7 +473,7 @@ def resolve_sham_masks(
     for target in targets:
         # Look for thresholded mask file with various naming patterns
         patterns = [
-            f"{participant_id}_{target}_thr_to_*.nii.gz",  # 2vol coregistered
+            f"{participant_id}_{target}_thr_to_*.nii.gz",  # reference coregistered
             f"{participant_id}_{target}_thr.nii.gz",  # Non-coregistered
             f"*_{target}_thr*.nii.gz",  # Any matching pattern
         ]
