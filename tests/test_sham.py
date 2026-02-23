@@ -1,7 +1,5 @@
 """Tests for pineuro.sham — randomization, condition lookup, replay provider."""
 
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
@@ -11,7 +9,6 @@ from pineuro.sham import (
     get_condition_for_participant,
     load_randomization,
 )
-
 
 # =============================================================================
 # generate_randomization

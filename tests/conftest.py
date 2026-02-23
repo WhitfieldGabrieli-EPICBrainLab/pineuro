@@ -5,12 +5,10 @@ Provides factory fixtures for creating synthetic neuroimaging data
 """
 
 import json
-from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 import pytest
-
 
 # =============================================================================
 # NIfTI Fixtures

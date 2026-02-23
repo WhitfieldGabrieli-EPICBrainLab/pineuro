@@ -1,14 +1,12 @@
 """Tests for pineuro.preprocessing — pipeline steps and volume handling."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import nibabel as nib
 import numpy as np
 import pytest
 
 from pineuro.preprocessing import concat, spatial_smoothing, temporal_filtering
-
 
 # =============================================================================
 # concat
@@ -128,8 +126,6 @@ class TestTemporalFiltering:
         result = nib.load(output_path).get_fdata()
         filtered_voxel = result[1, 1, 1, :]
 
-        # The slow drift power should be attenuated
-        original_drift_power = np.var(slow_drift)
         # Filter should have removed most of the drift
         assert np.var(filtered_voxel) < np.var(slow_drift + fast_signal)
 

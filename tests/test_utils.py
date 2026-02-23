@@ -25,7 +25,6 @@ from pineuro.utils import (
     save_timing_report,
 )
 
-
 # =============================================================================
 # outputs_exist
 # =============================================================================
@@ -140,7 +139,7 @@ class TestGetVolumeFiles:
 class TestTiming:
     def setup_method(self):
         """Reset timing state before each test."""
-        enable_timing()   # clears _timing_data
+        enable_timing()  # clears _timing_data
         disable_timing()  # then disable
 
     def test_enable_disable(self):

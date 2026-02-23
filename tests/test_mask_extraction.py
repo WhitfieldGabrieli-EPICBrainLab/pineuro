@@ -1,7 +1,5 @@
 """Tests for pineuro.mask_extraction — ICA, GLM, atlas, and manual mask workflows."""
 
-import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import nibabel as nib
@@ -13,7 +11,6 @@ from pineuro.mask_extraction import (
     load_mask_selections,
     save_mask_selections,
 )
-
 
 # =============================================================================
 # MaskSelection dataclass
@@ -148,9 +145,7 @@ class TestClusterThreshold:
         atlas = np.zeros((20, 20, 20), dtype=np.float64)
         atlas[5:15, 5:15, 5:15] = 1.0
 
-        mask, meta = cluster_threshold_stat_map(
-            stat, atlas, target_n_voxels=50, start_threshold=1.0
-        )
+        mask, meta = cluster_threshold_stat_map(stat, atlas, target_n_voxels=50, start_threshold=1.0)
 
         assert mask.sum() > 0
         assert mask.sum() <= 64  # Can't exceed cluster size
@@ -187,9 +182,7 @@ class TestRunIca:
             mock_canica_cls.return_value = mock_canica
             mock_canica.components_img_ = nib.Nifti1Image(mock_components, np.eye(4))
 
-            components_file, metadata_file = run_ica(
-                input_path, mask_path, output_dir, "test", n_components=5
-            )
+            components_file, metadata_file = run_ica(input_path, mask_path, output_dir, "test", n_components=5)
 
             assert mock_canica.fit.called
             assert components_file.exists()
@@ -221,7 +214,7 @@ class TestCoregisterReference:
         with (
             patch("pineuro.mask_extraction.dicom_to_nifti", return_value=fake_nifti) as mock_dcm,
             patch("pineuro.mask_extraction.compute_xfm") as mock_compute,
-            patch("pineuro.mask_extraction.apply_xfm") as mock_apply,
+            patch("pineuro.mask_extraction.apply_xfm"),
         ):
             mock_compute.return_value = (tmp_path / "warped.nii.gz", ["transform.mat"])
 

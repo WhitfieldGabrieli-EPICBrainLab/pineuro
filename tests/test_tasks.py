@@ -1,10 +1,7 @@
 """Tests for pineuro.tasks — plugin registry, factory, designs, session state."""
 
-from pathlib import Path
-
 import numpy as np
 import pytest
-
 
 # =============================================================================
 # Task registry

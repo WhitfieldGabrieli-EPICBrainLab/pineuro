@@ -1,7 +1,5 @@
 """Tests for pineuro.session — configuration dataclasses and visit management."""
 
-from pathlib import Path
-
 import pytest
 
 from pineuro.session import (
@@ -14,7 +12,6 @@ from pineuro.session import (
     detect_existing_visits,
     next_visit_id,
 )
-
 
 # =============================================================================
 # PathConfig

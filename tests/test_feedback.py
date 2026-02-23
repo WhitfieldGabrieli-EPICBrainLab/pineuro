@@ -1,14 +1,10 @@
 """Tests for pineuro.feedback — IncrementalGLM, FeedbackEstimator, ConnectivityEstimator."""
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import nibabel as nib
 import numpy as np
 import pytest
 
 from pineuro.feedback import IncrementalGLM
-
 
 # =============================================================================
 # IncrementalGLM — Core Algorithm Tests

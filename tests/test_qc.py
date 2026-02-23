@@ -4,12 +4,9 @@ import matplotlib
 
 matplotlib.use("Agg")  # Non-interactive backend for testing
 
-from pathlib import Path
 
 import nibabel as nib
 import numpy as np
-import pytest
-
 
 # =============================================================================
 # summarize_mask
