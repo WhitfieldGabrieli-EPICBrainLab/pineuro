@@ -2014,6 +2014,183 @@ class ParticipantWorkflowScreen:
         result["total_size"] = result["collection_size"] + result["tmp_size"]
         return result
 
+    def _build_scanner_connection_section(self) -> ft.ExpansionPanel:
+        """Build the scanner connection test section.
+
+        Only shown when simulator mode is disabled. Provides a test button
+        and setup guide link for verifying real-time scanner connectivity.
+        """
+        config = self.study_config.session_config
+        scanner_ip = config["scan"].get("scanner_ip", "")
+        watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
+
+        self._scanner_status_icon = ft.Icon(
+            ft.Icons.HELP_OUTLINE, color=ft.Colors.GREY, size=20
+        )
+        self._scanner_status_text = ft.Text(
+            "Not tested yet",
+            size=12,
+            color=ft.Colors.GREY_600,
+            italic=True,
+        )
+
+        test_button = ft.ElevatedButton(
+            "Test Connection",
+            icon=ft.Icons.SETTINGS_ETHERNET,
+            on_click=lambda e: self._on_test_scanner_connection(),
+            disabled=self._is_running,
+        )
+
+        setup_guide_button = ft.TextButton(
+            "Setup Guide",
+            icon=ft.Icons.HELP_OUTLINE,
+            on_click=lambda e: self._on_show_setup_guide(),
+        )
+
+        ip_text = scanner_ip if scanner_ip else "not set"
+
+        return ft.ExpansionPanel(
+            header=ft.ListTile(
+                title=ft.Text("Scanner Connection", weight=ft.FontWeight.BOLD),
+            ),
+            content=ft.Column(
+                [
+                    ft.Text(
+                        f"IP: {ip_text} | Dir: {watch_dir}",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                test_button,
+                                self._scanner_status_icon,
+                                self._scanner_status_text,
+                            ],
+                            spacing=10,
+                        ),
+                        padding=ft.padding.only(left=10),
+                    ),
+                    ft.Container(
+                        content=setup_guide_button,
+                        padding=ft.padding.only(left=10),
+                    ),
+                ],
+                spacing=5,
+            ),
+            expanded=True,
+        )
+
+    def _on_test_scanner_connection(self):
+        """Handle scanner connection test button click."""
+        from ..components.scanner_connection_dialog import ScannerConnectionDialog
+
+        config = self.study_config.session_config
+        scanner_ip = config["scan"].get("scanner_ip", "")
+        watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
+
+        def on_result(result):
+            if result is None:
+                return
+            try:
+                if result.overall_ok:
+                    self._scanner_status_icon.name = ft.Icons.CHECK_CIRCLE
+                    self._scanner_status_icon.color = ft.Colors.GREEN
+                    self._scanner_status_text.value = "Connection OK"
+                    self._scanner_status_text.color = ft.Colors.GREEN
+                    self._scanner_status_text.italic = False
+                else:
+                    self._scanner_status_icon.name = ft.Icons.ERROR
+                    self._scanner_status_icon.color = ft.Colors.RED
+                    self._scanner_status_text.value = "Issues detected"
+                    self._scanner_status_text.color = ft.Colors.RED
+                    self._scanner_status_text.italic = False
+                self.page.update()
+            except Exception:
+                pass
+
+        dialog = ScannerConnectionDialog(
+            page=self.page,
+            scanner_ip=scanner_ip,
+            watch_dir=watch_dir,
+            on_close=on_result,
+        )
+        dialog.show()
+
+    def _on_show_setup_guide(self):
+        """Show scanner setup guide dialog from participant workflow."""
+        from pineuro.scanner_setup import get_current_platform_key, get_setup_instructions
+
+        config = self.study_config.session_config
+        watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
+        scanner_ip = config["scan"].get("scanner_ip", "")
+
+        instructions = get_setup_instructions(watch_dir, scanner_ip)
+        platform_key = get_current_platform_key()
+        initial_index = {"windows": 0, "macos": 1, "linux": 2}.get(platform_key, 0)
+
+        def _make_content(text: str) -> ft.Container:
+            return ft.Container(
+                content=ft.Column(
+                    [ft.Text(text, font_family="monospace", selectable=True, size=12)],
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                padding=10,
+            )
+
+        tabs = ft.Tabs(
+            length=3,
+            selected_index=initial_index,
+            content=ft.Column(
+                [
+                    ft.TabBar(
+                        tabs=[
+                            ft.Tab(label="Windows"),
+                            ft.Tab(label="macOS"),
+                            ft.Tab(label="Linux"),
+                        ],
+                    ),
+                    ft.TabBarView(
+                        controls=[
+                            _make_content(instructions["windows"]),
+                            _make_content(instructions["macos"]),
+                            _make_content(instructions["linux"]),
+                        ],
+                        expand=True,
+                    ),
+                ],
+                expand=True,
+            ),
+            expand=True,
+        )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Scanner Setup Guide"),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text("SMB Share Setup", size=14, weight=ft.FontWeight.BOLD),
+                        ft.Container(content=tabs, height=300),
+                        ft.Divider(),
+                        ft.Text("Scanner Console Configuration", size=14, weight=ft.FontWeight.BOLD),
+                        ft.Text(instructions["scanner_notes"], size=12),
+                    ],
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                width=700,
+                height=550,
+            ),
+            actions=[ft.TextButton("Close", on_click=lambda e: _close())],
+        )
+
+        def _close():
+            dialog.open = False
+            self.page.update()
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
     def _build_utilities_section(self) -> ft.ExpansionPanel:
         """Build the session utilities section with cleanup step.
 
@@ -4906,8 +5083,14 @@ class ParticipantWorkflowScreen:
 
         # Left panel: Step dashboard
         # Store reference for dynamic updates
-        # Only show localizer and mask extraction sections if NOT in mask reuse mode
         panels = []
+        # Show scanner connection section when NOT in simulator mode
+        is_simulator = self.study_config.session_config.get("scan", {}).get(
+            "simulator_enabled", True
+        )
+        if not is_simulator:
+            panels.append(self._build_scanner_connection_section())
+        # Only show localizer and mask extraction sections if NOT in mask reuse mode
         if not self._is_mask_reuse_mode:
             panels.append(self._build_localizer_session_section())
             panels.append(self._build_mask_extraction_section())

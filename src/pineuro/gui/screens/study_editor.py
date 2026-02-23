@@ -119,6 +119,7 @@ class StudyEditorScreen:
                 "collection_speed": 10.0,  # Speed for localizer/collection
                 "feedback_simulator_speed": 1.0,  # Speed for feedback runs
                 "scanner_dicom_dir": "/BOLD_DICOM",
+                "scanner_ip": "",
             },
             "mask": {
                 "n_yeo": 17,
@@ -258,6 +259,21 @@ class StudyEditorScreen:
             label="Scanner DICOM Directory",
             value=config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM"),
             hint_text="Directory where scanner exports DICOMs (e.g., /BOLD_DICOM)",
+        )
+
+        # Scanner IP address for connection testing
+        self.scanner_ip_field = ft.TextField(
+            width=290,
+            label="Scanner IP Address",
+            value=config["scan"].get("scanner_ip", ""),
+            hint_text="e.g., 192.168.2.1",
+        )
+
+        # Setup guide button
+        self.scanner_setup_guide_btn = ft.OutlinedButton(
+            "Setup Guide",
+            icon=ft.Icons.HELP_OUTLINE,
+            on_click=lambda e: self._show_scanner_setup_guide(),
         )
 
         # --- Localizer tab fields ---
@@ -1119,6 +1135,79 @@ class StudyEditorScreen:
 
         self.name_field.update()
 
+    def _show_scanner_setup_guide(self):
+        """Show platform-specific SMB share setup instructions dialog."""
+        from pineuro.scanner_setup import get_current_platform_key, get_setup_instructions
+
+        watch_dir = self.scanner_dicom_dir_field.value.strip() or "/BOLD_DICOM"
+        scanner_ip = self.scanner_ip_field.value.strip()
+
+        instructions = get_setup_instructions(watch_dir, scanner_ip)
+        platform_key = get_current_platform_key()
+        initial_index = {"windows": 0, "macos": 1, "linux": 2}.get(platform_key, 0)
+
+        def _make_content(text: str) -> ft.Container:
+            return ft.Container(
+                content=ft.Column(
+                    [ft.Text(text, font_family="monospace", selectable=True, size=12)],
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                padding=10,
+            )
+
+        tabs = ft.Tabs(
+            length=3,
+            selected_index=initial_index,
+            content=ft.Column(
+                [
+                    ft.TabBar(
+                        tabs=[
+                            ft.Tab(label="Windows"),
+                            ft.Tab(label="macOS"),
+                            ft.Tab(label="Linux"),
+                        ],
+                    ),
+                    ft.TabBarView(
+                        controls=[
+                            _make_content(instructions["windows"]),
+                            _make_content(instructions["macos"]),
+                            _make_content(instructions["linux"]),
+                        ],
+                        expand=True,
+                    ),
+                ],
+                expand=True,
+            ),
+            expand=True,
+        )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Scanner Setup Guide"),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text("SMB Share Setup", size=14, weight=ft.FontWeight.BOLD),
+                        ft.Container(content=tabs, height=300),
+                        ft.Divider(),
+                        ft.Text("Scanner Console Configuration", size=14, weight=ft.FontWeight.BOLD),
+                        ft.Text(instructions["scanner_notes"], size=12),
+                    ],
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                width=700,
+                height=550,
+            ),
+            actions=[ft.TextButton("Close", on_click=lambda e: _close())],
+        )
+
+        def _close():
+            dialog.open = False
+            self.page.update()
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
     def _on_simulator_mode_changed(self, e):
         """Handle simulator mode checkbox change."""
         is_simulator = self.simulator_enabled_checkbox.value
@@ -1128,6 +1217,8 @@ class StudyEditorScreen:
         self.feedback_simulator_speed_field.visible = is_simulator
         self.scanner_dicom_dir_field.visible = not is_simulator
         self.scanner_dicom_dir_browse_btn.visible = not is_simulator
+        self.scanner_ip_field.visible = not is_simulator
+        self.scanner_setup_guide_btn.visible = not is_simulator
 
         # Update simulator instruction text
         if hasattr(self, "simulator_instruction_text"):
@@ -1920,6 +2011,8 @@ class StudyEditorScreen:
         self.feedback_simulator_speed_field.visible = is_simulator
         self.scanner_dicom_dir_field.visible = not is_simulator
         self.scanner_dicom_dir_browse_btn.visible = not is_simulator
+        self.scanner_ip_field.visible = not is_simulator
+        self.scanner_setup_guide_btn.visible = not is_simulator
 
         # Get task info for display
         task_type = self.task_type_dropdown.value
@@ -1998,6 +2091,14 @@ class StudyEditorScreen:
                             self.scanner_dicom_dir_field,
                             self.scanner_dicom_dir_browse_btn,
                         ]
+                    ),
+                    ft.Row(
+                        [
+                            self.scanner_ip_field,
+                            self.scanner_setup_guide_btn,
+                        ],
+                        alignment=ft.MainAxisAlignment.START,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     self.simulator_instruction_text,
                     ft.Divider(),
@@ -2960,6 +3061,7 @@ class StudyEditorScreen:
             config["scan"]["collection_speed"] = float(self.collection_speed_field.value)
             config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value)
             config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip()
+            config["scan"]["scanner_ip"] = self.scanner_ip_field.value.strip()
             # Only save mapping if in mapping mode
             if self.simulator_source_mode_radio.value == "mapping":
                 config["scan"]["simulator_source_mapping"] = self.simulator_source_mapping_field.value.strip()

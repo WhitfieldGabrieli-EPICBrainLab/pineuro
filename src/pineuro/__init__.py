@@ -150,6 +150,12 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "generate_mask_extraction_script": (".script_generator", "generate_mask_extraction_script"),
     "generate_task_mask_extraction_script": (".script_generator", "generate_task_mask_extraction_script"),
     "save_script": (".script_generator", "save_script"),
+    # --- scanner_setup.py (lightweight: stdlib only) ---
+    "test_scanner_connection": (".scanner_setup", "test_scanner_connection"),
+    "ConnectionTestResult": (".scanner_setup", "ConnectionTestResult"),
+    "ping_scanner": (".scanner_setup", "ping_scanner"),
+    "check_watch_directory": (".scanner_setup", "check_watch_directory"),
+    "get_setup_instructions": (".scanner_setup", "get_setup_instructions"),
     # --- config module ---
     "config": (".config", ""),  # Module import, not attribute
 }
@@ -250,6 +256,12 @@ __all__ = [
     "generate_mask_extraction_script",
     "generate_task_mask_extraction_script",
     "save_script",
+    # Scanner setup
+    "test_scanner_connection",
+    "ConnectionTestResult",
+    "ping_scanner",
+    "check_watch_directory",
+    "get_setup_instructions",
     # Configuration
     "config",
 ]
