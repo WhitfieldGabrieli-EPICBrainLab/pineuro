@@ -324,7 +324,7 @@ class TaskBase(ABC):  # noqa: B024
         if sys.platform != "win32":
             return
 
-        from ctypes import windll
+        from ctypes import windll  # type: ignore[attr-defined]  # Windows-only, guarded above
 
         current_thread = windll.kernel32.GetCurrentThreadId()
 
