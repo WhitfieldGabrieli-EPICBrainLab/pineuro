@@ -2024,9 +2024,7 @@ class ParticipantWorkflowScreen:
         scanner_ip = config["scan"].get("scanner_ip", "")
         watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
 
-        self._scanner_status_icon = ft.Icon(
-            ft.Icons.HELP_OUTLINE, color=ft.Colors.GREY, size=20
-        )
+        self._scanner_status_icon = ft.Icon(ft.Icons.HELP_OUTLINE, color=ft.Colors.GREY, size=20)
         self._scanner_status_text = ft.Text(
             "Not tested yet",
             size=12,
@@ -5085,9 +5083,7 @@ class ParticipantWorkflowScreen:
         # Store reference for dynamic updates
         panels = []
         # Show scanner connection section when NOT in simulator mode
-        is_simulator = self.study_config.session_config.get("scan", {}).get(
-            "simulator_enabled", True
-        )
+        is_simulator = self.study_config.session_config.get("scan", {}).get("simulator_enabled", True)
         if not is_simulator:
             panels.append(self._build_scanner_connection_section())
         # Only show localizer and mask extraction sections if NOT in mask reuse mode

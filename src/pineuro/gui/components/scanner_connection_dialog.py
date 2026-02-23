@@ -89,9 +89,7 @@ class ScannerConnectionDialog:
         self._dialog.open = True
         self.page.update()
 
-        threading.Thread(
-            target=self._run_test, daemon=True, name="scanner-connection-test"
-        ).start()
+        threading.Thread(target=self._run_test, daemon=True, name="scanner-connection-test").start()
 
     def _run_test(self):
         """Execute connection test in background thread."""
@@ -144,9 +142,7 @@ class ScannerConnectionDialog:
             icon = ft.Icons.ERROR
             color = ft.Colors.RED
 
-        self._dir_status.content = self._build_result_row(
-            "Watch Directory", result.dir_detail, icon, color
-        )
+        self._dir_status.content = self._build_result_row("Watch Directory", result.dir_detail, icon, color)
 
         # Overall banner
         if result.overall_ok:
@@ -197,9 +193,7 @@ class ScannerConnectionDialog:
             spacing=8,
         )
 
-    def _build_result_row(
-        self, label: str, detail: str, icon: str, color: str
-    ) -> ft.Row:
+    def _build_result_row(self, label: str, detail: str, icon: ft.IconData, color: str) -> ft.Row:
         """Build a result row with status icon."""
         return ft.Row(
             [

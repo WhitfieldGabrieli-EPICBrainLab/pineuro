@@ -1,9 +1,6 @@
 """Tests for pineuro.scanner_setup."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from pineuro.scanner_setup import (
     ConnectionTestResult,
@@ -35,9 +32,7 @@ class TestParsePingLatency:
 
 class TestCheckWatchDirectory:
     def test_nonexistent(self, tmp_path):
-        exists, writable, empty, count, detail = check_watch_directory(
-            tmp_path / "nonexistent"
-        )
+        exists, writable, empty, count, detail = check_watch_directory(tmp_path / "nonexistent")
         assert exists is False
         assert writable is False
         assert "does not exist" in detail
@@ -98,6 +93,7 @@ class TestPingScanner:
     @patch("pineuro.scanner_setup.subprocess.run")
     def test_timeout(self, mock_run):
         import subprocess
+
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="ping", timeout=3)
         ok, latency, detail = ping_scanner("192.168.2.1")
         assert ok is False

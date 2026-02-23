@@ -13,7 +13,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -66,9 +66,7 @@ def ping_scanner(ip_address: str, timeout: float = 3.0) -> tuple[bool, float | N
         cmd = ["ping", "-c", "1", "-W", str(int(timeout)), ip_address]
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout + 5
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
         if result.returncode == 0:
             latency = _parse_ping_latency(result.stdout)
             if latency is not None:
@@ -166,9 +164,7 @@ def test_scanner_connection(
     result = ConnectionTestResult()
 
     if scanner_ip and scanner_ip.strip():
-        result.ping_ok, result.ping_latency_ms, result.ping_detail = ping_scanner(
-            scanner_ip, timeout=ping_timeout
-        )
+        result.ping_ok, result.ping_latency_ms, result.ping_detail = ping_scanner(scanner_ip, timeout=ping_timeout)
     else:
         result.ping_ok = None
         result.ping_detail = "Scanner IP not configured (ping skipped)"
@@ -184,7 +180,7 @@ def test_scanner_connection(
     return result
 
 
-test_scanner_connection.__test__ = False  # prevent pytest collection
+test_scanner_connection.__test__ = False  # type: ignore[attr-defined]  # prevent pytest collection
 
 
 def get_setup_instructions(watch_dir: str, scanner_ip: str = "") -> dict[str, str]:
@@ -283,7 +279,7 @@ def get_setup_instructions(watch_dir: str, scanner_ip: str = "") -> dict[str, st
         f"# 2. Set a Samba password for your user\n"
         f"sudo smbpasswd -a $USER\n\n"
         f"# 3. Create the DICOM watch directory\n"
-        f'sudo mkdir -p {watch_dir}\n'
+        f"sudo mkdir -p {watch_dir}\n"
         f"sudo chown $USER {watch_dir}\n"
         f"sudo chmod -R 773 {watch_dir}\n\n"
         f"# 4. Configure Samba\n"
