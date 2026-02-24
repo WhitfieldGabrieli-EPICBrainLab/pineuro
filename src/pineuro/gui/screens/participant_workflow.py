@@ -516,7 +516,10 @@ class ParticipantWorkflowScreen:
             self.page.update()
             return
 
-        mask_files = sorted(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
+        mask_files = sorted(
+            masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"),
+            key=lambda p: ("_reverse" in p.name, p.name),  # Forward first, reverse after
+        )
         if not mask_files:
             _snack = ft.SnackBar(
                 ft.Text("No thresholded masks found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE
@@ -555,10 +558,33 @@ class ParticipantWorkflowScreen:
         overlays_dir = qc_dir / "overlays" / "subject"
         overlays_dir.mkdir(parents=True, exist_ok=True)
         mask_cards: list[ft.Control] = []
+        added_reverse_divider = False
         for mask_file in mask_files:
             # Strip full .nii.gz suffix then participant prefix and _thr suffix
             bare = mask_file.name.replace(".nii.gz", "").replace(".nii", "")
             mask_name = bare.replace(f"{self.participant_id}_", "").replace("_thr", "")
+
+            # Add divider before first reverse contrast mask
+            if "_reverse" in mask_name and not added_reverse_divider:
+                added_reverse_divider = True
+                mask_cards.append(ft.Divider(height=2, color=ft.Colors.ORANGE_200))
+                mask_cards.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.SWAP_VERT, color=ft.Colors.ORANGE, size=16),
+                                ft.Text(
+                                    "Reverse Contrasts",
+                                    size=12,
+                                    color=ft.Colors.ORANGE_700,
+                                    weight=ft.FontWeight.W_500,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        padding=ft.padding.only(left=5, bottom=5),
+                    )
+                )
 
             # Get stats from selections
             sel = selections_data.get(mask_name, {})
@@ -613,7 +639,7 @@ class ParticipantWorkflowScreen:
                     bgcolor=ft.Colors.GREY_200,
                 )
 
-            # Build cluster table widget if available
+            # Build collapsible cluster table widget if available
             cluster_table_widget: ft.Control | None = None
             cluster_table_data = sel.get("cluster_table")
             if cluster_table_data:
@@ -642,31 +668,42 @@ class ParticipantWorkflowScreen:
                             ],
                         )
                     )
-                cluster_table_widget = ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text(
-                                f"Clusters ({len(cluster_table_data)})",
-                                size=12,
-                                weight=ft.FontWeight.W_500,
-                                color=ft.Colors.BLUE_700,
-                            ),
-                            ft.DataTable(
-                                columns=[
-                                    ft.DataColumn(ft.Text("#", size=11, weight=ft.FontWeight.BOLD)),
-                                    ft.DataColumn(ft.Text("Voxels", size=11, weight=ft.FontWeight.BOLD), numeric=True),
-                                    ft.DataColumn(ft.Text("Peak", size=11, weight=ft.FontWeight.BOLD), numeric=True),
-                                    ft.DataColumn(ft.Text("Region", size=11, weight=ft.FontWeight.BOLD)),
-                                ],
-                                rows=table_rows,
-                                column_spacing=15,
-                                data_row_min_height=28,
-                                heading_row_height=30,
-                            ),
+                table_content = ft.Container(
+                    content=ft.DataTable(
+                        columns=[
+                            ft.DataColumn(ft.Text("#", size=11, weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("Voxels", size=11, weight=ft.FontWeight.BOLD), numeric=True),
+                            ft.DataColumn(ft.Text("Peak", size=11, weight=ft.FontWeight.BOLD), numeric=True),
+                            ft.DataColumn(ft.Text("Region", size=11, weight=ft.FontWeight.BOLD)),
                         ],
-                        spacing=4,
+                        rows=table_rows,
+                        column_spacing=15,
+                        data_row_min_height=28,
+                        heading_row_height=30,
                     ),
+                    visible=False,
                     padding=ft.padding.symmetric(horizontal=5),
+                    animate_opacity=ft.Animation(200),
+                )
+
+                def _toggle_table(e, tc=table_content):
+                    tc.visible = not tc.visible
+                    # Update the chevron icon
+                    e.control.icon = ft.Icons.EXPAND_LESS if tc.visible else ft.Icons.EXPAND_MORE
+                    tc.update()
+                    e.control.update()
+
+                cluster_table_widget = ft.Column(
+                    [
+                        ft.TextButton(
+                            f"Clusters ({len(cluster_table_data)})",
+                            icon=ft.Icons.EXPAND_MORE,
+                            style=ft.ButtonStyle(color=ft.Colors.BLUE_700),
+                            on_click=_toggle_table,
+                        ),
+                        table_content,
+                    ],
+                    spacing=0,
                 )
 
             card_children = [
@@ -3121,7 +3158,10 @@ class ParticipantWorkflowScreen:
                     except KeyError:
                         pass
             if contrasts:
-                return list(contrasts.keys())
+                names = list(contrasts.keys())
+                if config.get("mask", {}).get("include_reverse_contrasts", False):
+                    names = names + [f"{n}_reverse" for n in names]
+                return names
         return list(config.get("mask", {}).get("mask_names", []))
 
     def _get_blind_display_names(self, mask_names: list[str]) -> list[str] | None:

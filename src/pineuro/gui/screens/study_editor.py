@@ -303,6 +303,14 @@ class StudyEditorScreen:
             italic=True,
         )
 
+        # Reverse contrasts checkbox (task-based localizers only)
+        is_task_localizer = config["scan"].get("localizer_task_type", "rest") != "rest"
+        self.include_reverse_contrasts_checkbox = ft.Checkbox(
+            label="Include reverse contrasts (enables dual-network from single-contrast localizer)",
+            value=config.get("mask", {}).get("include_reverse_contrasts", False),
+            on_change=self._on_include_reverse_contrasts_changed,
+        )
+
         self.localizer_tr_field = ft.TextField(
             width=600,
             label="TR (seconds)",
@@ -470,11 +478,11 @@ class StudyEditorScreen:
         )
 
         # Two-tier atlas selection for cluster thresholding
-        # First tier: atlas source (Harvard-Oxford, AAL, Schaefer)
+        # First tier: atlas source (Harvard-Oxford, AAL, Schaefer, Gray Matter)
         cluster_atlas_options = [
             ft.dropdown.Option(key=k, text=v["display_name"])
             for k, v in ATLAS_SOURCES.items()
-            if v["type"] == "anatomical" or k.startswith("schaefer")
+            if v["type"] in ("anatomical", "tissue") or k.startswith("schaefer")
         ]
         current_atlas_source = config["mask"].get("atlas_source") or "harvard_oxford"
         self.atlas_source_dropdown = ft.Dropdown(
@@ -664,11 +672,10 @@ class StudyEditorScreen:
             width=600,
             label="Feedback signal",
             options=[
-                ft.dropdown.Option("activation", "Activation (dual-network)"),
-                ft.dropdown.Option("activation_single", "Activation (single-network)"),
+                ft.dropdown.Option("activation", "Activation (differential)"),
                 ft.dropdown.Option("connectivity", "Connectivity (sliding-window correlation)"),
             ],
-            value=feedback_mode_val,
+            value="activation" if feedback_mode_val == "activation_single" else feedback_mode_val,
             on_select=self._on_feedback_mode_changed,
         )
 
@@ -763,26 +770,6 @@ class StudyEditorScreen:
                 self.connectivity_target_dropdown,
             ],
             visible=is_conn_mode,
-        )
-
-        # Activation polarity config (shown in activation_single mode)
-        polarity_val = config.get("feedback", {}).get("activation_polarity", "positive_up")
-        is_single_mode = feedback_mode_val == "activation_single"
-        self.activation_polarity_dropdown = ft.Dropdown(
-            width=600,
-            label="Activation polarity",
-            options=[
-                ft.dropdown.Option("positive_up", "Positive activation moves ball UP"),
-                ft.dropdown.Option("negative_up", "Negative activation moves ball UP (reduce activation)"),
-            ],
-            value=polarity_val,
-        )
-        self.activation_single_section = ft.Column(
-            [
-                ft.Text("Single-Network Activation", size=14, weight=ft.FontWeight.W_500),
-                self.activation_polarity_dropdown,
-            ],
-            visible=is_single_mode,
         )
 
         # Intermittent feedback mode (checkbox + interval field)
@@ -1056,6 +1043,16 @@ class StudyEditorScreen:
                 padding=10,
             )
 
+    def _on_include_reverse_contrasts_changed(self, e):
+        """Handle include reverse contrasts checkbox change."""
+        enabled = self.include_reverse_contrasts_checkbox.value
+
+        # Store in config
+        self.study_config.session_config.setdefault("mask", {})["include_reverse_contrasts"] = enabled
+
+        # Refresh feedback dropdowns with updated contrast key options
+        self._update_feedback_dropdowns_for_localizer()
+
     def _get_yeo_network_options(self, n_networks: int) -> list:
         """Get network options for dropdowns based on network count.
 
@@ -1069,6 +1066,58 @@ class StudyEditorScreen:
 
         labels = YEO_7_LABELS if n_networks == 7 else YEO_17_LABELS
         return [ft.dropdown.Option(key=label, text=label) for label in labels]
+
+    def _update_feedback_dropdowns_for_localizer(self):
+        """Update feedback dropdowns with contrast key options for task-based localizers.
+
+        When the localizer is task-based, repopulate all network/mask dropdowns
+        with contrast key names (plus _reverse suffixes when enabled) instead
+        of Yeo network labels.
+        """
+        import contextlib
+
+        config = self.study_config.session_config
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        if localizer_task_type == "rest":
+            return
+
+        # Build contrast key options from task metadata
+        contrasts = config.get("mask", {}).get("contrasts", {})
+        if not contrasts:
+            from pineuro.tasks.task_registry import get_task_metadata
+
+            try:
+                metadata = get_task_metadata(localizer_task_type)
+                contrasts = metadata.default_contrasts or {}
+            except (KeyError, ValueError):
+                return
+
+        names = list(contrasts.keys())
+        if config.get("mask", {}).get("include_reverse_contrasts", False):
+            names = names + [f"{n}_reverse" for n in names]
+
+        new_options = [ft.dropdown.Option(key=n, text=n) for n in names]
+
+        # Update all feedback-related dropdowns
+        for dropdown in [
+            self.first_network_dropdown,
+            self.second_network_dropdown,
+            self.sham_first_network_dropdown,
+            self.sham_second_network_dropdown,
+            self.sham_hemisphere_network_dropdown,
+            self.differential_positive_dropdown,
+            self.differential_negative_dropdown,
+            self.connectivity_pair_a_dropdown,
+            self.connectivity_pair_b_dropdown,
+        ]:
+            old_value = dropdown.value
+            dropdown.options = new_options
+            valid_keys = [opt.key for opt in new_options]
+            if old_value not in valid_keys:
+                dropdown.value = None
+
+        with contextlib.suppress(Exception):
+            self.page.update()
 
     def _on_network_atlas_changed(self, e):
         """Handle network atlas change - update all network dropdowns."""
@@ -1096,23 +1145,19 @@ class StudyEditorScreen:
             if old_value not in valid_keys:
                 dropdown.value = None
 
-        # Update feedback mode dropdown and section visibility based on mask count
+        # Update feedback mode dropdown based on mask count
         n_networks = len(new_options)
         if n_networks < 2:
-            # Only single-network mode available
             self.feedback_mode_dropdown.options = [
-                ft.dropdown.Option("activation_single", "Activation (single-network)"),
+                ft.dropdown.Option("activation", "Activation (differential)"),
             ]
-            if self.feedback_mode_dropdown.value != "activation_single":
-                self.feedback_mode_dropdown.value = "activation_single"
+            if self.feedback_mode_dropdown.value not in ("activation",):
+                self.feedback_mode_dropdown.value = "activation"
             self.differential_row.visible = False
             self.connectivity_section.visible = False
-            self.activation_single_section.visible = True
         else:
-            # Restore all options when 2+ masks
             self.feedback_mode_dropdown.options = [
-                ft.dropdown.Option("activation", "Activation (dual-network)"),
-                ft.dropdown.Option("activation_single", "Activation (single-network)"),
+                ft.dropdown.Option("activation", "Activation (differential)"),
                 ft.dropdown.Option("connectivity", "Connectivity (sliding-window correlation)"),
             ]
 
@@ -1125,6 +1170,17 @@ class StudyEditorScreen:
         atlas_source = self.atlas_source_dropdown.value
         if not atlas_source:
             return
+
+        # Gray matter uses whole-brain — no region selection needed
+        if atlas_source == "gray_matter":
+            self.atlas_region_dropdown.options = []
+            self.atlas_region_dropdown.value = None
+            self.atlas_region_dropdown.visible = False
+            with contextlib.suppress(Exception):
+                self.page.update()
+            return
+
+        self.atlas_region_dropdown.visible = True
 
         # Show loading state
         self.atlas_region_dropdown.options = [ft.dropdown.Option(key="__loading__", text="Loading regions...")]
@@ -1320,7 +1376,6 @@ class StudyEditorScreen:
         mode = self.feedback_mode_dropdown.value
         self.differential_row.visible = mode == "activation"
         self.connectivity_section.visible = mode == "connectivity"
-        self.activation_single_section.visible = mode == "activation_single"
         self._update_sham_visibility()
         self.page.update()
 
@@ -1740,6 +1795,15 @@ class StudyEditorScreen:
             with contextlib.suppress(Exception):
                 self.contrast_info_text.update()
 
+        # Toggle reverse contrasts checkbox visibility (task-based only)
+        if hasattr(self, "include_reverse_contrasts_checkbox"):
+            self.include_reverse_contrasts_checkbox.visible = not is_rest
+            with contextlib.suppress(Exception):
+                self.include_reverse_contrasts_checkbox.update()
+
+        # Refresh feedback dropdowns with contrast keys when task-based
+        self._update_feedback_dropdowns_for_localizer()
+
         # Recreate localizer task parameter fields
         self._create_localizer_task_parameter_fields()
 
@@ -2048,6 +2112,9 @@ class StudyEditorScreen:
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
 
+        # Populate feedback dropdowns with contrast keys for task-based localizers
+        self._update_feedback_dropdowns_for_localizer()
+
         return ft.Column(
             [
                 # Header
@@ -2303,6 +2370,7 @@ class StudyEditorScreen:
                     ft.Divider(),
                     self.networks_section,
                     self.localizer_task_params_section,
+                    self.include_reverse_contrasts_checkbox,
                     ft.Text("Mask Extraction", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text(
                         "Configure how network masks are extracted from the stat maps.",
@@ -2456,7 +2524,6 @@ class StudyEditorScreen:
                     self.feedback_mode_dropdown,
                     self.differential_row,
                     self.connectivity_section,
-                    self.activation_single_section,
                     self.intermittent_enabled_checkbox,
                     self.feedback_interval_field,
                     ft.Divider(),
@@ -3230,11 +3297,27 @@ class StudyEditorScreen:
         except ValueError:
             n_networks = 2  # Default fallback
 
-        selected_networks = []
-        if self.first_network_dropdown.value:
-            selected_networks.append(self.first_network_dropdown.value)
-        if n_networks >= 2 and self.second_network_dropdown.value:
-            selected_networks.append(self.second_network_dropdown.value)
+        is_task_localizer = config.get("mask", {}).get("localizer_type", "rest") == "task"
+        if is_task_localizer:
+            # For task-based localizers, mask_names are derived from contrast keys
+            contrasts = config.get("mask", {}).get("contrasts", {})
+            if not contrasts:
+                localizer_task_type = config.get("scan", {}).get("localizer_task_type")
+                if localizer_task_type:
+                    try:
+                        loc_meta = get_task_metadata(localizer_task_type)
+                        contrasts = loc_meta.default_contrasts or {}
+                    except (KeyError, ValueError):
+                        pass
+            selected_networks = list(contrasts.keys())
+            if config.get("mask", {}).get("include_reverse_contrasts", False):
+                selected_networks = selected_networks + [f"{n}_reverse" for n in selected_networks]
+        else:
+            selected_networks = []
+            if self.first_network_dropdown.value:
+                selected_networks.append(self.first_network_dropdown.value)
+            if n_networks >= 2 and self.second_network_dropdown.value:
+                selected_networks.append(self.second_network_dropdown.value)
         config["mask"]["yeo_targets"] = selected_networks
         config["mask"]["mask_names"] = selected_networks
 
@@ -3285,7 +3368,6 @@ class StudyEditorScreen:
             feedback_mode = self.feedback_mode_dropdown.value or "activation"
             config["feedback"]["feedback_mode"] = feedback_mode
             config["feedback"]["connectivity_target"] = self.connectivity_target_dropdown.value or "increase"
-            config["feedback"]["activation_polarity"] = self.activation_polarity_dropdown.value or "positive_up"
             if feedback_mode == "connectivity":
                 a = self.connectivity_pair_a_dropdown.value
                 b = self.connectivity_pair_b_dropdown.value
@@ -3295,10 +3377,6 @@ class StudyEditorScreen:
                     config["feedback"]["connectivity_pairs"] = None
                 window_str = self.connectivity_window_field.value.strip()
                 config["feedback"]["connectivity_window"] = int(window_str) if window_str else 15
-                config["feedback"]["differential_pair"] = None
-            elif feedback_mode == "activation_single":
-                config["feedback"]["connectivity_pairs"] = None
-                config["feedback"]["connectivity_window"] = 15
                 config["feedback"]["differential_pair"] = None
             else:
                 config["feedback"]["connectivity_pairs"] = None
@@ -3344,13 +3422,21 @@ class StudyEditorScreen:
             logger.error(f"Invalid task parameter: {e}")
             raise ValidationError(f"Invalid task parameter: {e}") from e
 
+        # Save reverse contrast setting
+        config["mask"]["include_reverse_contrasts"] = self.include_reverse_contrasts_checkbox.value
+
         # Save network assignment for current task type using its network_roles
         task_type = config["task"].get("task_type", "ball")
         if task_type not in config["task"]:
             config["task"][task_type] = {}
         try:
             task_meta = get_task_metadata(task_type)
-            dropdowns = [self.first_network_dropdown, self.second_network_dropdown]
+            is_task_localizer = config.get("mask", {}).get("localizer_type", "rest") == "task"
+            if is_task_localizer:
+                # For task-based localizers, derive roles from differential pair
+                dropdowns = [self.differential_positive_dropdown, self.differential_negative_dropdown]
+            else:
+                dropdowns = [self.first_network_dropdown, self.second_network_dropdown]
             for i, role in enumerate(task_meta.network_roles):
                 if i < len(dropdowns) and dropdowns[i].value:
                     config["task"][task_type][role.key] = dropdowns[i].value

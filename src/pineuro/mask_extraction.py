@@ -1971,7 +1971,20 @@ def fetch_atlas_mask(
         return output_file
 
     # --- Resolve atlas data and target regions ---
-    if atlas_source is not None and regions is not None:
+    if atlas_source == "gray_matter":
+        # Gray matter probability mask from templateflow (thresholded at 0.5)
+        import templateflow.api as tflow
+
+        gm_mni = Path(str(tflow.get("MNI152NLin2009cAsym", resolution=2, label="GM", suffix="probseg")))
+        gm_img = cast(Nifti1Image, load(gm_mni))
+        gm_data = gm_img.get_fdata()
+        binary_mask = (gm_data > 0.5).astype(np.uint8)
+        n_voxels = int(binary_mask.sum())
+        logger.info(f"Gray matter mask: {n_voxels} voxels in MNI space (threshold > 0.5)")
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        save(Nifti1Image(binary_mask, gm_img.affine, gm_img.header), output_file)
+        return output_file
+    elif atlas_source is not None and regions is not None:
         # New pathway: fetch atlas by source key
         atlas_img, atlas_data, labels, label_indices = _fetch_atlas_and_resolve_regions(atlas_source, regions)
         atlas_label = f"{atlas_source} ({len(regions)} regions)"
@@ -2428,6 +2441,7 @@ def mask_extraction_task(
     high_pass: float = 0.01,
     drift_model: str = "cosine",
     hrf_model: str = "spm",
+    include_reverse: bool = False,
     overwrite: bool = False,
     qc_enabled: bool = True,
     qc_dir: Union[str, Path] | None = None,
@@ -2511,6 +2525,11 @@ def mask_extraction_task(
         (default: "cosine")
     hrf_model : str
         HRF model: "spm", "spm + derivative", "glover", etc. (default: "spm")
+    include_reverse : bool
+        When True, generate a reverse (negated) mask for each contrast by
+        negating the stat map before thresholding. For contrast "A - B", the
+        reverse captures "B - A". Reverse masks are named "{mask_name}_reverse".
+        Enables dual-network feedback from a single-contrast localizer.
     overwrite : bool
         If True, rerun even if outputs exist (default: False)
     qc_enabled : bool
@@ -2722,6 +2741,30 @@ def mask_extraction_task(
 
         emit_progress(f"Step 1/{n_steps}", "GLM fit complete")
 
+    # Generate reverse contrasts by negating each forward stat map
+    if include_reverse:
+        for mask_name in list(contrasts.keys()):
+            reverse_name = f"{mask_name}_reverse"
+            forward_path = stat_map_paths[mask_name]
+            reverse_path = glm_dir / f"{participant_id}_{reverse_name}_{stat_type}map.nii.gz"
+            stat_map_paths[reverse_name] = reverse_path
+
+            if reverse_path.exists() and not overwrite:
+                logger.info(f"Reverse stat map exists: {reverse_path.name}")
+                continue
+
+            forward_img = cast(Nifti1Image, load(forward_path))
+            reverse_data = -forward_img.get_fdata()
+            reverse_img = Nifti1Image(reverse_data, forward_img.affine, forward_img.header)
+            nib.save(reverse_img, str(reverse_path))
+            logger.info(f"Generated reverse contrast: {reverse_name} (negated {mask_name})")
+
+    # Build combined contrasts dict for thresholding (forward + any reverse)
+    all_contrasts: dict[str, str] = dict(contrasts)
+    if include_reverse:
+        for mask_name, contrast_expr in contrasts.items():
+            all_contrasts[f"{mask_name}_reverse"] = f"-({contrast_expr})"
+
     # =========================================================================
     # Step 2/3: MNI Registration (atlas + Harvard-Oxford parcellation)
     # =========================================================================
@@ -2881,7 +2924,7 @@ def mask_extraction_task(
     network_thr_files = []
     selections: dict[str, TaskMaskSelection] = {}
 
-    for mask_name, contrast_expr in contrasts.items():
+    for mask_name, contrast_expr in all_contrasts.items():
         stat_map_path = stat_map_paths[mask_name]
 
         # Save unthresholded map to masks dir
@@ -3053,12 +3096,12 @@ def mask_extraction_task(
     if qc_enabled:
         emit_progress("Generating QC report...")
         qc_output_dir = Path(qc_dir) if qc_dir is not None else root_dir.parent / "qc"
-        mask_names = list(contrasts.keys())
+        mask_names = list(all_contrasts.keys())
         report_path = qc.generate_task_mask_extraction_report(
             mask_extraction_dir=root_dir,
             participant_id=participant_id,
             mask_names=mask_names,
-            contrasts=contrasts,
+            contrasts=all_contrasts,
             stat_type=stat_type,
             output_dir=qc_output_dir,
             overwrite=overwrite,

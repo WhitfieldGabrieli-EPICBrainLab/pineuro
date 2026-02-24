@@ -199,7 +199,6 @@ class BallTask(BaseTask):
         self.is_first_of_type = is_first_of_type
         self._signal_mode = signal_mode
         self._connectivity_target = connectivity_target
-        self._activation_polarity = kwargs.get("activation_polarity", "positive_up")
         self._last_connectivity = 0.0
 
         self._min_hits_threshold = min_hits_threshold
@@ -207,22 +206,13 @@ class BallTask(BaseTask):
         self._scale_adjust_factor = scale_adjust_factor
         self.circle_shrink_factor = circle_shrink_factor
 
-        if self._signal_mode == "activation_single":
-            # Single-network mode: require at least 1 mask
-            if len(coordinator.mask_names) < 1:
-                raise ValueError(f"BallTask requires at least 1 mask, got {len(coordinator.mask_names)}")
-            if mask_names is None:
-                mask_names = coordinator.mask_names[:1]
-            else:
-                mask_names = mask_names[:1]  # Use first mask only
-        else:
-            # Dual-network or connectivity mode: require 2 masks
-            if len(coordinator.mask_names) < 2:
-                raise ValueError(f"BallTask requires at least 2 masks, got {len(coordinator.mask_names)}")
-            if mask_names is None:
-                mask_names = coordinator.mask_names[:2]
-            elif len(mask_names) != 2:
-                raise ValueError(f"BallTask requires exactly 2 mask names, got {len(mask_names)}")
+        # Dual-network or connectivity mode: require 2 masks
+        if len(coordinator.mask_names) < 2:
+            raise ValueError(f"BallTask requires at least 2 masks, got {len(coordinator.mask_names)}")
+        if mask_names is None:
+            mask_names = coordinator.mask_names[:2]
+        elif len(mask_names) != 2:
+            raise ValueError(f"BallTask requires exactly 2 mask names, got {len(mask_names)}")
 
         self.mask_names = mask_names
 
@@ -332,8 +322,6 @@ class BallTask(BaseTask):
             header.append(f"{name}_activation")
         if self._signal_mode == "connectivity":
             header.extend(["connectivity", "target_hits", "nontarget_hits"])
-        elif self._signal_mode == "activation_single":
-            header.extend(["target_hits", "nontarget_hits"])
         else:
             header.extend([f"{self.mask_names[0]}_hits", f"{self.mask_names[1]}_hits"])
         self._psychopy_log_writer.writerow(header)
@@ -553,30 +541,6 @@ class BallTask(BaseTask):
             )
             return
 
-        # Single-network activation mode: one mask drives ball movement
-        if self._signal_mode == "activation_single":
-            name = self.mask_names[0]
-            val = activations.get(name, 0.0)
-
-            if abs(val) > self.pda_outlier_threshold:
-                self.outlier_count += 1
-                self._current_is_outlier = True
-                logger.info(f"Outlier detected: {name}={val:.4f} (threshold: {self.pda_outlier_threshold})")
-                return
-            self._current_is_outlier = False
-
-            self.current_activity = abs(val) / 10.0
-
-            # Apply polarity: "negative_up" negates so reducing activation → ball UP
-            directed_val = -val if self._activation_polarity == "negative_up" else val
-            self.current_direction = 1.0 if directed_val >= 0 else -1.0
-            direction_label = "UP" if self.current_direction > 0 else "DOWN"
-            logger.debug(
-                f"Single activation: {name}={val:.4f}, polarity={self._activation_polarity}, "
-                f"directed={directed_val:.4f} -> {direction_label}"
-            )
-            return
-
         # Dual-network activation mode
         acts = [activations[name] for name in self.mask_names]
 
@@ -688,7 +652,7 @@ class BallTask(BaseTask):
                 self.hit_counters[i] += 1
 
                 # Log hit event
-                if self._signal_mode in ("connectivity", "activation_single"):
+                if self._signal_mode == "connectivity":
                     label = "target" if self.network_directions[i] > 0 else "nontarget"
                 else:
                     label = self.mask_names[i]
@@ -1008,7 +972,7 @@ class BallTask(BaseTask):
             shapes.append({"type": "circle", "x": 0.5, "y": ball_y, "radius": 0.03, "fill": "white"})
 
             # Hit counter text
-            if self._signal_mode in ("connectivity", "activation_single"):
+            if self._signal_mode == "connectivity":
                 hit_text = f"target: {self.hit_counters[0]}  nontarget: {self.hit_counters[1]}"
             else:
                 hit_text = f"{self.mask_names[0]}: {self.hit_counters[0]}  {self.mask_names[1]}: {self.hit_counters[1]}"
@@ -1114,9 +1078,6 @@ class BallTask(BaseTask):
                 logger.info(f"Connectivity target: {self._connectivity_target}")
                 logger.info(f"Connectivity key: corr_{self.mask_names[0]}_{self.mask_names[1]}")
                 logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
-            elif self._signal_mode == "activation_single":
-                logger.info(f"Activation polarity: {self._activation_polarity}")
-                logger.info(f"Network: {self.mask_names[0]}")
             else:
                 logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
             logger.info(f"Scale factor: {self.scale_factor}")
@@ -1162,7 +1123,7 @@ class BallTask(BaseTask):
             logger.info("")
             logger.info("=== BallTask Session Complete ===")
             logger.info(f"Total volumes: {self.current_volume}/{self.coordinator.n_volumes}")
-            if self._signal_mode in ("connectivity", "activation_single"):
+            if self._signal_mode == "connectivity":
                 logger.info(f"Hits - target: {self.hit_counters[0]}, nontarget: {self.hit_counters[1]}")
             else:
                 logger.info(
@@ -1292,7 +1253,7 @@ BALL_TASK_METADATA = TaskMetadata(
         ),
     ],
     cross_parameter_validator=_validate_ball_hits,
-    n_networks=1,  # Minimum 1 network (single-network mode); dual-network also supported
+    n_networks=2,  # Requires 2 networks (dual-network activation or connectivity)
     network_roles=[
         NetworkRole("top_network", "Top Network (upward)", "Ball moves up when this network is more active"),
         NetworkRole("bottom_network", "Bottom Network (downward)", "Ball moves down when this network is more active"),

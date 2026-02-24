@@ -626,6 +626,11 @@ class MaskConfig:
         For task-based extraction: mapping of mask name to contrast expression.
         Example: {"CEN": "nback - rest", "DMN": "rest - nback"}.
         Ignored when localizer_type="rest".
+    include_reverse_contrasts : bool
+        When True, automatically generate a reverse (negated) mask for each
+        contrast. For example, if contrasts={"rnt": "rumination - distraction"},
+        a second mask "rnt_reverse" is created from the negated stat map.
+        This enables dual-network feedback from a single-contrast localizer.
     events_file : Path, optional
         For task-based extraction: path to BIDS events .tsv file.
         Ignored when localizer_type="rest".
@@ -673,6 +678,7 @@ class MaskConfig:
     # Task-based extraction fields
     localizer_type: str = "rest"
     contrasts: dict[str, str] = field(default_factory=dict)
+    include_reverse_contrasts: bool = False
     events_file: Path | None = None
     stat_type: str = "t"
     hrf_model: str = "spm"

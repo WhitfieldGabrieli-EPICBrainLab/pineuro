@@ -44,4 +44,6 @@ ATLAS_SOURCES: dict[str, dict[str, Any]] = {
     # Anatomical/parcel atlases (cluster thresholding pathway)
     "harvard_oxford": {"display_name": "Harvard-Oxford Cortical", "type": "anatomical"},
     "aal": {"display_name": "AAL (SPM12)", "type": "anatomical"},
+    # Whole-brain gray matter (no region selection needed)
+    "gray_matter": {"display_name": "Gray Matter (whole-brain)", "type": "tissue"},
 }

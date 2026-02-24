@@ -797,6 +797,8 @@ class PipelineRunner:
             cluster_start_threshold = config.get("mask", {}).get("cluster_start_threshold", 2.0)
             cluster_step = config.get("mask", {}).get("cluster_step", 0.1)
 
+            include_reverse = config.get("mask", {}).get("include_reverse_contrasts", False)
+
             _mask_files = mask_extraction_task(
                 participant_id=self.participant_id,
                 root_dir=mask_extraction_dir,
@@ -814,6 +816,7 @@ class PipelineRunner:
                 ref_file=str(ref_file),
                 cluster_start_threshold=cluster_start_threshold,
                 cluster_step=cluster_step,
+                include_reverse=include_reverse,
                 overwrite=self.overwrite,
                 smoothing_fwhm=smooth_fwhm,
                 high_pass=highpass,
@@ -1192,6 +1195,7 @@ class PipelineRunner:
         # For ICA-based (rest) extraction, mask names come from mask_names/yeo_targets.
         localizer_type = config["mask"].get("localizer_type", "rest")
         signal_mode = config["feedback"].get("feedback_mode", "activation")
+        include_reverse = config.get("mask", {}).get("include_reverse_contrasts", False)
         if localizer_type == "task":
             contrasts = config["mask"].get("contrasts", {})
             real_mask_names = list(contrasts.keys())
@@ -1204,15 +1208,17 @@ class PipelineRunner:
                         real_mask_names = list((loc_meta.default_contrasts or {}).keys())
                     except KeyError:
                         pass
+            # Append reverse contrast mask names
+            if include_reverse:
+                real_mask_names = real_mask_names + [f"{n}_reverse" for n in real_mask_names]
         else:
             real_mask_names = list(config["mask"]["mask_names"])
 
         # Resolve task mask names from network assignment in task config.
-        # Skip for single-network mode — the extracted contrast keys ARE the mask names.
         metadata = get_task_metadata(feedback_task_type)
         task_specific_config = task_config.get(feedback_task_type, {})
 
-        if signal_mode != "activation_single" and metadata.network_roles:
+        if metadata.network_roles:
             # Use explicit network assignment from task config (dual-network modes)
             assigned_names = []
             for role in metadata.network_roles:
@@ -1502,9 +1508,6 @@ class PipelineRunner:
             if signal_mode == "connectivity" and len(sham_mask_names) >= 2:
                 # Connectivity: use both sham masks as the pair
                 task_mask_names = sham_mask_names[:2]
-            elif signal_mode == "activation_single":
-                # Single-network: just swap the one mask
-                task_mask_names = [sham_mask_names[0]]
             else:
                 # Dual-network activation: swap first mask only
                 task_mask_names = [sham_mask_names[0], real_mask_names[1]]
@@ -1606,7 +1609,6 @@ class PipelineRunner:
             signal_mode = config["feedback"].get("feedback_mode", "activation")
 
             connectivity_target = config["feedback"].get("connectivity_target", "increase")
-            activation_polarity = config["feedback"].get("activation_polarity", "positive_up")
 
             factory_config = {
                 **task_specific_config,
@@ -1614,7 +1616,6 @@ class PipelineRunner:
                 "feedback_mode": feedback_mode,
                 "signal_mode": signal_mode,
                 "connectivity_target": connectivity_target,
-                "activation_polarity": activation_polarity,
                 "presenter_monitor": presenter_monitor,
             }
 
