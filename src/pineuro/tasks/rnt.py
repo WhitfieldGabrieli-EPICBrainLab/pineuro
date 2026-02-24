@@ -449,6 +449,21 @@ class RNTTask(BaseLocalizerTask):
     # Stimulus presentation
     # =========================================================================
 
+    def _show_fixation(self, duration: float) -> None:
+        """Display fixation cross using pre-created stimulus."""
+        from psychopy import core, event
+
+        self._fixation_stim.draw()
+        self._capture_and_emit_screenshot(force=True)
+        self.win.flip()
+
+        timer = core.CountdownTimer(duration)
+        while timer.getTime() > 0 and self._running:
+            if event.getKeys(keyList=["escape"]):
+                raise KeyboardInterrupt("Escaped during fixation")
+            self._fixation_stim.draw()
+            self.win.flip()
+
     def _show_text(self, text: str, duration: float) -> None:
         """Display text centered on screen for a given duration.
 
@@ -459,16 +474,10 @@ class RNTTask(BaseLocalizerTask):
         duration : float
             Duration in seconds.
         """
-        from psychopy import core, event, visual
+        from psychopy import core, event
 
-        text_stim = visual.TextStim(
-            self.win,
-            text=text,
-            height=0.06,
-            color="white",
-            wrapWidth=1.2,
-        )
-        text_stim.draw()
+        self._text_stim.text = text
+        self._text_stim.draw()
         self._capture_and_emit_screenshot(force=True)
         self.win.flip()
 
@@ -476,7 +485,29 @@ class RNTTask(BaseLocalizerTask):
         while timer.getTime() > 0 and self._running:
             if event.getKeys(keyList=["escape"]):
                 raise KeyboardInterrupt("Escaped during text display")
-            core.wait(0.01)
+            # Redraw every frame to survive window occlusion/focus changes
+            self._text_stim.draw()
+            self.win.flip()
+
+    def _update_marker(self, x_pos: float) -> None:
+        """Move the triangle marker to a new x position."""
+        self._rating_marker.pos = (x_pos, 0)
+
+    def _pos_to_x(self, pos: float) -> float:
+        """Convert a rating position (1-5) to screen x coordinate."""
+        return self._scale_left_x + (pos - 1) * self._tick_spacing
+
+    def _draw_rating_frame(self) -> None:
+        """Draw all rating scale components (reusable stimuli)."""
+        self._rating_question.draw()
+        self._rating_scale_line.draw()
+        for tm in self._rating_tick_marks:
+            tm.draw()
+        for tl in self._rating_tick_labels:
+            tl.draw()
+        self._rating_left_label.draw()
+        self._rating_right_label.draw()
+        self._rating_marker.draw()
 
     def _run_rating(
         self,
@@ -504,96 +535,19 @@ class RNTTask(BaseLocalizerTask):
         tuple of (int or None, float or None)
             (rating_value, response_time_seconds). Both None if timed out.
         """
-        from psychopy import core, event, visual
+        from psychopy import core, event
 
         scale_low = 1
         scale_high = 5
-        n_ticks = scale_high - scale_low + 1
-        scale_y = -0.15
-        scale_width = 0.5
-        tick_spacing = scale_width / (n_ticks - 1)
-        scale_left_x = -scale_width / 2
 
-        tick_x = [scale_left_x + i * tick_spacing for i in range(n_ticks)]
+        # Update text for this specific rating call
+        self._rating_question.text = question_text
+        self._rating_left_label.text = left_label_text
+        self._rating_right_label.text = right_label_text
 
         # Start at midpoint (3.0 for 1-5 scale)
         marker_pos = (scale_low + scale_high) / 2.0
-
-        def pos_to_x(pos):
-            return scale_left_x + (pos - scale_low) * tick_spacing
-
-        # Scale line
-        scale_line = visual.Line(
-            self.win,
-            start=(-scale_width / 2, scale_y),
-            end=(scale_width / 2, scale_y),
-            lineColor="white",
-            lineWidth=2,
-        )
-
-        # Tick marks and number labels
-        tick_marks = []
-        tick_labels_stim = []
-        for i, val in enumerate(range(scale_low, scale_high + 1)):
-            tick = visual.Line(
-                self.win,
-                start=(tick_x[i], scale_y - 0.015),
-                end=(tick_x[i], scale_y + 0.015),
-                lineColor="white",
-                lineWidth=2,
-            )
-            tick_marks.append(tick)
-            label = visual.TextStim(
-                self.win,
-                text=str(val),
-                pos=(tick_x[i], scale_y - 0.05),
-                height=0.035,
-                color="white",
-            )
-            tick_labels_stim.append(label)
-
-        # Endpoint labels
-        left_label = visual.TextStim(
-            self.win,
-            text=left_label_text,
-            pos=(tick_x[0], scale_y - 0.1),
-            height=0.035,
-            color="white",
-        )
-        right_label = visual.TextStim(
-            self.win,
-            text=right_label_text,
-            pos=(tick_x[-1], scale_y - 0.1),
-            height=0.035,
-            color="white",
-        )
-
-        # Triangle marker (pointing down toward scale line)
-        marker_size = 0.02
-        marker_gap = 0.02
-
-        def make_marker(x_pos):
-            return visual.ShapeStim(
-                self.win,
-                vertices=[
-                    (x_pos - marker_size, scale_y + marker_gap + marker_size * 2),
-                    (x_pos + marker_size, scale_y + marker_gap + marker_size * 2),
-                    (x_pos, scale_y + marker_gap),
-                ],
-                fillColor="white",
-                lineColor="white",
-                closeShape=True,
-            )
-
-        # Question text
-        question_stim = visual.TextStim(
-            self.win,
-            text=question_text,
-            pos=(0, 0.15),
-            height=0.06,
-            color="white",
-            wrapWidth=1.2,
-        )
+        self._update_marker(self._pos_to_x(marker_pos))
 
         clock = core.Clock()
         timer = core.CountdownTimer(self.rating_timeout)
@@ -634,16 +588,8 @@ class RNTTask(BaseLocalizerTask):
             if confirmed:
                 break
 
-            # Redraw each frame
-            question_stim.draw()
-            scale_line.draw()
-            for tm in tick_marks:
-                tm.draw()
-            for tl in tick_labels_stim:
-                tl.draw()
-            left_label.draw()
-            right_label.draw()
-            make_marker(pos_to_x(marker_pos)).draw()
+            self._update_marker(self._pos_to_x(marker_pos))
+            self._draw_rating_frame()
             self._capture_and_emit_screenshot()
             self.win.flip()
 
@@ -653,7 +599,7 @@ class RNTTask(BaseLocalizerTask):
         # Wait out remaining time with fixation
         remaining = timer.getTime()
         if remaining > 0:
-            self.show_fixation(remaining)
+            self._show_fixation(remaining)
 
         return response, rt_value
 
@@ -757,7 +703,7 @@ class RNTTask(BaseLocalizerTask):
         logger.info(
             f"[TIMING] Rest: onset={onset:.2f}s, duration={rest_duration:.2f}s"
         )
-        self.show_fixation(rest_duration)
+        self._show_fixation(rest_duration)
         self.record_event(onset, rest_duration, "rest", trial=trial_num)
 
         # 7. Distraction prompt
@@ -821,16 +767,92 @@ class RNTTask(BaseLocalizerTask):
         """Load keywords and create PsychoPy window."""
         self._load_keywords()
         self.create_window(monitor_position=self.monitor_position)
+        self._create_stimuli()
 
         logger.info(
             f"RNTTask setup: run={self.run_number}, "
             f"{len(self._memories)} memories loaded"
         )
 
+    def _create_stimuli(self) -> None:
+        """Pre-create reusable PsychoPy stimuli to avoid GPU memory leaks."""
+        from psychopy import visual
+
+        # Reusable text stimulus for _show_text()
+        self._text_stim = visual.TextStim(
+            self.win, text="", height=0.06, color="white", wrapWidth=1.2,
+        )
+
+        # Reusable fixation stimulus
+        self._fixation_stim = visual.TextStim(
+            self.win, text="+", height=0.3, color="white",
+        )
+
+        # Rating scale components (static geometry reused across all ratings)
+        scale_y = -0.15
+        scale_width = 0.5
+        n_ticks = 5
+        tick_spacing = scale_width / (n_ticks - 1)
+        scale_left_x = -scale_width / 2
+        tick_x = [scale_left_x + i * tick_spacing for i in range(n_ticks)]
+
+        self._rating_scale_line = visual.Line(
+            self.win,
+            start=(-scale_width / 2, scale_y),
+            end=(scale_width / 2, scale_y),
+            lineColor="white", lineWidth=2,
+        )
+        self._rating_tick_marks = []
+        self._rating_tick_labels = []
+        for i, val in enumerate(range(1, 6)):
+            self._rating_tick_marks.append(visual.Line(
+                self.win,
+                start=(tick_x[i], scale_y - 0.015),
+                end=(tick_x[i], scale_y + 0.015),
+                lineColor="white", lineWidth=2,
+            ))
+            self._rating_tick_labels.append(visual.TextStim(
+                self.win,
+                text=str(val),
+                pos=(tick_x[i], scale_y - 0.05),
+                height=0.035, color="white",
+            ))
+
+        self._rating_left_label = visual.TextStim(
+            self.win, text="", pos=(tick_x[0], scale_y - 0.1),
+            height=0.035, color="white",
+        )
+        self._rating_right_label = visual.TextStim(
+            self.win, text="", pos=(tick_x[-1], scale_y - 0.1),
+            height=0.035, color="white",
+        )
+        self._rating_question = visual.TextStim(
+            self.win, text="", pos=(0, 0.15),
+            height=0.06, color="white", wrapWidth=1.2,
+        )
+
+        # Reusable triangle marker — vertices defined relative to (0,0),
+        # moved to correct position via .pos to avoid vertex buffer issues
+        marker_size = 0.02
+        marker_gap = 0.02
+        self._rating_marker = visual.ShapeStim(
+            self.win,
+            vertices=[
+                (-marker_size, scale_y + marker_gap + marker_size * 2),
+                (marker_size, scale_y + marker_gap + marker_size * 2),
+                (0, scale_y + marker_gap),
+            ],
+            fillColor="white", lineColor="white", closeShape=True,
+        )
+        self._scale_left_x = scale_left_x
+        self._tick_spacing = tick_spacing
+
     def run_paradigm(self) -> None:
         """Execute the RNT localizer paradigm."""
         from psychopy import core
 
+        task_keys = [self.left_key, self.right_key, self.confirm_key]
+        advance_keys = list(set(task_keys + ["space", "return"]))
         self.show_instructions(
             [
                 "In this task, you will be asked to think about\n"
@@ -839,10 +861,12 @@ class RNTTask(BaseLocalizerTask):
                 "unrelated topics as a distraction.\n\n"
                 "After each period, you will rate how sad you feel\n"
                 "and how focused you are on your feelings.\n\n"
-                "Use button 1 to move left, button 3 to move right,\n"
-                "and button 2 to confirm your rating.\n\n"
+                f"Use button {self.left_key} to move left, "
+                f"button {self.right_key} to move right,\n"
+                f"and button {self.confirm_key} to confirm your rating.\n\n"
                 "Press any button to begin."
-            ]
+            ],
+            advance_keys=advance_keys,
         )
 
         self.wait_for_trigger()

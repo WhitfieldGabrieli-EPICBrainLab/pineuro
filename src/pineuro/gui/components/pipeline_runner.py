@@ -747,8 +747,21 @@ class PipelineRunner:
 
             contrasts = config.get("mask", {}).get("contrasts", {})
 
-            # Auto-resolve events file from localizer task output
+            # Fall back to task metadata's default_contrasts if not in config
             localizer_task_type = config["scan"].get("localizer_task_type", "")
+            if not contrasts and localizer_task_type:
+                from pineuro.tasks.task_registry import get_task_metadata
+                try:
+                    metadata = get_task_metadata(localizer_task_type)
+                    contrasts = metadata.default_contrasts or {}
+                    if contrasts:
+                        self._emit_progress(
+                            f"Using default contrasts from {metadata.display_name}: {contrasts}"
+                        )
+                except KeyError:
+                    pass
+
+            # Auto-resolve events file from localizer task output
             events_dir = base_dir / "preprocessing"
             events_glob = sorted(events_dir.glob(f"*_task-{localizer_task_type}_*_events.tsv"))
             if events_glob:

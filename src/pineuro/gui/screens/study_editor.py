@@ -295,6 +295,14 @@ class StudyEditorScreen:
             on_select=self._on_localizer_task_type_changed,
         )
 
+        # Show GLM contrast info for the selected task
+        self.contrast_info_text = ft.Text(
+            value=self._get_contrast_info_text(config["scan"].get("localizer_task_type", "rest")),
+            size=12,
+            color=ft.Colors.BLUE_700,
+            italic=True,
+        )
+
         self.localizer_tr_field = ft.TextField(
             width=600,
             label="TR (seconds)",
@@ -1654,6 +1662,20 @@ class StudyEditorScreen:
         self.page.overlay.append(_snack)
         self.page.update()
 
+    def _get_contrast_info_text(self, task_type: str) -> str:
+        """Get contrast info string for the selected localizer task."""
+        if task_type == "rest":
+            return ""
+        try:
+            from pineuro.tasks.task_registry import get_task_metadata
+            metadata = get_task_metadata(task_type)
+            if metadata.default_contrasts:
+                parts = [f"{name}: {expr}" for name, expr in metadata.default_contrasts.items()]
+                return f"GLM contrast: {', '.join(parts)}"
+        except KeyError:
+            pass
+        return ""
+
     def _on_localizer_task_type_changed(self, e):
         """Handle localizer task type dropdown change.
 
@@ -1678,6 +1700,12 @@ class StudyEditorScreen:
             with contextlib.suppress(Exception):
                 self.networks_section.update()
 
+        # Update contrast info
+        if hasattr(self, "contrast_info_text"):
+            self.contrast_info_text.value = self._get_contrast_info_text(localizer_task_type)
+            with contextlib.suppress(Exception):
+                self.contrast_info_text.update()
+
         # Recreate localizer task parameter fields
         self._create_localizer_task_parameter_fields()
 
@@ -1693,7 +1721,7 @@ class StudyEditorScreen:
         msg = (
             "Localizer: Rest (ICA-based network extraction)"
             if is_rest
-            else f"Localizer: {localizer_task_type} (GLM-based coming soon)"
+            else f"Localizer: {localizer_task_type} (GLM-based)"
         )
         _snack = ft.SnackBar(ft.Text(msg))
         _snack.open = True
@@ -2083,6 +2111,7 @@ class StudyEditorScreen:
                     ft.Text("Experiment Design", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text("Localizer Task", size=14, weight=ft.FontWeight.BOLD),
                     self.localizer_task_type_dropdown,
+                    self.contrast_info_text,
                     ft.Text(
                         "Rest uses ICA for network extraction. Task-based localizers use GLM contrasts.",
                         size=11,
