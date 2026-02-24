@@ -470,7 +470,7 @@ class BallTask(BaseTask):
 
         # Show instruction screen (BallTask-specific)
         if not hasattr(self, "slider_instruction_text"):
-            logger.warning("Slider instruction text not initialized; skipping post-run questions")
+            logger.debug("Slider instruction text not initialized; skipping post-run questions")
             return []
         self.slider_instruction_text.draw()
         self._capture_and_emit_screenshot(force=True)
@@ -890,6 +890,10 @@ class BallTask(BaseTask):
         Overrides BaseTask to apply adaptive difficulty and include
         BallTask state in the task_state_snapshot.
         """
+        if getattr(self, "_run_recorded", False):
+            return  # Already recorded; prevent double-recording from super().cleanup()
+        self._run_recorded = True
+
         if self._session_state is None:
             return
 
@@ -996,18 +1000,21 @@ class BallTask(BaseTask):
             outlier_pct = (self.outlier_count / self.current_volume) * 100
             logger.info(f"Outlier summary: {self.outlier_count}/{self.current_volume} volumes ({outlier_pct:.1f}%)")
 
-        # Note: State is saved in _record_run_completion() via super().cleanup()
-
         # Close PsychoPy log file
         if self._psychopy_log_file is not None:
             self._psychopy_log_file.close()
             self._psychopy_log_file = None
             self._psychopy_log_writer = None
 
-        # Show post-run questions BEFORE deleting stimuli (they need GL context)
-        # BaseTask.cleanup() would normally show these, but it's too late after
-        # stimulus deletion. The guard in _show_post_run_questions() prevents
-        # double-showing when super().cleanup() runs.
+        # Record run completion BEFORE showing questions so is_last_feedback_run
+        # is accurate for "last_feedback_only" questions. The guard in
+        # _record_run_completion() prevents double-recording when super().cleanup()
+        # calls it again.
+        self._record_run_completion()
+
+        # Show post-run questions BEFORE deleting stimuli (they need GL context).
+        # The guard in _show_post_run_questions() prevents double-showing when
+        # super().cleanup() runs.
         should_show = True
         if hasattr(self, "coordinator") and hasattr(self.coordinator, "should_show_questions"):
             should_show = self.coordinator.should_show_questions()

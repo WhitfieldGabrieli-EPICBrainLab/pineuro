@@ -304,7 +304,6 @@ class BaseTask(TaskBase):
         response_clock = core.Clock()
 
         # Wait for response
-        self._reset_poll_state()
         while True:
             # Check for stop signal from GUI
             if hasattr(self, "coordinator") and self.coordinator.was_stopped():
