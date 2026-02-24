@@ -331,6 +331,7 @@ class StudyEditorScreen:
             width=200,
             label="Number of volumes",
             value=str(config["scan"].get("reference_initial_n_volumes", 2)),
+            visible=config["scan"].get("reference_initial_enabled", True),
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field(
                 "reference_initial_n_volumes", self.reference_initial_n_volumes_field, validate_positive_int
@@ -1712,6 +1713,10 @@ class StudyEditorScreen:
     def _on_reference_initial_enabled_changed(self, e):
         """Handle reference initial enable checkbox change - update paths tab."""
         enabled = self.reference_initial_enabled_checkbox.value
+
+        # Update n_volumes field visibility in localizer tab
+        self.reference_initial_n_volumes_field.visible = enabled
+        self.reference_initial_n_volumes_field.update()
 
         # Update paths tab row visibility if it has been built
         if hasattr(self, "reference_initial_row"):
