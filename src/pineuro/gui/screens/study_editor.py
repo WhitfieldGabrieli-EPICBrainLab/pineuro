@@ -350,6 +350,7 @@ class StudyEditorScreen:
             width=200,
             label="Number of volumes",
             value=str(config["scan"].get("reference_realtime_n_volumes", 2)),
+            visible=config["scan"].get("reference_realtime_enabled", True),
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field(
                 "reference_realtime_n_volumes", self.reference_realtime_n_volumes_field, validate_positive_int
@@ -1727,6 +1728,10 @@ class StudyEditorScreen:
     def _on_reference_realtime_enabled_changed(self, e):
         """Handle reference realtime enable checkbox change - update paths tab and note."""
         enabled = self.reference_realtime_enabled_checkbox.value
+
+        # Update n_volumes field visibility in feedback tab
+        self.reference_realtime_n_volumes_field.visible = enabled
+        self.reference_realtime_n_volumes_field.update()
 
         # Update paths tab row visibility if it has been built
         if hasattr(self, "reference_realtime_row"):
