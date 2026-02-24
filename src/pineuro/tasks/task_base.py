@@ -383,8 +383,8 @@ class TaskBase(ABC):  # noqa: B024
            still records the old thread ID.
 
         This method patches both before ``visual.Window()`` is called.
-        Only runs when the current thread differs from pyglet's recorded thread
-        (i.e. this is a re-run, not the first run).
+        Always runs unconditionally — the OS can reuse thread IDs, so
+        checking thread identity is not reliable.
         """
         import sys
 
@@ -395,17 +395,12 @@ class TaskBase(ABC):  # noqa: B024
 
         current_thread = windll.kernel32.GetCurrentThreadId()
 
-        # Check if we're in the same thread that created pyglet's state.
-        # If so, everything is fine — no reset needed.
-        try:
-            import pyglet.app
-
-            if pyglet.app.platform_event_loop._event_thread == current_thread:
-                return
-        except Exception:
-            return
-
-        logger.debug("Detected new thread for PsychoPy window — resetting pyglet state")
+        # Always reset pyglet state before creating a new window.
+        # Even when the OS reuses the same thread ID for the new task
+        # thread, the old GL context / shadow window are stale and must
+        # be cleared to avoid "Unable to share contexts" errors and
+        # garbled text rendering.
+        logger.debug("Resetting pyglet state for new PsychoPy window")
 
         try:
             import pyglet
@@ -430,6 +425,55 @@ class TaskBase(ABC):  # noqa: B024
             pyglet.app.platform_event_loop._event_thread = current_thread
         except Exception as e:
             logger.debug(f"Could not reset pyglet state: {e}")
+
+    def _clear_font_caches(self) -> None:
+        """Clear all font / glyph caches that hold OpenGL texture IDs.
+
+        Two independent caching layers store GL textures for text rendering:
+
+        1. **PsychoPy FontManager** (``psychopy.tools.fontmanager``):
+           Module-level singleton ``allFonts`` caches ``GLFont`` objects whose
+           ``_TextureAtlas`` holds an ``glGenTextures`` ID.  ``TextBox2``
+           (used by ``visual.Slider`` labels and PsychoPy's splash text)
+           draws from this cache.
+
+        2. **Pyglet context object_space** (``gl.current_context.object_space``):
+           ``pyglet.font.load()`` caches ``Font`` objects with glyph textures
+           per GL context.  ``TextStim`` (via ``pyglet.text.Label``) draws
+           from this cache.
+
+        When the PsychoPy window (and its GL context) is destroyed, both sets
+        of texture IDs become invalid.  Clearing the caches forces fresh
+        texture creation on the next window.
+
+        Must be called **before** closing the window so that
+        ``gl.current_context`` is still valid for the pyglet cache.
+        """
+        # 1. PsychoPy FontManager — clears GLFont atlas textures used by TextBox2.
+        #    The module-level `allFonts` singleton in textbox2 is the actual
+        #    instance used; FontManager() creates a *new* object each call.
+        try:
+            from psychopy.visual.textbox2.textbox2 import allFonts
+
+            allFonts._glFonts.clear()
+            logger.debug("Cleared PsychoPy allFonts._glFonts cache")
+        except Exception as e:
+            logger.debug(f"Could not clear PsychoPy font cache: {e}")
+
+        # 2. Pyglet per-context font cache — clears glyph textures used by TextStim
+        try:
+            import pyglet.gl as gl
+
+            ctx = gl.current_context
+            if ctx is not None and hasattr(ctx, "object_space"):
+                ospace = ctx.object_space
+                if hasattr(ospace, "pyglet_font_font_cache"):
+                    ospace.pyglet_font_font_cache.clear()
+                if hasattr(ospace, "pyglet_font_font_hold"):
+                    ospace.pyglet_font_font_hold.clear()
+                logger.debug("Cleared pyglet font cache on context object_space")
+        except Exception as e:
+            logger.debug(f"Could not clear pyglet font cache: {e}")
 
     def _reset_pyglet_gl_info(self) -> None:
         """Reset pyglet's gl_info cached state after closing a window.
@@ -705,6 +749,12 @@ class TaskBase(ABC):  # noqa: B024
                 logger.warning("Simulator thread did not finish within timeout")
             else:
                 logger.info("Simulator thread joined successfully")
+
+        # Clear font/glyph caches BEFORE closing the window (needs live GL
+        # context for the pyglet cache).  Without this, the next window's
+        # Slider labels and PsychoPy splash text render as boxes because
+        # TextBox2's FontManager singleton still holds stale GL texture IDs.
+        self._clear_font_caches()
 
         # Close window
         if hasattr(self, "win") and self.win is not None:
