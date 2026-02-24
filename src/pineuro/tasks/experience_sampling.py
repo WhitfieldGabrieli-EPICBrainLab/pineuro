@@ -403,7 +403,6 @@ class ExperienceSamplingTask(BaseTask):
         rt = None
 
         event.clearEvents("keyboard")
-        self._ensure_focus()
 
         while timer.getTime() > 0 and self._running:
             if hasattr(self, "coordinator") and self.coordinator.was_stopped():

@@ -304,13 +304,14 @@ class BaseTask(TaskBase):
         response_clock = core.Clock()
 
         # Wait for response
-        self._ensure_focus()
+        self._reset_poll_state()
         while True:
             # Check for stop signal from GUI
             if hasattr(self, "coordinator") and self.coordinator.was_stopped():
                 logger.info("Stop signal received during slider question")
                 raise KeyboardInterrupt("Stopped by user")
 
+            self._inject_keys_if_unfocused([left_button, right_button, enter_button])
             keys = event.getKeys(keyList=[left_button, right_button, enter_button, "escape"])
 
             for key in keys:

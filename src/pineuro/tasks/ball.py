@@ -490,12 +490,14 @@ class BallTask(BaseTask):
 
         # Wait for any button press to continue
         event.clearEvents("keyboard")
+        self._reset_poll_state()
         while True:
             # Check for stop signal from GUI
             if self.coordinator.was_stopped():
                 logger.info("Stop signal received during slider instructions")
                 raise KeyboardInterrupt("Stopped by user")
 
+            self._inject_keys_if_unfocused([self.left_button, self.right_button, self.enter_button])
             keys = event.getKeys(keyList=[self.left_button, self.right_button, self.enter_button])
             if keys:
                 break

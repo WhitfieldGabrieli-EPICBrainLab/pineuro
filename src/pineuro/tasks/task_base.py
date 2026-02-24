@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import sys
 import threading
 import time
 from abc import ABC
@@ -75,6 +74,9 @@ class TaskBase(ABC):  # noqa: B024
         self._mirror_frame_counter = 0
         self._mirror_frame_skip = 4  # Only capture every Nth frame
 
+        # Inline key polling state (Windows only, for unfocused key capture)
+        self._poll_prev: set[str] = set()
+
     # =========================================================================
     # Mirror callback support
     # =========================================================================
@@ -91,31 +93,69 @@ class TaskBase(ABC):  # noqa: B024
         """
         self._mirror_callback = callback
 
-    def _ensure_focus(self) -> None:
-        """Bring PsychoPy window to foreground so it receives key events."""
-        if self.win is None:
-            return
-        try:
-            if sys.platform == "win32":
-                import ctypes
+    # =========================================================================
+    # Inline key polling (Windows only)
+    # =========================================================================
+    # When the PsychoPy window lacks OS focus, pyglet doesn't receive keyboard
+    # events.  These helpers use GetAsyncKeyState to detect key presses globally
+    # and inject them into PsychoPy's event buffer.  Only called from specific
+    # waiting loops (trigger, instructions, slider) — never during the main
+    # task loop.
 
-                hwnd = self.win.winHandle._hwnd
-                user32 = ctypes.windll.user32
-                fg_hwnd = user32.GetForegroundWindow()
-                if fg_hwnd != hwnd:
-                    fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None)
-                    cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
-                    # Attach our thread TO the foreground thread so Windows
-                    # grants us permission to call SetForegroundWindow
-                    user32.AttachThreadInput(cur_tid, fg_tid, True)
-                    user32.SetForegroundWindow(hwnd)
-                    user32.BringWindowToTop(hwnd)
-                    user32.SetFocus(hwnd)
-                    user32.AttachThreadInput(cur_tid, fg_tid, False)
-            else:
-                self.win.winHandle.activate()
+    _PSYCHOPY_TO_VK: dict[str, int] = {
+        "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
+        "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
+        "t": 0x54, "equal": 0xBB, "+": 0x6B,
+        "space": 0x20, "return": 0x0D,
+    }
+
+    def _reset_poll_state(self) -> None:
+        """Clear key-down tracking for a fresh waiting loop."""
+        self._poll_prev.clear()
+
+    def _inject_keys_if_unfocused(self, key_names: list[str]) -> None:
+        """If PsychoPy window lacks focus, poll keys and inject into event buffer.
+
+        Uses GetAsyncKeyState (Windows only) to detect key presses regardless
+        of which window has focus.  Injects into ``event._keyBuffer`` using the
+        same 3-tuple format as the simulator's ``_inject_trigger_key()``.
+
+        Only fires on key-down transitions (not repeats).  Skips "escape" to
+        prevent accidental task abort from GUI typing.
+        """
+        import sys
+
+        if sys.platform != "win32" or self.win is None:
+            return
+
+        import ctypes
+
+        from psychopy import core
+        from psychopy import event as psychopy_event
+
+        user32 = ctypes.windll.user32
+        try:
+            hwnd = self.win.winHandle._hwnd
         except Exception:
-            pass
+            return
+
+        if user32.GetForegroundWindow() == hwnd:
+            # Window has focus — pyglet handles keys natively
+            self._poll_prev.clear()
+            return
+
+        for name in key_names:
+            if name == "escape":
+                continue
+            vk = self._PSYCHOPY_TO_VK.get(name)
+            if vk is None:
+                continue
+            pressed = bool(user32.GetAsyncKeyState(vk) & 0x8000)
+            if pressed and name not in self._poll_prev:
+                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                self._poll_prev.add(name)
+            elif not pressed:
+                self._poll_prev.discard(name)
 
     def _capture_and_emit_screenshot(self, force: bool = False) -> None:
         """Capture current PsychoPy frame and emit to mirror callback.
@@ -327,7 +367,6 @@ class TaskBase(ABC):  # noqa: B024
                 time.sleep(0.2)  # Give window time to appear
                 self._move_window_xlib(target_x)
 
-        self._ensure_focus()
         return self.win
 
     def _reset_pyglet_for_new_window(self) -> None:
@@ -499,11 +538,12 @@ class TaskBase(ABC):  # noqa: B024
 
             # Wait for advance key
             event.clearEvents("keyboard")
-            self._ensure_focus()
+            self._reset_poll_state()
             while True:
                 if not self._running:
                     raise KeyboardInterrupt("Stopped by user")
 
+                self._inject_keys_if_unfocused(advance_keys)
                 keys = event.getKeys(keyList=advance_keys + ["escape"])
                 if "escape" in keys:
                     raise KeyboardInterrupt("Escaped during instructions")
@@ -559,11 +599,12 @@ class TaskBase(ABC):  # noqa: B024
         # Must be AFTER clearEvents to avoid wiping the injected trigger key
         if self._simulator is not None:
             self._start_simulator_thread()
-        self._ensure_focus()
+        self._reset_poll_state()
         while True:
             if not self._running:
                 raise KeyboardInterrupt("Stopped by user")
 
+            self._inject_keys_if_unfocused(self.trigger_keys)
             keys = event.getKeys(keyList=self.trigger_keys + ["escape"])
             if "escape" in keys:
                 raise KeyboardInterrupt("Escaped during trigger wait")
