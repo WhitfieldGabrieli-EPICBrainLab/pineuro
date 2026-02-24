@@ -1,12 +1,14 @@
 """Tests for pineuro.preprocessing — pipeline steps and volume handling."""
 
+import threading
+import time
 from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 import pytest
 
-from pineuro.preprocessing import concat, spatial_smoothing, temporal_filtering
+from pineuro.preprocessing import collect_volumes, concat, spatial_smoothing, temporal_filtering
 
 # =============================================================================
 # concat
@@ -213,3 +215,106 @@ class TestPreprocessingPipeline:
 
         with pytest.raises(FileNotFoundError, match="Directory is empty"):
             preprocessing("sub-01", "rest", root_dir, empty_dicoms)
+
+
+# =============================================================================
+# collect_volumes — recursive subfolder watching
+# =============================================================================
+
+
+def _make_nifti_volume(path: Path, shape=(4, 4, 4)) -> None:
+    """Create a minimal valid NIfTI volume file."""
+    data = np.random.default_rng(42).standard_normal(shape).astype(np.float32)
+    img = nib.Nifti1Image(data, np.eye(4))
+    nib.save(img, str(path))
+
+
+class TestCollectVolumesRecursive:
+    """Tests for recursive subfolder watching in collect_volumes."""
+
+    def test_flat_directory_still_works(self, tmp_path):
+        """Flat directory (GE/simulator style) works as before."""
+        watch_dir = tmp_path / "incoming"
+        watch_dir.mkdir()
+        output_dir = tmp_path / "output"
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+
+        for i in range(3):
+            _make_nifti_volume(source_dir / f"vol_{i:04d}.nii.gz")
+
+        result = collect_volumes(
+            watch_dir=watch_dir,
+            output_dir=output_dir,
+            n_volumes=3,
+            simulator_source_dir=source_dir,
+            simulator_speed=100.0,
+            timeout=30.0,
+        )
+        collected = sorted(result.iterdir())
+        assert len([f for f in collected if f.is_file()]) >= 3
+
+    def test_subfolder_files_detected(self, tmp_path):
+        """Files created in a new subfolder are detected and collected."""
+        watch_dir = tmp_path / "incoming"
+        watch_dir.mkdir()
+        output_dir = tmp_path / "output"
+
+        def write_to_subfolder():
+            """Simulate scanner creating a subfolder and writing NIfTIs."""
+            time.sleep(0.5)  # Let watchdog start
+            subdir = watch_dir / "seq_f1"
+            subdir.mkdir()
+            for i in range(3):
+                time.sleep(0.1)
+                _make_nifti_volume(subdir / f"vol_{i:04d}.nii.gz")
+
+        writer = threading.Thread(target=write_to_subfolder)
+        writer.start()
+
+        result = collect_volumes(
+            watch_dir=watch_dir,
+            output_dir=output_dir,
+            n_volumes=3,
+            timeout=15.0,
+        )
+        writer.join()
+        collected = [f for f in result.iterdir() if f.is_file()]
+        assert len(collected) >= 3
+
+    def test_preexisting_subfolder_files_skipped(self, tmp_path):
+        """Files in pre-existing subfolders are not collected (already-seen)."""
+        watch_dir = tmp_path / "incoming"
+        watch_dir.mkdir()
+        output_dir = tmp_path / "output"
+
+        # Pre-existing subfolder from a previous sequence
+        old_subdir = watch_dir / "old_rest_seq"
+        old_subdir.mkdir()
+        for i in range(5):
+            _make_nifti_volume(old_subdir / f"vol_{i:04d}.nii.gz")
+
+        def write_new_subfolder():
+            """Simulate new scanner sequence after a delay."""
+            time.sleep(0.5)
+            new_subdir = watch_dir / "new_feedback_seq"
+            new_subdir.mkdir()
+            for i in range(3):
+                time.sleep(0.1)
+                _make_nifti_volume(new_subdir / f"vol_{i:04d}.nii.gz")
+
+        writer = threading.Thread(target=write_new_subfolder)
+        writer.start()
+
+        result = collect_volumes(
+            watch_dir=watch_dir,
+            output_dir=output_dir,
+            n_volumes=3,
+            clear_watch_dir=False,  # Don't clear — old files should be skipped via pre-cataloging
+            timeout=15.0,
+        )
+        writer.join()
+
+        # Should have collected exactly 3 (from new subfolder), not 8 (5 old + 3 new)
+        collected = [f for f in result.iterdir() if f.is_file()]
+        assert len(collected) == 3

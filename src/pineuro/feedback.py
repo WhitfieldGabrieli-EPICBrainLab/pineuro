@@ -2634,48 +2634,52 @@ class NeurofeedbackCoordinator:
     def _on_new_file(self, file_path: Path) -> None:
         """Callback when a new file is detected.
 
-        Adds file to priority queue (heap) sorted by filename.
+        Adds file to priority queue (heap) sorted by full path.
+        Uses full path as key to avoid collisions when scanner creates
+        per-sequence subfolders (e.g., Siemens).
         """
         with self._lock:
-            if file_path.name not in self._processed_files:
-                # Add to heap (priority queue) sorted by filename
-                heapq.heappush(self._pending_heap, (file_path.name, file_path))
+            key = str(file_path)
+            if key not in self._processed_files:
+                heapq.heappush(self._pending_heap, (key, file_path))
 
     def _scan_for_existing_files(self) -> None:
-        """Scan watch directory for any volume files (DICOM or NIfTI) not yet processed.
+        """Scan watch directory recursively for volume files not yet processed.
 
         This handles files that may have been missed by watchdog events,
         particularly when the simulator runs faster than processing.
+        Recursive scan supports Siemens-style per-sequence subfolders.
         """
         # Get all files OUTSIDE the lock to avoid blocking other threads during I/O
         # Supports extensionless DICOMs from some scanner exports
-        found_files = [f for f in self.watch_dir.iterdir() if f.is_file()]
+        found_files = [f for f in self.watch_dir.rglob("*") if f.is_file()]
 
         # Only hold lock for the quick heap operations
         with self._lock:
-            existing_names = {item[0] for item in self._pending_heap}
+            existing_keys = {item[0] for item in self._pending_heap}
             for file_path in found_files:
-                if file_path.name not in self._processed_files and file_path.name not in existing_names:
-                    heapq.heappush(self._pending_heap, (file_path.name, file_path))
-                    existing_names.add(file_path.name)
+                key = str(file_path)
+                if key not in self._processed_files and key not in existing_keys:
+                    heapq.heappush(self._pending_heap, (key, file_path))
+                    existing_keys.add(key)
 
     def _get_next_file_to_process(self) -> Path | None:
         """Get the next file to process in strict order, skipping invalid files."""
         with self._lock:
             while self._pending_heap:
-                filename, file_path = self._pending_heap[0]
+                key, file_path = self._pending_heap[0]
 
-                if filename in self._processed_files:
+                if key in self._processed_files:
                     heapq.heappop(self._pending_heap)
                     continue
 
                 if is_valid_volume(file_path):
                     heapq.heappop(self._pending_heap)
-                    self._processed_files.add(filename)
+                    self._processed_files.add(key)
                     return file_path
                 else:
                     heapq.heappop(self._pending_heap)
-                    logger.debug(f"Skipping invalid volume: {filename}")
+                    logger.debug(f"Skipping invalid volume: {file_path.name}")
 
             return None
 
@@ -2967,12 +2971,19 @@ class NeurofeedbackCoordinator:
             # Initialize CSV
             self._init_csv()
 
-            # Set up watchdog observer
+            # Catalog existing files so we only process NEW arrivals.
+            # This prevents picking up DICOMs from previous sequences when
+            # scanners (e.g., Siemens) create per-sequence subfolders.
+            for f in self.watch_dir.rglob("*"):
+                if f.is_file():
+                    self._processed_files.add(str(f))
+
+            # Set up watchdog observer (recursive=True for Siemens-style subfolders)
             event_handler = _DicomEventHandler(self._on_new_file)
             observer = Observer()
-            observer.schedule(event_handler, str(self.watch_dir), recursive=False)
+            observer.schedule(event_handler, str(self.watch_dir), recursive=True)
             observer.start()
-            logger.info(f"Watching {self.watch_dir} for DICOMs...")
+            logger.info(f"Watching {self.watch_dir} for DICOMs (recursive)...")
 
             self._ready_event.set()
             logger.debug("Coordinator ready signal set")

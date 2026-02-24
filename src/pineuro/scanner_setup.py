@@ -128,13 +128,23 @@ def check_watch_directory(watch_dir: str | Path) -> tuple[bool, bool, bool, int,
 
     is_empty = file_count == 0
 
+    # Check for subfolders (Siemens scanners create per-sequence subfolders)
+    try:
+        subdirs = [d for d in watch_dir.iterdir() if d.is_dir()]
+    except PermissionError:
+        subdirs = []
+
     parts = [f"Directory exists: {watch_dir}"]
     if writable:
         parts.append("Writable: yes")
     else:
         parts.append("Writable: NO (check permissions)")
-    if is_empty:
+    if is_empty and not subdirs:
         parts.append("Empty: yes (ready for new session)")
+    elif subdirs:
+        parts.append(f"{len(subdirs)} subfolder(s) from previous sequences")
+        if file_count > 0:
+            parts.append(f"Also contains {file_count} top-level file(s)")
     else:
         parts.append(f"Contains {file_count} file(s) (may need clearing)")
 

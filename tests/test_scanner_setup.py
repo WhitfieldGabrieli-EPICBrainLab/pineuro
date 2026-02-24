@@ -72,6 +72,26 @@ class TestCheckWatchDirectory:
         exists, writable, empty, count, detail = check_watch_directory(str(d))
         assert exists is True
 
+    def test_subfolders_reported(self, tmp_path):
+        """Siemens-style subfolders are reported in the detail string."""
+        d = tmp_path / "watch"
+        d.mkdir()
+        (d / "seq_f1").mkdir()
+        (d / "seq_f2").mkdir()
+        exists, writable, empty, count, detail = check_watch_directory(d)
+        assert exists is True
+        assert "2 subfolder(s)" in detail
+        assert "previous sequences" in detail
+
+    def test_subfolders_with_top_level_files(self, tmp_path):
+        d = tmp_path / "watch"
+        d.mkdir()
+        (d / "seq_f1").mkdir()
+        (d / "stray.dcm").touch()
+        exists, writable, empty, count, detail = check_watch_directory(d)
+        assert "1 subfolder(s)" in detail
+        assert "1 top-level file(s)" in detail
+
 
 class TestPingScanner:
     @patch("pineuro.scanner_setup.subprocess.run")

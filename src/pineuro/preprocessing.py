@@ -1263,8 +1263,8 @@ def collect_volumes(
     # Thread safety: Multiple threads access this state (watchdog handler,
     # main loop, scanner callback), so all access is protected by a lock.
 
-    pending_heap: list[tuple[str, Path]] = []  # (filename, path) tuples sorted by filename
-    processed_files: set[str] = set()  # Track processed files to avoid duplicates
+    pending_heap: list[tuple[str, Path]] = []  # (key, path) tuples sorted by full path
+    processed_files: set[str] = set()  # Track processed files by full path to avoid duplicates
     collected_count = 0
     lock = threading.Lock()
 
@@ -1273,38 +1273,39 @@ def collect_volumes(
         Callback invoked by watchdog when a new file appears.
 
         Adds the file to the pending queue for ordered processing.
+        Uses full path as key to avoid collisions when scanner creates
+        per-sequence subfolders (e.g., Siemens).
         Thread-safe: acquires lock before modifying shared state.
         """
         with lock:
-            # Skip if already processed (shouldn't happen but defensive)
-            if file_path.name not in processed_files:
-                # Check if already in queue (watchdog may fire multiple times)
-                existing_names = {item[0] for item in pending_heap}
-                if file_path.name not in existing_names:
-                    # Add to heap - files are sorted by filename (alphabetical order)
-                    heapq.heappush(pending_heap, (file_path.name, file_path))
+            key = str(file_path)
+            if key not in processed_files:
+                existing_keys = {item[0] for item in pending_heap}
+                if key not in existing_keys:
+                    heapq.heappush(pending_heap, (key, file_path))
 
     def scan_for_existing_files() -> None:
         """
-        Periodically scan watch directory for any missed files.
+        Periodically scan watch directory recursively for any missed files.
 
         Filesystem event notifications can be missed under heavy load or on
         network filesystems. This backup scan ensures we eventually find all
         files even if watchdog misses some events.
+        Recursive scan supports Siemens-style per-sequence subfolders.
         """
-        # Get all files in watch directory (supports extensionless DICOMs)
-        found_files = [f for f in watch_dir.iterdir() if f.is_file()]
+        found_files = [f for f in watch_dir.rglob("*") if f.is_file()]
 
         with lock:
-            existing_names = {item[0] for item in pending_heap}
+            existing_keys = {item[0] for item in pending_heap}
             for file_path in found_files:
-                if file_path.name not in processed_files and file_path.name not in existing_names:
-                    heapq.heappush(pending_heap, (file_path.name, file_path))
-                    existing_names.add(file_path.name)
+                key = str(file_path)
+                if key not in processed_files and key not in existing_keys:
+                    heapq.heappush(pending_heap, (key, file_path))
+                    existing_keys.add(key)
 
     def get_next_file() -> Path | None:
         """
-        Get the next valid volume file to process, in alphabetical order.
+        Get the next valid volume file to process, in sorted order.
 
         Returns None if no valid files are pending. Files are validated
         (DICOM header check or NIfTI format check) before being returned.
@@ -1312,23 +1313,22 @@ def collect_volumes(
         """
         with lock:
             while pending_heap:
-                # Peek at the smallest (alphabetically first) file
-                filename, file_path = pending_heap[0]
+                key, file_path = pending_heap[0]
 
                 # Skip if already processed (defensive check)
-                if filename in processed_files:
+                if key in processed_files:
                     heapq.heappop(pending_heap)
                     continue
 
                 # Validate the file (check DICOM header or NIfTI format)
                 if is_valid_volume(file_path):
                     heapq.heappop(pending_heap)
-                    processed_files.add(filename)
+                    processed_files.add(key)
                     return file_path
                 else:
                     # Invalid file (corrupt, incomplete, or not a volume)
                     heapq.heappop(pending_heap)
-                    logger.debug(f"Skipping invalid volume: {filename}")
+                    logger.debug(f"Skipping invalid volume: {file_path.name}")
 
             return None
 
@@ -1339,9 +1339,16 @@ def collect_volumes(
     # Watchdog uses the OS's native filesystem event system (inotify on Linux,
     # FSEvents on macOS) for responsive, low-overhead file detection.
 
+    # Catalog existing files so we only process NEW arrivals.
+    # This prevents picking up DICOMs from previous sequences when
+    # scanners (e.g., Siemens) create per-sequence subfolders.
+    for f in watch_dir.rglob("*"):
+        if f.is_file():
+            processed_files.add(str(f))
+
     event_handler = _CollectorEventHandler(on_new_file)
     observer = Observer()
-    observer.schedule(event_handler, str(watch_dir), recursive=False)  # No subdirectories
+    observer.schedule(event_handler, str(watch_dir), recursive=True)
     observer.start()
 
     # -------------------------------------------------------------------------
