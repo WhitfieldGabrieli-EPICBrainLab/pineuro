@@ -278,12 +278,13 @@ class StudyEditorScreen:
 
         # --- Localizer tab fields ---
         # Localizer task type (rest or registered task)
-        available_tasks = list_available_tasks()
+        available_tasks = list_available_tasks(role="localizer")
         localizer_task_options = [ft.dropdown.Option(key="rest", text="Rest (ICA Network Extraction)")]
         localizer_task_options.extend(
             [
                 ft.dropdown.Option(key=task_id, text=f"{metadata.display_name} (GLM Contrast)")
                 for task_id, metadata in available_tasks.items()
+                if metadata.default_contrasts
             ]
         )
         self.localizer_task_type_dropdown = ft.Dropdown(

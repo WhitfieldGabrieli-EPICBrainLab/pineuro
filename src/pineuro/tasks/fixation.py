@@ -26,7 +26,6 @@ FIXATION_METADATA = TaskMetadata(
     task_id="fixation",
     display_name="Fixation (Rest)",
     description="Simple fixation cross display for resting-state acquisition",
-    roles={"localizer"},
     n_networks=0,
     parameters=[
         TaskParameter(
