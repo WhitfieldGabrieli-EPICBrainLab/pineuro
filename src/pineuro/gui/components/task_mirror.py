@@ -69,7 +69,7 @@ class TaskMirror:
             src=placeholder,
             width=self.width,
             height=self.height,
-            fit=ft.ImageFit.CONTAIN,
+            fit=ft.BoxFit.CONTAIN,
         )
         self._container = ft.Container(
             content=self._image,

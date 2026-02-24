@@ -612,7 +612,7 @@ class ParticipantWorkflowScreen:
                 b64 = base64.b64encode(overlay_path.read_bytes()).decode("utf-8")
                 overlay_content: ft.Control = ft.Image(
                     src=f"data:image/png;base64,{b64}",
-                    fit=ft.ImageFit.CONTAIN,
+                    fit=ft.BoxFit.CONTAIN,
                     height=150,
                 )
             else:
@@ -705,7 +705,7 @@ class ParticipantWorkflowScreen:
                         t_b64 = base64.b64encode(tissue_overlay.read_bytes()).decode("utf-8")
                         t_overlay_content: ft.Control = ft.Image(
                             src=f"data:image/png;base64,{t_b64}",
-                            fit=ft.ImageFit.CONTAIN,
+                            fit=ft.BoxFit.CONTAIN,
                             height=120,
                         )
                     else:
@@ -869,7 +869,7 @@ class ParticipantWorkflowScreen:
                                         ft.Container(
                                             content=ft.Image(
                                                 src=f"data:image/png;base64,{b64_atlas}",
-                                                fit=ft.ImageFit.CONTAIN,
+                                                fit=ft.BoxFit.CONTAIN,
                                                 height=180,
                                             ),
                                             border=ft.border.all(1, ft.Colors.TEAL_200),

@@ -116,7 +116,7 @@ class QCPlotViewer:
                             ft.Container(
                                 content=ft.Image(
                                     src=str(path),
-                                    fit=ft.ImageFit.CONTAIN,
+                                    fit=ft.BoxFit.CONTAIN,
                                 ),
                                 border=ft.border.all(1, ft.Colors.GREY_300),
                                 border_radius=5,

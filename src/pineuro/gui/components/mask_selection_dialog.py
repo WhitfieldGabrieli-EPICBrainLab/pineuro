@@ -176,7 +176,7 @@ class MaskSelectionDialog:
         """Create an Image widget from a local file path."""
         return ft.Image(
             src=str(path),
-            fit=ft.ImageFit.CONTAIN,
+            fit=ft.BoxFit.CONTAIN,
             height=height,
             width=width,
         )

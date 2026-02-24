@@ -133,7 +133,7 @@ class CollectionProgressPanel:
             src="",
             width=256,
             height=256,
-            fit=ft.ImageFit.CONTAIN,
+            fit=ft.BoxFit.CONTAIN,
             visible=False,  # Hidden until first image
         )
 
