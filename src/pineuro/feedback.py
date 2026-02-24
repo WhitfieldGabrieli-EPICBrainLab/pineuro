@@ -2977,6 +2977,8 @@ class NeurofeedbackCoordinator:
             for f in self.watch_dir.rglob("*"):
                 if f.is_file():
                     self._processed_files.add(str(f))
+            if self._processed_files:
+                logger.debug(f"Cataloged {len(self._processed_files)} existing files in watch dir")
 
             # Set up watchdog observer (recursive=True for Siemens-style subfolders)
             event_handler = _DicomEventHandler(self._on_new_file)
@@ -2997,6 +2999,15 @@ class NeurofeedbackCoordinator:
                 logger.info("Trigger received - starting acquisition")
 
             self._start_time = time.monotonic()
+
+            # Prune cataloged files that were deleted between cataloging and
+            # trigger (e.g., simulator cleared the incoming directory).  Without
+            # this, new files with the same names are silently skipped.
+            before = len(self._processed_files)
+            self._processed_files = {f for f in self._processed_files if Path(f).exists()}
+            pruned = before - len(self._processed_files)
+            if pruned:
+                logger.info(f"Pruned {pruned} stale entries from processed-files set")
 
             while not self._stop_event.is_set() and self.n_processed < self.n_volumes and not self._stop_event.is_set():
                 # If stop was requested before trigger, skip processing entirely

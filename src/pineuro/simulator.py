@@ -314,7 +314,6 @@ class VolumeSimulator:
         # Set start time if not already set (coordinator may set it earlier)
         if self.start_time is None:
             self.start_time = time.monotonic()
-
         # Fire trigger callback before any volume copies (replicates real
         # scanner sending trigger key before acquiring the first volume)
         if self.trigger_callback is not None:
