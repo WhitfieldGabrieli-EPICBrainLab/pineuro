@@ -304,6 +304,7 @@ class BaseTask(TaskBase):
         response_clock = core.Clock()
 
         # Wait for response
+        self._ensure_focus()
         while True:
             # Check for stop signal from GUI
             if hasattr(self, "coordinator") and self.coordinator.was_stopped():

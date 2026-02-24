@@ -90,6 +90,14 @@ class TaskBase(ABC):  # noqa: B024
         """
         self._mirror_callback = callback
 
+    def _ensure_focus(self) -> None:
+        """Bring PsychoPy window to foreground so it receives key events."""
+        if self.win is not None:
+            try:
+                self.win.winHandle.activate()
+            except Exception:
+                pass
+
     def _capture_and_emit_screenshot(self, force: bool = False) -> None:
         """Capture current PsychoPy frame and emit to mirror callback.
 
@@ -471,6 +479,7 @@ class TaskBase(ABC):  # noqa: B024
 
             # Wait for advance key
             event.clearEvents("keyboard")
+            self._ensure_focus()
             while True:
                 if not self._running:
                     raise KeyboardInterrupt("Stopped by user")
@@ -530,6 +539,7 @@ class TaskBase(ABC):  # noqa: B024
         # Must be AFTER clearEvents to avoid wiping the injected trigger key
         if self._simulator is not None:
             self._start_simulator_thread()
+        self._ensure_focus()
         while True:
             if not self._running:
                 raise KeyboardInterrupt("Stopped by user")
