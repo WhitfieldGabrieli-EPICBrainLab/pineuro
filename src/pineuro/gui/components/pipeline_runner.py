@@ -455,6 +455,11 @@ class PipelineRunner:
         # Shared event so collect_dicoms knows when acquisition actually starts
         trigger_event = threading.Event()
 
+        # Event set when the localizer task's paradigm finishes.
+        # For variable-duration tasks (e.g., RNT), this signals collect_dicoms
+        # to drain remaining volumes and stop, rather than waiting for n_volumes.
+        task_done_event = threading.Event()
+
         # Always launch a localizer task - it controls simulator start timing
         localizer_thread = self._launch_localizer_task(
             run_num,
@@ -463,10 +468,15 @@ class PipelineRunner:
             acq=acq,
             simulator=simulator,
             trigger_event=trigger_event,
+            task_done_event=task_done_event,
         )
 
         # collect_dicoms just watches the directory - no simulator
         # (simulator is controlled by the task for synchronization)
+        # Timeout must exceed the expected run duration (n_volumes * TR) plus buffer
+        tr = config["scan"].get("localizer_tr", 1.2)
+        expected_duration = n_volumes * tr
+        collection_timeout = max(300.0, expected_duration + 120.0)
         collect_dicoms(
             watch_dir=watch_dir,
             output_dir=output_dir,
@@ -478,9 +488,14 @@ class PipelineRunner:
             progress_callback=self.on_collection_progress,
             stop_event=self._stop_event,
             trigger_event=trigger_event,
+            task_done_event=task_done_event,
+            timeout=collection_timeout,
         )
 
-        self._emit_progress(f"Collected {n_volumes} volumes to {output_dir}")
+        # Report actual collected count (may be less than n_volumes for
+        # variable-duration tasks that finish before the configured max)
+        actual_count = len(list(output_dir.iterdir())) if output_dir.exists() else 0
+        self._emit_progress(f"Collected {actual_count} volumes to {output_dir}")
 
         # Stop and wait for localizer task (collection is done, task can end)
         if self._current_localizer_task is not None:
@@ -491,7 +506,14 @@ class PipelineRunner:
             self._current_localizer_task = None
 
     def _launch_localizer_task(
-        self, run_num: int, task_id: str, watch_dir: Path, acq: int = 1, simulator=None, trigger_event=None
+        self,
+        run_num: int,
+        task_id: str,
+        watch_dir: Path,
+        acq: int = 1,
+        simulator=None,
+        trigger_event=None,
+        task_done_event: threading.Event | None = None,
     ) -> threading.Thread:
         """Launch a localizer PsychoPy task in a separate thread.
 
@@ -504,6 +526,9 @@ class PipelineRunner:
             watch_dir: Directory to watch for first DICOM arrival (auto-trigger)
             acq: Acquisition number (for retry handling)
             simulator: VolumeSimulator instance (optional, for offline testing)
+            trigger_event: Event set when scanner trigger is received
+            task_done_event: Event to set when task paradigm finishes, signaling
+                collect_volumes to drain remaining volumes and stop
 
         Returns:
             Thread running the localizer task
@@ -527,8 +552,8 @@ class PipelineRunner:
         logger.debug(f"Localizer task ID: {task_id}")
         logger.debug(f"Localizer params: {localizer_params}")
 
-        # Output events to the collection directory
-        events_dir = base_dir / "collection"
+        # Output events to the preprocessing directory (survives cleanup)
+        events_dir = base_dir / "preprocessing"
         events_dir.mkdir(parents=True, exist_ok=True)
 
         # Get presenter monitor from display config
@@ -566,6 +591,11 @@ class PipelineRunner:
             except Exception as e:
                 logger.error(f"Localizer task error: {e}", exc_info=True)
                 self._emit_progress(f"Localizer task error: {e}")
+            finally:
+                # Signal that the task paradigm is done, allowing collect_volumes
+                # to drain remaining volumes and stop for variable-duration tasks
+                if task_done_event is not None:
+                    task_done_event.set()
 
         thread = threading.Thread(target=run_localizer, daemon=False, name=f"LocalizerTask-{task_id}-run{run_num}")
         thread.start()
@@ -719,7 +749,7 @@ class PipelineRunner:
 
             # Auto-resolve events file from localizer task output
             localizer_task_type = config["scan"].get("localizer_task_type", "")
-            events_dir = base_dir / "collection"
+            events_dir = base_dir / "preprocessing"
             events_glob = sorted(events_dir.glob(f"*_task-{localizer_task_type}_*_events.tsv"))
             if events_glob:
                 # If acqs were selected, prefer events file matching selected acq

@@ -72,7 +72,7 @@ class TaskParameter:
 
     key: str
     label: str
-    type: Literal["float", "int", "bool", "str", "list[str]"]
+    type: Literal["float", "int", "bool", "str", "dir", "list[str]"]
     default: Any
     hint: str = ""
     min_value: float | None = None

@@ -513,6 +513,7 @@ class StudyEditorScreen:
         )
 
         # Feedback task type selection (populated from registry)
+        feedback_tasks = list_available_tasks(role="feedback")
         self.task_type_dropdown = ft.Dropdown(
             width=600,
             label="Feedback Task Type",
@@ -521,7 +522,7 @@ class StudyEditorScreen:
                     key=task_id,
                     text=metadata.display_name,
                 )
-                for task_id, metadata in available_tasks.items()
+                for task_id, metadata in feedback_tasks.items()
             ],
             value=config["task"].get("task_type", "ball"),
             on_select=self._on_task_type_changed,
@@ -1549,6 +1550,15 @@ class StudyEditorScreen:
                 hint_text=param.hint,
             )
 
+        elif param.type == "dir":
+            field = ft.TextField(
+                width=600,
+                label=param.label,
+                value=current_value,
+                hint_text=param.hint,
+            )
+            return ft.Row([field, self._create_browse_button(field)])
+
         elif param.type == "str":
             return ft.TextField(
                 width=600,
@@ -1658,8 +1668,11 @@ class StudyEditorScreen:
         # Store in config as source of truth
         self.study_config.session_config["scan"]["localizer_task_type"] = localizer_task_type
 
-        # Toggle network extraction section visibility
+        # Update mask.localizer_type to match (used by participant_workflow and pipeline_runner)
         is_rest = localizer_task_type == "rest"
+        self.study_config.session_config["mask"]["localizer_type"] = "rest" if is_rest else "task"
+
+        # Toggle network extraction section visibility
         if hasattr(self, "networks_section"):
             self.networks_section.visible = is_rest
             with contextlib.suppress(Exception):
@@ -3057,6 +3070,10 @@ class StudyEditorScreen:
             config["scan"]["localizer_n_runs"] = int(self.localizer_n_runs_field.value)
             config["scan"]["localizer_task_type"] = self.localizer_task_type_dropdown.value
 
+            # Sync mask.localizer_type (used by participant_workflow and pipeline_runner)
+            localizer_task_type = self.localizer_task_type_dropdown.value
+            config["mask"]["localizer_type"] = "rest" if localizer_task_type == "rest" else "task"
+
             # Reference scan parameters
             config["scan"]["reference_initial_enabled"] = self.reference_initial_enabled_checkbox.value
             config["scan"]["reference_initial_n_volumes"] = int(self.reference_initial_n_volumes_field.value)
@@ -3235,7 +3252,11 @@ class StudyEditorScreen:
                 if field is None:
                     continue
 
-                if param.type == "bool":
+                # For "dir" type, the field is a Row containing [TextField, IconButton]
+                if param.type == "dir":
+                    text_field = field.controls[0] if isinstance(field, ft.Row) else field
+                    config["task"][task_type][param.key] = text_field.value
+                elif param.type == "bool":
                     config["task"][task_type][param.key] = field.value
                 elif param.type == "int":
                     config["task"][task_type][param.key] = int(field.value)
@@ -3285,7 +3306,11 @@ class StudyEditorScreen:
                     if field is None:
                         continue
 
-                    if param.type == "bool":
+                    # For "dir" type, the field is a Row containing [TextField, IconButton]
+                    if param.type == "dir":
+                        text_field = field.controls[0] if isinstance(field, ft.Row) else field
+                        config["localizer_task"][localizer_task_type][param.key] = text_field.value
+                    elif param.type == "bool":
                         config["localizer_task"][localizer_task_type][param.key] = field.value
                     elif param.type == "int":
                         config["localizer_task"][localizer_task_type][param.key] = int(field.value)

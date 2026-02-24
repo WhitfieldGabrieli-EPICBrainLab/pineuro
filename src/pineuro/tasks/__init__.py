@@ -181,6 +181,7 @@ from .fixation import FixationTask  # Registers "fixation" localizer task
 from .gauge import GaugeTask  # Registers "gauge" task
 from .self_other import SelfOtherTask  # Registers "self_other" localizer task
 from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
+from .rnt import RNTTask  # Registers "rnt" localizer task
 
 __all__ = [
     # Base classes
@@ -192,6 +193,7 @@ __all__ = [
     "ThermometerTask",
     "SelfOtherTask",
     "FixationTask",
+    "RNTTask",
     "SessionState",
     "ActivationSmoother",
     "ActivationNormalizer",

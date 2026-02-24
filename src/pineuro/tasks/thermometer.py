@@ -1244,7 +1244,7 @@ class ThermometerTask(BaseTask):
 
 THERMOMETER_METADATA = TaskMetadata(
     task_id="thermometer",
-    display_name="STG Neurofeedback Task",
+    display_name="STG Task",
     description="Block-design audio neurofeedback with thermometer feedback",
     n_networks=1,
     network_roles=[

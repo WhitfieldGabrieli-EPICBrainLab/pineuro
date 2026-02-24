@@ -69,7 +69,7 @@ SELF_OTHER_METADATA = TaskMetadata(
         TaskParameter(
             key="stim_dir",
             label="Stimulus Directory",
-            type="str",
+            type="dir",
             default="",
             hint="Directory containing per-participant stim files (auto-matched by participant ID and run)",
         ),

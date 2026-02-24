@@ -594,6 +594,9 @@ class TaskBase(ABC):  # noqa: B024
 
         def _run_simulator():
             try:
+                # Brief delay so "Waiting for scanner..." is visible before
+                # the synthetic trigger key is injected
+                time.sleep(2.0)
                 logger.info("Simulator thread starting")
                 for vol_num in self._simulator.copy_volumes_iter():
                     if not self._running:

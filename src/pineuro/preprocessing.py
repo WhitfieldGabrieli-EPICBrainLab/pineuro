@@ -1143,6 +1143,7 @@ def collect_volumes(
     progress_callback: Callable[[int, int, float, Path], None] | None = None,
     stop_event: threading.Event | None = None,
     trigger_event: threading.Event | None = None,
+    task_done_event: threading.Event | None = None,
 ) -> Path:
     """
     Watch for incoming volumes (DICOM or NIfTI) during scanner acquisition and collect them.
@@ -1184,6 +1185,11 @@ def collect_volumes(
         Use this to update progress displays during collection.
     stop_event : threading.Event, optional
         Event to signal early termination. If set, collection stops gracefully.
+    task_done_event : threading.Event, optional
+        Event set when a concurrent localizer task finishes its paradigm.
+        Collection drains any remaining queued volumes, then stops gracefully.
+        Used for variable-duration tasks where the exact volume count is not
+        known in advance.
 
     Returns
     -------
@@ -1417,6 +1423,36 @@ def collect_volumes(
                 logger.info(f"Collection stopped by user after {collected_count}/{n_volumes} volumes")
                 break
 
+            # --- Check for Task Completion ---
+            # For variable-duration tasks, the task signals when its paradigm
+            # finishes. Drain any remaining queued volumes, then stop.
+            if task_done_event is not None and task_done_event.is_set():
+                # Do one final scan and drain remaining queued volumes
+                scan_for_existing_files()
+                while True:
+                    file_path = get_next_file()
+                    if file_path is None:
+                        break
+                    dest_path = output_dir / file_path.name
+                    shutil.copy2(file_path, dest_path)
+                    if is_nifti_file(file_path):
+                        json_src = get_json_sidecar_path(file_path)
+                        if json_src.exists():
+                            json_dst = get_json_sidecar_path(dest_path)
+                            shutil.copy2(json_src, json_dst)
+                    collected_count += 1
+                    if progress_callback is not None and start_time is not None:
+                        elapsed = time.time() - start_time
+                        try:
+                            progress_callback(collected_count, n_volumes, elapsed, dest_path)
+                        except Exception:
+                            pass
+                logger.info(
+                    f"Task done — collection stopped after {collected_count} volumes "
+                    f"(configured max: {n_volumes})"
+                )
+                break
+
             # --- Check Timeout ---
             # Prevent infinite waiting if scanner stops sending files
             # Use initial_wait_start for timeout (starts from beginning, not first volume)
@@ -1486,9 +1522,12 @@ def collect_volumes(
 
         # Wait for simulator thread (if running) to complete
         if simulator_thread is not None:
-            if stop_event is not None and stop_event.is_set():
-                # User stopped early - don't wait for simulator (it's a daemon thread)
-                logger.debug("Skipping simulator join (stopped by user)")
+            stopped_early = (stop_event is not None and stop_event.is_set()) or (
+                task_done_event is not None and task_done_event.is_set()
+            )
+            if stopped_early:
+                # Stopped early (user or task done) - don't wait for simulator (daemon thread)
+                logger.debug("Skipping simulator join (stopped early)")
             else:
                 # Normal completion - wait for simulator to finish
                 simulator_thread.join()
