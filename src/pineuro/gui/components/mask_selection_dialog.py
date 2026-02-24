@@ -516,12 +516,6 @@ class MaskSelectionDialog:
         """Build action buttons for Stage 1."""
         return [
             ft.OutlinedButton(
-                "View in Browser",
-                icon=ft.Icons.OPEN_IN_NEW,
-                on_click=self._on_view_in_browser_clicked,
-                tooltip="Open interactive mask viewer in the default web browser",
-            ),
-            ft.OutlinedButton(
                 "Generate Script",
                 icon=ft.Icons.CODE,
                 on_click=self._on_generate_script_clicked,
@@ -1351,88 +1345,6 @@ class MaskSelectionDialog:
             self.page.update()
         if self.on_cancel:
             self.on_cancel()
-
-    def _on_view_in_browser_clicked(self, e):
-        """Open interactive mask viewer in the default web browser."""
-        # Check BOLD reference exists
-        if not self.ref_file or not Path(self.ref_file).exists():
-            _snack = ft.SnackBar(ft.Text("BOLD reference file not found."), bgcolor=ft.Colors.RED)
-            _snack.open = True
-            self.page.overlay.append(_snack)
-            self.page.update()
-            return
-
-        # Regenerate any modified masks before viewing
-        # This ensures user sees the currently selected masks, not old ones
-        existing = load_mask_selections(self.masks_dir)
-        modified_networks = []
-
-        for name, selection in self._selections.items():
-            if name in existing:
-                old = existing[name]
-                if (
-                    selection.source_type != old.source_type
-                    or selection.component_index != old.component_index
-                    or selection.secondary_component_index != old.secondary_component_index
-                ):
-                    modified_networks.append(name)
-            else:
-                # New selection that differs from auto
-                if selection.selection_reason != "auto":
-                    modified_networks.append(name)
-
-        # Regenerate modified masks
-        for name in modified_networks:
-            selection = self._selections[name]
-            logger.info(f"Regenerating mask for browser preview: {name}")
-            try:
-                regenerate_mask_from_selection(
-                    participant_id=self.participant_id,
-                    masks_dir=self.masks_dir,
-                    selection=selection,
-                    components_file=self.components_file,
-                    yeo_subject_space=self.yeo_subject_space,
-                    n_yeo=self.n_yeo,
-                    threshold=self.threshold,
-                )
-                if self.on_log:
-                    self.on_log(f"[INFO] Regenerated {name} mask for preview")
-            except Exception as ex:
-                logger.error(f"Failed to regenerate mask for {name}: {ex}")
-                _snack = ft.SnackBar(ft.Text(f"Failed to regenerate {name} mask: {ex}"), bgcolor=ft.Colors.RED)
-                _snack.open = True
-                self.page.overlay.append(_snack)
-                self.page.update()
-                return
-
-        # Collect all thresholded mask files
-        mask_files = sorted(self.masks_dir.glob("*_thr.nii.gz"))
-        if not mask_files:
-            _snack = ft.SnackBar(ft.Text("No thresholded masks found."), bgcolor=ft.Colors.ORANGE)
-            _snack.open = True
-            self.page.overlay.append(_snack)
-            self.page.update()
-            return
-
-        # Generate HTML viewer and open in browser
-        try:
-            from pineuro.gui.utils import open_mask_viewer_in_browser
-
-            qc_dir = self.masks_dir.parent / "qc"
-            open_mask_viewer_in_browser(
-                ref_file=Path(self.ref_file),
-                mask_files=mask_files,
-                output_dir=qc_dir,
-                title=f"Mask Review - {self.participant_id}",
-            )
-            if self.on_log:
-                self.on_log(f"[INFO] Opened mask viewer in browser with {len(mask_files)} masks")
-        except Exception as ex:
-            logger.error(f"Failed to open mask viewer: {ex}")
-            _snack = ft.SnackBar(ft.Text(f"Failed to open mask viewer: {ex}"), bgcolor=ft.Colors.RED)
-            _snack.open = True
-            self.page.overlay.append(_snack)
-            self.page.update()
 
     def _on_reload_clicked(self, e):
         """Handle Reload button - reload selections, correlations, and images from disk."""

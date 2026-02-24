@@ -190,6 +190,15 @@ from pineuro.utils import (
 logger = logging.getLogger(__name__)
 
 
+def _json_default(obj):
+    """JSON serializer for numpy types produced by the mask pipeline."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 # =============================================================================
 # SECTION 1: DATA STRUCTURES
 # =============================================================================
@@ -253,7 +262,7 @@ def save_mask_selections(masks_dir: Union[str, Path], selections: dict[str, Mask
     data = {name: asdict(sel) for name, sel in selections.items()}
 
     with open(output_file, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, indent=2, default=_json_default)
 
     logger.info(f"Saved mask selections to {output_file}")
     return output_file
@@ -2223,6 +2232,101 @@ def cluster_threshold_stat_map(
     }
 
 
+def compute_cluster_table(
+    binary_mask: np.ndarray,
+    stat_data: np.ndarray,
+    affine: np.ndarray,
+    atlas_data: np.ndarray | None = None,
+    atlas_labels: list[str] | None = None,
+    max_clusters: int = 50,
+) -> list[dict[str, Any]]:
+    """Identify connected clusters in a binary mask and label them.
+
+    Parameters
+    ----------
+    binary_mask : np.ndarray
+        3D binary mask (0/1).
+    stat_data : np.ndarray
+        3D stat map (same shape) for peak values.
+    affine : np.ndarray
+        4×4 NIfTI affine for coordinate conversion.
+    atlas_data : np.ndarray, optional
+        Integer-labeled parcellation in same space (0 = background).
+    atlas_labels : list[str], optional
+        Region names indexed by atlas integer values. Index 0 is background.
+    max_clusters : int
+        Maximum clusters to return (sorted by size descending).
+
+    Returns
+    -------
+    list[dict]
+        Per-cluster info: cluster_id, n_voxels, peak_stat, peak_ijk,
+        peak_xyz, centroid_xyz, anatomical_label, label_overlap.
+    """
+    labeled, n_clusters = ndimage_label(binary_mask.astype(np.int32))
+    if n_clusters == 0:
+        return []
+
+    clusters = []
+    for cluster_id in range(1, n_clusters + 1):
+        mask_c = labeled == cluster_id
+        n_voxels = int(mask_c.sum())
+
+        # Peak stat within this cluster
+        stat_in_cluster = stat_data * mask_c
+        peak_flat = int(np.argmax(stat_in_cluster))
+        peak_ijk = np.unravel_index(peak_flat, stat_data.shape)
+        peak_stat = float(stat_data[peak_ijk])
+
+        # Centroid
+        coords = np.argwhere(mask_c)
+        centroid_ijk = tuple(float(round(v, 1)) for v in coords.mean(axis=0))
+
+        # Convert to mm via affine
+        peak_xyz = tuple(float(round(v, 1)) for v in (affine @ [*peak_ijk, 1])[:3])
+        centroid_xyz = tuple(float(round(v, 1)) for v in (affine @ [*centroid_ijk, 1])[:3])
+
+        entry = {
+            "cluster_id": cluster_id,
+            "n_voxels": n_voxels,
+            "peak_stat": round(peak_stat, 3),
+            "peak_ijk": list(peak_ijk),
+            "peak_xyz": list(peak_xyz),
+            "centroid_xyz": list(centroid_xyz),
+        }
+
+        # Anatomical labeling via atlas overlap
+        if atlas_data is not None and atlas_labels is not None:
+            atlas_vals = atlas_data[mask_c].astype(int)
+            overlap: dict[str, int] = {}
+            for val in np.unique(atlas_vals):
+                if val == 0:
+                    continue  # skip background
+                if val < len(atlas_labels):
+                    label = atlas_labels[val]
+                else:
+                    label = f"region_{val}"
+                overlap[label] = int((atlas_vals == val).sum())
+            if overlap:
+                entry["anatomical_label"] = max(overlap, key=overlap.get)
+                entry["label_overlap"] = overlap
+            else:
+                entry["anatomical_label"] = "Unlabeled"
+                entry["label_overlap"] = {}
+        else:
+            entry["anatomical_label"] = ""
+            entry["label_overlap"] = {}
+
+        clusters.append(entry)
+
+    # Sort by size descending, limit
+    clusters.sort(key=lambda c: c["n_voxels"], reverse=True)
+    # Re-number after sorting
+    for i, c in enumerate(clusters[:max_clusters]):
+        c["cluster_id"] = i + 1
+    return clusters[:max_clusters]
+
+
 @dataclass
 class TaskMaskSelection:
     """Tracks the selection state for a single task-based GLM mask.
@@ -2255,6 +2359,8 @@ class TaskMaskSelection:
         Number of clusters at the final threshold (cluster method only)
     cluster_outcome : str or None
         Outcome of cluster thresholding (cluster method only)
+    cluster_table : list of dict or None
+        Per-cluster breakdown: size, peak stat, coordinates, anatomical label
     """
 
     mask_name: str
@@ -2270,6 +2376,7 @@ class TaskMaskSelection:
     final_cluster_threshold: float | None = None
     n_clusters_found: int | None = None
     cluster_outcome: str | None = None
+    cluster_table: list[dict[str, Any]] | None = None
 
 
 def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str, TaskMaskSelection]) -> Path:
@@ -2278,7 +2385,7 @@ def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str,
     Parameters
     ----------
     masks_dir : str or Path
-        Directory containing the masks (typically 02_masks/)
+        Directory containing the masks (typically 03_masks/)
     selections : dict
         Dictionary mapping mask names to TaskMaskSelection objects
 
@@ -2293,7 +2400,7 @@ def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str,
     data = {"type": "task", "selections": {name: asdict(sel) for name, sel in selections.items()}}
 
     with open(output_file, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, indent=2, default=_json_default)
 
     logger.info(f"Saved task mask selections to {output_file}")
     return output_file
@@ -2539,7 +2646,7 @@ def mask_extraction_task(
             available = ", ".join(sorted(registry.keys()))
             raise ValueError(f"Unknown atlas_name '{atlas_name}'. Available: {available}")
 
-    n_steps = 3 if threshold_method == "cluster" else 2
+    n_steps = 3  # 01_glm, 02_mnireg, 03_masks
 
     # =========================================================================
     # Step 1/{n_steps}: GLM Fit
@@ -2611,19 +2718,19 @@ def mask_extraction_task(
             }
             info_file = glm_dir / f"{participant_id}_glm_info.json"
             with open(info_file, "w") as f:
-                json.dump(glm_info, f, indent=2)
+                json.dump(glm_info, f, indent=2, default=_json_default)
 
         emit_progress(f"Step 1/{n_steps}", "GLM fit complete")
 
     # =========================================================================
-    # Step 2/3: Atlas Registration (cluster mode only)
+    # Step 2/3: MNI Registration (atlas + Harvard-Oxford parcellation)
     # =========================================================================
+    mnireg_dir = root_dir / "02_mnireg"
+    mnireg_dir.mkdir(parents=True, exist_ok=True)
+
     atlas_subject_space_data = None  # Set below if cluster mode
 
     if threshold_method == "cluster":
-        mnireg_dir = root_dir / "02_mnireg"
-        mnireg_dir.mkdir(parents=True, exist_ok=True)
-
         emit_progress(f"Step 2/{n_steps}: Preparing atlas mask")
 
         if atlas_mask is not None:
@@ -2705,12 +2812,62 @@ def mask_extraction_task(
         emit_progress(f"Step 2/{n_steps}", f"Atlas mask: {int(atlas_subject_space_data.sum())} voxels in subject space")
 
     # =========================================================================
+    # Harvard-Oxford parcellation for anatomical cluster labeling
+    # =========================================================================
+    ho_subject_data = None
+    ho_labels = None
+
+    if ref_file is not None:
+        from nilearn import datasets
+
+        label_step = f"Step 2/{n_steps}"
+        emit_progress(label_step, "Registering Harvard-Oxford atlas for cluster labeling...")
+
+        # Fetch Harvard-Oxford cortical parcellation (integer-labeled, MNI space)
+        ho_atlas = datasets.fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm")
+        ho_maps = ho_atlas.maps
+        ho_img = ho_maps if isinstance(ho_maps, nib.Nifti1Image) else cast(Nifti1Image, nib.load(ho_maps))
+        ho_labels = list(ho_atlas.labels)  # Index 0 = "Background"
+
+        ho_mni_path = mnireg_dir / "harvard_oxford_cort_mni.nii.gz"
+        if not ho_mni_path.exists() or overwrite:
+            save(ho_img, ho_mni_path)
+
+        # Compute MNI <-> subject transforms (fast if cached from cluster step above)
+        ref_file_path = Path(ref_file)
+        xfm_prefix = mnireg_dir / f"{participant_id}_to_MNI_boldref"
+        _mni_ref, _fwd_xfm, inv_xfm = compute_xfm_to_mni(
+            input_file=ref_file_path,
+            output_prefix=xfm_prefix,
+            overwrite=False,  # always reuse cached transforms
+        )
+
+        # Apply inverse transform: MNI -> subject space (nearestNeighbor preserves labels)
+        ho_subject_path = mnireg_dir / f"harvard_oxford_cort_to_{participant_id}.nii.gz"
+        apply_xfm(
+            moving=ho_mni_path,
+            fixed=ref_file_path,
+            transform_files=inv_xfm,
+            output_file=ho_subject_path,
+            interpolator="nearestNeighbor",
+            invert=False,
+            overwrite=overwrite,
+        )
+
+        ho_subject_img = cast(Nifti1Image, load(ho_subject_path))
+
+        # Resample to stat map grid
+        first_stat_path = stat_map_paths[list(contrasts.keys())[0]]
+        stat_ref_img = cast(Nifti1Image, load(first_stat_path))
+        ho_resampled = resample_to_img(ho_subject_img, stat_ref_img, interpolation="nearest")
+        ho_subject_data = np.round(ho_resampled.get_fdata()).astype(int)
+
+        emit_progress(label_step, f"Harvard-Oxford: {len(ho_labels) - 1} cortical regions in subject space")
+
+    # =========================================================================
     # Step {n_steps}/{n_steps}: Threshold to Binary Masks
     # =========================================================================
-    if threshold_method == "cluster":
-        masks_dir = root_dir / "03_masks"
-    else:
-        masks_dir = root_dir / "02_masks"
+    masks_dir = root_dir / "03_masks"
     masks_dir.mkdir(parents=True, exist_ok=True)
 
     step_label = f"Step {n_steps}/{n_steps}"
@@ -2868,6 +3025,19 @@ def mask_extraction_task(
                 n_clusters_found=cluster_info.get("n_clusters_at_final"),
                 cluster_outcome=outcome,
             )
+
+        # Compute cluster table with anatomical labels
+        if n_kept > 0:
+            cluster_table = compute_cluster_table(
+                binary_mask=binary_mask,
+                stat_data=stat_data,
+                affine=stat_img.affine,
+                atlas_data=ho_subject_data,
+                atlas_labels=ho_labels,
+            )
+            selections[mask_name].cluster_table = cluster_table
+            n_clusters_found = len(cluster_table)
+            logger.info(f"{mask_name}: {n_clusters_found} clusters in {n_kept} voxels")
 
         save(Nifti1Image(binary_mask, stat_img.affine, stat_img.header), thr_file)
         network_thr_files.append(thr_file)
@@ -3120,7 +3290,7 @@ def import_manual_masks(
         }
     selections_file = masks_dir / "mask_selections.json"
     with open(selections_file, "w") as f:
-        json.dump(selections_data, f, indent=2)
+        json.dump(selections_data, f, indent=2, default=_json_default)
     logger.info(f"Saved manual mask selections to {selections_file}")
 
     emit_progress("Complete", f"Imported {len(output_files)} masks to {masks_dir}")

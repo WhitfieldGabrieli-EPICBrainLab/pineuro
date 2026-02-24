@@ -1301,10 +1301,7 @@ def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
     if config.visit is None or config.visit.mask_source == "compute":
         # Masks computed in this visit
         assert config.paths.mask_extraction_dir is not None
-        # Check both ICA-based (03_masks) and task-based (02_masks) directories
         mask_dir = config.paths.mask_extraction_dir / "03_masks"
-        if not mask_dir.exists():
-            mask_dir = config.paths.mask_extraction_dir / "02_masks"
         mask_files = sorted(mask_dir.glob("*_thr.nii.gz")) if mask_dir.exists() else []
         ref = ref_file_path(config)
         return (mask_files, ref)
@@ -1313,10 +1310,7 @@ def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
         assert config.visit.mask_source_visit is not None
         source_visit = config.visit.mask_source_visit
         source_base = config.paths.base_dir / config.paths.participant_id / source_visit / "mask_extraction"
-        # Check both ICA-based (03_masks) and task-based (02_masks) directories
         source_mask_dir = source_base / "03_masks"
-        if not source_mask_dir.exists():
-            source_mask_dir = source_base / "02_masks"
         mask_files = sorted(source_mask_dir.glob("*_thr.nii.gz")) if source_mask_dir.exists() else []
         ref = ref_file_path(config, source_visit=source_visit)
         return (mask_files, ref)
@@ -1380,7 +1374,7 @@ def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict[str
             me_dir = entry / "mask_extraction"
             visit_info = {
                 "visit_id": entry.name,
-                "has_masks": (me_dir / "03_masks").exists() or (me_dir / "02_masks").exists(),
+                "has_masks": (me_dir / "03_masks").exists(),
                 "has_feedback": (entry / "feedback" / "session_state.json").exists(),
                 "masks_approved": (me_dir / ".masks_approved").exists(),
             }
@@ -1393,7 +1387,7 @@ def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict[str
             0,
             {
                 "visit_id": None,  # Single-visit mode
-                "has_masks": (me_dir / "03_masks").exists() or (me_dir / "02_masks").exists(),
+                "has_masks": (me_dir / "03_masks").exists(),
                 "has_feedback": (participant_dir / "feedback" / "session_state.json").exists(),
                 "masks_approved": (me_dir / ".masks_approved").exists(),
             },
@@ -1885,7 +1879,7 @@ def setup_visit_with_reused_masks(
         source_base = config.paths.base_dir / config.paths.participant_id / source_visit / "mask_extraction"
         raise FileNotFoundError(
             f"No masks found in source visit {source_visit}. "
-            f"Expected masks in: {source_base / '03_masks'} or {source_base / '02_masks'}"
+            f"Expected masks in: {source_base / '03_masks'}"
         )
 
     if not source_ref.exists():

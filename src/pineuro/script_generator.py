@@ -564,7 +564,7 @@ threshold_method = "{threshold_method}"
 """
         cluster_params = """        threshold_method=threshold_method,"""
 
-    masks_dir_name = "03_masks" if threshold_method == "cluster" else "02_masks"
+    masks_dir_name = "03_masks"
 
     script = f'''#!/usr/bin/env python3
 """

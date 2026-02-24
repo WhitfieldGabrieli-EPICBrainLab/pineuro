@@ -199,6 +199,7 @@ class BallTask(BaseTask):
         self.is_first_of_type = is_first_of_type
         self._signal_mode = signal_mode
         self._connectivity_target = connectivity_target
+        self._activation_polarity = kwargs.get("activation_polarity", "positive_up")
         self._last_connectivity = 0.0
 
         self._min_hits_threshold = min_hits_threshold
@@ -206,13 +207,22 @@ class BallTask(BaseTask):
         self._scale_adjust_factor = scale_adjust_factor
         self.circle_shrink_factor = circle_shrink_factor
 
-        if len(coordinator.mask_names) < 2:
-            raise ValueError(f"BallTask requires at least 2 masks, got {len(coordinator.mask_names)}")
-
-        if mask_names is None:
-            mask_names = coordinator.mask_names[:2]
-        elif len(mask_names) != 2:
-            raise ValueError(f"BallTask requires exactly 2 mask names, got {len(mask_names)}")
+        if self._signal_mode == "activation_single":
+            # Single-network mode: require at least 1 mask
+            if len(coordinator.mask_names) < 1:
+                raise ValueError(f"BallTask requires at least 1 mask, got {len(coordinator.mask_names)}")
+            if mask_names is None:
+                mask_names = coordinator.mask_names[:1]
+            else:
+                mask_names = mask_names[:1]  # Use first mask only
+        else:
+            # Dual-network or connectivity mode: require 2 masks
+            if len(coordinator.mask_names) < 2:
+                raise ValueError(f"BallTask requires at least 2 masks, got {len(coordinator.mask_names)}")
+            if mask_names is None:
+                mask_names = coordinator.mask_names[:2]
+            elif len(mask_names) != 2:
+                raise ValueError(f"BallTask requires exactly 2 mask names, got {len(mask_names)}")
 
         self.mask_names = mask_names
 
@@ -317,17 +327,13 @@ class BallTask(BaseTask):
         # Initialize PsychoPy log file
         self._psychopy_log_file = open(self._psychopy_log_path, "w", newline="")  # noqa: SIM115
         self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter="\t")
-        header = [
-            "frame",
-            "time",
-            "volume",
-            "ball_y_pos",
-            "scale_factor",
-            f"{self.mask_names[0]}_activation",
-            f"{self.mask_names[1]}_activation",
-        ]
+        header = ["frame", "time", "volume", "ball_y_pos", "scale_factor"]
+        for name in self.mask_names:
+            header.append(f"{name}_activation")
         if self._signal_mode == "connectivity":
             header.extend(["connectivity", "target_hits", "nontarget_hits"])
+        elif self._signal_mode == "activation_single":
+            header.extend(["target_hits", "nontarget_hits"])
         else:
             header.extend([f"{self.mask_names[0]}_hits", f"{self.mask_names[1]}_hits"])
         self._psychopy_log_writer.writerow(header)
@@ -475,6 +481,9 @@ class BallTask(BaseTask):
             return []
 
         # Show instruction screen (BallTask-specific)
+        if not hasattr(self, "slider_instruction_text"):
+            logger.warning("Slider instruction text not initialized; skipping post-run questions")
+            return []
         self.slider_instruction_text.draw()
         self._capture_and_emit_screenshot(force=True)
         self.win.flip()
@@ -542,6 +551,31 @@ class BallTask(BaseTask):
             )
             return
 
+        # Single-network activation mode: one mask drives ball movement
+        if self._signal_mode == "activation_single":
+            name = self.mask_names[0]
+            val = activations.get(name, 0.0)
+
+            if abs(val) > self.pda_outlier_threshold:
+                self.outlier_count += 1
+                self._current_is_outlier = True
+                logger.info(f"Outlier detected: {name}={val:.4f} (threshold: {self.pda_outlier_threshold})")
+                return
+            self._current_is_outlier = False
+
+            self.current_activity = abs(val) / 10.0
+
+            # Apply polarity: "negative_up" negates so reducing activation → ball UP
+            directed_val = -val if self._activation_polarity == "negative_up" else val
+            self.current_direction = 1.0 if directed_val >= 0 else -1.0
+            direction_label = "UP" if self.current_direction > 0 else "DOWN"
+            logger.debug(
+                f"Single activation: {name}={val:.4f}, polarity={self._activation_polarity}, "
+                f"directed={directed_val:.4f} -> {direction_label}"
+            )
+            return
+
+        # Dual-network activation mode
         acts = [activations[name] for name in self.mask_names]
 
         # Reject outliers to prevent extreme activations from dominating movement
@@ -652,7 +686,7 @@ class BallTask(BaseTask):
                 self.hit_counters[i] += 1
 
                 # Log hit event
-                if self._signal_mode == "connectivity":
+                if self._signal_mode in ("connectivity", "activation_single"):
                     label = "target" if self.network_directions[i] > 0 else "nontarget"
                 else:
                     label = self.mask_names[i]
@@ -737,15 +771,9 @@ class BallTask(BaseTask):
         # Calculate frame timestamp relative to task start
         frame_time = time.time() - self._task_start_time
 
-        row = [
-            self._frame_counter,
-            frame_time,
-            self.current_volume,
-            self.ball_pos[1],
-            self.scale_factor,
-            activations[self.mask_names[0]],
-            activations[self.mask_names[1]],
-        ]
+        row = [self._frame_counter, frame_time, self.current_volume, self.ball_pos[1], self.scale_factor]
+        for name in self.mask_names:
+            row.append(activations.get(name, 0.0))
         if self._signal_mode == "connectivity":
             row.extend([self._last_connectivity, self.hit_counters[0], self.hit_counters[1]])
         else:
@@ -978,7 +1006,7 @@ class BallTask(BaseTask):
             shapes.append({"type": "circle", "x": 0.5, "y": ball_y, "radius": 0.03, "fill": "white"})
 
             # Hit counter text
-            if self._signal_mode == "connectivity":
+            if self._signal_mode in ("connectivity", "activation_single"):
                 hit_text = f"target: {self.hit_counters[0]}  nontarget: {self.hit_counters[1]}"
             else:
                 hit_text = f"{self.mask_names[0]}: {self.hit_counters[0]}  {self.mask_names[1]}: {self.hit_counters[1]}"
@@ -1010,13 +1038,36 @@ class BallTask(BaseTask):
             self._psychopy_log_file = None
             self._psychopy_log_writer = None
 
+        # Show post-run questions BEFORE deleting stimuli (they need GL context)
+        # BaseTask.cleanup() would normally show these, but it's too late after
+        # stimulus deletion. The guard in _show_post_run_questions() prevents
+        # double-showing when super().cleanup() runs.
+        should_show = True
+        if hasattr(self, "coordinator") and hasattr(self.coordinator, "should_show_questions"):
+            should_show = self.coordinator.should_show_questions()
+        if should_show and hasattr(self, "win") and self.win is not None:
+            # Temporarily clear the stop event so the question wait-loops
+            # don't immediately raise KeyboardInterrupt (we're in cleanup
+            # and the user explicitly asked for questions via show_questions).
+            stop_event = getattr(self.coordinator, "_stop_event", None)
+            was_set = stop_event is not None and stop_event.is_set()
+            if was_set:
+                stop_event.clear()
+            try:
+                self._show_post_run_questions()
+            except KeyboardInterrupt:
+                logger.info("Questions interrupted during cleanup")
+            finally:
+                if was_set and stop_event is not None:
+                    stop_event.set()
+
         # Delete visual stimuli while GL context is still alive
         # (prevents PsychoPy TextStim.__del__ access violations during GC)
         for attr in ["ball", "fixation_cross", "question_text", "slider_instruction_text"]:
             if hasattr(self, attr):
                 delattr(self, attr)
 
-        # Call base class cleanup (shows questions, closes window, clears events, resets pyglet)
+        # Call base class cleanup (closes window, clears events, resets pyglet)
         super().cleanup()
 
         # Close questions file after base class has written to it
@@ -1060,7 +1111,12 @@ class BallTask(BaseTask):
             if self._signal_mode == "connectivity":
                 logger.info(f"Connectivity target: {self._connectivity_target}")
                 logger.info(f"Connectivity key: corr_{self.mask_names[0]}_{self.mask_names[1]}")
-            logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
+                logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
+            elif self._signal_mode == "activation_single":
+                logger.info(f"Activation polarity: {self._activation_polarity}")
+                logger.info(f"Network: {self.mask_names[0]}")
+            else:
+                logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
             logger.info(f"Scale factor: {self.scale_factor}")
             logger.info(f"Target volumes: {self.coordinator.n_volumes}")
             logger.info(f"Baseline volumes: {self.coordinator.n_baseline}")
@@ -1104,7 +1160,7 @@ class BallTask(BaseTask):
             logger.info("")
             logger.info("=== BallTask Session Complete ===")
             logger.info(f"Total volumes: {self.current_volume}/{self.coordinator.n_volumes}")
-            if self._signal_mode == "connectivity":
+            if self._signal_mode in ("connectivity", "activation_single"):
                 logger.info(f"Hits - target: {self.hit_counters[0]}, nontarget: {self.hit_counters[1]}")
             else:
                 logger.info(
@@ -1150,7 +1206,7 @@ def _validate_ball_hits(config: dict[str, Any]) -> None:
 BALL_TASK_METADATA = TaskMetadata(
     task_id="ball",
     display_name="Ball Task",
-    description="Dual-network neurofeedback with ball control",
+    description="Neurofeedback with ball control (single or dual network)",
     parameters=[
         TaskParameter(
             key="use_transfer_runs",
@@ -1234,7 +1290,7 @@ BALL_TASK_METADATA = TaskMetadata(
         ),
     ],
     cross_parameter_validator=_validate_ball_hits,
-    n_networks=2,  # Ball task requires exactly 2 networks (top/bottom)
+    n_networks=1,  # Minimum 1 network (single-network mode); dual-network also supported
     network_roles=[
         NetworkRole("top_network", "Top Network (upward)", "Ball moves up when this network is more active"),
         NetworkRole("bottom_network", "Bottom Network (downward)", "Ball moves down when this network is more active"),

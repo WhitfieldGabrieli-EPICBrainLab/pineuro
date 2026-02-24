@@ -811,7 +811,7 @@ class PipelineRunner:
                 atlas_name=atlas_name_cfg,
                 atlas_source=atlas_source_cfg,
                 atlas_regions=atlas_regions_cfg,
-                ref_file=str(ref_file) if threshold_method == "cluster" else None,
+                ref_file=str(ref_file),
                 cluster_start_threshold=cluster_start_threshold,
                 cluster_step=cluster_step,
                 overwrite=self.overwrite,
@@ -960,10 +960,7 @@ class PipelineRunner:
             localizer_task = config.get("scan", {}).get("localizer_task_type", "rest")
             task_name = localizer_task if localizer_task != "rest" else "rest"
             ref_file = source_preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
-            # Check both ICA-based (03_masks) and task-based (02_masks) directories
             masks_dir = source_mask_extraction_dir / "03_masks"
-            if not masks_dir.exists():
-                masks_dir = source_mask_extraction_dir / "02_masks"
 
             self._emit_progress(f"Using masks from source visit: {mask_source_visit}")
         else:
@@ -971,10 +968,7 @@ class PipelineRunner:
             localizer_task = config.get("scan", {}).get("localizer_task_type", "rest")
             task_name = localizer_task if localizer_task != "rest" else "rest"
             ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
-            # Check both ICA-based (03_masks) and task-based (02_masks) directories
             masks_dir = mask_extraction_dir / "03_masks"
-            if not masks_dir.exists():
-                masks_dir = mask_extraction_dir / "02_masks"
 
         # Find the most recent complete reference collection for this run
         n_volumes = config["scan"].get("reference_n_volumes", 2)
@@ -1197,24 +1191,35 @@ class PipelineRunner:
         # For task-based (GLM) extraction, mask names come from contrast keys.
         # For ICA-based (rest) extraction, mask names come from mask_names/yeo_targets.
         localizer_type = config["mask"].get("localizer_type", "rest")
+        signal_mode = config["feedback"].get("feedback_mode", "activation")
         if localizer_type == "task":
             contrasts = config["mask"].get("contrasts", {})
             real_mask_names = list(contrasts.keys())
+            # Fallback to task metadata default_contrasts if config has none
+            if not real_mask_names:
+                localizer_task_type = config["scan"].get("localizer_task_type")
+                if localizer_task_type:
+                    try:
+                        loc_meta = get_task_metadata(localizer_task_type)
+                        real_mask_names = list((loc_meta.default_contrasts or {}).keys())
+                    except KeyError:
+                        pass
         else:
             real_mask_names = list(config["mask"]["mask_names"])
 
-        # Resolve task mask names from network assignment in task config
+        # Resolve task mask names from network assignment in task config.
+        # Skip for single-network mode — the extracted contrast keys ARE the mask names.
         metadata = get_task_metadata(feedback_task_type)
         task_specific_config = task_config.get(feedback_task_type, {})
 
-        if metadata.network_roles:
-            # Use explicit network assignment from task config
+        if signal_mode != "activation_single" and metadata.network_roles:
+            # Use explicit network assignment from task config (dual-network modes)
             assigned_names = []
             for role in metadata.network_roles:
                 name = task_specific_config.get(role.key)
                 if name:
                     assigned_names.append(name)
-            if len(assigned_names) == metadata.n_networks:
+            if len(assigned_names) >= 2:
                 real_mask_names = assigned_names
 
         self._emit_progress(f"Task networks: {real_mask_names}")
@@ -1236,8 +1241,6 @@ class PipelineRunner:
         else:
             # Use boldref space masks from mask extraction
             masks_dir = mask_extraction_dir / "03_masks"
-            if not masks_dir.exists():
-                masks_dir = mask_extraction_dir / "02_masks"
             pattern_template = "*_{mask_name}_thr.nii.gz"
             mask_space = "subject boldref"
 
@@ -1495,13 +1498,15 @@ class PipelineRunner:
         # Determine which masks control the task based on condition
         # For real: use real_mask_names
         # For sham: substitute masks based on signal mode
-        signal_mode = config["feedback"].get("feedback_mode", "activation")
         if condition == "sham" and sham_mask_names:
             if signal_mode == "connectivity" and len(sham_mask_names) >= 2:
                 # Connectivity: use both sham masks as the pair
                 task_mask_names = sham_mask_names[:2]
+            elif signal_mode == "activation_single":
+                # Single-network: just swap the one mask
+                task_mask_names = [sham_mask_names[0]]
             else:
-                # Activation: swap first mask only
+                # Dual-network activation: swap first mask only
                 task_mask_names = [sham_mask_names[0], real_mask_names[1]]
             if self._is_blind_mode():
                 self._emit_progress_file_only(
@@ -1601,6 +1606,7 @@ class PipelineRunner:
             signal_mode = config["feedback"].get("feedback_mode", "activation")
 
             connectivity_target = config["feedback"].get("connectivity_target", "increase")
+            activation_polarity = config["feedback"].get("activation_polarity", "positive_up")
 
             factory_config = {
                 **task_specific_config,
@@ -1608,6 +1614,7 @@ class PipelineRunner:
                 "feedback_mode": feedback_mode,
                 "signal_mode": signal_mode,
                 "connectivity_target": connectivity_target,
+                "activation_polarity": activation_polarity,
                 "presenter_monitor": presenter_monitor,
             }
 

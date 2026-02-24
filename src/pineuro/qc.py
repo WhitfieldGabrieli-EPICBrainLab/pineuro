@@ -1680,6 +1680,13 @@ def generate_mask_extraction_report(
                         )
                 sections.append({"type": "grid", "content": grid_items})
 
+    # Interactive nilearn viewers
+    if ref_file and ref_file.exists() and network_masks:
+        viewer_html = _generate_interactive_viewers(ref_file, network_masks)
+        if viewer_html:
+            sections.append({"type": "heading", "content": "Interactive Mask Viewer"})
+            sections.append({"type": "raw_html", "content": viewer_html})
+
     # Mask summary table
     if network_masks:
         sections.append({"type": "heading", "content": "Mask Summary"})
@@ -1746,7 +1753,7 @@ def generate_task_mask_extraction_report(
     Parameters
     ----------
     mask_extraction_dir : Path
-        Root mask extraction directory (contains 01_glm/, 02_masks/)
+        Root mask extraction directory (contains 01_glm/, 02_mnireg/, 03_masks/)
     participant_id : str
         Participant identifier
     mask_names : sequence of str
@@ -1779,10 +1786,7 @@ def generate_task_mask_extraction_report(
     logger.info(f"Generating task-based mask extraction QC report for {participant_id}")
 
     glm_dir = mask_extraction_dir / "01_glm"
-    # Cluster method uses 03_masks/; top_n uses 02_masks/
     masks_dir = mask_extraction_dir / "03_masks"
-    if not masks_dir.exists():
-        masks_dir = mask_extraction_dir / "02_masks"
 
     # Find BOLD reference for overlays
     preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
@@ -1822,6 +1826,34 @@ def generate_task_mask_extraction_report(
         summary_data["Conditions"] = ", ".join(glm_info.get("conditions", []))
         summary_data["N volumes"] = str(glm_info.get("n_volumes", "?"))
         summary_data["HRF model"] = glm_info.get("hrf_model", "?")
+        if glm_info.get("smoothing_fwhm") is not None:
+            summary_data["Smoothing FWHM"] = f"{glm_info['smoothing_fwhm']} mm"
+        if glm_info.get("high_pass") is not None:
+            summary_data["High-pass filter"] = f"{glm_info['high_pass']} Hz"
+
+    # Load mask selections for thresholding info
+    selections_file = masks_dir / "mask_selections.json"
+    sel_data = {}
+    if selections_file.exists():
+        import json as _json
+
+        with open(selections_file) as f:
+            _sel_raw = _json.load(f)
+        sel_data = _sel_raw.get("selections", _sel_raw)
+
+    # Add threshold info to summary from first selection
+    if sel_data:
+        first_sel = next(iter(sel_data.values()))
+        thr_method = first_sel.get("threshold_method", "?")
+        summary_data["Threshold method"] = thr_method
+        n_thr = first_sel.get("n_voxels_thresholded")
+        if n_thr is not None:
+            summary_data["Target voxels"] = str(n_thr)
+        if thr_method == "cluster":
+            atlas = first_sel.get("atlas_used")
+            if atlas:
+                summary_data["Atlas"] = atlas
+
     sections.append({"type": "summary", "content": summary_data})
 
     # Contrast definitions
@@ -1891,16 +1923,30 @@ def generate_task_mask_extraction_report(
                 )
             sections.append({"type": "grid", "content": grid_items})
 
+    # Interactive nilearn viewers
+    if ref_file and ref_file.exists() and network_masks:
+        viewer_html = _generate_interactive_viewers(ref_file, network_masks)
+        if viewer_html:
+            sections.append({"type": "heading", "content": "Interactive Mask Viewer"})
+            sections.append({"type": "raw_html", "content": viewer_html})
+
     # Mask summary table
     if network_masks:
         sections.append({"type": "heading", "content": "Mask Summary"})
         table_rows = []
         for mask_name, mask_path in network_masks.items():
             summary = summarize_mask(mask_path, name=mask_name)
+            sel = sel_data.get(mask_name, {})
+            peak = sel.get("peak_stat")
+            peak_str = f"{peak:.2f}" if peak is not None else "—"
+            n_pos = sel.get("n_voxels_above_zero")
+            n_pos_str = str(n_pos) if n_pos is not None else "—"
             table_rows.append(
                 [
                     summary.name,
                     contrasts.get(mask_name, ""),
+                    peak_str,
+                    n_pos_str,
                     str(summary.voxels),
                     f"{summary.volume_ml:.2f}",
                     str(summary.centroid_ijk),
@@ -1910,10 +1956,43 @@ def generate_task_mask_extraction_report(
         sections.append(
             {
                 "type": "table",
-                "headers": ["Name", "Contrast", "Voxels", "Volume (mL)", "Centroid (i,j,k)"],
+                "headers": [
+                    "Name", "Contrast", f"Peak {stat_type}",
+                    "Positive voxels", "Mask voxels", "Volume (mL)", "Centroid (i,j,k)",
+                ],
                 "rows": table_rows,
             }
         )
+
+    # Cluster table (anatomical breakdown)
+    if sel_data:
+        for mask_name in mask_names:
+            sel = sel_data.get(mask_name, {})
+            cluster_table = sel.get("cluster_table")
+            if cluster_table:
+                sections.append({"type": "heading", "content": f"Cluster Table: {mask_name}"})
+                ct_rows = []
+                for c in cluster_table[:15]:
+                    peak_ijk = c.get("peak_ijk", [])
+                    peak_ijk_str = f"({', '.join(str(int(v)) for v in peak_ijk)})" if peak_ijk else ""
+                    ct_rows.append(
+                        [
+                            str(c.get("cluster_id", "")),
+                            str(c.get("n_voxels", "")),
+                            f"{c.get('peak_stat', 0):.2f}",
+                            peak_ijk_str,
+                            c.get("anatomical_label", "") or "—",
+                        ]
+                    )
+                if len(cluster_table) > 15:
+                    ct_rows.append(["...", f"+{len(cluster_table) - 15} more", "", "", ""])
+                sections.append(
+                    {
+                        "type": "table",
+                        "headers": ["Cluster", "Voxels", f"Peak {stat_type}", "Peak (i,j,k)", "Region"],
+                        "rows": ct_rows,
+                    }
+                )
 
     # Generate HTML report
     html_report = output_dir / f"{participant_id}_mask_extraction_qc.html"
@@ -3278,6 +3357,68 @@ def generate_feedback_report(
 # ============================================================================
 
 
+def _generate_interactive_viewers(
+    ref_file: Path,
+    mask_files: dict[str, Path],
+) -> str:
+    """Generate interactive nilearn tri-planar viewer iframes for mask overlays.
+
+    Creates HTML containing one interactive viewer per mask, each overlaid
+    on the BOLD reference image. Uses nilearn's ``view_img`` to produce
+    JavaScript-based iframes with full slice navigation.
+
+    Parameters
+    ----------
+    ref_file : Path
+        Path to the BOLD reference NIfTI file (background image).
+    mask_files : dict of str to Path
+        Mapping of network/mask name to thresholded mask NIfTI path.
+
+    Returns
+    -------
+    str
+        HTML string with ``<div class="viewer-section">`` blocks, one per
+        mask.  Returns empty string if nilearn is unavailable or all masks
+        fail to render.
+    """
+    try:
+        from nilearn.plotting import view_img  # type: ignore[import-untyped]
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            "nilearn not available — skipping interactive viewers"
+        )
+        return ""
+
+    ref_str = str(ref_file)
+    parts: list[str] = []
+
+    for name, mask_path in mask_files.items():
+        try:
+            viewer = view_img(
+                stat_map_img=str(mask_path),
+                bg_img=ref_str,
+                title=name,
+                threshold=0.5,
+                symmetric_cmap=False,
+                cmap="hot",
+                colorbar=True,
+                dim=-0.5,
+                opacity=0.6,
+                resampling_interpolation="nearest",
+            )
+            parts.append('<div class="viewer-section">')
+            parts.append(f"<h3>{name}</h3>")
+            parts.append(viewer.get_iframe(width=900, height=500))
+            parts.append("</div>")
+        except Exception:
+            logging.getLogger(__name__).warning(
+                f"Failed to generate interactive viewer for {name}",
+                exc_info=True,
+            )
+
+    return "\n".join(parts)
+
+
 def _generate_html_template(title: str, participant_id: str, stage: str, sections: list[dict]) -> str:
     """Generate a professional HTML QC report with consistent styling.
 
@@ -3388,6 +3529,9 @@ def _generate_html_template(title: str, participant_id: str, stage: str, section
                 html_sections.append("</tr>")
             html_sections.append("</table>")
 
+        elif section_type == "raw_html":
+            html_sections.append(section["content"])
+
     # Complete HTML document
     html = f"""<!DOCTYPE html>
 <html>
@@ -3459,6 +3603,21 @@ def _generate_html_template(title: str, participant_id: str, stage: str, section
         }}
         tr:nth-child(even) {{
             background: #f8f9fa;
+        }}
+        .viewer-section {{
+            margin-bottom: 30px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .viewer-section h3 {{
+            color: #666;
+            margin-top: 0;
+        }}
+        .viewer-section iframe {{
+            border: none;
+            border-radius: 4px;
         }}
         .summary-box {{
             background: #e3f2fd;

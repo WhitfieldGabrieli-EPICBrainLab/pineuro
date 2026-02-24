@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import sys
 import threading
 import time
 from abc import ABC
@@ -92,11 +93,29 @@ class TaskBase(ABC):  # noqa: B024
 
     def _ensure_focus(self) -> None:
         """Bring PsychoPy window to foreground so it receives key events."""
-        if self.win is not None:
-            try:
+        if self.win is None:
+            return
+        try:
+            if sys.platform == "win32":
+                import ctypes
+
+                hwnd = self.win.winHandle._hwnd
+                user32 = ctypes.windll.user32
+                fg_hwnd = user32.GetForegroundWindow()
+                if fg_hwnd != hwnd:
+                    fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None)
+                    cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+                    # Attach our thread TO the foreground thread so Windows
+                    # grants us permission to call SetForegroundWindow
+                    user32.AttachThreadInput(cur_tid, fg_tid, True)
+                    user32.SetForegroundWindow(hwnd)
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetFocus(hwnd)
+                    user32.AttachThreadInput(cur_tid, fg_tid, False)
+            else:
                 self.win.winHandle.activate()
-            except Exception:
-                pass
+        except Exception:
+            pass
 
     def _capture_and_emit_screenshot(self, force: bool = False) -> None:
         """Capture current PsychoPy frame and emit to mirror callback.
@@ -308,6 +327,7 @@ class TaskBase(ABC):  # noqa: B024
                 time.sleep(0.2)  # Give window time to appear
                 self._move_window_xlib(target_x)
 
+        self._ensure_focus()
         return self.win
 
     def _reset_pyglet_for_new_window(self) -> None:
@@ -604,9 +624,6 @@ class TaskBase(ABC):  # noqa: B024
 
         def _run_simulator():
             try:
-                # Brief delay so "Waiting for scanner..." is visible before
-                # the synthetic trigger key is injected
-                time.sleep(2.0)
                 logger.info("Simulator thread starting")
                 for vol_num in self._simulator.copy_volumes_iter():
                     if not self._running:

@@ -108,3 +108,23 @@ class TestPlotFunctions:
 
         plot_fd_timeseries(log_path, output)
         assert output.exists()
+
+
+# =============================================================================
+# HTML template
+# =============================================================================
+
+
+class TestHtmlTemplate:
+    def test_raw_html_section(self):
+        from pineuro.qc import _generate_html_template
+
+        raw = '<div class="viewer-section"><h3>Test</h3><p>Content</p></div>'
+        html = _generate_html_template(
+            title="Test",
+            participant_id="sub-01",
+            stage="Test",
+            sections=[{"type": "raw_html", "content": raw}],
+        )
+        assert raw in html
+        assert "viewer-section" in html

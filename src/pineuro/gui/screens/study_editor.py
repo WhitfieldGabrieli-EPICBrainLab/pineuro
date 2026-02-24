@@ -665,11 +665,11 @@ class StudyEditorScreen:
             label="Feedback signal",
             options=[
                 ft.dropdown.Option("activation", "Activation (dual-network)"),
+                ft.dropdown.Option("activation_single", "Activation (single-network)"),
                 ft.dropdown.Option("connectivity", "Connectivity (sliding-window correlation)"),
             ],
             value=feedback_mode_val,
             on_select=self._on_feedback_mode_changed,
-            visible=has_multi_mask,
         )
 
         # Differential pair (shown in activation mode)
@@ -763,6 +763,26 @@ class StudyEditorScreen:
                 self.connectivity_target_dropdown,
             ],
             visible=is_conn_mode,
+        )
+
+        # Activation polarity config (shown in activation_single mode)
+        polarity_val = config.get("feedback", {}).get("activation_polarity", "positive_up")
+        is_single_mode = feedback_mode_val == "activation_single"
+        self.activation_polarity_dropdown = ft.Dropdown(
+            width=600,
+            label="Activation polarity",
+            options=[
+                ft.dropdown.Option("positive_up", "Positive activation moves ball UP"),
+                ft.dropdown.Option("negative_up", "Negative activation moves ball UP (reduce activation)"),
+            ],
+            value=polarity_val,
+        )
+        self.activation_single_section = ft.Column(
+            [
+                ft.Text("Single-Network Activation", size=14, weight=ft.FontWeight.W_500),
+                self.activation_polarity_dropdown,
+            ],
+            visible=is_single_mode,
         )
 
         # Intermittent feedback mode (checkbox + interval field)
@@ -1078,10 +1098,23 @@ class StudyEditorScreen:
 
         # Update feedback mode dropdown and section visibility based on mask count
         n_networks = len(new_options)
-        self.feedback_mode_dropdown.visible = n_networks >= 2
         if n_networks < 2:
+            # Only single-network mode available
+            self.feedback_mode_dropdown.options = [
+                ft.dropdown.Option("activation_single", "Activation (single-network)"),
+            ]
+            if self.feedback_mode_dropdown.value != "activation_single":
+                self.feedback_mode_dropdown.value = "activation_single"
             self.differential_row.visible = False
             self.connectivity_section.visible = False
+            self.activation_single_section.visible = True
+        else:
+            # Restore all options when 2+ masks
+            self.feedback_mode_dropdown.options = [
+                ft.dropdown.Option("activation", "Activation (dual-network)"),
+                ft.dropdown.Option("activation_single", "Activation (single-network)"),
+                ft.dropdown.Option("connectivity", "Connectivity (sliding-window correlation)"),
+            ]
 
         self.page.update()
 
@@ -1287,6 +1320,7 @@ class StudyEditorScreen:
         mode = self.feedback_mode_dropdown.value
         self.differential_row.visible = mode == "activation"
         self.connectivity_section.visible = mode == "connectivity"
+        self.activation_single_section.visible = mode == "activation_single"
         self._update_sham_visibility()
         self.page.update()
 
@@ -2422,6 +2456,7 @@ class StudyEditorScreen:
                     self.feedback_mode_dropdown,
                     self.differential_row,
                     self.connectivity_section,
+                    self.activation_single_section,
                     self.intermittent_enabled_checkbox,
                     self.feedback_interval_field,
                     ft.Divider(),
@@ -3250,6 +3285,7 @@ class StudyEditorScreen:
             feedback_mode = self.feedback_mode_dropdown.value or "activation"
             config["feedback"]["feedback_mode"] = feedback_mode
             config["feedback"]["connectivity_target"] = self.connectivity_target_dropdown.value or "increase"
+            config["feedback"]["activation_polarity"] = self.activation_polarity_dropdown.value or "positive_up"
             if feedback_mode == "connectivity":
                 a = self.connectivity_pair_a_dropdown.value
                 b = self.connectivity_pair_b_dropdown.value
@@ -3259,6 +3295,10 @@ class StudyEditorScreen:
                     config["feedback"]["connectivity_pairs"] = None
                 window_str = self.connectivity_window_field.value.strip()
                 config["feedback"]["connectivity_window"] = int(window_str) if window_str else 15
+                config["feedback"]["differential_pair"] = None
+            elif feedback_mode == "activation_single":
+                config["feedback"]["connectivity_pairs"] = None
+                config["feedback"]["connectivity_window"] = 15
                 config["feedback"]["differential_pair"] = None
             else:
                 config["feedback"]["connectivity_pairs"] = None

@@ -508,17 +508,7 @@ class ParticipantWorkflowScreen:
 
         from pineuro.gui.components.qc_viewer import open_qc_report
 
-        # Cluster method uses 03_masks/; top_n uses 02_masks/
-        threshold_method = config.get("mask", {}).get("threshold_method", "top_n")
-        if threshold_method == "cluster":
-            masks_dir = mask_extraction_dir / "03_masks"
-        else:
-            masks_dir = mask_extraction_dir / "02_masks"
-        # Fallback: check the other directory if primary doesn't exist
-        if not masks_dir.exists():
-            alt = mask_extraction_dir / ("02_masks" if threshold_method == "cluster" else "03_masks")
-            if alt.exists():
-                masks_dir = alt
+        masks_dir = mask_extraction_dir / "03_masks"
         if not masks_dir.exists():
             _snack = ft.SnackBar(ft.Text("Task masks not found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
@@ -623,25 +613,82 @@ class ParticipantWorkflowScreen:
                     bgcolor=ft.Colors.GREY_200,
                 )
 
-            card = ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Row(
-                            [
-                                ft.Text(mask_name, size=16, weight=ft.FontWeight.W_500),
-                                ft.Container(expand=True),
-                                ft.Text(stat_text, size=13, color=ft.Colors.GREY_700),
+            # Build cluster table widget if available
+            cluster_table_widget: ft.Control | None = None
+            cluster_table_data = sel.get("cluster_table")
+            if cluster_table_data:
+                max_display = 15
+                table_rows = []
+                for c in cluster_table_data[:max_display]:
+                    region = c.get("anatomical_label", "")
+                    table_rows.append(
+                        ft.DataRow(
+                            cells=[
+                                ft.DataCell(ft.Text(str(c.get("cluster_id", "")), size=11)),
+                                ft.DataCell(ft.Text(str(c.get("n_voxels", "")), size=11)),
+                                ft.DataCell(ft.Text(f"{c.get('peak_stat', 0):.2f}", size=11)),
+                                ft.DataCell(ft.Text(region if region else "—", size=11)),
                             ],
-                        ),
-                        ft.Container(
-                            content=overlay_content,
-                            border=ft.border.all(1, ft.Colors.GREY_300),
-                            border_radius=5,
-                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                        ),
+                        )
+                    )
+                if len(cluster_table_data) > max_display:
+                    table_rows.append(
+                        ft.DataRow(
+                            cells=[
+                                ft.DataCell(ft.Text("...", size=11, italic=True)),
+                                ft.DataCell(ft.Text(f"+{len(cluster_table_data) - max_display} more", size=11, italic=True)),
+                                ft.DataCell(ft.Text("")),
+                                ft.DataCell(ft.Text("")),
+                            ],
+                        )
+                    )
+                cluster_table_widget = ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                f"Clusters ({len(cluster_table_data)})",
+                                size=12,
+                                weight=ft.FontWeight.W_500,
+                                color=ft.Colors.BLUE_700,
+                            ),
+                            ft.DataTable(
+                                columns=[
+                                    ft.DataColumn(ft.Text("#", size=11, weight=ft.FontWeight.BOLD)),
+                                    ft.DataColumn(ft.Text("Voxels", size=11, weight=ft.FontWeight.BOLD), numeric=True),
+                                    ft.DataColumn(ft.Text("Peak", size=11, weight=ft.FontWeight.BOLD), numeric=True),
+                                    ft.DataColumn(ft.Text("Region", size=11, weight=ft.FontWeight.BOLD)),
+                                ],
+                                rows=table_rows,
+                                column_spacing=15,
+                                data_row_min_height=28,
+                                heading_row_height=30,
+                            ),
+                        ],
+                        spacing=4,
+                    ),
+                    padding=ft.padding.symmetric(horizontal=5),
+                )
+
+            card_children = [
+                ft.Row(
+                    [
+                        ft.Text(mask_name, size=16, weight=ft.FontWeight.W_500),
+                        ft.Container(expand=True),
+                        ft.Text(stat_text, size=13, color=ft.Colors.GREY_700),
                     ],
-                    spacing=10,
                 ),
+                ft.Container(
+                    content=overlay_content,
+                    border=ft.border.all(1, ft.Colors.GREY_300),
+                    border_radius=5,
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                ),
+            ]
+            if cluster_table_widget is not None:
+                card_children.append(cluster_table_widget)
+
+            card = ft.Container(
+                content=ft.Column(card_children, spacing=10),
                 padding=15,
                 bgcolor=ft.Colors.GREY_100,
                 border_radius=8,
@@ -919,32 +966,6 @@ class ParticipantWorkflowScreen:
                 self.page.overlay.append(_snack)
                 self.page.update()
 
-        def on_view_in_browser(e):
-            if not ref_file.exists():
-                _snack = ft.SnackBar(ft.Text("BOLD reference file not found."), bgcolor=ft.Colors.RED)
-                _snack.open = True
-                self.page.overlay.append(_snack)
-                self.page.update()
-                return
-
-            try:
-                from pineuro.gui.utils import open_mask_viewer_in_browser
-
-                viewer_output_dir = mask_extraction_dir / "qc"
-                open_mask_viewer_in_browser(
-                    ref_file=ref_file,
-                    mask_files=mask_files,
-                    output_dir=viewer_output_dir,
-                    title=f"Task Mask Review - {self.participant_id}",
-                )
-                self._add_log(f"[INFO] Opened mask viewer in browser with {len(mask_files)} masks")
-            except Exception as ex:
-                logger.error(f"Failed to open mask viewer: {ex}")
-                _snack = ft.SnackBar(ft.Text(f"Failed to open mask viewer: {ex}"), bgcolor=ft.Colors.RED)
-                _snack.open = True
-                self.page.overlay.append(_snack)
-                self.page.update()
-
         def on_close(e):
             _close_dialog(dialog)
 
@@ -979,12 +1000,6 @@ class ParticipantWorkflowScreen:
                 height=500,
             ),
             actions=[
-                ft.OutlinedButton(
-                    "View in Browser",
-                    icon=ft.Icons.OPEN_IN_NEW,
-                    on_click=on_view_in_browser,
-                    tooltip="Open interactive mask viewer in the default web browser",
-                ),
                 ft.OutlinedButton(
                     "View QC Report",
                     icon=ft.Icons.ASSESSMENT,
@@ -1443,10 +1458,7 @@ class ParticipantWorkflowScreen:
 
             # Check mask extraction outputs
             mask_extraction_dir = base_dir / "mask_extraction"
-            # Task-based uses 02_masks, ICA-based uses 03_masks
-            masks_dir = mask_extraction_dir / "02_masks"
-            if not masks_dir.exists():
-                masks_dir = mask_extraction_dir / "03_masks"
+            masks_dir = mask_extraction_dir / "03_masks"
 
             # Check for any network mask files
             if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
@@ -1760,7 +1772,10 @@ class ParticipantWorkflowScreen:
             if self._initial_qc_approved:
                 # Approved - show "Review Masks" button with checkmark
                 masks_customized = self._has_custom_mask_selections()
-                status_text = "Customized" if masks_customized else "Default ICA"
+                _cfg = self.study_config.session_config
+                localizer_type = _cfg.get("mask", {}).get("localizer_type", "rest")
+                method_label = "GLM" if localizer_type == "task" else "ICA"
+                status_text = "Customized" if masks_customized else method_label
                 status_color = ft.Colors.BLUE if masks_customized else ft.Colors.GREY_600
 
                 controls.append(
@@ -2719,12 +2734,7 @@ class ParticipantWorkflowScreen:
 
         # Get blind display names if blind mode is enabled
         # Include all masks (real + sham alternatives) for proper blinding
-        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        if localizer_type == "task":
-            contrasts = config.get("mask", {}).get("contrasts", {})
-            mask_names = list(contrasts.keys()) if contrasts else list(config["mask"]["mask_names"])
-        else:
-            mask_names = list(config["mask"]["mask_names"])
+        mask_names = self._resolve_mask_names(config)
         sham_config = config.get("sham", {})
         if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
             sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
@@ -3095,6 +3105,25 @@ class ParticipantWorkflowScreen:
 
         return network_names
 
+    def _resolve_mask_names(self, config: dict) -> list[str]:
+        """Resolve mask names from config, falling back to task metadata for GLM localizers."""
+        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+        if localizer_type == "task":
+            contrasts = config.get("mask", {}).get("contrasts", {})
+            if not contrasts:
+                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "")
+                if localizer_task_type:
+                    from pineuro.tasks.task_registry import get_task_metadata
+
+                    try:
+                        metadata = get_task_metadata(localizer_task_type)
+                        contrasts = metadata.default_contrasts or {}
+                    except KeyError:
+                        pass
+            if contrasts:
+                return list(contrasts.keys())
+        return list(config.get("mask", {}).get("mask_names", []))
+
     def _get_blind_display_names(self, mask_names: list[str]) -> list[str] | None:
         """Get blinded display names if blind mode is enabled.
 
@@ -3155,9 +3184,7 @@ class ParticipantWorkflowScreen:
                     "Smoothing": f"{config['mask'].get('smooth_fwhm', 5.0)} mm FWHM",
                     "Output": base_dir / "mask_extraction",
                 },
-                "output_path": base_dir
-                / "mask_extraction"
-                / ("03_masks" if config.get("mask", {}).get("threshold_method", "top_n") == "cluster" else "02_masks"),
+                "output_path": base_dir / "mask_extraction" / "03_masks",
             }
         else:
             all_networks = self._get_all_network_targets(config)
@@ -3197,14 +3224,14 @@ class ParticipantWorkflowScreen:
             study_base_dir = base_dir.parent.parent  # Go up from participant/visit to study
             source_visit_dir = study_base_dir / self.participant_id / mask_source_visit
             me_dir = source_visit_dir / "mask_extraction"
-            input_masks_path = me_dir / "03_masks" if (me_dir / "03_masks").exists() else me_dir / "02_masks"
+            input_masks_path = me_dir / "03_masks"
             description = (
                 f"Register network masks from {mask_source_visit} to real-time reference space for feedback runs."
             )
         else:
             # Standard mode: masks come from current visit
             me_dir = base_dir / "mask_extraction"
-            input_masks_path = me_dir / "03_masks" if (me_dir / "03_masks").exists() else me_dir / "02_masks"
+            input_masks_path = me_dir / "03_masks"
             description = "Register network masks to real-time reference space for feedback runs."
 
         return {
@@ -3506,13 +3533,7 @@ class ParticipantWorkflowScreen:
             ordinal = {1: "First", 2: "Second", 3: "Third", 4: "Fourth", 5: "Fifth"}.get(run_num, f"{run_num}th")
 
             _feedback_task_type = config.get("task", {}).get("task_type", "ball")
-            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-            if localizer_type == "task":
-                networks_str = ", ".join(
-                    list(config["mask"].get("contrasts", {}).keys()) or config["mask"]["mask_names"]
-                )
-            else:
-                networks_str = ", ".join(config["mask"]["mask_names"])
+            networks_str = ", ".join(self._resolve_mask_names(config))
 
             params = {
                 "Task": f"feedback (run-{run_num:02d})",
@@ -4016,12 +4037,7 @@ class ParticipantWorkflowScreen:
                         except Exception as e:
                             logger.warning(f"Could not load randomization for blind mode: {e}")
 
-                localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-                if localizer_type == "task":
-                    contrasts = config.get("mask", {}).get("contrasts", {})
-                    real_mask_names = list(contrasts.keys()) if contrasts else list(config["mask"]["mask_names"])
-                else:
-                    real_mask_names = list(config["mask"]["mask_names"])
+                real_mask_names = self._resolve_mask_names(config)
 
                 if condition == "sham" and sham_config.get("delivery_method") == "alternative_masks":
                     # Sham condition: show sham masks
@@ -4047,12 +4063,7 @@ class ParticipantWorkflowScreen:
                 display_names = ["Target", "Non-Target"]
             else:
                 # Non-blind mode: show all masks with real names
-                localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-                if localizer_type == "task":
-                    contrasts = config.get("mask", {}).get("contrasts", {})
-                    mask_names = list(contrasts.keys()) if contrasts else list(config["mask"]["mask_names"])
-                else:
-                    mask_names = list(config["mask"]["mask_names"])
+                mask_names = self._resolve_mask_names(config)
                 if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
                     sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
                     if sham_mask_mode == "hemisphere_split":
@@ -4598,12 +4609,7 @@ class ParticipantWorkflowScreen:
         if hasattr(self, "_feedback_mask_names"):
             mask_names = self._feedback_mask_names
         else:
-            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-            if localizer_type == "task":
-                contrasts = config.get("mask", {}).get("contrasts", {})
-                mask_names = list(contrasts.keys()) if contrasts else list(config["mask"]["mask_names"])
-            else:
-                mask_names = list(config["mask"]["mask_names"])
+            mask_names = self._resolve_mask_names(config)
 
         n_volumes = config["feedback"]["n_volumes"]
 
