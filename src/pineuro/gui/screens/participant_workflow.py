@@ -3184,7 +3184,8 @@ class ParticipantWorkflowScreen:
                     "Smoothing": f"{config['mask'].get('smooth_fwhm', 5.0)} mm FWHM",
                     "Output": base_dir / "mask_extraction",
                 },
-                "output_path": base_dir / "mask_extraction" / "03_masks",
+                "output_path": base_dir / "mask_extraction",
+                "output_pattern": "0*",
             }
         else:
             all_networks = self._get_all_network_targets(config)
@@ -3198,7 +3199,8 @@ class ParticipantWorkflowScreen:
                     "Highpass": f"{config['mask']['highpass']} Hz",
                     "Output": base_dir / "mask_extraction",
                 },
-                "output_path": base_dir / "mask_extraction" / "03_masks",
+                "output_path": base_dir / "mask_extraction",
+                "output_pattern": "0*",
             }
 
     def _get_coregistration_realtime_step_info(self, config: dict, base_dir: Path) -> dict:
@@ -3421,7 +3423,8 @@ class ParticipantWorkflowScreen:
                     "Output": base_dir / "preprocessing",
                     "Expected Outputs": "preproc.nii.gz, mask.nii.gz, boldref.nii.gz",
                 },
-                "output_path": base_dir / "preprocessing" / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz",
+                "output_path": base_dir / "preprocessing",
+                "output_pattern": "0*",
             },
             "mask_extraction": self._get_mask_extraction_step_info(config, base_dir),
             "coregistration": {
