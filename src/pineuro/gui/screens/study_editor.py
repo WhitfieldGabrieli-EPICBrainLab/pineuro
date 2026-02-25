@@ -15,7 +15,7 @@ import logging
 
 import flet as ft
 
-from pineuro.tasks import TaskParameter, get_task_metadata, list_available_tasks
+from pineuro.tasks.task_registry import TaskParameter, get_task_metadata, list_available_tasks
 
 from ..config_manager import ConfigManager
 from ..models import StudyConfig, StudyMetadata

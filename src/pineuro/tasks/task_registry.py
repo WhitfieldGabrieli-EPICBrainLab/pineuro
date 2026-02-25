@@ -37,6 +37,20 @@ logger = logging.getLogger(__name__)
 # Task registry (task_id -> metadata)
 _TASK_REGISTRY: dict[str, "TaskMetadata"] = {}
 
+# Lazy loaders: callables that import task modules on first access
+_lazy_loaders: list[Callable[[], None]] = []
+
+
+def add_lazy_loader(loader: Callable[[], None]) -> None:
+    """Register a callable to import task modules on first access."""
+    _lazy_loaders.append(loader)
+
+
+def _ensure_tasks_loaded() -> None:
+    """Import task modules if not yet loaded."""
+    while _lazy_loaders:
+        _lazy_loaders.pop(0)()
+
 
 class TaskConfigError(ValueError):
     """Raised when task configuration validation fails.
@@ -286,6 +300,7 @@ def get_task_metadata(task_id: str) -> TaskMetadata:
     Raises:
         ValueError: If task_id is not registered
     """
+    _ensure_tasks_loaded()
     if task_id not in _TASK_REGISTRY:
         raise ValueError(f"Unknown task: {task_id}")
     return _TASK_REGISTRY[task_id]
@@ -301,6 +316,7 @@ def list_available_tasks(role: str | None = None) -> dict[str, TaskMetadata]:
     Returns:
         Dictionary mapping task_id to TaskMetadata
     """
+    _ensure_tasks_loaded()
     if role is None:
         return _TASK_REGISTRY.copy()
     return {task_id: metadata for task_id, metadata in _TASK_REGISTRY.items() if role in metadata.roles}

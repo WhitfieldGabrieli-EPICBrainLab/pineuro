@@ -30,10 +30,8 @@ if TYPE_CHECKING:
 
 import flet as ft
 
-from pineuro.feedback import STEP_TO_RUN_NUMBER, get_slot_run_info
-from pineuro.session import get_localizer_run_info
-from pineuro.sham import get_condition_for_participant, load_randomization
-from pineuro.tasks.session import SessionState
+# Heavy pineuro imports are deferred to method bodies to avoid loading
+# numpy/nibabel/scipy when this screen module is first imported.
 
 from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, scan_collection_acqs
 from ..components.activation_plot import ActivationPlot
@@ -1359,6 +1357,8 @@ class ParticipantWorkflowScreen:
             StepStatus based on best attempt status (COMPLETE if any complete,
             INTERRUPTED if any partial, PENDING if none found)
         """
+        from pineuro.feedback import STEP_TO_RUN_NUMBER
+
         if step_id not in STEP_TO_RUN_NUMBER:
             return StepStatus.PENDING
 
@@ -3401,6 +3401,8 @@ class ParticipantWorkflowScreen:
                 "output_pattern": "task-reference_acq-*_run-01",
             }
 
+        from pineuro.session import get_localizer_run_info
+
         n_vols = config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
         collection_dir = base_dir / "collection"
 
@@ -3464,6 +3466,8 @@ class ParticipantWorkflowScreen:
                 "output_pattern": f"task-reference_acq-*_run-{run_num:02d}",
             }
 
+        from pineuro.session import get_localizer_run_info
+
         n_vols = config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
         collection_dir = base_dir / "collection"
 
@@ -3511,6 +3515,10 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step label, description, parameters, and outputs_exist flag
         """
+        from pineuro.feedback import get_slot_run_info
+        from pineuro.session import get_localizer_run_info
+        from pineuro.tasks.session import SessionState
+
         # Load session state for adaptive state display
         feedback_dir = base_dir / "feedback" / "02_feedback_output"
         task_type = config.get("task", {}).get("task_type", "ball")
@@ -4287,6 +4295,8 @@ class ParticipantWorkflowScreen:
 
             # Determine which masks to show based on blind mode and condition
             if blind_mode and sham_config.get("enabled", False):
+                from pineuro.sham import get_condition_for_participant, load_randomization
+
                 # In blind mode, only show the masks that control the task
                 # Look up condition from randomization file
                 condition = "real"  # Default
@@ -4884,6 +4894,8 @@ class ParticipantWorkflowScreen:
         output_dir = base_dir / "feedback" / "02_feedback_output"
 
         # Get the slot-based run info (run number and acq letter)
+        from pineuro.feedback import get_slot_run_info
+
         run_info = get_slot_run_info(
             output_dir=output_dir,
             subject=self.participant_id,

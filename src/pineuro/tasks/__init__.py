@@ -174,15 +174,43 @@ def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
     return discovered
 
 
-# Import tasks to trigger auto-registration
-# Task modules register themselves via register_task() at import time
-from .ball import BallTask  # Registers "ball" task
-from .fixation import FixationTask  # Registers "fixation" localizer task
-from .gauge import GaugeTask  # Registers "gauge" task
-from .rnt import RNTTask  # Registers "rnt" localizer task
-from .rnt_experience_sampling import RNTExperienceSamplingTask  # Registers "rnt_experience_sampling" task
-from .self_other import SelfOtherTask  # Registers "self_other" localizer task
-from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
+# Lazy-load built-in task modules to avoid pulling in numpy/PsychoPy at import
+# time.  Tasks register themselves via @pineuro_task when first imported.
+def _load_builtin_tasks():
+    from . import ball, fixation, gauge, rnt, rnt_experience_sampling, self_other, thermometer  # noqa: F401
+
+
+from .task_registry import add_lazy_loader  # noqa: E402
+
+add_lazy_loader(_load_builtin_tasks)
+
+# Names that live in lazily-loaded task modules.  A module-level __getattr__
+# triggers the lazy loader so that ``from pineuro.tasks import BallTask`` still
+# works without eagerly importing numpy/PsychoPy at package-init time.
+_LAZY_TASK_CLASS_NAMES = {
+    "BallTask",
+    "GaugeTask",
+    "ThermometerTask",
+    "SelfOtherTask",
+    "FixationTask",
+    "RNTTask",
+    "RNTExperienceSamplingTask",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_TASK_CLASS_NAMES:
+        _load_builtin_tasks()
+        # After loading, the name should be importable from the submodules
+        # that were just imported.  Look it up in the factory registry.
+        from .factory import _TASK_CLASSES
+
+        for cls in _TASK_CLASSES.values():
+            if cls.__name__ == name:
+                return cls
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Base classes

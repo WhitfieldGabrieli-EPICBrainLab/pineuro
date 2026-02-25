@@ -10,19 +10,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from pineuro.feedback import get_slot_run_info, run_feedback_session
-from pineuro.mask_extraction import coregister_reference, generate_reference_qc_overlays, mask_extraction_rest
-from pineuro.preprocessing import collect_dicoms, preprocessing
-from pineuro.session import get_localizer_run_info
-from pineuro.sham import (
-    ReplayActivationProvider,
-    find_feedbacklog_for_replay,
-    get_condition_for_participant,
-    load_randomization,
-)
-from pineuro.tasks import get_task_metadata
-from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
-from pineuro.tasks.session import SessionState
+# Heavy pineuro imports are deferred to method bodies to avoid loading
+# numpy/nibabel/scipy when the GUI module is first imported.
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +261,9 @@ class PipelineRunner:
 
     def _run_reference_initial(self) -> None:
         """Collect initial reference scan for positioning verification."""
+        from pineuro.preprocessing import collect_dicoms
+        from pineuro.session import get_localizer_run_info
+
         config = self.config
 
         # Check if reference initial is enabled
@@ -352,6 +344,9 @@ class PipelineRunner:
         Args:
             run_num: Run number (1-based)
         """
+        from pineuro.preprocessing import collect_dicoms
+        from pineuro.session import get_localizer_run_info
+
         config = self.config
         localizer_type = config.get("mask", {}).get("localizer_type", "rest")
         localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
@@ -659,6 +654,8 @@ class PipelineRunner:
 
     def _run_preprocessing(self) -> None:
         """Run preprocessing on collected rest runs."""
+        from pineuro.preprocessing import preprocessing
+
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
@@ -719,6 +716,8 @@ class PipelineRunner:
 
     def _run_mask_extraction(self) -> None:
         """Extract network masks using ICA (rest) or GLM contrasts (task)."""
+        from pineuro.mask_extraction import mask_extraction_rest
+
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         preprocessing_dir = base_dir / "preprocessing"
@@ -914,6 +913,8 @@ class PipelineRunner:
         Args:
             run_id: Run number (1 for initial, 2 for realtime)
         """
+        from pineuro.mask_extraction import coregister_reference, generate_reference_qc_overlays
+
         config = self.config
 
         # Check if reference is enabled for this run
@@ -1074,6 +1075,9 @@ class PipelineRunner:
 
     def _run_reference_realtime(self) -> None:
         """Collect real-time reference scan before feedback session."""
+        from pineuro.preprocessing import collect_dicoms
+        from pineuro.session import get_localizer_run_info
+
         config = self.config
 
         # Check if reference realtime is enabled
@@ -1156,6 +1160,17 @@ class PipelineRunner:
         Args:
             step_id: One of transfer_1, transfer_2, feedback_1, feedback_2, feedback_3, etc.
         """
+        from pineuro.feedback import get_slot_run_info, run_feedback_session
+        from pineuro.sham import (
+            ReplayActivationProvider,
+            find_feedbacklog_for_replay,
+            get_condition_for_participant,
+            load_randomization,
+        )
+        from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
+        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.task_registry import get_task_metadata
+
         # Parse step ID to determine task type
         if step_id.startswith("transfer_"):
             task_type = "transfer"
