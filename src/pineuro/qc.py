@@ -3400,7 +3400,7 @@ def _generate_interactive_viewers(
                 title=name,
                 threshold=0.5,
                 symmetric_cmap=False,
-                cmap="hot",
+                cmap="autumn",
                 colorbar=True,
                 dim=-0.5,
                 opacity=0.6,
