@@ -188,3 +188,41 @@ def sample_design_matrix(tmp_path):
         return path
 
     return _make
+
+
+# =============================================================================
+# GUI / Flet Mock Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def mock_flet_page():
+    """Mock Flet Page object for GUI unit tests.
+
+    Provides a MagicMock that exposes the attributes and methods most
+    commonly accessed by pineuro GUI components, so tests can run without
+    launching a real Flet application.
+
+    Attributes mocked
+    -----------------
+    page.overlay : list
+        Mutable overlay list (dialogs are appended here).
+    page.update : MagicMock
+        Callable that records update calls.
+    page.show_dialog : MagicMock
+        Callable that records dialog-show calls.
+
+    Usage::
+
+        def test_something(mock_flet_page):
+            component = MyComponent(page=mock_flet_page)
+            component.do_something()
+            mock_flet_page.update.assert_called()
+    """
+    from unittest.mock import MagicMock
+
+    page = MagicMock()
+    page.overlay = []
+    page.update = MagicMock()
+    page.show_dialog = MagicMock()
+    return page
