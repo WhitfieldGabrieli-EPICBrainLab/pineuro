@@ -263,8 +263,13 @@ class VolumeSimulator:
             if json_src.exists():
                 json_dst = get_json_sidecar_path(dst_file)
                 json_tmp = self.target_dir / f".{json_src.name}.tmp"
-                shutil.copy2(json_src, json_tmp)
-                json_tmp.rename(json_dst)
+                try:
+                    shutil.copy2(json_src, json_tmp)
+                    json_tmp.replace(json_dst)
+                except Exception:
+                    if json_tmp.exists():
+                        json_tmp.unlink()
+                    raise
 
         return dst_file
 

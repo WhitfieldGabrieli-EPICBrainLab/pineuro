@@ -408,18 +408,23 @@ class TaskBase(ABC):  # noqa: B024
         """
         import sys
 
-        if sys.platform != "win32":
-            return
-
         # On the very first window creation, pyglet state is fresh —
         # resetting it destroys the valid shadow window / GL context and
         # causes instability (crashes when the window loses OS focus).
         if not TaskBase._has_created_window:
             return
 
-        from ctypes import windll  # type: ignore[attr-defined]  # Windows-only, guarded above
-
-        current_thread = windll.kernel32.GetCurrentThreadId()
+        # Get the current thread ID (platform-specific)
+        try:
+            if sys.platform == "win32":
+                from ctypes import windll  # type: ignore[attr-defined]  # Windows-only
+                current_thread = windll.kernel32.GetCurrentThreadId()
+            else:
+                import threading
+                current_thread = threading.get_ident()
+        except Exception as e:
+            logger.debug(f"Could not get current thread ID: {e}")
+            current_thread = None
 
         logger.debug("Resetting stale pyglet state for new PsychoPy window")
 
@@ -443,7 +448,8 @@ class TaskBase(ABC):  # noqa: B024
             gl_info.remove_active_context()
 
             # 2. Re-bind the platform event loop to the current thread.
-            pyglet.app.platform_event_loop._event_thread = current_thread
+            if current_thread is not None:
+                pyglet.app.platform_event_loop._event_thread = current_thread
         except Exception as e:
             logger.debug(f"Could not reset pyglet state: {e}")
 

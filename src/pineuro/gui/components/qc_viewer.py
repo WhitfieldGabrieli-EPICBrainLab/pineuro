@@ -30,7 +30,7 @@ def open_qc_report(report_path: Path, screen: int | None = None) -> bool:
     try:
         # Convert to absolute path
         abs_path = report_path.resolve()
-        url = f"file://{abs_path}"
+        url = abs_path.as_uri()
 
         # Try to use xdg-open on Linux for better screen control
         system = platform.system()

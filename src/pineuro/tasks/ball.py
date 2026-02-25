@@ -225,6 +225,7 @@ class BallTask(BaseTask):
         )
 
         self.scale_factor = scale_factor
+        self._initial_scale_factor = scale_factor  # Used to bound adaptive scaling
         self.internal_scaler = internal_scaler
         self.pda_outlier_threshold = pda_outlier_threshold
 
@@ -877,6 +878,12 @@ class BallTask(BaseTask):
             )
         elif total_hits < self._min_hits_threshold:
             self.scale_factor = old_scale * (1 + self._scale_adjust_factor)
+            max_scale = self._initial_scale_factor * 10
+            if self.scale_factor > max_scale:
+                self.scale_factor = max_scale
+                logger.info(
+                    f"  Adaptive difficulty: scale_factor clamped to max {max_scale:.1f}"
+                )
             logger.info(
                 f"  Adaptive difficulty: {total_hits} total hits < {self._min_hits_threshold} min -> "
                 f"increasing scale_factor {old_scale:.1f} -> {self.scale_factor:.1f}"

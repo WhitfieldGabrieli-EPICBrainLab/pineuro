@@ -101,11 +101,11 @@ class ParticipantWorkflowScreen:
 
         # The base_dir might already contain participant/visit paths from a previous session
         # (if the study_config object was reused). We need to get the study-level base_dir.
-        # Look for participant ID in the path and strip it and everything after.
-        base_dir_str = str(base_dir)
-        if f"/{participant_id}" in base_dir_str:
-            # Strip participant and everything after it
-            base_dir = Path(base_dir_str.split(f"/{participant_id}")[0])
+        # Look for participant ID in the path parts and strip it and everything after.
+        parts = base_dir.parts
+        if participant_id in parts:
+            idx = parts.index(participant_id)
+            base_dir = Path(*parts[:idx])
 
         if visit_id:
             # Multi-visit mode: base_dir/participant_id/visit_id/

@@ -1117,6 +1117,26 @@ class _CollectorEventHandler(FileSystemEventHandler):
         super().__init__()
         self._callback = callback
 
+    @staticmethod
+    def _wait_for_stable_file(path: Path, interval: float = 0.05, stable_count: int = 3) -> None:
+        """Poll file size until stable, indicating the writer has finished."""
+        prev_size = -1
+        count = 0
+        for _ in range(60):  # Max ~3 seconds of polling
+            try:
+                size = path.stat().st_size
+            except OSError:
+                time.sleep(interval)
+                continue
+            if size == prev_size and size > 0:
+                count += 1
+                if count >= stable_count:
+                    return
+            else:
+                count = 0
+                prev_size = size
+            time.sleep(interval)
+
     def on_created(self, event):
         """Handle file creation events from the filesystem."""
         # Ignore directory creation events (we only want files)
@@ -1126,9 +1146,15 @@ class _CollectorEventHandler(FileSystemEventHandler):
         # Handle both str and bytes paths (Windows vs Unix compatibility)
         src_path = event.src_path
         if isinstance(src_path, bytes):
-            self._callback(Path(src_path.decode()))
+            file_path = Path(src_path.decode())
         elif isinstance(src_path, str):
-            self._callback(Path(src_path))
+            file_path = Path(src_path)
+        else:
+            return
+
+        # Wait for file to be fully written before passing to callback
+        self._wait_for_stable_file(file_path)
+        self._callback(file_path)
 
 
 def collect_volumes(

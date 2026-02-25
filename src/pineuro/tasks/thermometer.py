@@ -330,7 +330,7 @@ class ThermometerTask(BaseTask):
             }
         )
 
-        if self._accumulating and not is_outlier:
+        if self._accumulating and not is_outlier and not is_baseline:
             activation = activations.get(self.mask_name, 0.0)
             self._block_activations.append(activation)
 

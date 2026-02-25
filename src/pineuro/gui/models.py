@@ -125,11 +125,12 @@ class StudyConfig:
     @classmethod
     def from_dict(cls, data: dict, file_path: Path | None = None) -> "StudyConfig":
         """Create from dictionary loaded from YAML."""
-        metadata_dict = data.pop("_metadata", {})
+        metadata_dict = data.get("_metadata", {})
         metadata = StudyMetadata.from_dict(metadata_dict)
+        session_config = {k: v for k, v in data.items() if k != "_metadata"}
 
         return cls(
             metadata=metadata,
-            session_config=data,
+            session_config=session_config,
             file_path=file_path,
         )

@@ -425,6 +425,12 @@ class PathConfig:
         """Convert all paths to Path objects and set defaults for optional directories."""
         self.base_dir = Path(self.base_dir)
 
+        # Validate visit_id format if provided
+        if self.visit_id and not re.match(r"^ses-\d+$", self.visit_id):
+            raise ValueError(
+                f"visit_id must be in BIDS format 'ses-NN' (e.g., 'ses-01'), got '{self.visit_id}'"
+            )
+
         # Compute participant + visit directory
         if self.visit_id:
             # Multi-visit mode: base_dir/participant_id/visit_id/

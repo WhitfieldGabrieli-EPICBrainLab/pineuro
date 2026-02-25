@@ -46,8 +46,10 @@ class FeedbackLogPoller:
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
         self._last_row_count = 0
         self._headers: list[str] = []
+        self._file_offset = 0
 
     def start(self):
         """Start polling in a background thread."""
@@ -56,8 +58,10 @@ class FeedbackLogPoller:
             return
 
         self._stop_event.clear()
-        self._last_row_count = 0
-        self._headers = []
+        with self._lock:
+            self._last_row_count = 0
+            self._headers = []
+            self._file_offset = 0
 
         self._thread = threading.Thread(
             target=self._poll_loop,
@@ -80,46 +84,57 @@ class FeedbackLogPoller:
         while not self._stop_event.is_set():
             try:
                 self._check_for_new_data()
-            except Exception as e:
+            except (OSError, csv.Error, ValueError) as e:
                 logger.error(f"Error polling log file: {e}")
 
             # Wait for next poll interval
             self._stop_event.wait(self.poll_interval)
 
     def _check_for_new_data(self):
-        """Check for new rows in the log file."""
+        """Check for new rows in the log file (incremental read from last offset)."""
         if not self.log_path.exists():
             return
 
         try:
             with open(self.log_path, newline="") as f:
-                reader = csv.reader(f, delimiter="\t")
+                with self._lock:
+                    has_headers = bool(self._headers)
+                    seek_pos = self._file_offset
 
-                # Read all rows
-                rows = list(reader)
-
-                if not rows:
+                if not has_headers:
+                    # First call: read header line only
+                    header_line = f.readline()
+                    if not header_line:
+                        return
+                    reader = csv.reader([header_line], delimiter="\t")
+                    headers = next(reader)
+                    with self._lock:
+                        self._headers = headers
+                        self._file_offset = f.tell()
+                    logger.debug(f"Log headers: {headers}")
                     return
 
-                # First row is header
-                if not self._headers:
-                    self._headers = rows[0]
-                    logger.debug(f"Log headers: {self._headers}")
+                # Subsequent calls: read only new content from last position
+                f.seek(seek_pos)
+                new_lines = list(f)
+                new_offset = f.tell()
 
-                # Check for new data rows
-                current_row_count = len(rows) - 1  # Exclude header
+            if not new_lines:
+                return
 
-                if current_row_count > self._last_row_count:
-                    # Process new rows
-                    for i in range(self._last_row_count + 1, len(rows)):
-                        row = rows[i]
-                        data = self._parse_row(row)
-                        if data:
-                            self.on_new_data(data)
+            with self._lock:
+                self._file_offset = new_offset
+                self._last_row_count += len(new_lines)
 
-                    self._last_row_count = current_row_count
+            reader = csv.reader(new_lines, delimiter="\t")
+            for row in reader:
+                if not row:
+                    continue
+                data = self._parse_row(row)
+                if data:
+                    self.on_new_data(data)
 
-        except Exception as e:
+        except (OSError, csv.Error, ValueError) as e:
             logger.error(f"Error reading log file: {e}")
 
     def _parse_row(self, row: list[str]) -> dict[str, Any] | None:
@@ -192,11 +207,13 @@ class FeedbackMonitor:
         self.on_update = on_update
 
         self._poller: FeedbackLogPoller | None = None
+        self._lock = threading.Lock()
         self._volumes_processed = 0
 
     def start(self):
         """Start monitoring."""
-        self._volumes_processed = 0
+        with self._lock:
+            self._volumes_processed = 0
         self._poller = FeedbackLogPoller(
             log_path=self.log_path,
             on_new_data=self._on_new_row,
@@ -212,14 +229,16 @@ class FeedbackMonitor:
     @property
     def volumes_processed(self) -> int:
         """Number of volumes processed so far."""
-        return self._volumes_processed
+        with self._lock:
+            return self._volumes_processed
 
     @property
     def progress(self) -> float:
         """Progress as a fraction (0.0 to 1.0)."""
         if self.n_volumes <= 0:
             return 0.0
-        return min(1.0, self._volumes_processed / self.n_volumes)
+        with self._lock:
+            return min(1.0, self._volumes_processed / self.n_volumes)
 
     def _on_new_row(self, data: dict[str, Any]):
         """Handle new row from poller.
@@ -227,8 +246,9 @@ class FeedbackMonitor:
         Args:
             data: Parsed row data
         """
-        volume = data.get("volume", self._volumes_processed + 1)
-        self._volumes_processed = volume
+        volume = data.get("volume", self.volumes_processed + 1)
+        with self._lock:
+            self._volumes_processed = volume
 
         # Extract mask activations
         # New format: columns are just mask names (e.g., ContA, DefaultA, SomMotA)

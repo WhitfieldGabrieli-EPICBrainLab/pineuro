@@ -111,6 +111,7 @@ class ReplayActivationProvider(ShamActivationProvider):
 
         self._data = self._load_feedbacklog()
         self._n_source_volumes = len(self._data)
+        self._loop_warned = False
 
         logger.info(
             f"ReplayActivationProvider initialized with {self._n_source_volumes} volumes from {self.feedbacklog_path}"
@@ -159,10 +160,12 @@ class ReplayActivationProvider(ShamActivationProvider):
         # Convert to 0-indexed and loop if needed
         source_idx = (volume - 1) % self._n_source_volumes
 
-        if volume > self._n_source_volumes:
-            logger.debug(
-                f"Volume {volume} exceeds source length {self._n_source_volumes}, looping to index {source_idx}"
+        if volume > self._n_source_volumes and not self._loop_warned:
+            logger.warning(
+                f"Volume {volume} exceeds source session length ({self._n_source_volumes} volumes); "
+                "looping from beginning. This warning is emitted once."
             )
+            self._loop_warned = True
 
         row = self._data.iloc[source_idx]
         return {name: float(row[self._column_mapping[name]]) for name in self.mask_names}

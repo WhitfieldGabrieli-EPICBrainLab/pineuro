@@ -2712,6 +2712,11 @@ def plot_activation_timeseries(
         Figure title
     """
     df = pd.read_csv(feedback_log_path, sep="\t")
+
+    if len(df) < 2:
+        logger.warning(f"Feedback log has fewer than 2 rows ({len(df)}); skipping activation timeseries plot")
+        return
+
     groups = _classify_feedbacklog_columns(df)
     mask_cols = groups["activation"]
 
@@ -2770,6 +2775,11 @@ def plot_connectivity_timeseries(
         True if a plot was generated, False if no connectivity columns found.
     """
     df = pd.read_csv(feedback_log_path, sep="\t")
+
+    if len(df) < 2:
+        logger.warning(f"Feedback log has fewer than 2 rows ({len(df)}); skipping connectivity timeseries plot")
+        return
+
     groups = _classify_feedbacklog_columns(df)
     conn_cols = groups["connectivity"]
 
@@ -2896,6 +2906,10 @@ def plot_fd_timeseries(
     # Load feedback log
     df = pd.read_csv(feedback_log_path, sep="\t")
 
+    if len(df) < 2:
+        logger.warning(f"Feedback log has fewer than 2 rows ({len(df)}); skipping FD timeseries plot")
+        return
+
     # Check if FD column exists
     if "fd" not in df.columns:
         logger.warning("No 'fd' column in feedback log, skipping FD plot")
@@ -2976,6 +2990,10 @@ def plot_dvars_timeseries(
         Figure title
     """
     df = pd.read_csv(feedback_log_path, sep="\t")
+
+    if len(df) < 2:
+        logger.warning(f"Feedback log has fewer than 2 rows ({len(df)}); skipping DVARS timeseries plot")
+        return
 
     if "dvars" not in df.columns:
         logger.warning("No 'dvars' column in feedback log, skipping DVARS plot")

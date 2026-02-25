@@ -442,6 +442,9 @@ class IncrementalGLM:
         self._steady_state_residual_mse: NDArray[np.float64] | None = None
         self._steady_state_timepoint: int | None = None
 
+        # Guard to emit rank-deficiency warning at most once per session
+        self._rank_deficient_warned = False
+
     def _apply_givens_rotation(
         self,
         j: int,
@@ -543,6 +546,13 @@ class IncrementalGLM:
             else:
                 # Column is effectively zero - set beta to zero
                 beta[i, :] = 0.0
+                if not self._rank_deficient_warned:
+                    logger.warning(
+                        f"Near-zero pivot at regressor index {i} (|R[{i},{i}]|={abs(R[i, i]):.2e}): "
+                        "design matrix may be rank-deficient (expected during baseline); "
+                        "setting beta to zero. This warning is emitted once per session."
+                    )
+                    self._rank_deficient_warned = True
 
         return beta
 
@@ -2742,6 +2752,11 @@ class NeurofeedbackCoordinator:
                     shutil.copy2(json_src, json_dest)
                 else:
                     json_path = None  # No sidecar available
+                    if self._motion_correction == "siemens_moco":
+                        logger.warning(
+                            f"No JSON sidecar found for {volume_path.name}; "
+                            "motion parameters will be set to zero for this volume."
+                        )
             except Exception as e:
                 logger.error(f"Failed to copy NIfTI {volume_path}: {e}")
                 return
