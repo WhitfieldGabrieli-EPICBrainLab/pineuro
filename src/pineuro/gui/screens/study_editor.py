@@ -1657,6 +1657,14 @@ class StudyEditorScreen:
             return ft.Row([field, self._create_browse_button(field)])
 
         elif param.type == "str":
+            if param.choices:
+                return ft.Dropdown(
+                    width=600,
+                    label=param.label,
+                    value=current_value,
+                    hint_text=param.hint,
+                    options=[ft.dropdown.Option(c) for c in param.choices],
+                )
             return ft.TextField(
                 width=600,
                 label=param.label,

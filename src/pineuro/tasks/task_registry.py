@@ -66,6 +66,8 @@ class TaskParameter:
         hint: Help text shown below field (optional)
         min_value: Minimum value for numeric types (optional)
         max_value: Maximum value for numeric types (optional)
+        choices: Allowed values for str type (optional). If set, GUI renders a
+            dropdown instead of a text field.
         validator: Custom validation function (optional)
             Should take value and raise ValueError if invalid
     """
@@ -77,6 +79,7 @@ class TaskParameter:
     hint: str = ""
     min_value: float | None = None
     max_value: float | None = None
+    choices: list[str] | None = None
     validator: Callable[[Any], None] | None = None
 
     def validate(self, value: Any) -> None:
@@ -100,6 +103,11 @@ class TaskParameter:
 
             if self.max_value is not None and num > self.max_value:
                 raise ValueError(f"{self.label} must be <= {self.max_value}")
+
+        # Choices validation (for str type with constrained values)
+        if self.choices is not None and value not in self.choices:
+            allowed = ", ".join(repr(c) for c in self.choices)
+            raise ValueError(f"{self.label} must be one of {allowed}")
 
         # Custom validation
         if self.validator is not None:

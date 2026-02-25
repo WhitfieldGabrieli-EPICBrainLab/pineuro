@@ -1416,7 +1416,7 @@ class ParticipantWorkflowScreen:
         task_config = config.get("task", {})
         max_feedback_runs = task_config.get("max_feedback_runs", 2)
         task_type = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
+        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", False)
 
         if is_mask_reuse:
             # Mask reuse mode: only need reference + coregistration + feedback
@@ -1557,7 +1557,7 @@ class ParticipantWorkflowScreen:
         task_config = config.get("task", {})
         max_feedback_runs = task_config.get("max_feedback_runs", 2)
         task_type = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
+        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", False)
 
         feedback_transfer_steps = []
         if use_transfer_runs:
@@ -1942,7 +1942,7 @@ class ParticipantWorkflowScreen:
         task_config = config.get("task", {})
         max_feedback_runs = task_config.get("max_feedback_runs", 2)
         task_type = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
+        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", False)
 
         feedback_steps = []
         if use_transfer_runs:
@@ -3626,7 +3626,7 @@ class ParticipantWorkflowScreen:
         task_config = config.get("task", {})
         max_feedback_runs = task_config.get("max_feedback_runs", 2)
         task_type_name = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type_name, {}).get("use_transfer_runs", True)
+        use_transfer_runs = task_config.get(task_type_name, {}).get("use_transfer_runs", False)
 
         feedback_steps = []
         if use_transfer_runs:
@@ -4947,7 +4947,7 @@ class ParticipantWorkflowScreen:
         task_config = config.get("task", {})
         max_feedback_runs = task_config.get("max_feedback_runs", 2)
         task_type = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", True)
+        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", False)
 
         if use_transfer_runs:
             workflow.append(("transfer_1", "Transfer Run 1"))

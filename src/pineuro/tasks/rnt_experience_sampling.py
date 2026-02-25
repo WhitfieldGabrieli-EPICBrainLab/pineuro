@@ -1,11 +1,11 @@
-"""Triggered experience sampling neurofeedback task.
+"""RNT experience sampling neurofeedback task.
 
 Summary
 -------
-Monitors BOLD activation in real time and triggers experience sampling
-prompts (sadness and focus ratings) when configurable threshold, trend,
-and cooldown conditions are met.  Timeout prompts fire if no trigger
-occurs within a configurable window.
+Monitors BOLD activation in a rumination network and triggers experience
+sampling prompts (sadness and focus ratings) when configurable threshold,
+trend, and cooldown conditions are met.  Timeout prompts fire if no
+trigger occurs within a configurable window.
 
 Task Flow (per run)
 -------------------
@@ -37,6 +37,7 @@ from __future__ import annotations
 import csv
 import logging
 import math
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
     from .session import SessionState
 
 logger = logging.getLogger(__name__)
+
 
 
 # ============================================================================
@@ -80,13 +82,25 @@ class TriggerState:
 # Task implementation
 # ============================================================================
 
+# Phase constants
+_PHASE_BASELINE = "baseline"
+_PHASE_MONITORING = "monitoring"
+_PHASE_PROMPT = "prompt"
 
-class ExperienceSamplingTask(BaseTask):
-    """Triggered experience sampling neurofeedback task.
+# Rating definitions: (question, left_label, right_label)
+_RATINGS = [
+    ("How sad do you feel right now?", "Not sad", "Very sad"),
+    ("How focused are you on your feelings?", "Not focused", "Very focused"),
+]
 
-    Monitors BOLD activation and triggers sadness/focus rating prompts
-    when threshold + trend conditions are met, with cooldown and timeout
-    logic for controlled sampling.
+
+class RNTExperienceSamplingTask(BaseTask):
+    """RNT experience sampling neurofeedback task.
+
+    Uses the base class run()/update() loop.  All display logic lives in
+    update(), which is called every frame by the base class at refresh_rate Hz.
+    A simple state machine (_phase) drives the three task phases: baseline,
+    monitoring, and prompt (rating scales).
 
     Parameters
     ----------
@@ -94,12 +108,12 @@ class ExperienceSamplingTask(BaseTask):
         Coordinator providing activation data.
     mask_names : list of str, optional
         Names of masks. Only the first mask is used.
-    trigger_direction : str
-        ``"above"`` triggers when activation > 0 (above baseline),
-        ``"below"`` triggers when activation < 0 (below baseline).
+    activation_contrast : str
+        ``"positive"`` triggers when activation > 0 (above baseline),
+        ``"negative"`` triggers when activation < 0 (below baseline).
     consecutive_volumes : int
         Number of consecutive volumes with trending signal needed to trigger.
-    signal_trend : str
+    activation_trend : str
         ``"increasing"`` or ``"decreasing"`` — direction of consecutive trend.
     min_prompt_interval : float
         Minimum seconds between prompts (cooldown).
@@ -119,15 +133,15 @@ class ExperienceSamplingTask(BaseTask):
         Monitor position for task window.
     """
 
-    task_id = "experience_sampling"
+    task_id = "rnt_experience_sampling"
 
     def __init__(
         self,
         coordinator,
         mask_names: list[str] | None = None,
-        trigger_direction: str = "above",
+        activation_contrast: str = "positive",
         consecutive_volumes: int = 3,
-        signal_trend: str = "increasing",
+        activation_trend: str = "increasing",
         min_prompt_interval: float = 30.0,
         timeout_duration: float = 60.0,
         rating_timeout: float = 15.0,
@@ -155,9 +169,9 @@ class ExperienceSamplingTask(BaseTask):
         self.presenter_monitor = presenter_monitor
 
         # Trigger parameters
-        self.trigger_direction = trigger_direction
+        self.activation_contrast = activation_contrast
         self.consecutive_volumes = consecutive_volumes
-        self.signal_trend = signal_trend
+        self.activation_trend = activation_trend
         self.min_prompt_interval = min_prompt_interval
         self.timeout_duration = timeout_duration
         self.rating_timeout = rating_timeout
@@ -179,16 +193,35 @@ class ExperienceSamplingTask(BaseTask):
         # Prompt counter
         self._prompt_number = 0
 
-        # Task clock (set in run)
+        # Task clock (set in setup)
         self._task_clock: Any = None
 
         # Date string for TSV
         self._date = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
+        # Phase state machine
+        self._phase = _PHASE_BASELINE
+        self._baseline_onset = 0.0
+
+        # Prompt state (active during _PHASE_PROMPT)
+        self._prompt_onset = 0.0
+        self._prompt_type = ""
+        self._prompt_volume = 0
+        self._prompt_activation = 0.0
+        self._current_rating_index = 0
+        self._rating_responses: list[tuple[int | None, float | None]] = []
+
+        # Per-rating frame state
+        self._rating_marker_pos = 3.0
+        self._rating_confirmed = False
+        self._rating_rt: float | None = None
+        self._rating_clock: Any = None
+        self._rating_timer: Any = None
+
         logger.info(
-            f"ExperienceSamplingTask initialized: mask={self.mask_name}, "
-            f"direction={trigger_direction}, consecutive={consecutive_volumes}, "
-            f"trend={signal_trend}, cooldown={min_prompt_interval}s, "
+            f"RNTExperienceSamplingTask initialized: mask={self.mask_name}, "
+            f"contrast={activation_contrast}, consecutive={consecutive_volumes}, "
+            f"trend={activation_trend}, cooldown={min_prompt_interval}s, "
             f"timeout={timeout_duration}s"
         )
 
@@ -240,8 +273,8 @@ class ExperienceSamplingTask(BaseTask):
         if time_since_last >= self.timeout_duration:
             return "timeout"
 
-        # Threshold: activation above or below baseline
-        if self.trigger_direction == "above":
+        # Threshold: activation positive or negative relative to baseline
+        if self.activation_contrast == "positive":
             threshold_met = activation > 0
         else:
             threshold_met = activation < 0
@@ -255,7 +288,7 @@ class ExperienceSamplingTask(BaseTask):
             return None
 
         recent = history[-self.consecutive_volumes:]
-        if self.signal_trend == "increasing":
+        if self.activation_trend == "increasing":
             trending = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
         else:
             trending = all(recent[i] > recent[i + 1] for i in range(len(recent) - 1))
@@ -276,11 +309,6 @@ class ExperienceSamplingTask(BaseTask):
         # Fixation cross
         self._fixation = visual.TextStim(
             self.win, text="+", pos=(0, 0), height=0.3, color="white",
-        )
-
-        # Text stimulus for instructions / prompts
-        self._text_stim = visual.TextStim(
-            self.win, text="", height=0.06, color="white", wrapWidth=1.2,
         )
 
         # Rating scale components (1-5 scale, matching RNT pattern)
@@ -361,228 +389,6 @@ class ExperienceSamplingTask(BaseTask):
         self._rating_right_label.draw()
         self._rating_marker.draw()
 
-    def _run_rating(
-        self,
-        question_text: str,
-        left_label_text: str,
-        right_label_text: str,
-    ) -> tuple[int | None, float | None]:
-        """Display a 1-5 rating scale with sliding marker and timeout.
-
-        Parameters
-        ----------
-        question_text : str
-            Question displayed above the scale.
-        left_label_text : str
-            Label below the left endpoint (value 1).
-        right_label_text : str
-            Label below the right endpoint (value 5).
-
-        Returns
-        -------
-        tuple of (int or None, float or None)
-            (rating_value, response_time_seconds). Both None if timed out.
-        """
-        from psychopy import core, event
-
-        scale_low = 1
-        scale_high = 5
-
-        # Update text for this specific rating call
-        self._rating_question.text = question_text
-        self._rating_left_label.text = left_label_text
-        self._rating_right_label.text = right_label_text
-
-        # Start at midpoint (3.0 for 1-5 scale)
-        marker_pos = (scale_low + scale_high) / 2.0
-        self._update_marker(self._pos_to_x(marker_pos))
-
-        clock = core.Clock()
-        timer = core.CountdownTimer(self.rating_timeout)
-        confirmed = False
-        rt = None
-
-        event.clearEvents("keyboard")
-
-        while timer.getTime() > 0 and self._running:
-            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
-                raise KeyboardInterrupt("Stopped by user")
-
-            keys = event.getKeys(
-                keyList=[
-                    self.left_key,
-                    self.right_key,
-                    self.confirm_key,
-                    "return",
-                    "escape",
-                ],
-                timeStamped=clock,
-            )
-            for key, t in keys:
-                if key == "escape":
-                    raise KeyboardInterrupt("Escaped during rating")
-                if key == self.left_key:
-                    if marker_pos != int(marker_pos):
-                        marker_pos = math.floor(marker_pos)
-                    elif marker_pos > scale_low:
-                        marker_pos -= 1
-                elif key == self.right_key:
-                    if marker_pos != int(marker_pos):
-                        marker_pos = math.ceil(marker_pos)
-                    elif marker_pos < scale_high:
-                        marker_pos += 1
-                elif key in (self.confirm_key, "return"):
-                    confirmed = True
-                    rt = t
-                    break
-
-            if confirmed:
-                break
-
-            self._update_marker(self._pos_to_x(marker_pos))
-            self._draw_rating_frame()
-            self._capture_and_emit_screenshot()
-            self.win.flip()
-
-        response = int(round(marker_pos)) if confirmed else None
-        rt_value = round(rt, 3) if rt is not None else None
-
-        # Wait out remaining time with fixation
-        remaining = timer.getTime()
-        if remaining > 0:
-            self._show_fixation(remaining)
-
-        return response, rt_value
-
-    # =========================================================================
-    # Prompt execution
-    # =========================================================================
-
-    def _run_prompt(
-        self,
-        prompt_type: str,
-        volume: int,
-        activation: float,
-        current_time: float,
-    ) -> None:
-        """Execute a prompt: two sequential rating scales.
-
-        Parameters
-        ----------
-        prompt_type : str
-            ``"triggered"`` or ``"timeout"``.
-        volume : int
-            Volume number at time of trigger.
-        activation : float
-            Activation value at time of trigger.
-        current_time : float
-            Task clock time at trigger.
-        """
-        self._prompt_number += 1
-        onset = self._task_clock.getTime()
-
-        # Rating 1: Sadness
-        sadness_rating, sadness_rt = self._run_rating(
-            "How sad do you feel right now?",
-            "Not sad",
-            "Very sad",
-        )
-
-        # Rating 2: Focus on feelings
-        focus_rating, focus_rt = self._run_rating(
-            "How focused are you on your feelings?",
-            "Not focused",
-            "Very focused",
-        )
-
-        duration = self._task_clock.getTime() - onset
-
-        # Record BIDS event
-        trial_type = f"prompt_{prompt_type}"
-        self._record_event(
-            onset,
-            duration,
-            trial_type,
-            volume=volume,
-            activation=round(activation, 4),
-            sadness_rating=sadness_rating if sadness_rating is not None else "n/a",
-            sadness_rt=round(sadness_rt, 3) if sadness_rt is not None else "n/a",
-            focus_rating=focus_rating if focus_rating is not None else "n/a",
-            focus_rt=round(focus_rt, 3) if focus_rt is not None else "n/a",
-            prompt_number=self._prompt_number,
-        )
-
-        # Update trigger state
-        self._trigger_state.last_prompt_time = self._task_clock.getTime()
-        if prompt_type == "triggered":
-            self._trigger_state.n_prompts_triggered += 1
-        else:
-            self._trigger_state.n_prompts_timeout += 1
-
-        # Clear activation history (fresh trend detection after prompt)
-        self._trigger_state.activation_history.clear()
-        self._trigger_state.volume_history.clear()
-
-        logger.info(
-            f"Prompt #{self._prompt_number} ({prompt_type}): "
-            f"sadness={sadness_rating}, focus={focus_rating}, "
-            f"vol={volume}, act={activation:.3f}"
-        )
-
-    # =========================================================================
-    # Display helpers
-    # =========================================================================
-
-    def _wait_with_escape(self, duration: float, draw_func=None) -> None:
-        """Wait for a duration while checking for escape/stop."""
-        from psychopy import core, event
-
-        clock = core.Clock()
-        while clock.getTime() < duration and self._running:
-            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
-                raise KeyboardInterrupt("Stopped by user")
-            keys = event.getKeys(keyList=["escape"])
-            if keys:
-                raise KeyboardInterrupt("Escaped")
-            if draw_func:
-                draw_func()
-                self._capture_and_emit_screenshot()
-                self.win.flip()
-            else:
-                core.wait(0.01)
-
-    def _wait_for_baseline_end(self) -> None:
-        """Show fixation cross until coordinator's is_baseline flips to False."""
-        from psychopy import core, event
-
-        while self._running:
-            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
-                raise KeyboardInterrupt("Stopped by user")
-            if hasattr(self, "coordinator") and self.coordinator.is_complete():
-                break
-
-            data = self.get_latest_data()
-            if not data.get("is_baseline", True):
-                break
-
-            self._fixation.draw()
-            self._capture_and_emit_screenshot()
-            self.win.flip()
-
-            keys = event.getKeys(keyList=["escape"])
-            if keys:
-                raise KeyboardInterrupt("Escaped")
-
-            core.wait(0.01)
-
-    def _show_fixation(self, duration: float) -> None:
-        """Display fixation cross for a given duration."""
-
-        def draw():
-            self._fixation.draw()
-
-        self._wait_with_escape(duration, draw_func=draw)
-
     # =========================================================================
     # BIDS events
     # =========================================================================
@@ -645,11 +451,10 @@ class ExperienceSamplingTask(BaseTask):
 
         output_dir = Path(output_dir)
         subject = getattr(self.coordinator, "subject", "unknown")
-        task = getattr(self.coordinator, "task", "experience_sampling")
         run_number = getattr(self.coordinator, "run_number", 1)
         run_str = f"run-{run_number:02d}"
 
-        path = output_dir / f"{subject}_task-{task}_{run_str}_events.tsv"
+        path = output_dir / f"{subject}_task-{self.task_id}_{run_str}_events.tsv"
 
         with open(path, "w", newline="") as f:
             writer = csv.DictWriter(
@@ -665,51 +470,13 @@ class ExperienceSamplingTask(BaseTask):
         logger.info(f"Saved {len(self._events)} events to {path}")
 
     # =========================================================================
-    # Monitoring loop
-    # =========================================================================
-
-    def _run_monitoring_loop(self) -> None:
-        """Main monitoring loop: fixation + trigger detection + prompts."""
-        from psychopy import core, event
-
-        while self._running and not self.coordinator.is_complete():
-            if hasattr(self, "coordinator") and self.coordinator.was_stopped():
-                raise KeyboardInterrupt("Stopped by user")
-
-            keys = event.getKeys(keyList=["escape"])
-            if keys:
-                raise KeyboardInterrupt("Escaped")
-
-            # Get latest data
-            data = self.get_latest_data()
-            volume = data["volume"]
-            activation = data["activation"]
-            current_time = self._task_clock.getTime()
-
-            # Process new volume (only non-baseline, non-duplicate)
-            if volume > self._trigger_state.last_processed_volume and not data["is_baseline"]:
-                self._trigger_state.last_processed_volume = volume
-                self._trigger_state.activation_history.append(activation)
-                self._trigger_state.volume_history.append(volume)
-
-                # Check trigger
-                result = self._check_trigger(current_time, activation)
-                if result is not None:
-                    self._run_prompt(result, volume, activation, current_time)
-
-            # Draw fixation cross
-            self._fixation.draw()
-            self._capture_and_emit_screenshot()
-            self.win.flip()
-
-            core.wait(0.01)
-
-    # =========================================================================
-    # Lifecycle
+    # Lifecycle — uses base class run()
     # =========================================================================
 
     def setup(self) -> None:
-        """Initialize PsychoPy window and stimuli."""
+        """Initialize PsychoPy window, stimuli, instructions, and trigger."""
+        from psychopy import core
+
         self.create_window(
             monitor_position=self.presenter_monitor,
             color="black",
@@ -736,45 +503,284 @@ class ExperienceSamplingTask(BaseTask):
         # Wait for scanner trigger
         self.wait_for_trigger()
 
-        logger.info("ExperienceSamplingTask setup complete")
+        # Task clock starts after trigger
+        self._task_clock = core.Clock()
+        self._baseline_onset = self._task_clock.getTime()
+        self._phase = _PHASE_BASELINE
 
-    def update(self, data: dict) -> None:
-        """No-op — custom run() loop handles display updates."""
-        pass
+    def run(self):
+        """Main task loop — lets participant finish current prompt before stopping.
 
-    def run(self) -> None:
-        """Main task loop — monitoring with triggered prompts."""
-        from psychopy import core
-
+        Overrides BaseTask.run() so that when the coordinator signals
+        completion mid-prompt, the rating scales keep running until the
+        participant finishes (or escape is pressed).
+        """
         self._running = True
 
         try:
             self.setup()
 
-            self._task_clock = core.Clock()
+            while self._running and not self.coordinator.is_complete():
+                frame_start = time.time()
+                self.coordinator.check_error()
+                data = self.get_latest_data()
+                self.update(data)
+                self._emit_mirror_state()
+                elapsed = time.time() - frame_start
+                if elapsed < self.frame_duration:
+                    time.sleep(self.frame_duration - elapsed)
 
-            # Phase 1: Wait for baseline to end
-            onset = self._task_clock.getTime()
-            self._wait_for_baseline_end()
-            baseline_dur = self._task_clock.getTime() - onset
-            self._record_event(onset, baseline_dur, "baseline")
+            # Process final data
+            data = self.get_latest_data()
+            self.update(data)
+            self._emit_mirror_state()
 
-            # Initialize trigger state timing
-            self._trigger_state.last_prompt_time = self._task_clock.getTime()
-            self._trigger_state.monitoring_start_time = self._task_clock.getTime()
-
-            # Phase 2: Monitoring loop
-            self._run_monitoring_loop()
-
-            # Phase 3: Append per-TR activation rows
-            self._append_activation_rows()
+            # Let participant finish current prompt before stopping
+            if self._phase == _PHASE_PROMPT:
+                logger.info("Run complete — waiting for participant to finish current prompt")
+                while self._running and self._phase == _PHASE_PROMPT:
+                    frame_start = time.time()
+                    data = self.get_latest_data()
+                    self.update(data)
+                    self._emit_mirror_state()
+                    elapsed = time.time() - frame_start
+                    if elapsed < self.frame_duration:
+                        time.sleep(self.frame_duration - elapsed)
 
         except KeyboardInterrupt:
-            logger.info("ExperienceSamplingTask interrupted")
+            pass
         finally:
             self._running = False
-            self._save_events_tsv()
             self.cleanup()
+
+    def update(self, data: dict) -> None:
+        """Frame-by-frame update — state machine drives display.
+
+        Called every frame by the base class run() loop.
+        """
+        from psychopy import event
+
+        # Check for escape
+        keys = event.getKeys(keyList=["escape"])
+        if keys:
+            raise KeyboardInterrupt("Escaped")
+
+        if self._phase == _PHASE_BASELINE:
+            self._update_baseline(data)
+        elif self._phase == _PHASE_MONITORING:
+            self._update_monitoring(data)
+        elif self._phase == _PHASE_PROMPT:
+            self._update_prompt(data)
+
+    # =========================================================================
+    # Phase handlers
+    # =========================================================================
+
+    def _update_baseline(self, data: dict) -> None:
+        """Show fixation until coordinator's baseline period ends."""
+        if not data.get("is_baseline", True):
+            # Baseline ended — record event and transition
+            baseline_dur = self._task_clock.getTime() - self._baseline_onset
+            self._record_event(self._baseline_onset, baseline_dur, "baseline")
+            self._trigger_state.last_prompt_time = self._task_clock.getTime()
+            self._trigger_state.monitoring_start_time = self._task_clock.getTime()
+            self._phase = _PHASE_MONITORING
+            logger.debug("Baseline complete, entering monitoring phase")
+
+        # Draw fixation every frame (like ball/gauge tasks)
+        self._fixation.draw()
+        self._capture_and_emit_screenshot()
+        self.win.flip()
+
+    def _update_monitoring(self, data: dict) -> None:
+        """Show fixation, check trigger on each new volume."""
+        volume = data["volume"]
+        activation = data["activation"]
+        current_time = self._task_clock.getTime()
+
+        # Process new volume (only non-baseline, non-duplicate)
+        if volume > self._trigger_state.last_processed_volume and not data["is_baseline"]:
+            self._trigger_state.last_processed_volume = volume
+            self._trigger_state.activation_history.append(activation)
+            self._trigger_state.volume_history.append(volume)
+
+            # Count current consecutive trend and log
+            history = list(self._trigger_state.activation_history)
+            consecutive = 0
+            if len(history) >= 2:
+                for i in range(len(history) - 1, 0, -1):
+                    if self.activation_trend == "increasing":
+                        if history[i] > history[i - 1]:
+                            consecutive += 1
+                        else:
+                            break
+                    else:
+                        if history[i] < history[i - 1]:
+                            consecutive += 1
+                        else:
+                            break
+
+            # Check trigger
+            result = self._check_trigger(current_time, activation)
+
+            # Log trend progress (cap display at required count)
+            trend_str = f"{min(consecutive, self.consecutive_volumes)}/{self.consecutive_volumes}"
+            if result is not None:
+                pass  # _begin_prompt logs the trigger
+            elif consecutive >= self.consecutive_volumes:
+                # Trend met but didn't trigger — explain why
+                time_since_last = current_time - self._trigger_state.last_prompt_time
+                if time_since_last < self.min_prompt_interval:
+                    logger.info(f"  consecutive {self.activation_trend}={trend_str} (cooldown: {self.min_prompt_interval - time_since_last:.0f}s left)")
+                else:
+                    logger.info(f"  consecutive {self.activation_trend}={trend_str} (threshold not met: act={activation:+.3f})")
+            else:
+                logger.info(f"  consecutive {self.activation_trend}={trend_str}")
+            if result is not None:
+                self._begin_prompt(result, volume, activation)
+                return
+
+        # Draw fixation every frame (like ball/gauge tasks)
+        self._fixation.draw()
+        self._capture_and_emit_screenshot()
+        self.win.flip()
+
+    def _update_prompt(self, data: dict) -> None:
+        """Frame-by-frame rating scale handler."""
+        from psychopy import event
+
+        # Timer expired — finish current rating
+        if self._rating_timer.getTime() <= 0:
+            if not self._rating_confirmed:
+                self._rating_responses.append((None, None))
+                q = _RATINGS[self._current_rating_index][0]
+                logger.info(f"  Timed out (no response) — \"{q}\"")
+            self._advance_rating()
+            return
+
+        # Already confirmed — show fixation for remaining time
+        if self._rating_confirmed:
+            self._fixation.draw()
+            self._capture_and_emit_screenshot()
+            self.win.flip()
+            return
+
+        # Handle key presses
+        self._inject_keys_if_unfocused([self.left_key, self.right_key, self.confirm_key])
+        keys = event.getKeys(
+            keyList=[self.left_key, self.right_key, self.confirm_key, "return"],
+            timeStamped=self._rating_clock,
+        )
+        for key, t in keys:
+            if key == self.left_key:
+                if self._rating_marker_pos != int(self._rating_marker_pos):
+                    self._rating_marker_pos = math.floor(self._rating_marker_pos)
+                elif self._rating_marker_pos > 1:
+                    self._rating_marker_pos -= 1
+            elif key == self.right_key:
+                if self._rating_marker_pos != int(self._rating_marker_pos):
+                    self._rating_marker_pos = math.ceil(self._rating_marker_pos)
+                elif self._rating_marker_pos < 5:
+                    self._rating_marker_pos += 1
+            elif key in (self.confirm_key, "return"):
+                self._rating_confirmed = True
+                self._rating_rt = t
+                response = int(round(self._rating_marker_pos))
+                self._rating_responses.append((response, round(t, 3)))
+                q = _RATINGS[self._current_rating_index][0]
+                logger.info(f"  Response: {response}/5 (RT={t:.2f}s) — \"{q}\"")
+                break
+
+        # Draw rating frame (flips every frame for responsive input)
+        self._update_marker(self._pos_to_x(self._rating_marker_pos))
+        self._draw_rating_frame()
+        self._capture_and_emit_screenshot()
+        self.win.flip()
+
+    # =========================================================================
+    # Prompt flow
+    # =========================================================================
+
+    def _begin_prompt(self, prompt_type: str, volume: int, activation: float) -> None:
+        """Start a new prompt sequence (sadness + focus ratings)."""
+        logger.info(f"Prompt #{self._prompt_number + 1} ({prompt_type}) at vol={volume}")
+        self._prompt_number += 1
+        self._prompt_onset = self._task_clock.getTime()
+        self._prompt_type = prompt_type
+        self._prompt_volume = volume
+        self._prompt_activation = activation
+        self._current_rating_index = 0
+        self._rating_responses = []
+        self._phase = _PHASE_PROMPT
+        self._init_current_rating()
+
+    def _init_current_rating(self) -> None:
+        """Set up stimuli and timers for the current rating scale."""
+        from psychopy import core, event
+
+        q, left, right = _RATINGS[self._current_rating_index]
+        logger.info(f"  Question {self._current_rating_index + 1}/{len(_RATINGS)}: \"{q}\"")
+        self._rating_question.text = q
+        self._rating_left_label.text = left
+        self._rating_right_label.text = right
+
+        self._rating_marker_pos = 3.0  # Midpoint of 1-5
+        self._update_marker(self._pos_to_x(self._rating_marker_pos))
+        self._rating_confirmed = False
+        self._rating_rt = None
+        self._rating_clock = core.Clock()
+        self._rating_timer = core.CountdownTimer(self.rating_timeout)
+        event.clearEvents("keyboard")
+
+    def _advance_rating(self) -> None:
+        """Move to the next rating scale, or finish the prompt."""
+        if self._current_rating_index < len(_RATINGS) - 1:
+            self._current_rating_index += 1
+            self._init_current_rating()
+        else:
+            self._finish_prompt()
+
+    def _finish_prompt(self) -> None:
+        """Record completed prompt and return to monitoring."""
+        duration = self._task_clock.getTime() - self._prompt_onset
+
+        sadness = self._rating_responses[0] if len(self._rating_responses) > 0 else (None, None)
+        focus = self._rating_responses[1] if len(self._rating_responses) > 1 else (None, None)
+
+        self._record_event(
+            self._prompt_onset,
+            duration,
+            f"prompt_{self._prompt_type}",
+            volume=self._prompt_volume,
+            activation=round(self._prompt_activation, 4),
+            sadness_rating=sadness[0] if sadness[0] is not None else "n/a",
+            sadness_rt=sadness[1] if sadness[1] is not None else "n/a",
+            focus_rating=focus[0] if focus[0] is not None else "n/a",
+            focus_rt=focus[1] if focus[1] is not None else "n/a",
+            prompt_number=self._prompt_number,
+        )
+
+        # Update trigger state
+        self._trigger_state.last_prompt_time = self._task_clock.getTime()
+        if self._prompt_type == "triggered":
+            self._trigger_state.n_prompts_triggered += 1
+        else:
+            self._trigger_state.n_prompts_timeout += 1
+
+        # Clear activation history (fresh trend detection after prompt)
+        self._trigger_state.activation_history.clear()
+        self._trigger_state.volume_history.clear()
+
+        logger.info(
+            f"Prompt #{self._prompt_number} complete: "
+            f"sadness={sadness[0]}, focus={focus[0]}"
+        )
+
+        self._phase = _PHASE_MONITORING
+
+    # =========================================================================
+    # Cleanup and results
+    # =========================================================================
 
     def get_run_results(self) -> dict:
         """Return task-specific results from the completed run."""
@@ -785,9 +791,33 @@ class ExperienceSamplingTask(BaseTask):
         return results
 
     def cleanup(self) -> None:
-        """Clean up resources."""
+        """Save events and clean up resources."""
+        # Record partial prompt if interrupted mid-prompt (escape/error).
+        # Normal run completion waits for the prompt to finish via run().
+        if self._phase == _PHASE_PROMPT:
+            duration = self._task_clock.getTime() - self._prompt_onset if self._task_clock else 0.0
+            sadness = self._rating_responses[0] if len(self._rating_responses) > 0 else (None, None)
+            focus = self._rating_responses[1] if len(self._rating_responses) > 1 else (None, None)
+
+            self._record_event(
+                self._prompt_onset,
+                duration,
+                f"prompt_{self._prompt_type}_incomplete",
+                volume=self._prompt_volume,
+                activation=round(self._prompt_activation, 4),
+                sadness_rating=sadness[0] if sadness[0] is not None else "n/a",
+                sadness_rt=sadness[1] if sadness[1] is not None else "n/a",
+                focus_rating=focus[0] if focus[0] is not None else "n/a",
+                focus_rt=focus[1] if focus[1] is not None else "n/a",
+                prompt_number=self._prompt_number,
+            )
+            logger.info(
+                f"Prompt #{self._prompt_number} incomplete (run ended): "
+                f"sadness={sadness[0]}, focus={focus[0]}"
+            )
+
         logger.info(
-            f"ExperienceSamplingTask cleanup: "
+            f"RNTExperienceSamplingTask cleanup: "
             f"{self._trigger_state.n_prompts_triggered} triggered, "
             f"{self._trigger_state.n_prompts_timeout} timeout, "
             f"{self._prompt_number} total prompts"
@@ -803,11 +833,16 @@ class ExperienceSamplingTask(BaseTask):
             "n_prompts_total": self._prompt_number,
         }
 
+        # Append per-TR rows and save events
+        try:
+            self._append_activation_rows()
+            self._save_events_tsv()
+        except Exception:
+            logger.exception("Failed to save events TSV during cleanup")
+
         # Delete visual stimuli while GL context is still alive
-        # (prevents PsychoPy TextStim.__del__ access violations during GC)
         for attr in [
             "_fixation",
-            "_text_stim",
             "_rating_scale_line",
             "_rating_left_label",
             "_rating_right_label",
@@ -824,21 +859,17 @@ class ExperienceSamplingTask(BaseTask):
 
         super().cleanup()
 
-    def stop(self) -> None:
-        """Signal task to stop."""
-        self._running = False
-
 
 # ============================================================================
 # Task metadata and registration
 # ============================================================================
 
-EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
-    task_id="experience_sampling",
-    display_name="Experience Sampling",
+RNT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
+    task_id="rnt_experience_sampling",
+    display_name="RNT Experience Sampling",
     description=(
-        "Triggered experience sampling: monitors BOLD activation and prompts "
-        "sadness/focus ratings when threshold + trend conditions are met"
+        "Triggered experience sampling: monitors rumination network activation "
+        "and prompts sadness/focus ratings when threshold + trend conditions are met"
     ),
     n_networks=1,
     network_roles=[
@@ -851,11 +882,12 @@ EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
     design_type="nuisance_only",
     parameters=[
         TaskParameter(
-            key="trigger_direction",
-            label="Trigger Direction",
+            key="activation_contrast",
+            label="Activation Contrast",
             type="str",
-            default="above",
-            hint='Compare activation to baseline: "above" (activation > 0) or "below" (activation < 0)',
+            default="positive",
+            choices=["positive", "negative"],
+            hint="Positive = activation > baseline, Negative = activation < baseline",
         ),
         TaskParameter(
             key="consecutive_volumes",
@@ -867,11 +899,12 @@ EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
             hint="Number of consecutive trending volumes required to trigger",
         ),
         TaskParameter(
-            key="signal_trend",
-            label="Signal Trend",
+            key="activation_trend",
+            label="Activation Trend",
             type="str",
             default="increasing",
-            hint='Direction of consecutive volume trend: "increasing" or "decreasing"',
+            choices=["increasing", "decreasing"],
+            hint="Consecutive volumes increasing or decreasing in activation",
         ),
         TaskParameter(
             key="min_prompt_interval",
@@ -933,5 +966,5 @@ EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
     post_run_questions=[],
 )
 
-register_task(EXPERIENCE_SAMPLING_METADATA)
-register_task_class("experience_sampling", ExperienceSamplingTask)
+register_task(RNT_EXPERIENCE_SAMPLING_METADATA)
+register_task_class("rnt_experience_sampling", RNTExperienceSamplingTask)

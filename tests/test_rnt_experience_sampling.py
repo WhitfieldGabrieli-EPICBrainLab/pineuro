@@ -1,4 +1,4 @@
-"""Tests for pineuro.tasks.experience_sampling — trigger logic and registration."""
+"""Tests for pineuro.tasks.rnt_experience_sampling — trigger logic and registration."""
 
 import pytest
 
@@ -8,19 +8,19 @@ import pytest
 # =============================================================================
 
 
-class TestExperienceSamplingRegistration:
+class TestRNTExperienceSamplingRegistration:
     def test_task_registered_in_feedback_tasks(self):
         from pineuro.tasks.task_registry import list_available_tasks
 
         tasks = list_available_tasks(role="feedback")
-        assert "experience_sampling" in tasks
+        assert "rnt_experience_sampling" in tasks
 
     def test_task_metadata(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("experience_sampling")
-        assert meta.task_id == "experience_sampling"
-        assert meta.display_name == "Experience Sampling"
+        meta = get_task_metadata("rnt_experience_sampling")
+        assert meta.task_id == "rnt_experience_sampling"
+        assert meta.display_name == "RNT Experience Sampling"
         assert meta.n_networks == 1
         assert meta.design_type == "nuisance_only"
         assert "feedback" in meta.roles
@@ -28,11 +28,11 @@ class TestExperienceSamplingRegistration:
     def test_task_parameters_defined(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("experience_sampling")
+        meta = get_task_metadata("rnt_experience_sampling")
         param_keys = {p.key for p in meta.parameters}
-        assert "trigger_direction" in param_keys
+        assert "activation_contrast" in param_keys
         assert "consecutive_volumes" in param_keys
-        assert "signal_trend" in param_keys
+        assert "activation_trend" in param_keys
         assert "min_prompt_interval" in param_keys
         assert "timeout_duration" in param_keys
         assert "rating_timeout" in param_keys
@@ -41,12 +41,12 @@ class TestExperienceSamplingRegistration:
         from pineuro.tasks.factory import get_registered_task_ids
 
         ids = get_registered_task_ids()
-        assert "experience_sampling" in ids
+        assert "rnt_experience_sampling" in ids
 
     def test_import_from_tasks_package(self):
-        from pineuro.tasks import ExperienceSamplingTask
+        from pineuro.tasks import RNTExperienceSamplingTask
 
-        assert ExperienceSamplingTask.task_id == "experience_sampling"
+        assert RNTExperienceSamplingTask.task_id == "rnt_experience_sampling"
 
 
 # =============================================================================
@@ -56,7 +56,7 @@ class TestExperienceSamplingRegistration:
 
 class TestTriggerState:
     def test_default_values(self):
-        from pineuro.tasks.experience_sampling import TriggerState
+        from pineuro.tasks.rnt_experience_sampling import TriggerState
 
         state = TriggerState()
         assert state.last_prompt_time == -float("inf")
@@ -66,7 +66,7 @@ class TestTriggerState:
         assert len(state.activation_history) == 0
 
     def test_activation_history_maxlen(self):
-        from pineuro.tasks.experience_sampling import TriggerState
+        from pineuro.tasks.rnt_experience_sampling import TriggerState
 
         state = TriggerState()
         for i in range(100):
@@ -82,28 +82,28 @@ class TestTriggerState:
 class TestTriggerDetection:
     """Test the trigger detection algorithm in isolation.
 
-    We create an ExperienceSamplingTask-like object with just enough state
+    We create an RNTExperienceSamplingTask-like object with just enough state
     to test _check_trigger() without needing PsychoPy or a coordinator.
     """
 
     def _make_task_stub(self, **kwargs):
         """Create a minimal stub with trigger detection capability."""
-        from pineuro.tasks.experience_sampling import ExperienceSamplingTask, TriggerState
+        from pineuro.tasks.rnt_experience_sampling import RNTExperienceSamplingTask, TriggerState
 
         class TriggerStub:
-            """Minimal stub mimicking ExperienceSamplingTask for trigger testing."""
+            """Minimal stub mimicking RNTExperienceSamplingTask for trigger testing."""
             pass
 
         stub = TriggerStub()
-        stub.trigger_direction = kwargs.get("trigger_direction", "above")
+        stub.activation_contrast = kwargs.get("activation_contrast", "positive")
         stub.consecutive_volumes = kwargs.get("consecutive_volumes", 3)
-        stub.signal_trend = kwargs.get("signal_trend", "increasing")
+        stub.activation_trend = kwargs.get("activation_trend", "increasing")
         stub.min_prompt_interval = kwargs.get("min_prompt_interval", 30.0)
         stub.timeout_duration = kwargs.get("timeout_duration", 60.0)
         stub._trigger_state = TriggerState()
 
         # Bind the method
-        stub._check_trigger = ExperienceSamplingTask._check_trigger.__get__(stub)
+        stub._check_trigger = RNTExperienceSamplingTask._check_trigger.__get__(stub)
         return stub
 
     def test_cooldown_blocks_trigger(self):
@@ -131,7 +131,7 @@ class TestTriggerDetection:
         assert result == "timeout"
 
     def test_threshold_above_blocks_when_below(self):
-        stub = self._make_task_stub(trigger_direction="above", consecutive_volumes=2)
+        stub = self._make_task_stub(activation_contrast="positive", consecutive_volumes=2)
         stub._trigger_state.last_prompt_time = 0.0
 
         # Activation below 0, so threshold not met
@@ -141,7 +141,7 @@ class TestTriggerDetection:
         assert result is None
 
     def test_threshold_below_blocks_when_above(self):
-        stub = self._make_task_stub(trigger_direction="below", consecutive_volumes=2)
+        stub = self._make_task_stub(activation_contrast="negative", consecutive_volumes=2)
         stub._trigger_state.last_prompt_time = 0.0
 
         # Activation above 0, so "below" threshold not met
@@ -160,9 +160,9 @@ class TestTriggerDetection:
 
     def test_increasing_trend_triggers(self):
         stub = self._make_task_stub(
-            trigger_direction="above",
+            activation_contrast="positive",
             consecutive_volumes=3,
-            signal_trend="increasing",
+            activation_trend="increasing",
         )
         stub._trigger_state.last_prompt_time = 0.0
 
@@ -173,9 +173,9 @@ class TestTriggerDetection:
 
     def test_decreasing_trend_triggers(self):
         stub = self._make_task_stub(
-            trigger_direction="below",
+            activation_contrast="negative",
             consecutive_volumes=3,
-            signal_trend="decreasing",
+            activation_trend="decreasing",
         )
         stub._trigger_state.last_prompt_time = 0.0
 
@@ -186,9 +186,9 @@ class TestTriggerDetection:
 
     def test_non_monotonic_trend_blocks(self):
         stub = self._make_task_stub(
-            trigger_direction="above",
+            activation_contrast="positive",
             consecutive_volumes=3,
-            signal_trend="increasing",
+            activation_trend="increasing",
         )
         stub._trigger_state.last_prompt_time = 0.0
 
@@ -199,9 +199,9 @@ class TestTriggerDetection:
 
     def test_flat_trend_blocks(self):
         stub = self._make_task_stub(
-            trigger_direction="above",
+            activation_contrast="positive",
             consecutive_volumes=3,
-            signal_trend="increasing",
+            activation_trend="increasing",
         )
         stub._trigger_state.last_prompt_time = 0.0
 
@@ -213,9 +213,9 @@ class TestTriggerDetection:
     def test_longer_history_uses_last_n(self):
         """Trigger checks only the last `consecutive_volumes` entries."""
         stub = self._make_task_stub(
-            trigger_direction="above",
+            activation_contrast="positive",
             consecutive_volumes=3,
-            signal_trend="increasing",
+            activation_trend="increasing",
         )
         stub._trigger_state.last_prompt_time = 0.0
 
@@ -227,7 +227,7 @@ class TestTriggerDetection:
     def test_timeout_takes_priority_over_threshold_check(self):
         """Timeout fires even when threshold is not met."""
         stub = self._make_task_stub(
-            trigger_direction="above",
+            activation_contrast="positive",
             timeout_duration=60.0,
         )
         stub._trigger_state.last_prompt_time = 0.0
@@ -252,9 +252,9 @@ class TestTriggerDetection:
     def test_consecutive_volumes_1_triggers_immediately(self):
         """With consecutive_volumes=1, only threshold matters."""
         stub = self._make_task_stub(
-            trigger_direction="above",
+            activation_contrast="positive",
             consecutive_volumes=1,
-            signal_trend="increasing",
+            activation_trend="increasing",
         )
         stub._trigger_state.last_prompt_time = 0.0
 

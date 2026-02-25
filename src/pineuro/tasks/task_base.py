@@ -51,6 +51,11 @@ class TaskBase(ABC):  # noqa: B024
         injects a synthetic trigger key, then produces DICOMs at TR intervals.
     """
 
+    # Class-level flag: tracks whether a PsychoPy window has been created
+    # (and later destroyed) in this process. Used by _reset_pyglet_for_new_window
+    # to skip the destructive pyglet reset on the very first run.
+    _has_created_window: bool = False
+
     task_id: str = "task_base"
 
     def __init__(
@@ -197,8 +202,11 @@ class TaskBase(ABC):  # noqa: B024
             import base64
             import io
 
-            # Capture back buffer (drawn content before flip)
+            # Capture back buffer (drawn content before flip).
             frame = self.win.getMovieFrame(buffer="back")
+            # Clear accumulated frames to prevent memory leak
+            # (getMovieFrame appends to win.movieFrames; ~7 MB per frame).
+            self.win.movieFrames.clear()
 
             # Resize to mirror dimensions (16:9 aspect ratio)
             frame_resized = frame.resize((480, 270))
@@ -367,6 +375,7 @@ class TaskBase(ABC):  # noqa: B024
                 time.sleep(0.2)  # Give window time to appear
                 self._move_window_xlib(target_x)
 
+        TaskBase._has_created_window = True
         return self.win
 
     def _reset_pyglet_for_new_window(self) -> None:
@@ -383,24 +392,25 @@ class TaskBase(ABC):  # noqa: B024
            still records the old thread ID.
 
         This method patches both before ``visual.Window()`` is called.
-        Always runs unconditionally — the OS can reuse thread IDs, so
-        checking thread identity is not reliable.
+        Skips the first window creation (pyglet state is fresh) and only
+        resets on subsequent runs where the old GL context is stale.
         """
         import sys
 
         if sys.platform != "win32":
             return
 
+        # On the very first window creation, pyglet state is fresh —
+        # resetting it destroys the valid shadow window / GL context and
+        # causes instability (crashes when the window loses OS focus).
+        if not TaskBase._has_created_window:
+            return
+
         from ctypes import windll  # type: ignore[attr-defined]  # Windows-only, guarded above
 
         current_thread = windll.kernel32.GetCurrentThreadId()
 
-        # Always reset pyglet state before creating a new window.
-        # Even when the OS reuses the same thread ID for the new task
-        # thread, the old GL context / shadow window are stale and must
-        # be cleared to avoid "Unable to share contexts" errors and
-        # garbled text rendering.
-        logger.debug("Resetting pyglet state for new PsychoPy window")
+        logger.debug("Resetting stale pyglet state for new PsychoPy window")
 
         try:
             import pyglet

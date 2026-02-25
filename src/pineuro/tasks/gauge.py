@@ -850,7 +850,7 @@ GAUGE_METADATA = TaskMetadata(
             key="use_transfer_runs",
             label="Use Transfer Runs",
             type="bool",
-            default=True,
+            default=False,
             hint="Include transfer runs (1 before feedback, 1 after)",
         ),
         TaskParameter(
