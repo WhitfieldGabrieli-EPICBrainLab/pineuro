@@ -46,6 +46,7 @@ from .task_registry import (
     TaskParameter,
     register_task,
 )
+from .utils import make_bids_run_prefix
 
 if TYPE_CHECKING:
     from .session import SessionState
@@ -334,15 +335,13 @@ class ThermometerTask(BaseTask):
             activation = activations.get(self.mask_name, 0.0)
             self._block_activations.append(activation)
 
-    def _start_accumulating(self):
+    def _start_accumulating(self) -> None:
         """Begin collecting per-volume activations for current block."""
-        self._block_activations = []
-        self._accumulating = True
+        self._start_block_accumulation()
 
     def _stop_accumulating(self) -> list[float]:
         """Stop collecting and return accumulated activations."""
-        self._accumulating = False
-        return self._block_activations.copy()
+        return self._stop_block_accumulation()
 
     # =========================================================================
     # BIDS events
@@ -392,9 +391,9 @@ class ThermometerTask(BaseTask):
         subject = getattr(self.coordinator, "subject", "unknown")
         task = getattr(self.coordinator, "task", "thermometer")
         run_number = getattr(self.coordinator, "run_number", 1)
-        run_str = f"run-{run_number:02d}"
+        prefix = make_bids_run_prefix(subject, task, run_number)
 
-        path = output_dir / f"{subject}_task-{task}_{run_str}_events.tsv"
+        path = output_dir / f"{prefix}_events.tsv"
 
         with open(path, "w", newline="") as f:
             writer = csv.DictWriter(

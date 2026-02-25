@@ -17,6 +17,8 @@ import flet as ft
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 
+from .base_dialog import BaseDialog
+
 logger = logging.getLogger(__name__)
 
 
@@ -142,7 +144,7 @@ def compute_feedback_summary(
     )
 
 
-class FeedbackSummaryDialog:
+class FeedbackSummaryDialog(BaseDialog):
     """Modal dialog showing feedback run summary after completion.
 
     Displays:
@@ -179,7 +181,7 @@ class FeedbackSummaryDialog:
             on_view_full_qc: Callback to open full QC report
             display_names: Optional mapping of network names to display names (for blind mode)
         """
-        self.page = page
+        super().__init__(page)
         self.summary_data = summary_data
         self.subject = subject
         self.task = task
@@ -189,30 +191,27 @@ class FeedbackSummaryDialog:
         self.on_close = on_close
         self.on_view_full_qc = on_view_full_qc
         self.display_names = display_names or {}
-        self._dialog: ft.AlertDialog | None = None
 
     def show(self):
         """Display the modal dialog."""
-        self._dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Row(
-                [
-                    ft.Icon(ft.Icons.ASSESSMENT, color=ft.Colors.BLUE),
-                    ft.Text(
-                        f"Feedback Summary - {self.subject} ({self.task} run {self.run})",
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                ],
-                spacing=10,
-            ),
-            content=self._build_content(),
-            actions=self._build_actions(),
-            actions_alignment=ft.MainAxisAlignment.END,
+        self._open_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.ASSESSMENT, color=ft.Colors.BLUE),
+                        ft.Text(
+                            f"Feedback Summary - {self.subject} ({self.task} run {self.run})",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                    ],
+                    spacing=10,
+                ),
+                content=self._build_content(),
+                actions=self._build_actions(),
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
         )
-
-        self.page.overlay.append(self._dialog)
-        self._dialog.open = True
-        self.page.update()
 
     def _build_content(self) -> ft.Control:
         """Build the dialog content with summary stats and plots."""
@@ -600,8 +599,3 @@ class FeedbackSummaryDialog:
         if self.on_close:
             self.on_close()
 
-    def _close_dialog(self):
-        """Close the dialog."""
-        if self._dialog:
-            self._dialog.open = False
-            self.page.update()

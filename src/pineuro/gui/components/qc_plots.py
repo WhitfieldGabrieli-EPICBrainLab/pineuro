@@ -17,6 +17,8 @@ from typing import Any
 
 import flet as ft
 
+from ..utils import build_placeholder
+
 # Import chart types from flet_charts package
 try:
     import flet_charts as fch  # type: ignore[import-untyped]
@@ -92,6 +94,11 @@ class BaseQCPlot:
 
     Subclasses set class attributes for configuration and override hook
     methods for metric-specific behavior.
+
+    For most metrics, add_data() performs an incremental O(1) append to the
+    existing chart series. Subclasses that require all y-values to be
+    recalculated on each new point (e.g. DVARSPlot standardization) should
+    set ``_incremental_append = False`` to force a full O(n) rebuild instead.
     """
 
     # --- Subclass configuration ---
@@ -100,6 +107,7 @@ class BaseQCPlot:
     axis_title_size: int = 12
     legend_label: str = ""
     flag_above: bool = True  # True = flag above threshold, False = flag below
+    _incremental_append: bool = True  # Set False when all y-values change on each update
 
     def __init__(self, n_volumes: int, height: float, threshold: float):
         self.n_volumes = n_volumes
@@ -117,10 +125,7 @@ class BaseQCPlot:
     def build(self) -> ft.Container:
         """Build the chart + legend + summary container."""
         if LineChart is None:
-            return ft.Container(
-                content=ft.Text("Chart not available", size=16, color=ft.Colors.GREY_500),
-                height=self.height,
-            )
+            return build_placeholder("Chart not available", height=self.height)
 
         self._data_series = self._create_data_series()
         min_x, max_x, min_y, max_y = self._calculate_axis_range()
@@ -194,9 +199,23 @@ class BaseQCPlot:
         )
 
     def add_data(self, volume: int, value: float):
-        """Add a data point and update the chart."""
+        """Add a data point and update the chart.
+
+        Uses an incremental O(1) append when possible (``_incremental_append``
+        is True and the chart has already been built). Falls back to a full
+        O(n) rebuild for subclasses whose y-values change retroactively (e.g.
+        DVARSPlot DVARS standardization).
+        """
         self.data.add_point(volume, value)
-        self._update_chart()
+        if (
+            self._incremental_append
+            and self.chart is not None
+            and self._data_series
+        ):
+            self._append_latest_point()
+            self._update_axis_and_summary()
+        else:
+            self._update_chart()
 
     def clear(self):
         """Clear all data and reset chart."""
@@ -204,6 +223,62 @@ class BaseQCPlot:
         self._update_chart()
 
     # --- Shared internals ---
+
+    def _append_latest_point(self) -> None:
+        """Append only the newest data point to the existing series (O(1))."""
+        if not self._data_series or LineChartDataPoint is None:
+            return
+
+        i = len(self.data.volumes) - 1
+        if i < 0 or self._skip_point(i):
+            return
+
+        plot_values = self._get_plot_values()
+        if i >= len(plot_values):
+            return
+
+        val = plot_values[i]
+        point_marker = None
+        if ChartCirclePoint is not None and self._is_flagged(val):
+            point_marker = ChartCirclePoint(
+                color=THRESHOLD_LINE_COLOR,
+                radius=4,
+                stroke_color=ft.Colors.RED_900,
+                stroke_width=1,
+            )
+        self._data_series[0].points.append(
+            LineChartDataPoint(
+                x=float(self.data.volumes[i]),
+                y=val,
+                point=point_marker,
+            )
+        )
+
+    def _update_axis_and_summary(self) -> None:
+        """Recalculate axis range and summary label, then call chart.update()."""
+        if self.chart is None:
+            return
+
+        min_x, max_x, min_y, max_y = self._calculate_axis_range()
+        self.chart.min_x = min_x
+        self.chart.max_x = max_x
+        self.chart.min_y = min_y
+        self.chart.max_y = max_y
+
+        if self.chart.horizontal_grid_lines:
+            self.chart.horizontal_grid_lines.interval = self._get_grid_interval(max_y)
+
+        if self._summary_text is not None:
+            text, color = self._format_summary()
+            self._summary_text.value = text
+            self._summary_text.color = color
+
+        try:
+            self.chart.update()
+            if self._summary_text is not None:
+                self._summary_text.update()
+        except Exception as e:
+            logger.debug(f"Chart update failed: {e}")
 
     def _create_data_series(self) -> list:
         if LineChartData is None:
@@ -262,30 +337,12 @@ class BaseQCPlot:
         return series
 
     def _update_chart(self):
+        """Full O(n) rebuild of data series, then update axis and summary."""
         if self.chart is None:
             return
 
         self.chart.data_series = self._create_data_series()
-        min_x, max_x, min_y, max_y = self._calculate_axis_range()
-        self.chart.min_x = min_x
-        self.chart.max_x = max_x
-        self.chart.min_y = min_y
-        self.chart.max_y = max_y
-
-        if self.chart.horizontal_grid_lines:
-            self.chart.horizontal_grid_lines.interval = self._get_grid_interval(max_y)
-
-        if self._summary_text is not None:
-            text, color = self._format_summary()
-            self._summary_text.value = text
-            self._summary_text.color = color
-
-        try:
-            self.chart.update()
-            if self._summary_text is not None:
-                self._summary_text.update()
-        except Exception as e:
-            logger.debug(f"Chart update failed: {e}")
+        self._update_axis_and_summary()
 
     def _is_flagged(self, value: float) -> bool:
         if self.flag_above:
@@ -379,6 +436,9 @@ class DVARSPlot(BaseQCPlot):
 
     Raw DVARS (Power 2012) is standardized by dividing by sqrt(median(DVARS^2))
     from stable volumes (Nichols 2013). Threshold default is 1.5 (fMRIPrep).
+
+    Requires full rebuild on every update because standardization divides all
+    y-values by a median that changes as new data arrives.
     """
 
     line_color = DVARS_LINE_COLOR
@@ -386,6 +446,7 @@ class DVARSPlot(BaseQCPlot):
     axis_title_size = 10
     legend_label = "DVARS"
     flag_above = True
+    _incremental_append = False  # Standardization changes all y-values retroactively
 
     def __init__(self, n_volumes: int, height: float = 100, threshold: float = DEFAULT_DVARS_THRESHOLD):
         super().__init__(n_volumes, height, threshold)

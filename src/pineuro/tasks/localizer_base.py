@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Union
 
 from .task_base import TaskBase
+from .utils import make_bids_run_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -175,15 +176,13 @@ class BaseLocalizerTask(TaskBase):
 
         if path is None:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            if self.acq_number is not None:
-                path = (
-                    self.output_dir
-                    / f"{self.participant_id}_task-{self.task_id}_acq-{self.acq_number:02d}_run-{self.run_number:02d}_events.tsv"
-                )
-            else:
-                path = (
-                    self.output_dir / f"{self.participant_id}_task-{self.task_id}_run-{self.run_number:02d}_events.tsv"
-                )
+            prefix = make_bids_run_prefix(
+                self.participant_id,
+                self.task_id,
+                self.run_number,
+                acq=self.acq_number,
+            )
+            path = self.output_dir / f"{prefix}_events.tsv"
 
         if not self._events:
             logger.warning("No events recorded, saving empty events file")

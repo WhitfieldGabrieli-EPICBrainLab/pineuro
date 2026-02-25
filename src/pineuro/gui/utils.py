@@ -53,6 +53,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import flet as ft
+
 logger = logging.getLogger(__name__)
 
 
@@ -303,3 +305,22 @@ def truncate_text(text: str, max_length: int = 100) -> str:
     if len(text) <= max_length:
         return text
     return text[: max_length - 3] + "..."
+
+
+def build_placeholder(text: str, height: float | None = None) -> ft.Container:
+    """Build a centered placeholder container with greyed-out text.
+
+    Used as a fallback display when a chart or component is unavailable.
+
+    Args:
+        text: Message to display in the placeholder.
+        height: Optional fixed height for the container.
+
+    Returns:
+        A centred ``ft.Container`` with the placeholder text.
+    """
+    return ft.Container(
+        content=ft.Text(text, size=16, color=ft.Colors.GREY_500),
+        height=height,
+        alignment=ft.Alignment(0, 0),
+    )

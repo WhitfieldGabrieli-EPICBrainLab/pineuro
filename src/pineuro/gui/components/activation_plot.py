@@ -13,6 +13,8 @@ from typing import Any
 
 import flet as ft
 
+from ..utils import build_placeholder
+
 # Import chart types from flet_charts package
 try:
     import flet_charts as fch  # type: ignore[import-untyped]
@@ -282,17 +284,7 @@ class ActivationPlot:
         # Check if LineChart is available
         if LineChart is None:
             logger.warning("LineChart not available - showing placeholder")
-            return ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text("Chart not available", size=16, color=ft.Colors.GREY_500),
-                        ft.Text("Flet charts module not found", size=12, color=ft.Colors.GREY_400),
-                    ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                height=self.height,
-                alignment=ft.Alignment(0, 0),  # Center alignment
-            )
+            return build_placeholder("Chart not available", height=self.height)
 
         # Create initial data series
         self._data_series = self._create_data_series()

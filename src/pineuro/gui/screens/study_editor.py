@@ -308,6 +308,7 @@ class StudyEditorScreen:
         self.include_reverse_contrasts_checkbox = ft.Checkbox(
             label="Include reverse contrasts (enables dual-network from single-contrast localizer)",
             value=config.get("mask", {}).get("include_reverse_contrasts", False),
+            visible=config["scan"].get("localizer_task_type", "rest") != "rest",
             on_change=self._on_include_reverse_contrasts_changed,
         )
 

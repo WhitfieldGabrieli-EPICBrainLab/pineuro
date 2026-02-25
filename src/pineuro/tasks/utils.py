@@ -3,17 +3,21 @@ Utility functions for neurofeedback tasks.
 
 Summary
 -------
-Helpers for smoothing and scaling activation values in real-time displays.
+Helpers for smoothing, scaling, and BIDS filename construction in real-time
+neurofeedback tasks.
 
 Components
 ----------
 - ActivationSmoother: Exponential moving average for jitter reduction
 - ActivationNormalizer: Percentile-based scaling to [0, 1]
+- make_bids_run_prefix: Build BIDS-compliant filename prefix
+- is_activation_outlier: Detect outlier activations by magnitude
 
 Workflow
 --------
 - Update smoother each frame to damp spikes
 - Feed activations to normalizer to map to [0, 1] for display scaling
+- Use make_bids_run_prefix() to build consistent BIDS filenames
 
 Dependencies
 ------------
@@ -35,6 +39,66 @@ import numpy as np
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
+
+
+def make_bids_run_prefix(
+    subject: str,
+    task: str,
+    run: int,
+    acq: int | str | None = None,
+) -> str:
+    """Build a BIDS-compliant filename prefix for task output files.
+
+    Parameters
+    ----------
+    subject : str
+        Subject label (e.g., 'sub-01' or '01')
+    task : str
+        Task label (e.g., 'ball', 'thermometer')
+    run : int
+        Run number (formatted as zero-padded 2-digit string)
+    acq : int or str or None, optional
+        Acquisition label. If int, formatted as zero-padded 2-digit string.
+        If None, omitted from prefix.
+
+    Returns
+    -------
+    str
+        Filename prefix like ``{subject}_task-{task}_run-01`` or
+        ``{subject}_task-{task}_acq-01_run-01`` when acq is provided.
+
+    Examples
+    --------
+    >>> make_bids_run_prefix("sub-01", "ball", run=1)
+    'sub-01_task-ball_run-01'
+    >>> make_bids_run_prefix("sub-01", "ball", run=2, acq=3)
+    'sub-01_task-ball_acq-03_run-02'
+    """
+    if acq is not None:
+        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
+        return f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}"
+    return f"{subject}_task-{task}_run-{run:02d}"
+
+
+def is_activation_outlier(acts: list[float] | float, threshold: float) -> bool:
+    """Return True if any activation magnitude exceeds the threshold.
+
+    Parameters
+    ----------
+    acts : float or list of float
+        Activation value(s) to test.
+    threshold : float
+        Maximum allowed magnitude. Values with abs(act) > threshold are
+        considered outliers.
+
+    Returns
+    -------
+    bool
+        True if any value exceeds the threshold.
+    """
+    if isinstance(acts, (int, float)):
+        return abs(acts) > threshold
+    return bool(np.max(np.abs(acts)) > threshold)
 
 
 class ActivationSmoother:

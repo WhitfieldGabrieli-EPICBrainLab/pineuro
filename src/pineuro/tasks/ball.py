@@ -33,6 +33,7 @@ import numpy as np
 # background-thread window creation on native Windows.
 # Local imports
 from .base import BaseTask
+from .utils import is_activation_outlier, make_bids_run_prefix
 
 if TYPE_CHECKING:
     from .session import SessionState
@@ -270,16 +271,13 @@ class BallTask(BaseTask):
         }
 
         output_dir = Path(coordinator.output_dir)
-        # Use acq-based naming if coordinator has acq attribute
-        if hasattr(coordinator, "acq") and coordinator.acq is not None:
-            # Format acq as 2-digit number if int
-            acq_str = f"{coordinator.acq:02d}" if isinstance(coordinator.acq, int) else coordinator.acq
-            run_acq_str = f"acq-{acq_str}_run-{coordinator.run_number:02d}"
-        else:
-            run_acq_str = f"run-{coordinator.run_number:02d}"
-        self._psychopy_log_path = (
-            output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_psychopylog.tsv"
+        prefix = make_bids_run_prefix(
+            coordinator.subject,
+            coordinator.task,
+            coordinator.run_number,
+            acq=getattr(coordinator, "acq", None),
         )
+        self._psychopy_log_path = output_dir / f"{prefix}_psychopylog.tsv"
         self._psychopy_log_file = None
         self._psychopy_log_writer = None
         self._frame_counter = 0
@@ -547,7 +545,7 @@ class BallTask(BaseTask):
 
         # Reject outliers to prevent extreme activations from dominating movement
         # Preserves existing activity direction/magnitude if outlier detected
-        if np.max(np.abs(acts)) > self.pda_outlier_threshold:
+        if is_activation_outlier(acts, self.pda_outlier_threshold):
             self.outlier_count += 1
             self._current_is_outlier = True
             logger.info(f"Outlier detected: {acts[0]:.2f}, {acts[1]:.2f} (threshold: {self.pda_outlier_threshold})")

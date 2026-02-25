@@ -135,6 +135,10 @@ class BaseTask(TaskBase):
             "is_baseline": True,
         }
 
+        # Block accumulation state (optional — call _start_block_accumulation() to enable)
+        self._accumulating: bool = False
+        self._block_activations: list[float] = []
+
     def get_task_metadata(self):
         """Get metadata for this task type.
 
@@ -229,6 +233,38 @@ class BaseTask(TaskBase):
         """
         with self._lock:
             return self._latest_data.copy()
+
+    # =========================================================================
+    # Block Accumulation (optional per-block activation averaging)
+    # =========================================================================
+
+    def _start_block_accumulation(self) -> None:
+        """Begin collecting per-volume activations for the current block.
+
+        Resets the accumulation buffer and sets the accumulation flag.
+        Call this at the start of a feedback block; call
+        _stop_block_accumulation() at the end to retrieve the values.
+
+        Subclasses that override _update_data() should call
+        ``super()._update_data(...)`` first, then check self._accumulating
+        and append to self._block_activations if needed. Accumulation state
+        is not individually locked; access is safe when _update_data() is
+        called exclusively from the coordinator thread.
+        """
+        self._block_activations = []
+        self._accumulating = True
+
+    def _stop_block_accumulation(self) -> list[float]:
+        """Stop accumulation and return the collected activation values.
+
+        Returns
+        -------
+        list[float]
+            A copy of all activation values appended since
+            _start_block_accumulation() was last called.
+        """
+        self._accumulating = False
+        return self._block_activations.copy()
 
     # =========================================================================
     # Post-Run Questions Support

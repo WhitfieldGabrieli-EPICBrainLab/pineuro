@@ -74,6 +74,7 @@ and added to the page controls. Example:
 """
 
 from .activation_plot import ActivationData, ActivationPlot
+from .base_dialog import BaseDialog
 from .collection_progress import CollectionProgressPanel
 from .csv_poller import FeedbackLogPoller, FeedbackMonitor
 from .feedback_summary import FeedbackSummaryData, FeedbackSummaryDialog, compute_feedback_summary
@@ -86,6 +87,7 @@ from .task_mirror import TaskMirror
 from .visit_selection_dialog import VisitSelectionDialog
 
 __all__ = [
+    "BaseDialog",
     "PipelineRunner",
     "ActivationPlot",
     "ActivationData",

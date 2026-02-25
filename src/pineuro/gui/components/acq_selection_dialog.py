@@ -12,6 +12,8 @@ from pathlib import Path
 
 import flet as ft
 
+from .base_dialog import BaseDialog
+
 logger = logging.getLogger(__name__)
 
 
@@ -95,7 +97,7 @@ def scan_collection_acqs(
     return acqs
 
 
-class AcqSelectionDialog:
+class AcqSelectionDialog(BaseDialog):
     """Modal dialog for selecting acquisitions for preprocessing.
 
     Displays available acquisition attempts per run with volume counts
@@ -118,35 +120,32 @@ class AcqSelectionDialog:
             on_confirm: Callback with dict {run_id: selected_acq_num}
             on_cancel: Optional callback when dialog is cancelled
         """
-        self.page = page
+        super().__init__(page)
         self.runs = runs
         self.on_confirm = on_confirm
         self.on_cancel = on_cancel
-        self._dialog: ft.AlertDialog | None = None
         self._radio_groups: dict[int, ft.RadioGroup] = {}
 
     def show(self):
         """Display the modal dialog."""
-        self._dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Row(
-                [
-                    ft.Icon(ft.Icons.TUNE, color=ft.Colors.BLUE),
-                    ft.Text(
-                        "Select Acquisition for Each Run",
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                ],
-                spacing=10,
-            ),
-            content=self._build_content(),
-            actions=self._build_actions(),
-            actions_alignment=ft.MainAxisAlignment.END,
+        self._open_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.TUNE, color=ft.Colors.BLUE),
+                        ft.Text(
+                            "Select Acquisition for Each Run",
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                    ],
+                    spacing=10,
+                ),
+                content=self._build_content(),
+                actions=self._build_actions(),
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
         )
-
-        self.page.overlay.append(self._dialog)
-        self._dialog.open = True
-        self.page.update()
 
     def _build_content(self) -> ft.Control:
         """Build the dialog content with radio buttons per run."""
@@ -294,8 +293,3 @@ class AcqSelectionDialog:
         if self.on_cancel:
             self.on_cancel()
 
-    def _close_dialog(self):
-        """Close the dialog."""
-        if self._dialog:
-            self._dialog.open = False
-            self.page.update()
