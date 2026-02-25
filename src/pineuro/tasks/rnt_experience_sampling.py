@@ -213,10 +213,14 @@ class RNTExperienceSamplingTask(BaseTask):
 
         # Per-rating frame state
         self._rating_marker_pos = 3.0
-        self._rating_confirmed = False
-        self._rating_rt: float | None = None
         self._rating_clock: Any = None
         self._rating_timer: Any = None
+
+        # Volume log suffix (computed in _update_data, read by coordinator log line)
+        self._volume_log_suffix: str = ""
+
+        # Separate dedup counter for trigger checks (history managed in _update_data)
+        self._last_trigger_checked_volume: int = 0
 
         logger.info(
             f"RNTExperienceSamplingTask initialized: mask={self.mask_name}, "
@@ -230,18 +234,55 @@ class RNTExperienceSamplingTask(BaseTask):
     # =========================================================================
 
     def _update_data(self, activations, volume, elapsed, is_baseline, is_outlier):
-        """Override to accumulate per-TR activations for end-of-run log."""
+        """Override to accumulate activations and update trigger history.
+
+        Called from the coordinator's background thread. Also computes the
+        consecutive trend count so it can be appended inline to the
+        coordinator's per-volume log line via get_volume_log_suffix().
+        """
         super()._update_data(activations, volume, elapsed, is_baseline, is_outlier)
+
+        activation_val = activations.get(self.mask_name, float("nan"))
 
         self._all_activations.append(
             {
                 "volume": volume,
                 "elapsed": elapsed,
-                "activation": activations.get(self.mask_name, float("nan")),
+                "activation": activation_val,
                 "is_baseline": is_baseline,
                 "is_outlier": is_outlier,
             }
         )
+
+        # Update activation history and compute consecutive trend suffix
+        if not is_baseline and volume > self._trigger_state.last_processed_volume:
+            self._trigger_state.last_processed_volume = volume
+            self._trigger_state.activation_history.append(activation_val)
+            self._trigger_state.volume_history.append(volume)
+
+            history = list(self._trigger_state.activation_history)
+            # Use the same window algorithm as _check_trigger: find the largest
+            # window (up to consecutive_volumes) ending at the current value
+            # that is monotonically increasing/decreasing.
+            consecutive = 0
+            for w in range(min(len(history), self.consecutive_volumes), 0, -1):
+                window = history[-w:]
+                if self.activation_trend == "increasing":
+                    if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
+                        consecutive = w
+                        break
+                else:
+                    if all(window[i] > window[i + 1] for i in range(len(window) - 1)):
+                        consecutive = w
+                        break
+
+            trend_str = f"{consecutive}/{self.consecutive_volumes}"
+            self._volume_log_suffix = f" | {self.activation_trend} {trend_str}"
+        else:
+            self._volume_log_suffix = ""
+
+    def get_volume_log_suffix(self) -> str:
+        return self._volume_log_suffix
 
     # =========================================================================
     # Trigger detection
@@ -598,44 +639,11 @@ class RNTExperienceSamplingTask(BaseTask):
         activation = data["activation"]
         current_time = self._task_clock.getTime()
 
-        # Process new volume (only non-baseline, non-duplicate)
-        if volume > self._trigger_state.last_processed_volume and not data["is_baseline"]:
-            self._trigger_state.last_processed_volume = volume
-            self._trigger_state.activation_history.append(activation)
-            self._trigger_state.volume_history.append(volume)
-
-            # Count current consecutive trend and log
-            history = list(self._trigger_state.activation_history)
-            consecutive = 0
-            if len(history) >= 2:
-                for i in range(len(history) - 1, 0, -1):
-                    if self.activation_trend == "increasing":
-                        if history[i] > history[i - 1]:
-                            consecutive += 1
-                        else:
-                            break
-                    else:
-                        if history[i] < history[i - 1]:
-                            consecutive += 1
-                        else:
-                            break
-
-            # Check trigger
+        # Check trigger for each new non-baseline volume
+        # (history is already updated by _update_data in the background thread)
+        if not data["is_baseline"] and volume > self._last_trigger_checked_volume:
+            self._last_trigger_checked_volume = volume
             result = self._check_trigger(current_time, activation)
-
-            # Log trend progress (cap display at required count)
-            trend_str = f"{min(consecutive, self.consecutive_volumes)}/{self.consecutive_volumes}"
-            if result is not None:
-                pass  # _begin_prompt logs the trigger
-            elif consecutive >= self.consecutive_volumes:
-                # Trend met but didn't trigger — explain why
-                time_since_last = current_time - self._trigger_state.last_prompt_time
-                if time_since_last < self.min_prompt_interval:
-                    logger.info(f"  consecutive {self.activation_trend}={trend_str} (cooldown: {self.min_prompt_interval - time_since_last:.0f}s left)")
-                else:
-                    logger.info(f"  consecutive {self.activation_trend}={trend_str} (threshold not met: act={activation:+.3f})")
-            else:
-                logger.info(f"  consecutive {self.activation_trend}={trend_str}")
             if result is not None:
                 self._begin_prompt(result, volume, activation)
                 return
@@ -649,20 +657,12 @@ class RNTExperienceSamplingTask(BaseTask):
         """Frame-by-frame rating scale handler."""
         from psychopy import event
 
-        # Timer expired — finish current rating
+        # Timer expired — record no response and immediately advance
         if self._rating_timer.getTime() <= 0:
-            if not self._rating_confirmed:
-                self._rating_responses.append((None, None))
-                q = _RATINGS[self._current_rating_index][0]
-                logger.info(f"  Timed out (no response) — \"{q}\"")
+            self._rating_responses.append((None, None))
+            q = _RATINGS[self._current_rating_index][0]
+            logger.info(f"  Timed out (no response) — \"{q}\"")
             self._advance_rating()
-            return
-
-        # Already confirmed — show fixation for remaining time
-        if self._rating_confirmed:
-            self._fixation.draw()
-            self._capture_and_emit_screenshot()
-            self.win.flip()
             return
 
         # Handle key presses
@@ -683,13 +683,12 @@ class RNTExperienceSamplingTask(BaseTask):
                 elif self._rating_marker_pos < 5:
                     self._rating_marker_pos += 1
             elif key in (self.confirm_key, "return"):
-                self._rating_confirmed = True
-                self._rating_rt = t
                 response = int(round(self._rating_marker_pos))
                 self._rating_responses.append((response, round(t, 3)))
                 q = _RATINGS[self._current_rating_index][0]
                 logger.info(f"  Response: {response}/5 (RT={t:.2f}s) — \"{q}\"")
-                break
+                self._advance_rating()
+                return
 
         # Draw rating frame (flips every frame for responsive input)
         self._update_marker(self._pos_to_x(self._rating_marker_pos))
@@ -726,8 +725,6 @@ class RNTExperienceSamplingTask(BaseTask):
 
         self._rating_marker_pos = 3.0  # Midpoint of 1-5
         self._update_marker(self._pos_to_x(self._rating_marker_pos))
-        self._rating_confirmed = False
-        self._rating_rt = None
         self._rating_clock = core.Clock()
         self._rating_timer = core.CountdownTimer(self.rating_timeout)
         event.clearEvents("keyboard")

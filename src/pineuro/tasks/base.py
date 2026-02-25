@@ -206,6 +206,15 @@ class BaseTask(TaskBase):
                 "is_baseline": is_baseline,
             }
 
+    def get_volume_log_suffix(self) -> str:
+        """Optional suffix appended to the coordinator's per-volume log line.
+
+        Override in subclasses to add task-specific info inline.
+        Called from the coordinator's background thread immediately after
+        _update_data() returns.
+        """
+        return ""
+
     def get_latest_data(self) -> dict:
         """Get latest activation data (thread-safe).
 

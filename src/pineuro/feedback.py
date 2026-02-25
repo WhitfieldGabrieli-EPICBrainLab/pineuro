@@ -2955,10 +2955,19 @@ class NeurofeedbackCoordinator:
         drift_str = f"+{timing_drift_ms:.0f}" if timing_drift_ms >= 0 else f"{timing_drift_ms:.0f}"
         outlier_indicator = " OUTLIER" if is_outlier else ""
 
+        task_suffix = ""
+        if (
+            self._activation_callback is not None
+            and hasattr(self._activation_callback, "__self__")
+            and hasattr(self._activation_callback.__self__, "get_volume_log_suffix")
+        ):
+            task_suffix = self._activation_callback.__self__.get_volume_log_suffix()
+
         logger.info(
             f"[{elapsed_time:7.2f}s] Vol {self.n_processed:4d}/{self.n_volumes} "
             f"({status}): {activation_str} "
             f"[proc:{total_duration:.0f}ms drift:{drift_str}ms{outlier_indicator}]{queue_warning}"
+            + task_suffix
         )
 
     def run(self) -> None:
