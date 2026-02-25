@@ -19,7 +19,9 @@ import logging
 from typing import TYPE_CHECKING, Any, Optional
 
 from .base import BaseTask
-from .task_registry import get_task_metadata
+from .task_registry import TaskConfigError, get_task_metadata
+
+__all__ = ["create_task", "create_localizer_task", "get_registered_task_ids", "TaskConfigError"]
 
 if TYPE_CHECKING:
     from .session import SessionState
@@ -91,8 +93,10 @@ def create_task(
     Raises
     ------
     ValueError
-        If task_id is not registered, config validation fails, or
-        insufficient networks are provided
+        If task_id is not registered or insufficient networks are provided.
+    TaskConfigError
+        If config validation fails (subclass of ValueError). Contains all
+        validation errors, not just the first failure.
     """
     # Get metadata and validate config
     metadata = get_task_metadata(task_id)

@@ -20,6 +20,30 @@ Dependencies
 ------------
 threading (stdlib), PsychoPy (for concrete tasks)
 
+Threading Model
+---------------
+Two threads interact with each task during a feedback session:
+
+Coordinator thread (background)
+    Runs incremental GLM and activation computation.  Calls
+    ``_update_data()`` after each processed volume.  Writes ``_latest_data``
+    (protected by ``self._lock``) and reads ``_accumulating`` /
+    ``_block_activations`` (lock-free, coordinator-thread only).
+
+Task thread (main thread, required by PsychoPy)
+    Runs ``run()`` → ``setup()`` → ``update()`` loop.  Reads ``_latest_data``
+    via ``get_latest_data()`` (acquires ``self._lock``).  Writes
+    ``_accumulating`` and ``_block_activations`` via
+    ``_start_block_accumulation()`` / ``_stop_block_accumulation()``
+    (lock-free, task-thread only).
+
+Rule: **Only call PsychoPy APIs from the task (main) thread.**  Never call
+PsychoPy drawing functions from the coordinator thread.
+
+See Also
+--------
+pineuro.tasks.protocol : Protocols documenting the full task/coordinator API.
+
 Notes
 -----
 The run() loop calls setup(), then updates at refresh_rate Hz until the
@@ -493,6 +517,29 @@ class BaseTask(TaskBase):
         return {
             "volumes_processed": getattr(self, "current_volume", 0) or getattr(self, "_volumes_processed", 0),
         }
+
+    # =========================================================================
+    # OVERRIDE GUIDE
+    # =========================================================================
+    # Must override (abstract — no super()):
+    #   setup()                     Create window and stimuli.
+    #   update(data)                Draw each frame.
+    #
+    # Should override (call super()):
+    #   cleanup()                   Release resources. Call super().cleanup() at END.
+    #   get_run_results()           Return run metrics. Merge with super().get_run_results().
+    #   _record_run_completion()    Custom session-state recording. Call super() first.
+    #
+    # May override (no super() needed):
+    #   get_mirror_state()          Return vector state for GUI mirror.
+    #   get_volume_log_suffix()     String appended to coordinator volume log line.
+    #   _show_post_run_questions()  Replace the post-run question display entirely.
+    #
+    # Do not override:
+    #   run()                       Main loop; framework-controlled.
+    #   _update_data()              Coordinator callback — only with super() called first.
+    #   get_latest_data()           Thread-safe data accessor.
+    # =========================================================================
 
     # =========================================================================
     # Abstract Methods

@@ -27,12 +27,36 @@ Example:
     register_task(ball_metadata)
 """
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+logger = logging.getLogger(__name__)
+
 # Task registry (task_id -> metadata)
 _TASK_REGISTRY: dict[str, "TaskMetadata"] = {}
+
+
+class TaskConfigError(ValueError):
+    """Raised when task configuration validation fails.
+
+    Collects all validation errors found in the config so callers see the
+    complete list of problems rather than just the first failure.
+
+    Attributes
+    ----------
+    task_id : str
+        The task identifier whose config failed validation.
+    errors : list[str]
+        All validation error messages found in the config.
+    """
+
+    def __init__(self, task_id: str, errors: list[str]) -> None:
+        self.task_id = task_id
+        self.errors = list(errors)
+        detail = "\n".join(f"  - {e}" for e in errors)
+        super().__init__(f"Task '{task_id}' config has {len(errors)} error(s):\n{detail}")
 
 
 @dataclass
@@ -210,20 +234,35 @@ class TaskMetadata:
     def validate_config(self, config: dict[str, Any]) -> None:
         """Validate a complete task configuration.
 
+        Collects *all* validation errors before raising so callers see the
+        full list of problems rather than just the first failure.
+
         Args:
             config: Task configuration dictionary
 
         Raises:
-            ValueError: If validation fails
+            TaskConfigError: If any parameter or cross-parameter validation
+                fails, containing every error message found.
         """
-        # Validate individual parameters
+        errors: list[str] = []
+
+        # Validate individual parameters that are present in config
         for param in self.parameters:
             if param.key in config:
-                param.validate(config[param.key])
+                try:
+                    param.validate(config[param.key])
+                except ValueError as exc:
+                    errors.append(str(exc))
 
         # Cross-parameter validation
         if self.cross_parameter_validator is not None:
-            self.cross_parameter_validator(config)
+            try:
+                self.cross_parameter_validator(config)
+            except ValueError as exc:
+                errors.append(str(exc))
+
+        if errors:
+            raise TaskConfigError(self.task_id, errors)
 
 
 def register_task(metadata: TaskMetadata) -> None:
@@ -324,3 +363,61 @@ def pineuro_task(metadata: TaskMetadata):
         return cls
 
     return decorator
+
+
+def discover_tasks(package_name: str | None = None) -> int:
+    """Discover and register tasks from installed entry points or a package.
+
+    Third-party task packages can advertise themselves in their
+    ``pyproject.toml``::
+
+        [project.entry-points."pineuro.tasks"]
+        my_task = "my_package.tasks"
+
+    When pineuro starts, call ``discover_tasks()`` (no arguments) to import
+    every package registered under the ``pineuro.tasks`` entry-point group.
+    Each imported package is expected to trigger its own ``@pineuro_task``
+    decorators, which registers the tasks automatically.
+
+    Parameters
+    ----------
+    package_name : str, optional
+        If provided, import this single package directly (useful for testing
+        or manual loading).  If ``None``, discover all packages registered
+        under the ``"pineuro.tasks"`` entry-point group.
+
+    Returns
+    -------
+    int
+        Number of packages successfully imported.
+
+    Examples
+    --------
+    Auto-discover all installed task plugins:
+
+    >>> from pineuro.tasks.task_registry import discover_tasks
+    >>> n = discover_tasks()
+
+    Load a specific package manually:
+
+    >>> discover_tasks("my_nfb_tasks.tasks")
+    1
+    """
+    import importlib
+    from importlib.metadata import entry_points
+
+    if package_name is not None:
+        importlib.import_module(package_name)
+        logger.info(f"Loaded task plugin from package: {package_name}")
+        return 1
+
+    eps = entry_points(group="pineuro.tasks")
+    count = 0
+    for ep in eps:
+        try:
+            importlib.import_module(ep.value)
+            count += 1
+            logger.info(f"Loaded task plugin '{ep.name}' from {ep.value}")
+        except Exception as exc:
+            logger.warning(f"Failed to load task plugin '{ep.name}' ({ep.value}): {exc}")
+    return count

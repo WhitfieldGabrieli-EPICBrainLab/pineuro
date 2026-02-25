@@ -1990,7 +1990,7 @@ class StudyEditorScreen:
     def _create_file_browse_button(
         self,
         field: ft.TextField,
-        filetypes: list[tuple[str, str]] = None,
+        filetypes: list[tuple[str, str]] | None = None,
     ) -> ft.IconButton:
         """Create a browse button for file selection.
 

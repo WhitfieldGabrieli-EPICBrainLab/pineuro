@@ -22,6 +22,7 @@ psychopy, numpy
 import csv
 import logging
 import time
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -43,13 +44,39 @@ logger = logging.getLogger(__name__)
 
 
 # ==============================================================================
+# Signal Mode
+# ==============================================================================
+
+
+class SignalMode(str, Enum):
+    """Signal mode for BallTask feedback.
+
+    Determines whether ball movement is driven by individual network activations
+    or by the functional connectivity between the two networks.
+
+    Attributes
+    ----------
+    ACTIVATION : str
+        Ball position driven by the difference in mean activation between the
+        two mask regions.  Activations are z-scores (see ``ACTIVATION_UNITS``
+        in ``pineuro.feedback``).
+    CONNECTIVITY : str
+        Ball position driven by the sliding-window Pearson correlation between
+        the two mask timeseries.
+    """
+
+    ACTIVATION = "activation"
+    CONNECTIVITY = "connectivity"
+
+
+# ==============================================================================
 # HRF and Task Regressor Computation
 # ==============================================================================
 
 # Re-export for backward compatibility with existing imports from this module.
 # compute_hrf and compute_boxcar_task_regressor are imported lazily via __getattr__
 # to avoid pulling in pineuro.utils (and its heavy deps) at import time.
-__all__ = ["BallTask", "compute_hrf", "compute_boxcar_task_regressor"]  # noqa: F822
+__all__ = ["BallTask", "SignalMode", "compute_hrf", "compute_boxcar_task_regressor"]  # noqa: F822
 
 
 def __getattr__(name):
@@ -190,7 +217,7 @@ class BallTask(BaseTask):
         scale_adjust_factor: float = 0.25,
         circle_shrink_factor: float = 0.9,
         presenter_monitor: str = "right",
-        signal_mode: str = "activation",
+        signal_mode: str | SignalMode = SignalMode.ACTIVATION,
         connectivity_target: str = "increase",
         **kwargs,  # Accept additional kwargs for factory compatibility
     ):

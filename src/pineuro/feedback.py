@@ -174,6 +174,22 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# CONSTANTS
+# =============================================================================
+
+# Units of the activation values delivered to display tasks.
+# Activations are continuous z-scores computed via Hinds et al. (2011)
+# normalization: error / running_std, where error excludes nuisance regressors
+# (motion, drift, intercept) but retains the task regressor contribution.
+# After the baseline period the standard deviation is frozen to prevent drift.
+ACTIVATION_UNITS = "z-score"
+
+# Assumed head radius (mm) used for framewise displacement (FD) computation.
+# Standard assumption from Power et al. (2012).
+HEAD_RADIUS_MM = 50.0
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -1239,9 +1255,9 @@ class FeedbackEstimator:
         # Format: [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z]
         # Translations (indices 0-2) are already in mm
         # Rotations (indices 3-5) are in degrees - convert to mm arc length
-        # Arc length = radius * angle_in_radians = 50 * (angle_degrees * pi/180)
+        # Arc length = radius * angle_in_radians = HEAD_RADIUS_MM * (angle_degrees * pi/180)
         diff_mm = diff.copy()
-        diff_mm[3:6] *= 50.0 * np.pi / 180.0
+        diff_mm[3:6] *= HEAD_RADIUS_MM * np.pi / 180.0
 
         # FD is sum of absolute values
         fd = float(np.sum(np.abs(diff_mm)))
@@ -1338,9 +1354,9 @@ class FeedbackEstimator:
                 prev = self._prev_motion if self._prev_motion is not None else np.zeros(6, dtype=np.float64)
                 motion_diff = np.asarray(motion_params - prev, dtype=np.float64)
 
-            # Convert rotations from degrees to arc length (mm) at 50mm radius
-            # arc_length = radius * angle_radians = 50 * (angle_degrees * pi/180)
-            motion_diff[3:6] *= 50.0 * np.pi / 180.0
+            # Convert rotations from degrees to arc length (mm) at HEAD_RADIUS_MM
+            # arc_length = radius * angle_radians = HEAD_RADIUS_MM * (angle_degrees * pi/180)
+            motion_diff[3:6] *= HEAD_RADIUS_MM * np.pi / 180.0
 
         self._prev_motion = motion_params.copy()
 
@@ -1675,7 +1691,7 @@ def _detect_interrupted_run(
     task: str,
     run: int,
     n_volumes: int,
-    acq: str = None,
+    acq: str | None = None,
 ) -> dict | None:
     """Check if a previous interrupted run exists for this task/run combination.
 
@@ -1753,7 +1769,7 @@ def _archive_interrupted_run(
     subject: str,
     task: str,
     run: int,
-    acq: str = None,
+    acq: str | None = None,
 ) -> Path:
     """Move interrupted run files to an archive subfolder with timestamp.
 
@@ -1820,7 +1836,7 @@ def _generate_partial_qc(
     subject: str,
     task: str,
     run: int,
-    acq: str = None,
+    acq: str | None = None,
 ) -> Path | None:
     """Generate QC report for interrupted session before archiving.
 
@@ -2151,7 +2167,7 @@ class NeurofeedbackCoordinator:
         error_callback: Callable[[Exception], None] | None = None,
         qc_enabled: bool = True,  # Generate QC report after session completes
         fd_threshold: float = 0.5,  # FD threshold in mm for QC plots
-        acq: str = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
+        acq: str | None = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
         sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
         condition: str = "real",  # Participant condition: "real" or "sham"
         motion_correction: str = "siemens_moco",  # "siemens_moco", "software", "none"
