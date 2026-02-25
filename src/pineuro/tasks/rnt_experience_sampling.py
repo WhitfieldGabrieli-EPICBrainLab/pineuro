@@ -645,7 +645,7 @@ class RNTExperienceSamplingTask(BaseTask):
             # Baseline ended — record event and transition
             baseline_dur = self._task_clock.getTime() - self._baseline_onset
             self._record_event(self._baseline_onset, baseline_dur, "baseline")
-            self._trigger_state.last_prompt_time = self._task_clock.getTime()
+            self._trigger_state.last_prompt_time = self._task_clock.getTime() - self.min_prompt_interval
             self._trigger_state.monitoring_start_time = self._task_clock.getTime()
             self._phase = _PHASE_MONITORING
             logger.debug("Baseline complete, entering monitoring phase")
