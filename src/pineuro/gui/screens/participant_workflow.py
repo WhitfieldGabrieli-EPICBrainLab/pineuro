@@ -2965,9 +2965,6 @@ class ParticipantWorkflowScreen:
         except OSError:
             pass
 
-        def on_overwrite_change(e):
-            self._pending_overwrite = e.control.value
-
         return ft.Container(
             content=ft.Row(
                 [
@@ -2988,11 +2985,6 @@ class ParticipantWorkflowScreen:
                         ],
                         spacing=2,
                         expand=True,
-                    ),
-                    ft.Checkbox(
-                        label="Overwrite completed steps",
-                        value=self._pending_overwrite,
-                        on_change=on_overwrite_change,
                     ),
                 ],
                 spacing=10,
