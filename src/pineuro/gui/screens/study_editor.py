@@ -138,6 +138,7 @@ class StudyEditorScreen:
                 "atlas_regions": None,
                 "cluster_start_threshold": 2.0,
                 "cluster_step": 0.1,
+                "cluster_return_all": False,
             },
             "feedback": {
                 "n_baseline": 25,
@@ -518,12 +519,18 @@ class StudyEditorScreen:
             hint_text="Threshold increment per iteration",
         )
 
+        self.cluster_return_all_checkbox = ft.Checkbox(
+            label="Return all clusters (use for whole-brain atlases like gray matter)",
+            value=config["mask"].get("cluster_return_all", False),
+        )
+
         # Cluster settings section (shown/hidden based on threshold_method)
         self.cluster_settings_section = ft.Column(
             [
                 self.atlas_source_dropdown,
                 self.atlas_region_dropdown,
                 ft.Row([self.cluster_start_threshold_field, self.cluster_step_field]),
+                self.cluster_return_all_checkbox,
             ],
             visible=config["mask"].get("threshold_method", "top_n") == "cluster",
         )
@@ -3287,11 +3294,13 @@ class StudyEditorScreen:
                 config["mask"]["atlas_mask"] = None
                 config["mask"]["cluster_start_threshold"] = float(self.cluster_start_threshold_field.value or 2.0)
                 config["mask"]["cluster_step"] = float(self.cluster_step_field.value or 0.1)
+                config["mask"]["cluster_return_all"] = bool(self.cluster_return_all_checkbox.value)
             else:
                 config["mask"]["atlas_source"] = None
                 config["mask"]["atlas_regions"] = None
                 config["mask"]["atlas_name"] = None
                 config["mask"]["atlas_mask"] = None
+                config["mask"]["cluster_return_all"] = False
         except (ValueError, TypeError) as e:
             logger.error(f"Invalid network parameter: {e}")
             raise ValidationError(f"Invalid network parameter: {e}") from e

@@ -2105,13 +2105,22 @@ def cluster_threshold_stat_map(
     start_threshold: float = 2.0,
     step: float = 0.1,
     max_iterations: int = 200,
+    return_all_clusters: bool = False,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Find the largest contiguous cluster within an atlas-masked stat map.
+    """Find cluster(s) within an atlas-masked stat map.
 
-    Iteratively raises the statistical threshold until the largest spatially
-    contiguous cluster within the atlas region is at most ``target_n_voxels``
-    in size. This mirrors the approach used in FSL-based STG extraction
-    pipelines where ``cluster`` is called repeatedly with increasing thresholds.
+    Iteratively raises the statistical threshold until the selected cluster(s)
+    within the atlas region fit within ``target_n_voxels``. This mirrors the
+    approach used in FSL-based STG extraction pipelines where ``cluster`` is
+    called repeatedly with increasing thresholds.
+
+    When ``return_all_clusters=False`` (default), only the single largest
+    contiguous cluster is returned. When ``True``, all clusters above the
+    final threshold are returned combined — suitable for whole-brain atlases
+    (e.g. gray matter) where multiple disconnected activation foci are expected.
+    The stopping criterion also changes: with ``return_all_clusters=False`` the
+    loop stops when the *largest* cluster fits; with ``True`` it stops when the
+    *total* suprathreshold voxel count fits.
 
     Parameters
     ----------
@@ -2128,6 +2137,10 @@ def cluster_threshold_stat_map(
         Amount to increase threshold per iteration.
     max_iterations : int
         Safety limit to prevent infinite loops.
+    return_all_clusters : bool
+        If False (default), return only the single largest contiguous cluster.
+        If True, return all clusters above the final threshold combined.
+        Use True for whole-brain atlases (e.g. gray matter).
 
     Returns
     -------
@@ -2191,13 +2204,18 @@ def cluster_threshold_stat_map(
             cluster_sizes = np.bincount(labeled.ravel())[1:]
             largest_label = int(cluster_sizes.argmax()) + 1
             largest_size = int(cluster_sizes.max())
-            binary_mask = (labeled == largest_label).astype(np.uint8)
+            if return_all_clusters:
+                binary_mask = (labeled > 0).astype(np.uint8)
+                selected_size = int(binary_mask.sum())
+            else:
+                binary_mask = (labeled == largest_label).astype(np.uint8)
+                selected_size = largest_size
             return binary_mask, {
                 "outcome": "success",
                 "final_threshold": float(threshold),
                 "n_iterations": iteration + 1,
                 "n_clusters_at_final": n_clusters,
-                "cluster_size": largest_size,
+                "cluster_size": selected_size,
                 "atlas_voxel_count": atlas_voxel_count,
             }
 
@@ -2216,31 +2234,44 @@ def cluster_threshold_stat_map(
         cluster_sizes = np.bincount(labeled.ravel())[1:]  # skip background
         largest_label = int(cluster_sizes.argmax()) + 1  # 1-based
         largest_size = int(cluster_sizes.max())
+        total_size = int(above_threshold.sum())
 
-        if largest_size <= target_n_voxels:
-            binary_mask = (labeled == largest_label).astype(np.uint8)
+        size_fits = total_size <= target_n_voxels if return_all_clusters else largest_size <= target_n_voxels
+
+        if size_fits:
+            if return_all_clusters:
+                binary_mask = (labeled > 0).astype(np.uint8)
+                selected_size = total_size
+            else:
+                binary_mask = (labeled == largest_label).astype(np.uint8)
+                selected_size = largest_size
             return binary_mask, {
                 "outcome": "success" if iteration > 0 else "already_under_target",
                 "final_threshold": float(threshold),
                 "n_iterations": iteration + 1,
                 "n_clusters_at_final": n_clusters,
-                "cluster_size": largest_size,
+                "cluster_size": selected_size,
                 "atlas_voxel_count": atlas_voxel_count,
             }
 
-        # Cluster too large — increase threshold
+        # Too large — increase threshold
         _prev_labeled = labeled
         _prev_n_clusters = n_clusters
         threshold += step
 
-    # Max iterations reached — return the current largest cluster
-    binary_mask = (labeled == largest_label).astype(np.uint8)
+    # Max iterations reached — return current cluster(s)
+    if return_all_clusters:
+        binary_mask = (labeled > 0).astype(np.uint8)
+        selected_size = int(binary_mask.sum())
+    else:
+        binary_mask = (labeled == largest_label).astype(np.uint8)
+        selected_size = largest_size
     return binary_mask, {
         "outcome": "max_iterations_reached",
         "final_threshold": float(threshold),
         "n_iterations": max_iterations,
         "n_clusters_at_final": n_clusters,
-        "cluster_size": largest_size,
+        "cluster_size": selected_size,
         "atlas_voxel_count": atlas_voxel_count,
     }
 
@@ -2436,6 +2467,7 @@ def mask_extraction_task(
     ref_file: Union[str, Path] | None = None,
     cluster_start_threshold: float = 2.0,
     cluster_step: float = 0.1,
+    cluster_return_all: bool = False,
     stat_type: str = "t",
     smoothing_fwhm: float | None = 5.0,
     high_pass: float = 0.01,
@@ -2458,9 +2490,11 @@ def mask_extraction_task(
     - **top_n** (default): Selects the top N voxels by stat value. Simple and fast,
       but the resulting mask may contain scattered, non-contiguous voxels.
     - **cluster**: Atlas-guided iterative cluster thresholding. Restricts the stat
-      map to an anatomical ROI (e.g., Harvard-Oxford STG), then iteratively raises
-      the stat threshold until the largest spatially contiguous cluster fits the
-      target size. Guarantees a single contiguous cluster within the atlas region.
+      map to an anatomical ROI, then iteratively raises the stat threshold until
+      the selected cluster(s) fit the target size. By default returns the single
+      largest contiguous cluster (suitable for anatomical ROIs like STG). Set
+      ``cluster_return_all=True`` to return all clusters combined (suitable for
+      whole-brain atlases like gray matter).
 
     Parameters
     ----------
@@ -2513,6 +2547,11 @@ def mask_extraction_task(
         Only used when ``threshold_method="cluster"``.
     cluster_step : float
         Amount to increase the threshold per iteration (default: 0.1).
+        Only used when ``threshold_method="cluster"``.
+    cluster_return_all : bool
+        If True, return all clusters above the final threshold combined rather
+        than only the largest single cluster. Use with whole-brain atlases
+        (e.g. ``atlas_source="gray_matter"``). Default: False.
         Only used when ``threshold_method="cluster"``.
     stat_type : str
         Type of statistical map: "t" or "z" (default: "t")
@@ -3015,6 +3054,7 @@ def mask_extraction_task(
                 target_n_voxels=threshold,
                 start_threshold=cluster_start_threshold,
                 step=cluster_step,
+                return_all_clusters=cluster_return_all,
             )
             n_kept = int(binary_mask.sum())
             outcome = cluster_info["outcome"]

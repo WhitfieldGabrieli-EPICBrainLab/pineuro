@@ -159,6 +159,50 @@ class TestClusterThreshold:
         mask, meta = cluster_threshold_stat_map(stat, atlas, target_n_voxels=100)
         assert mask.sum() == 0
 
+    def test_return_all_clusters(self):
+        """With return_all_clusters=True, all disconnected clusters should be returned."""
+        from pineuro.mask_extraction import cluster_threshold_stat_map
+
+        # Two clearly separated clusters (gap of ~16 voxels between them)
+        # Each: 4 * 4 * 4 = 64 voxels
+        stat = np.zeros((30, 10, 10), dtype=np.float64)
+        stat[1:5, 1:5, 1:5] = 5.0   # cluster A: 64 voxels
+        stat[25:29, 1:5, 1:5] = 5.0  # cluster B: 64 voxels, far from A
+
+        # Whole-brain atlas covering both
+        atlas = np.ones((30, 10, 10), dtype=np.float64)
+
+        # Single-cluster mode (default) — should return only the largest (either A or B)
+        mask_single, _ = cluster_threshold_stat_map(
+            stat, atlas, target_n_voxels=70, start_threshold=1.0
+        )
+        # Each cluster is 64 voxels; single mode should return exactly one
+        assert mask_single.sum() <= 64
+
+        # All-clusters mode — should return both clusters combined
+        mask_all, meta_all = cluster_threshold_stat_map(
+            stat, atlas, target_n_voxels=130, start_threshold=1.0, return_all_clusters=True
+        )
+        assert mask_all.sum() == 128  # both clusters (64 + 64)
+        assert meta_all["n_clusters_at_final"] == 2
+
+    def test_return_all_clusters_respects_target(self):
+        """With return_all_clusters=True the threshold is raised until total fits target."""
+        from pineuro.mask_extraction import cluster_threshold_stat_map
+
+        stat = np.zeros((30, 10, 10), dtype=np.float64)
+        stat[2:8, 4:6, 4:6] = 5.0   # cluster A: 48 voxels
+        stat[22:28, 4:6, 4:6] = 5.0  # cluster B: 48 voxels
+
+        atlas = np.ones((30, 10, 10), dtype=np.float64)
+
+        mask, meta = cluster_threshold_stat_map(
+            stat, atlas, target_n_voxels=80, start_threshold=1.0, return_all_clusters=True
+        )
+        # Total of both clusters (96 voxels) exceeds 80, so threshold should be raised
+        # until some voxels are trimmed from the edges; result must be ≤ 80
+        assert mask.sum() <= 80
+
 
 # =============================================================================
 # run_ica (mocked nilearn)

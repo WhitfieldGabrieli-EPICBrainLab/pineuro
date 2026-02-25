@@ -796,6 +796,7 @@ class PipelineRunner:
             atlas_regions_cfg = config.get("mask", {}).get("atlas_regions")
             cluster_start_threshold = config.get("mask", {}).get("cluster_start_threshold", 2.0)
             cluster_step = config.get("mask", {}).get("cluster_step", 0.1)
+            cluster_return_all = config.get("mask", {}).get("cluster_return_all", False)
 
             include_reverse = config.get("mask", {}).get("include_reverse_contrasts", False)
 
@@ -816,6 +817,7 @@ class PipelineRunner:
                 ref_file=str(ref_file),
                 cluster_start_threshold=cluster_start_threshold,
                 cluster_step=cluster_step,
+                cluster_return_all=cluster_return_all,
                 include_reverse=include_reverse,
                 overwrite=self.overwrite,
                 smoothing_fwhm=smooth_fwhm,
