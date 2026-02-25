@@ -47,6 +47,7 @@ from ..components.run_selection_dialog import RunInfo, RunSelectionDialog
 from ..components.task_mirror import TaskMirror
 from ..config_manager import ConfigManager
 from ..models import StudyConfig
+from ..utils import truncate_text
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,12 @@ class ParticipantWorkflowScreen:
         self._selected_rest_runs: list[int] | None = None
         # Selected acquisitions per run for preprocessing (None = auto-select best)
         self._selected_acqs: dict[int, int] | None = None
+
+        # Overwrite flag — set to True to re-run already-complete steps
+        self._pending_overwrite: bool = False
+
+        # Last failed step (for error recovery panel)
+        self._last_failed_step: str | None = None
 
     def _check_qc_approval(self, approval_type: str) -> bool:
         """Check if masks have been approved.
@@ -2915,6 +2922,88 @@ class ParticipantWorkflowScreen:
             spacing=0,
         )
 
+    def _build_resumption_banner(self) -> ft.Container | None:
+        """Build a banner showing already-complete steps when resuming a session.
+
+        Returns:
+            A styled container with step summary and overwrite checkbox, or None
+            if no steps are complete (fresh session).
+        """
+        completed = [step for step, status in self.step_statuses.items() if status == StepStatus.COMPLETE]
+        if not completed:
+            return None
+
+        # Friendly labels for step IDs
+        def _label(step_id: str) -> str:
+            labels = {
+                "reference_initial": "Initial Ref",
+                "preprocessing": "Preprocessing",
+                "mask_extraction": "Mask Extraction",
+                "coregistration": "Coregistration",
+                "reference_realtime": "RT Ref",
+                "coregistration_realtime": "RT Coregistration",
+            }
+            if step_id in labels:
+                return labels[step_id]
+            if step_id.startswith("rest_run_"):
+                return f"Rest Run {step_id.split('_')[-1]}"
+            if step_id.startswith("feedback_"):
+                return f"Feedback {step_id.split('_')[-1]}"
+            if step_id.startswith("transfer_"):
+                return f"Transfer {step_id.split('_')[-1]}"
+            return step_id
+
+        step_names = ", ".join(_label(s) for s in completed)
+
+        # Last-modified time of the session directory
+        import datetime
+
+        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        last_modified = ""
+        try:
+            mtime = base_dir.stat().st_mtime
+            last_modified = f"  ·  Last modified: {datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')}"
+        except OSError:
+            pass
+
+        def on_overwrite_change(e):
+            self._pending_overwrite = e.control.value
+
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.RESTORE, color=ft.Colors.AMBER_700, size=20),
+                    ft.Column(
+                        [
+                            ft.Text(
+                                f"Resuming session — {len(completed)} step(s) already complete{last_modified}",
+                                size=13,
+                                weight=ft.FontWeight.BOLD,
+                                color=ft.Colors.AMBER_900,
+                            ),
+                            ft.Text(
+                                step_names,
+                                size=12,
+                                color=ft.Colors.AMBER_800,
+                            ),
+                        ],
+                        spacing=2,
+                        expand=True,
+                    ),
+                    ft.Checkbox(
+                        label="Overwrite completed steps",
+                        value=self._pending_overwrite,
+                        on_change=on_overwrite_change,
+                    ),
+                ],
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=20, vertical=8),
+            bgcolor=ft.Colors.AMBER_50,
+            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.AMBER_200)),
+        )
+
     def _build_preview_panel(self) -> ft.Container:
         """Build the empty parameter preview panel.
 
@@ -3894,18 +3983,27 @@ class ParticipantWorkflowScreen:
             # Update UI lock state (re-enables navigation controls)
             self._update_ui_lock_state()
 
-            # Restore empty preview panel
-            if self.right_panel_container is not None:
+            if not success and completed_step_id is not None and self.right_panel_container is not None:
+                # Show interactive error recovery panel instead of restoring preview
+                self._last_failed_step = completed_step_id
+                error = RuntimeError(result_message or "Unknown error")
+                self.right_panel_container.content = self._build_error_recovery_panel(
+                    error, completed_step_id
+                )
+                self.right_panel_container.update()
+            elif self.right_panel_container is not None:
+                # Restore empty preview panel on success
                 self.right_panel_container.content = self._build_preview_panel()
                 self.right_panel_container.update()
 
-            # Show completion snackbar
-            _snack = ft.SnackBar(
-                ft.Text(result_message if result_message else "Step completed"),
-                bgcolor=ft.Colors.GREEN if success else ft.Colors.RED,
-            )
-            _snack.open = True
-            self.page.overlay.append(_snack)
+            # Show completion snackbar (success only; errors are shown in the recovery panel)
+            if success:
+                _snack = ft.SnackBar(
+                    ft.Text(result_message if result_message else "Step completed"),
+                    bgcolor=ft.Colors.GREEN,
+                )
+                _snack.open = True
+                self.page.overlay.append(_snack)
             self.page.update()
 
             # Auto-show QC approval dialog after coregistration steps
@@ -3928,22 +4026,146 @@ class ParticipantWorkflowScreen:
         except Exception as e:
             logger.error(f"Failed to schedule UI update: {e}")
 
+    def _build_error_recovery_panel(self, error: Exception, step_id: str) -> ft.Container:
+        """Build an interactive error recovery panel shown in the right panel area.
+
+        Parameters
+        ----------
+        error : Exception
+            The exception that caused the failure.
+        step_id : str
+            The pipeline step ID that failed (used by Retry).
+
+        Returns
+        -------
+        ft.Container
+            A red-tinted card with Retry / Continue Anyway / Scroll to Log buttons.
+        """
+        error_msg = truncate_text(str(error), 300)
+        error_type = type(error).__name__
+
+        def on_retry(e):
+            if self.right_panel_container is not None:
+                self.right_panel_container.content = self._build_preview_panel()
+                self.right_panel_container.update()
+            self._start_step(step_id)
+
+        def on_continue(e):
+            self._continue_after_error(step_id)
+
+        def on_scroll_log(e):
+            if self.log_listview is not None:
+                with contextlib.suppress(Exception):
+                    self.log_listview.scroll_to(offset=-1, duration=200)
+                    self.page.update()
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.ERROR_OUTLINE, color=ft.Colors.RED_700, size=24),
+                            ft.Text(
+                                f"Step failed: {error_type}",
+                                size=15,
+                                weight=ft.FontWeight.BOLD,
+                                color=ft.Colors.RED_900,
+                            ),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Container(
+                        content=ft.Text(
+                            error_msg,
+                            size=12,
+                            color=ft.Colors.RED_800,
+                            selectable=True,
+                        ),
+                        bgcolor=ft.Colors.RED_50,
+                        border_radius=4,
+                        padding=10,
+                    ),
+                    ft.Row(
+                        [
+                            ft.FilledButton(
+                                "Retry Step",
+                                icon=ft.Icons.REFRESH,
+                                on_click=on_retry,
+                            ),
+                            ft.OutlinedButton(
+                                "Continue Anyway",
+                                icon=ft.Icons.SKIP_NEXT,
+                                on_click=on_continue,
+                            ),
+                            ft.TextButton(
+                                "Scroll to Log",
+                                icon=ft.Icons.TERMINAL,
+                                on_click=on_scroll_log,
+                            ),
+                        ],
+                        spacing=8,
+                    ),
+                ],
+                spacing=12,
+            ),
+            padding=20,
+            bgcolor=ft.Colors.RED_50,
+            border=ft.border.all(1, ft.Colors.RED_200),
+            border_radius=8,
+            margin=10,
+        )
+
+    def _continue_after_error(self, step_id: str):
+        """Mark a failed step as interrupted and restore the preview panel.
+
+        This allows the user to skip past a failed step and continue with the
+        next one. The step is marked INTERRUPTED (not COMPLETE), so it will
+        display a warning icon but not block later steps.
+
+        Parameters
+        ----------
+        step_id : str
+            The pipeline step ID to mark as interrupted.
+        """
+        self.step_statuses[step_id] = StepStatus.INTERRUPTED
+        self._is_running = False
+        self._update_ui_lock_state()
+
+        if self.right_panel_container is not None:
+            self.right_panel_container.content = self._build_preview_panel()
+            self.right_panel_container.update()
+
+        self._refresh_step_list()
+        self._rebuild_header()
+
     def _on_pipeline_error(self, error: Exception):
         """Handle pipeline step error.
 
         Args:
             error: Exception that occurred
         """
+        failed_step = self._current_step_id
 
         # This callback runs in the background thread
         async def update_ui():
             self._add_log(f"[ERROR] {str(error)}")
-            _snack = ft.SnackBar(
-                ft.Text(f"Error: {str(error)}"),
-                bgcolor=ft.Colors.RED,
-            )
-            _snack.open = True
-            self.page.overlay.append(_snack)
+            self._is_running = False
+            self._update_ui_lock_state()
+            self._last_failed_step = failed_step
+
+            if failed_step is not None and self.right_panel_container is not None:
+                self.right_panel_container.content = self._build_error_recovery_panel(
+                    error, failed_step
+                )
+                self.right_panel_container.update()
+            else:
+                # Fallback: snackbar only (no step context)
+                _snack = ft.SnackBar(
+                    ft.Text(f"Error: {str(error)}"),
+                    bgcolor=ft.Colors.RED,
+                )
+                _snack.open = True
+                self.page.overlay.append(_snack)
             self.page.update()
 
         try:
@@ -5181,15 +5403,24 @@ class ParticipantWorkflowScreen:
         # Log console at bottom
         log_console = self._build_log_console()
 
-        return ft.Column(
+        # Resumption banner (shown only when re-opening a partially-completed session)
+        resumption_banner = self._build_resumption_banner()
+
+        main_controls: list[ft.Control] = [self.header_container]
+        if resumption_banner is not None:
+            main_controls.append(resumption_banner)
+        main_controls.extend(
             [
-                self.header_container,
                 ft.Container(
                     content=content_area,
                     expand=True,
                 ),
                 log_console,
-            ],
+            ]
+        )
+
+        return ft.Column(
+            main_controls,
             spacing=0,
             expand=True,
         )

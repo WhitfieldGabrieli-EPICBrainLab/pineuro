@@ -74,6 +74,7 @@ import flet as ft
 
 from .config_manager import ConfigManager
 from .models import StudyConfig
+from .utils import validate_participant_id
 
 if TYPE_CHECKING:
     from pineuro.session import VisitConfig
@@ -81,6 +82,41 @@ if TYPE_CHECKING:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# Pre-built study templates — applied as overrides on top of StudyEditorScreen._create_default_config()
+STUDY_TEMPLATES: dict[str, dict] = {
+    "Ball Task — Single Visit": {
+        "description": "Standard single-visit neurofeedback with the ball task (default settings).",
+        "icon": "sports_soccer",
+        "overrides": {},
+    },
+    "Ball Task — Multi-Visit": {
+        "description": "Longitudinal neurofeedback study with the ball task across multiple visits.",
+        "icon": "calendar_month",
+        "overrides": {
+            "study": {"multi_visit_enabled": True},
+        },
+    },
+    "Thermometer Task": {
+        "description": "Single-network neurofeedback using the thermometer display (ContA target).",
+        "icon": "thermostat",
+        "overrides": {
+            "task": {"task_type": "thermometer"},
+            "mask": {"yeo_targets": ["ContA"], "mask_names": ["ContA"]},
+        },
+    },
+    "Sham-Controlled (Ball)": {
+        "description": "Ball task with blinded sham condition — hemisphere-split alternative masks.",
+        "icon": "science",
+        "overrides": {
+            "sham": {
+                "enabled": True,
+                "blind_mode": True,
+                "delivery_method": "alternative_masks",
+            },
+        },
+    },
+}
 
 
 class PyrtnfApp:
@@ -138,9 +174,24 @@ class PyrtnfApp:
                                         size=24,
                                         weight=ft.FontWeight.BOLD,
                                     ),
-                                    ft.FilledButton(
-                                        "+ New Study",
-                                        on_click=lambda _: self.show_study_editor(None),
+                                    ft.Row(
+                                        [
+                                            ft.OutlinedButton(
+                                                "New from Template",
+                                                icon=ft.Icons.AUTO_AWESOME,
+                                                on_click=lambda _: self._show_template_dialog(),
+                                            ),
+                                            ft.OutlinedButton(
+                                                "Import Study",
+                                                icon=ft.Icons.DOWNLOAD,
+                                                on_click=lambda _: self._import_study(),
+                                            ),
+                                            ft.FilledButton(
+                                                "+ New Study",
+                                                on_click=lambda _: self.show_study_editor(None),
+                                            ),
+                                        ],
+                                        spacing=8,
                                     ),
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -262,6 +313,12 @@ class PyrtnfApp:
                                     on_click=lambda _, name=study_meta.name: self._duplicate_study(name),
                                 ),
                                 ft.IconButton(
+                                    icon=ft.Icons.UPLOAD_FILE,
+                                    icon_size=24,
+                                    tooltip="Export study config to file",
+                                    on_click=lambda _, name=study_meta.name: self._export_study(name),
+                                ),
+                                ft.IconButton(
                                     icon=ft.Icons.DELETE_OUTLINE,
                                     icon_size=24,
                                     tooltip="Delete",
@@ -304,17 +361,28 @@ class PyrtnfApp:
         example_id = study_config.session_config.get("paths", {}).get("example_participant_id", "sub-001")
 
         # Create text field for participant ID
+        def on_id_change(e):
+            pid = (participant_id_field.value or "").strip()
+            if pid:
+                _, error = validate_participant_id(pid)
+                participant_id_field.error_text = error
+            else:
+                participant_id_field.error_text = None
+            participant_id_field.update()
+
         participant_id_field = ft.TextField(
             label="Participant ID",
             hint_text=f"e.g., {example_id}",
             autofocus=True,
+            on_change=on_id_change,
         )
 
         def start_session(e):
-            participant_id = participant_id_field.value.strip()
+            participant_id = (participant_id_field.value or "").strip()
 
-            if not participant_id:
-                participant_id_field.error_text = "Participant ID is required"  # type: ignore[attr-defined]
+            is_valid, error = validate_participant_id(participant_id)
+            if not is_valid:
+                participant_id_field.error_text = error
                 participant_id_field.update()
                 return
 
@@ -393,6 +461,89 @@ class PyrtnfApp:
             self.page.update()
             self.show_study_manager()  # Refresh
 
+    def _export_study(self, study_name: str):
+        """Export a study configuration YAML to a user-chosen file.
+
+        Uses tkinter filedialog (same pattern as study_editor.py directory picker).
+
+        Args:
+            study_name: Name of the study to export
+        """
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError:
+            _snack = ft.SnackBar(ft.Text("File browser requires tkinter"))
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        dest = filedialog.asksaveasfilename(
+            title=f"Export '{study_name}'",
+            defaultextension=".yaml",
+            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+            initialfile=f"{study_name.replace(' ', '_')}.yaml",
+        )
+        root.destroy()
+
+        if not dest:
+            return
+
+        from pathlib import Path
+
+        success = self.config_manager.export_study(study_name, Path(dest))
+        msg = f"Exported to {dest}" if success else "Export failed: study not found"
+        _snack = ft.SnackBar(ft.Text(msg))
+        _snack.open = True
+        self.page.overlay.append(_snack)
+        self.page.update()
+
+    def _import_study(self):
+        """Import a study configuration YAML from a user-chosen file.
+
+        Uses tkinter filedialog (same pattern as study_editor.py file picker).
+        """
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError:
+            _snack = ft.SnackBar(ft.Text("File browser requires tkinter"))
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        src = filedialog.askopenfilename(
+            title="Import Study",
+            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+        )
+        root.destroy()
+
+        if not src:
+            return
+
+        from pathlib import Path
+
+        study = self.config_manager.import_study(Path(src))
+        if study:
+            _snack = ft.SnackBar(ft.Text(f"Imported study: {study.metadata.name}"))
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            self.show_study_manager()
+        else:
+            _snack = ft.SnackBar(ft.Text("Import failed: could not read study file"))
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+
     def _confirm_delete_study(self, study_name: str):
         """Show confirmation dialog before deleting a study.
 
@@ -424,6 +575,96 @@ class PyrtnfApp:
         )
 
         self.page.show_dialog(dialog)
+
+    def _show_template_dialog(self):
+        """Show a dialog for selecting a study template."""
+
+        def _use_template(template_name: str):
+            self.page.pop_dialog()
+            self._create_study_from_template(template_name)
+
+        template_cards: list[ft.Control] = []
+        for name, info in STUDY_TEMPLATES.items():
+            tname = name  # capture for lambda
+            template_cards.append(
+                ft.ListTile(
+                    leading=ft.Icon(ft.Icons.AUTO_AWESOME, color=ft.Colors.BLUE_400),
+                    title=ft.Text(tname, weight=ft.FontWeight.BOLD),
+                    subtitle=ft.Text(info["description"], size=12, color=ft.Colors.GREY_600),
+                    trailing=ft.OutlinedButton(
+                        "Use",
+                        on_click=lambda _, n=tname: _use_template(n),
+                    ),
+                )
+            )
+
+        dialog = ft.AlertDialog(
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.AUTO_AWESOME, color=ft.Colors.BLUE_400),
+                    ft.Text("New Study from Template", weight=ft.FontWeight.BOLD),
+                ],
+                spacing=8,
+            ),
+            content=ft.Container(
+                content=ft.Column(template_cards, spacing=4, tight=True),
+                width=520,
+            ),
+            actions=[ft.TextButton("Cancel", on_click=lambda _: self.page.pop_dialog())],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.show_dialog(dialog)
+
+    def _create_study_from_template(self, template_name: str):
+        """Open the study editor pre-filled with a template configuration.
+
+        Args:
+            template_name: Key in STUDY_TEMPLATES dict
+        """
+        import copy
+
+        from .models import StudyConfig, StudyMetadata
+        from .screens.study_editor import StudyEditorScreen
+
+        template = STUDY_TEMPLATES.get(template_name)
+        if template is None:
+            return
+
+        # Build default config using the same helper as StudyEditorScreen
+        default_config = StudyEditorScreen(
+            page=self.page,
+            config_manager=self.config_manager,
+        ).study_config
+
+        # Deep-copy the session config and apply template overrides
+        session_config = copy.deepcopy(default_config.session_config)
+        for section, values in template["overrides"].items():
+            if section not in session_config:
+                session_config[section] = {}
+            session_config[section].update(values)
+
+        # Build the template StudyConfig
+        template_config = StudyConfig(
+            metadata=StudyMetadata(name=template_name, description=template["description"]),
+            session_config=session_config,
+            file_path=None,
+        )
+
+        logger.info(f"Opening study editor from template: {template_name}")
+        self.current_study = template_config
+        self.page.controls.clear()
+
+        from .screens.study_editor import StudyEditorScreen
+
+        editor = StudyEditorScreen(
+            page=self.page,
+            config_manager=self.config_manager,
+            study_config=template_config,
+            on_cancel=lambda: self.show_study_manager(),
+            on_save=lambda: self.show_study_manager(),
+        )
+        self.page.add(editor.build())
+        self.page.update()
 
     def show_study_editor(self, study_name: str | None):
         """Show the study editor screen.

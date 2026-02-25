@@ -206,6 +206,7 @@ class StudyEditorScreen:
             width=600,
             label="Study Name",
             value=self.study_config.metadata.name,
+            hint_text="Unique name shown in the study manager",
             on_change=self._on_name_change,
         )
 
@@ -213,6 +214,7 @@ class StudyEditorScreen:
             width=600,
             label="Description",
             value=self.study_config.metadata.description,
+            hint_text="Brief summary shown on the study card",
             multiline=True,
             min_lines=2,
             max_lines=4,
@@ -316,6 +318,7 @@ class StudyEditorScreen:
             width=600,
             label="TR (seconds)",
             value=str(config["scan"].get("localizer_tr", 1.2)),
+            hint_text="Repetition time of the localizer sequence (e.g. 1.2)",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("localizer_tr", self.localizer_tr_field, validate_positive_number),
         )
@@ -324,6 +327,7 @@ class StudyEditorScreen:
             width=600,
             label="Volumes per localizer run",
             value=str(config["scan"].get("localizer_n_volumes", 200)),
+            hint_text="Volumes acquired per localizer (rest) run",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field(
                 "localizer_n_volumes", self.localizer_n_volumes_field, validate_positive_int
@@ -334,6 +338,7 @@ class StudyEditorScreen:
             width=600,
             label="Number of localizer runs",
             value=str(config["scan"].get("localizer_n_runs", 2)),
+            hint_text="Number of localizer (rest) runs — typically 2",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=self._on_localizer_n_runs_changed,
         )
@@ -349,6 +354,7 @@ class StudyEditorScreen:
             width=600,
             label="Number of volumes",
             value=str(config["scan"].get("reference_initial_n_volumes", 2)),
+            hint_text="Short scan to set receiver gain — typically 2–5 volumes",
             visible=config["scan"].get("reference_initial_enabled", True),
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field(
@@ -367,6 +373,7 @@ class StudyEditorScreen:
             width=600,
             label="Number of volumes",
             value=str(config["scan"].get("reference_realtime_n_volumes", 2)),
+            hint_text="Short scan for day-of registration before feedback — typically 2–5 volumes",
             visible=config["scan"].get("reference_realtime_enabled", True),
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field(
@@ -382,6 +389,7 @@ class StudyEditorScreen:
             width=600,
             label="TR (seconds)",
             value=str(config["scan"].get("feedback_tr", 1.2)),
+            hint_text="Repetition time of the feedback sequence (e.g. 1.2)",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("feedback_tr", self.feedback_tr_field, validate_positive_number),
         )
@@ -390,6 +398,7 @@ class StudyEditorScreen:
             width=600,
             label="Volumes per feedback run",
             value=str(config["scan"].get("feedback_n_volumes", 150)),
+            hint_text="Volumes acquired per feedback run",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field(
                 "feedback_n_volumes", self.feedback_n_volumes_field, validate_positive_int

@@ -189,6 +189,31 @@ def validate_yeo_networks(n_yeo: int, selected_networks: list) -> tuple[int, lis
     return n_yeo, selected_networks
 
 
+def validate_participant_id(participant_id: str) -> tuple[bool, str | None]:
+    """Validate a BIDS-compatible participant ID.
+
+    Accepts IDs containing only letters, digits, and hyphens, starting with
+    an alphanumeric character (e.g. ``'sub-01'``, ``'P001'``).
+
+    Parameters
+    ----------
+    participant_id : str
+        The participant ID to validate.
+
+    Returns
+    -------
+    tuple[bool, str | None]
+        ``(True, None)`` if valid; ``(False, error_message)`` otherwise.
+    """
+    import re
+
+    if not participant_id:
+        return False, "Participant ID is required"
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$", participant_id):
+        return False, "Use only letters, digits, and hyphens (e.g. sub-01)"
+    return True, None
+
+
 def validate_session_config(config_dict: dict) -> tuple[bool, str | None]:
     """Validate a complete session configuration.
 
