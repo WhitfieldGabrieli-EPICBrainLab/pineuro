@@ -3485,7 +3485,7 @@ class ParticipantWorkflowScreen:
         except OSError:
             pass
 
-        return ft.Container(
+        banner = ft.Container(
             content=ft.Row(
                 [
                     ft.Icon(ft.Icons.RESTORE, color=ft.Colors.AMBER_700, size=20),
@@ -3506,6 +3506,13 @@ class ParticipantWorkflowScreen:
                         spacing=2,
                         expand=True,
                     ),
+                    ft.IconButton(
+                        ft.Icons.CLOSE,
+                        icon_color=ft.Colors.AMBER_700,
+                        icon_size=18,
+                        tooltip="Dismiss",
+                        on_click=lambda e: self._dismiss_resumption_banner(),
+                    ),
                 ],
                 spacing=10,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -3514,6 +3521,14 @@ class ParticipantWorkflowScreen:
             bgcolor=ft.Colors.AMBER_50,
             border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.AMBER_200)),
         )
+        self._resumption_banner = banner
+        return banner
+
+    def _dismiss_resumption_banner(self):
+        """Hide the resumption banner."""
+        if self._resumption_banner:
+            self._resumption_banner.visible = False
+            self.page.update()
 
     def _build_preview_panel(self) -> ft.Container:
         """Build the empty parameter preview panel.
