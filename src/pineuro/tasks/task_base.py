@@ -99,30 +99,37 @@ class TaskBase(ABC):  # noqa: B024
         self._mirror_callback = callback
 
     # =========================================================================
-    # Inline key polling (Windows only)
+    # Cross-platform unfocused key polling
     # =========================================================================
     # When the PsychoPy window lacks OS focus, pyglet doesn't receive keyboard
-    # events.  These helpers use GetAsyncKeyState to detect key presses globally
-    # and inject them into PsychoPy's event buffer.  Only called from specific
+    # events.  These helpers poll global key state via platform-native APIs and
+    # inject presses into PsychoPy's event buffer.  Only called from specific
     # waiting loops (trigger, instructions, slider) — never during the main
     # task loop.
+    #
+    # Windows: GetAsyncKeyState (ctypes)
+    # Linux:   XQueryKeymap    (python-xlib, already a dependency)
+    # macOS:   CGEventSourceKeyState (pyobjc-framework-Quartz, ships with PsychoPy)
 
+    # Windows virtual-key codes
     _PSYCHOPY_TO_VK: dict[str, int] = {
-        "0": 0x30,
-        "1": 0x31,
-        "2": 0x32,
-        "3": 0x33,
-        "4": 0x34,
-        "5": 0x35,
-        "6": 0x36,
-        "7": 0x37,
-        "8": 0x38,
-        "9": 0x39,
-        "t": 0x54,
-        "equal": 0xBB,
-        "+": 0x6B,
-        "space": 0x20,
-        "return": 0x0D,
+        "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
+        "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
+        "t": 0x54, "equal": 0xBB, "+": 0x6B, "space": 0x20, "return": 0x0D,
+    }
+
+    # X11 keysym string names (for XK.string_to_keysym)
+    _PSYCHOPY_TO_XKEYSYM: dict[str, str] = {
+        "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
+        "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
+        "t": "t", "equal": "equal", "+": "plus", "space": "space", "return": "Return",
+    }
+
+    # macOS ANSI virtual keycodes
+    _PSYCHOPY_TO_MAC_VK: dict[str, int] = {
+        "0": 0x1D, "1": 0x12, "2": 0x13, "3": 0x14, "4": 0x15,
+        "5": 0x17, "6": 0x16, "7": 0x1A, "8": 0x1C, "9": 0x19,
+        "t": 0x11, "equal": 0x18, "+": 0x45, "space": 0x31, "return": 0x24,
     }
 
     def _reset_poll_state(self) -> None:
@@ -132,18 +139,29 @@ class TaskBase(ABC):  # noqa: B024
     def _inject_keys_if_unfocused(self, key_names: list[str]) -> None:
         """If PsychoPy window lacks focus, poll keys and inject into event buffer.
 
-        Uses GetAsyncKeyState (Windows only) to detect key presses regardless
-        of which window has focus.  Injects into ``event._keyBuffer`` using the
-        same 3-tuple format as the simulator's ``_inject_trigger_key()``.
+        Uses platform-native APIs to detect key presses regardless of which
+        window has focus.  Injects into ``event._keyBuffer`` using the same
+        3-tuple format as the simulator's ``_inject_trigger_key()``.
 
         Only fires on key-down transitions (not repeats).  Skips "escape" to
         prevent accidental task abort from GUI typing.
         """
         import sys
 
-        if sys.platform != "win32" or self.win is None:
+        if self.win is None:
             return
 
+        if sys.platform == "win32":
+            self._poll_keys_win32(key_names)
+        elif sys.platform == "linux":
+            self._poll_keys_x11(key_names)
+        elif sys.platform == "darwin":
+            self._poll_keys_quartz(key_names)
+
+    # -- Windows ---------------------------------------------------------------
+
+    def _poll_keys_win32(self, key_names: list[str]) -> None:
+        """Poll global key state on Windows via GetAsyncKeyState."""
         import ctypes
 
         from psychopy import core
@@ -156,7 +174,6 @@ class TaskBase(ABC):  # noqa: B024
             return
 
         if user32.GetForegroundWindow() == hwnd:
-            # Window has focus — pyglet handles keys natively
             self._poll_prev.clear()
             return
 
@@ -167,6 +184,90 @@ class TaskBase(ABC):  # noqa: B024
             if vk is None:
                 continue
             pressed = bool(user32.GetAsyncKeyState(vk) & 0x8000)
+            if pressed and name not in self._poll_prev:
+                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                self._poll_prev.add(name)
+            elif not pressed:
+                self._poll_prev.discard(name)
+
+    # -- Linux (X11) -----------------------------------------------------------
+
+    def _poll_keys_x11(self, key_names: list[str]) -> None:
+        """Poll global key state on Linux via XQueryKeymap."""
+        try:
+            from Xlib import XK
+            from Xlib import display as xlib_display
+        except ImportError:
+            return
+
+        from psychopy import core
+        from psychopy import event as psychopy_event
+
+        # Lazily open a persistent X display connection and resolve keycodes
+        if not hasattr(self, "_x11_display"):
+            self._x11_display = xlib_display.Display()
+            self._x11_keycodes: dict[str, int] = {}
+            for name, keysym_str in self._PSYCHOPY_TO_XKEYSYM.items():
+                ks = XK.string_to_keysym(keysym_str)
+                if ks:
+                    kc = self._x11_display.keysym_to_keycode(ks)
+                    if kc:
+                        self._x11_keycodes[name] = kc
+
+        d = self._x11_display
+
+        try:
+            window_id = self.win.winHandle._window
+            focused, _ = d.get_input_focus()
+            if focused.id == window_id:
+                self._poll_prev.clear()
+                return
+
+            keymap = d.query_keymap()
+        except Exception:
+            return
+
+        for name in key_names:
+            if name == "escape":
+                continue
+            kc = self._x11_keycodes.get(name)
+            if kc is None:
+                continue
+            pressed = bool(keymap[kc // 8] & (1 << (kc % 8)))
+            if pressed and name not in self._poll_prev:
+                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                self._poll_prev.add(name)
+            elif not pressed:
+                self._poll_prev.discard(name)
+
+    # -- macOS (Quartz) --------------------------------------------------------
+
+    def _poll_keys_quartz(self, key_names: list[str]) -> None:
+        """Poll global key state on macOS via CGEventSourceKeyState."""
+        try:
+            from AppKit import NSApplication
+            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedSessionState
+        except ImportError:
+            return
+
+        from psychopy import core
+        from psychopy import event as psychopy_event
+
+        try:
+            app = NSApplication.sharedApplication()
+            if app.keyWindow() is self.win.winHandle._window:
+                self._poll_prev.clear()
+                return
+        except Exception:
+            return
+
+        for name in key_names:
+            if name == "escape":
+                continue
+            vk = self._PSYCHOPY_TO_MAC_VK.get(name)
+            if vk is None:
+                continue
+            pressed = CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, vk)
             if pressed and name not in self._poll_prev:
                 psychopy_event._keyBuffer.append((name, 0, core.getTime()))
                 self._poll_prev.add(name)
