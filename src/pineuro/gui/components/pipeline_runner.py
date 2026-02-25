@@ -49,6 +49,7 @@ class PipelineRunner:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._current_coordinator = None  # Track coordinator for feedback tasks
+        self._current_feedback_task = None  # Track feedback task for stop support
         self._current_localizer_task = None  # Track localizer task for stop support
         self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
         self.overwrite: bool = False
@@ -186,10 +187,13 @@ class PipelineRunner:
 
         # Stop thread-based steps
         if self._thread is not None and self._thread.is_alive():
-            # If a feedback task is running, stop the coordinator
+            # If a feedback task is running, stop the coordinator and the task
             if self._current_coordinator is not None:
                 logger.info("Stopping feedback coordinator")
                 self._current_coordinator.stop(show_questions=show_questions)
+            if self._current_feedback_task is not None:
+                logger.info("Stopping feedback task (PsychoPy)")
+                self._current_feedback_task.stop()
             # If a localizer task is running, stop it
             if self._current_localizer_task is not None:
                 logger.info("Stopping localizer task")
@@ -1649,6 +1653,9 @@ class PipelineRunner:
             # Register callback so coordinator updates task with new activations
             coordinator._activation_callback = task._update_data
 
+            # Track task for stop support
+            self._current_feedback_task = task
+
             # Connect GUI mirror callback if set
             if self._task_mirror_callback is not None:
                 task.set_mirror_callback(self._task_mirror_callback)
@@ -1685,5 +1692,6 @@ class PipelineRunner:
 
             self._emit_progress(result_msg)
         finally:
-            # Clear coordinator reference
+            # Clear coordinator and task references
             self._current_coordinator = None
+            self._current_feedback_task = None
