@@ -415,7 +415,26 @@ class ParticipantWorkflowScreen:
         qc_dir = base_dir / "qc"
         config = self.study_config.session_config
 
-        # MNI atlas masks use a simple review flow (no ICA/GLM, just atlas overlays)
+        # Detect mask source from mask_selections.json (authoritative, not just instance var)
+        masks_dir = mask_extraction_dir / "03_masks"
+        selections_file = masks_dir / "mask_selections.json"
+        if selections_file.exists():
+            import json as _json
+
+            try:
+                _sel_data = _json.loads(selections_file.read_text())
+                if any(
+                    isinstance(v, dict) and v.get("source_type") == "mni_atlas"
+                    for v in _sel_data.values()
+                ):
+                    # Ensure instance state is consistent
+                    self._is_mni_atlas_mode = True
+                    self._show_mni_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir)
+                    return
+            except (ValueError, AttributeError):
+                pass
+
+        # MNI atlas mode flag (set during this session before selections exist on disk)
         if self._is_mni_atlas_mode:
             self._show_mni_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir)
             return
@@ -618,6 +637,9 @@ class ParticipantWorkflowScreen:
                 if overlay_path.exists():
                     tissue_mask_overlays[tissue_type] = overlay_path
 
+        # Get full HTML QC report path (if available)
+        html_report_path = self.qc_manager.get_mask_extraction_qc()
+
         dialog = MaskSelectionDialog(
             page=self.page,
             masks_info=masks_info,
@@ -645,6 +667,8 @@ class ParticipantWorkflowScreen:
             target_hemisphere=sham_target_hemisphere,
             # Tissue mask overlays (WM/CSF nuisance regression)
             tissue_mask_overlays=tissue_mask_overlays,
+            # Full HTML QC report
+            html_report_path=html_report_path,
         )
         dialog.show()
 

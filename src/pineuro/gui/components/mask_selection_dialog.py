@@ -21,6 +21,8 @@ from pineuro.mask_extraction import (
     save_mask_selections,
 )
 
+from .qc_viewer import open_qc_report
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,6 +90,8 @@ class MaskSelectionDialog:
         target_hemisphere: str = "right",
         # Tissue masks (WM/CSF nuisance regression, view-only)
         tissue_mask_overlays: dict[str, Path] | None = None,
+        # Full HTML QC report (optional, for "View Full Report" button)
+        html_report_path: Path | None = None,
     ):
         """Initialize the mask selection dialog.
 
@@ -146,6 +150,7 @@ class MaskSelectionDialog:
 
         # Tissue mask overlays (WM/CSF, view-only)
         self.tissue_mask_overlays = tissue_mask_overlays or {}
+        self.html_report_path = html_report_path
 
         self._dialog: ft.AlertDialog | None = None
         self._stage = 1  # 1 = Accept/Reject, 2 = Select Alternative
@@ -514,7 +519,19 @@ class MaskSelectionDialog:
 
     def _build_stage1_actions(self) -> list[ft.Control]:
         """Build action buttons for Stage 1."""
-        return [
+        actions: list[ft.Control] = []
+
+        # View full report button (if HTML path available)
+        if self.html_report_path and self.html_report_path.exists():
+            actions.append(
+                ft.TextButton(
+                    "View Full Report",
+                    icon=ft.Icons.OPEN_IN_NEW,
+                    on_click=self._on_view_full_report,
+                )
+            )
+
+        actions.extend([
             ft.OutlinedButton(
                 "Generate Script",
                 icon=ft.Icons.CODE,
@@ -535,7 +552,35 @@ class MaskSelectionDialog:
                 icon=ft.Icons.DONE_ALL,
                 on_click=self._on_accept_all_clicked,
             ),
-        ]
+        ])
+        return actions
+
+    def _on_view_full_report(self, e):
+        """Handle View Full Report button click.
+
+        Regenerates the report with overwrite=True so overlays match
+        the current masks on disk, then opens it in the browser.
+        """
+        from pineuro import qc
+
+        if self.on_log:
+            self.on_log("[INFO] Regenerating QC report...")
+
+        try:
+            report_path = qc.generate_mask_extraction_report(
+                mask_extraction_dir=self.mask_extraction_dir,
+                participant_id=self.participant_id,
+                network_names=self.yeo_targets,
+                n_yeo=self.n_yeo,
+                overwrite=True,
+            )
+            self.html_report_path = report_path
+        except Exception as ex:
+            logger.warning(f"Failed to regenerate QC report: {ex}")
+
+        if self.html_report_path:
+            logger.info(f"Opening full report: {self.html_report_path}")
+            open_qc_report(self.html_report_path)
 
     def _generate_alternative_overlays_for_network(self, network_name: str):
         """Generate alternative ICA and Yeo overlays for a network on-demand.
