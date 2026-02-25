@@ -217,7 +217,8 @@ class MaskSelection:
         Name of the network (e.g., "DefaultA", "ContA")
     source_type : str
         One of: "ica" for single ICA component, "ica_combined" for two merged
-        ICA components, or "yeo_atlas" for atlas fallback
+        ICA components, "yeo_atlas" for atlas fallback (per-network, after ICA),
+        or "mni_atlas" for full MNI atlas masks (no ICA/localizer required)
     component_index : int or None
         Primary ICA component index if source_type in ("ica", "ica_combined"),
         None for atlas masks
@@ -232,7 +233,7 @@ class MaskSelection:
     """
 
     network_name: str
-    source_type: str  # "ica", "ica_combined", or "yeo_atlas"
+    source_type: str  # "ica", "ica_combined", "yeo_atlas", or "mni_atlas"
     component_index: int | None
     correlation: float
     selection_reason: str  # "auto", "manual", "manual_combined", "yeo_fallback"
@@ -826,9 +827,10 @@ def regenerate_mask_from_selection(
     network_file = masks_dir / f"{participant_id}_{network_name}.nii.gz"
     thr_file = masks_dir / f"{participant_id}_{network_name}_thr.nii.gz"
 
-    if selection.source_type == "yeo_atlas":
-        # Use Yeo atlas fallback
-        logger.info(f"Regenerating {network_name} from Yeo atlas (fallback)")
+    if selection.source_type in ("yeo_atlas", "mni_atlas"):
+        # Use Yeo/MNI atlas mask
+        label = "MNI atlas" if selection.source_type == "mni_atlas" else "Yeo atlas (fallback)"
+        logger.info(f"Regenerating {network_name} from {label}")
         extract_yeo_mask_for_network(
             yeo_subject_space=yeo_subject_space,
             network_name=network_name,
@@ -1210,6 +1212,153 @@ def spatial_correlation(
 # network selection into a single, reproducible workflow.
 
 
+def _register_atlas_to_subject(
+    ref_file: Path,
+    mnireg_dir: Path,
+    network_atlas: str,
+    n_networks: int,
+    overwrite: bool = False,
+    progress_callback: Callable[[str, str], None] | None = None,
+) -> tuple[Path, list[str], list[str]]:
+    """Register a network atlas from MNI space to participant subject space.
+
+    Computes a nonlinear (SyN) transformation from the participant's BOLD
+    reference to MNI152, then warps the atlas (Yeo or Schaefer) backward to
+    participant space using the inverse transforms.
+
+    This is a shared helper used by both ``mask_extraction_rest`` (ICA-based)
+    and ``mask_extraction_mni`` (atlas-only fallback).
+
+    Parameters
+    ----------
+    ref_file : Path
+        BOLD reference image in participant space (used as registration input)
+    mnireg_dir : Path
+        Output directory for registration artifacts (typically ``02_mnireg/``)
+    network_atlas : str
+        Atlas identifier: ``"yeo_7"``, ``"yeo_17"``, ``"schaefer_100_7net"``, etc.
+    n_networks : int
+        Number of networks in the atlas (7 or 17)
+    overwrite : bool
+        If True, re-run registration even if outputs exist
+    progress_callback : callable, optional
+        Callback ``(step, detail)`` for progress updates
+
+    Returns
+    -------
+    atlas_subject_space : Path
+        Path to the atlas parcellation warped to participant space
+    fwd_transform_files : list[str]
+        Forward transforms (subject → MNI)
+    inv_transform_files : list[str]
+        Inverse transforms (MNI → subject)
+    """
+    from nilearn import datasets
+
+    def emit(detail: str = ""):
+        if detail:
+            logger.info(detail)
+        if progress_callback:
+            progress_callback("MNI registration", detail)
+
+    mnireg_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 1: Compute transformation from participant space to MNI space
+    output_prefix = mnireg_dir / f"{ref_file.with_suffix('').stem}_to_MNI_boldref"
+    emit("Computing transforms...")
+    _mni_ref_file, sub2mni_fwd_xfm, sub2mni_inv_xfm = compute_xfm_to_mni(
+        input_file=ref_file, output_prefix=output_prefix, overwrite=overwrite
+    )
+
+    atlas_display = ATLAS_SOURCES.get(network_atlas, {}).get("display_name", network_atlas)
+    emit(f"Transforming {atlas_display} atlas to participant space...")
+
+    # Step 2: Fetch atlas and warp to subject space
+    if network_atlas.startswith("yeo"):
+        yeo_atlas = datasets.fetch_atlas_yeo_2011(n_networks=n_networks, thickness="thick")
+        yeo = yeo_atlas.maps
+        yeo_mni = Path(yeo).with_suffix("").parent / Path(
+            Path(yeo).with_suffix("").stem + "_interp_to_fMRIPrep_boldref.nii.gz"
+        )
+
+        atlas2sub = mnireg_dir / f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz"
+        if not yeo_mni.exists() or overwrite:
+            apply_xfm_sform_to_mni(
+                input_file=yeo, output_file=yeo_mni, interp="nearestneighbour", overwrite=overwrite
+            )
+
+        if not atlas2sub.exists() or overwrite:
+            apply_xfm(
+                moving=yeo_mni,
+                fixed=ref_file,
+                transform_files=sub2mni_inv_xfm,
+                output_file=atlas2sub,
+                interpolator="nearestNeighbor",
+                invert=False,
+                overwrite=overwrite,
+            )
+
+    elif network_atlas.startswith("schaefer"):
+        info = ATLAS_SOURCES[network_atlas]
+        schaefer = datasets.fetch_atlas_schaefer_2018(
+            n_rois=info["n_rois"],
+            yeo_networks=n_networks,
+            resolution_mm=2,
+        )
+        raw_labels = [lbl.decode() if isinstance(lbl, bytes) else str(lbl) for lbl in schaefer.labels]
+
+        schaefer_maps = schaefer.maps
+        schaefer_img = (
+            schaefer_maps if isinstance(schaefer_maps, nib.Nifti1Image) else cast(Nifti1Image, nib.load(schaefer_maps))
+        )
+        schaefer_data = schaefer_img.get_fdata()
+
+        network_labels = get_yeo_labels(n_networks)
+        network_parcellation = np.zeros_like(schaefer_data)
+        for parcel_idx, parcel_label in enumerate(raw_labels):
+            parts = parcel_label.split("_")
+            if len(parts) >= 3:
+                net_name = parts[2]
+            else:
+                logger.warning(f"Unexpected Schaefer label format: {parcel_label}")
+                continue
+            try:
+                net_idx = network_labels.index(net_name) + 1
+            except ValueError:
+                logger.warning(f"Network '{net_name}' from label '{parcel_label}' not in network labels")
+                continue
+            network_parcellation[schaefer_data == parcel_idx + 1] = net_idx
+
+        schaefer_network_mni = mnireg_dir / f"Schaefer_{info['n_rois']}_{n_networks}net_networks_mni.nii.gz"
+        if not schaefer_network_mni.exists() or overwrite:
+            network_img = Nifti1Image(
+                network_parcellation.astype(np.int16),
+                schaefer_img.affine,
+                schaefer_img.header,
+            )
+            save(network_img, schaefer_network_mni)
+
+        atlas2sub = mnireg_dir / f"Schaefer_to_{ref_file.with_suffix('').stem}.nii.gz"
+        if not atlas2sub.exists() or overwrite:
+            apply_xfm(
+                moving=schaefer_network_mni,
+                fixed=ref_file,
+                transform_files=sub2mni_inv_xfm,
+                output_file=atlas2sub,
+                interpolator="nearestNeighbor",
+                invert=False,
+                overwrite=overwrite,
+            )
+    else:
+        raise ValueError(
+            f"Unsupported network_atlas '{network_atlas}' for atlas registration. "
+            "Use a Yeo or Schaefer atlas."
+        )
+
+    emit("Registration complete")
+    return atlas2sub, sub2mni_fwd_xfm, sub2mni_inv_xfm
+
+
 def mask_extraction_rest(
     participant_id: str,
     root_dir: Union[str, Path],
@@ -1302,7 +1451,6 @@ def mask_extraction_rest(
     if yeo_targets is None:
         yeo_targets = ["DefaultA", "ContA"]
 
-    from nilearn import datasets
     from nilearn.image import get_data
 
     # Helper to emit progress to both logger and callback
@@ -1374,100 +1522,17 @@ def mask_extraction_rest(
     emit_progress("Step 2/3: MNI registration", "Computing transforms...")
     mnireg_dir = root_dir / "02_mnireg"
 
-    # Step 2a: Compute transformation from participant space to MNI space
-    # Uses ANTs SyN (nonlinear) registration between BOLD reference volumes
-    output_prefix = mnireg_dir / Path(f"{ref_file.with_suffix('').stem}_to_MNI_boldref")
-    mni_ref_file, sub2mni_fwd_xfm, sub2mni_inv_xfm = compute_xfm_to_mni(
-        input_file=ref_file, output_prefix=output_prefix, overwrite=overwrite
+    def _reg_progress(step: str, detail: str = ""):
+        emit_progress("Step 2/3", detail)
+
+    atlas2sub, sub2mni_fwd_xfm, sub2mni_inv_xfm = _register_atlas_to_subject(
+        ref_file=ref_file,
+        mnireg_dir=mnireg_dir,
+        network_atlas=network_atlas,
+        n_networks=n_networks,
+        overwrite=overwrite,
+        progress_callback=_reg_progress,
     )
-
-    atlas_display = ATLAS_SOURCES.get(network_atlas, {}).get("display_name", network_atlas)
-    emit_progress("Step 2/3", f"Transforming {atlas_display} atlas to participant space...")
-
-    if network_atlas.startswith("yeo"):
-        # Yeo atlas path (existing behavior)
-        yeo_atlas = datasets.fetch_atlas_yeo_2011(n_networks=n_networks, thickness="thick")
-        yeo = yeo_atlas.maps
-        yeo_mni = Path(yeo).with_suffix("").parent / Path(
-            Path(yeo).with_suffix("").stem + "_interp_to_fMRIPrep_boldref.nii.gz"
-        )
-
-        atlas2sub = mnireg_dir / Path(f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz")
-        if not yeo_mni.exists() or overwrite:
-            apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp="nearestneighbour", overwrite=overwrite)
-
-        if not atlas2sub.exists() or overwrite:
-            apply_xfm(
-                moving=yeo_mni,
-                fixed=ref_file,
-                transform_files=sub2mni_inv_xfm,
-                output_file=atlas2sub,
-                interpolator="nearestNeighbor",
-                invert=False,
-                overwrite=overwrite,
-            )
-
-    elif network_atlas.startswith("schaefer"):
-        # Schaefer atlas: fetch, group parcels by network, register to subject space
-        info = ATLAS_SOURCES[network_atlas]
-        schaefer = datasets.fetch_atlas_schaefer_2018(
-            n_rois=info["n_rois"],
-            yeo_networks=n_networks,
-            resolution_mm=2,
-        )
-        raw_labels = [lbl.decode() if isinstance(lbl, bytes) else str(lbl) for lbl in schaefer.labels]
-
-        # Load Schaefer parcellation
-        schaefer_maps = schaefer.maps
-        schaefer_img = (
-            schaefer_maps if isinstance(schaefer_maps, nib.Nifti1Image) else cast(Nifti1Image, nib.load(schaefer_maps))
-        )
-        schaefer_data = schaefer_img.get_fdata()
-
-        # Group parcels by network name: "7Networks_LH_Default_Temp_1" → "Default"
-        network_labels = get_yeo_labels(n_networks)
-        network_parcellation = np.zeros_like(schaefer_data)
-        for parcel_idx, parcel_label in enumerate(raw_labels):
-            # Extract network name from label (3rd underscore-delimited segment)
-            parts = parcel_label.split("_")
-            if len(parts) >= 3:
-                net_name = parts[2]
-            else:
-                logger.warning(f"Unexpected Schaefer label format: {parcel_label}")
-                continue
-            try:
-                net_idx = network_labels.index(net_name) + 1  # 1-indexed
-            except ValueError:
-                logger.warning(f"Network '{net_name}' from label '{parcel_label}' not in network labels")
-                continue
-            network_parcellation[schaefer_data == parcel_idx + 1] = net_idx
-
-        # Save network-level parcellation as NIfTI in MNI space
-        schaefer_network_mni = mnireg_dir / f"Schaefer_{info['n_rois']}_{n_networks}net_networks_mni.nii.gz"
-        if not schaefer_network_mni.exists() or overwrite:
-            network_img = Nifti1Image(
-                network_parcellation.astype(np.int16),
-                schaefer_img.affine,
-                schaefer_img.header,
-            )
-            save(network_img, schaefer_network_mni)
-
-        # Register to subject space
-        atlas2sub = mnireg_dir / Path(f"Schaefer_to_{ref_file.with_suffix('').stem}.nii.gz")
-        if not atlas2sub.exists() or overwrite:
-            apply_xfm(
-                moving=schaefer_network_mni,
-                fixed=ref_file,
-                transform_files=sub2mni_inv_xfm,
-                output_file=atlas2sub,
-                interpolator="nearestNeighbor",
-                invert=False,
-                overwrite=overwrite,
-            )
-    else:
-        raise ValueError(
-            f"Unsupported network_atlas '{network_atlas}' for resting-state extraction. Use a Yeo or Schaefer atlas."
-        )
 
     emit_progress("Step 2/3", "Registration complete")
 
@@ -1587,6 +1652,219 @@ def mask_extraction_rest(
         qc_output_dir = Path(qc_dir) if qc_dir is not None else root_dir.parent / "qc"
 
         # Use high-level API to generate comprehensive QC report
+        network_names = [str(target) for target in yeo_targets]
+        report_path = qc.generate_mask_extraction_report(
+            mask_extraction_dir=root_dir,
+            participant_id=participant_id,
+            network_names=network_names,
+            output_dir=qc_output_dir,
+            n_yeo=n_networks,
+            overwrite=overwrite,
+            open_browser=False,
+        )
+        emit_progress("QC report", f"Saved to {report_path.name}")
+
+    return network_thr_files
+
+
+def mask_extraction_mni(
+    participant_id: str,
+    root_dir: Union[str, Path],
+    ref_file: Union[str, Path],
+    n_yeo: int = 17,
+    yeo_targets: Union[str, list[str]] | None = None,
+    network_atlas: str = "yeo_17",
+    threshold: int = 2000,
+    overwrite: bool = False,
+    qc_enabled: bool = True,
+    qc_dir: Union[str, Path] | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+    sham_hemisphere_network: str | None = None,
+) -> list[Path]:
+    """Extract network masks directly from an MNI atlas (no localizer/ICA required).
+
+    This is a fallback pathway that skips the localizer collection, preprocessing,
+    and ICA/GLM steps. Instead, it registers a network atlas (Yeo or Schaefer)
+    from MNI space to the participant's reference scan and extracts binary masks
+    for each target network directly from the warped atlas.
+
+    The resulting masks are less specific than ICA-derived masks (they reflect
+    population-average network boundaries rather than individual functional
+    topography), but allow a neurofeedback session to proceed when the standard
+    localizer pipeline fails or is impractical.
+
+    Output structure matches ``mask_extraction_rest`` exactly, so downstream
+    steps (coregistration, feedback) work without modification.
+
+    Parameters
+    ----------
+    participant_id : str
+        Participant ID
+    root_dir : str or Path
+        Root directory for outputs (typically ``mask_extraction/``)
+    ref_file : str or Path
+        BOLD reference in participant space. Can be a boldref from preprocessing
+        or the mean of a reference scan collection.
+    n_yeo : int, default=17
+        Yeo network parcellation. Ignored when ``network_atlas`` specifies it.
+    yeo_targets : str or list of str, optional
+        Target networks to extract (e.g., ``["DefaultA", "ContA"]``).
+        Defaults to ``["DefaultA", "ContA"]``.
+    network_atlas : str, default="yeo_17"
+        Atlas identifier. See ``_register_atlas_to_subject`` for options.
+    threshold : int, default=2000
+        Number of voxels per mask (passed to ``extract_yeo_mask_for_network``).
+    overwrite : bool, default=False
+        Re-run even if outputs exist.
+    qc_enabled : bool, default=True
+        Generate QC overlays and report.
+    qc_dir : str or Path, optional
+        Custom QC output directory.
+    progress_callback : callable, optional
+        Callback ``(step, detail)`` for GUI progress updates.
+    sham_hemisphere_network : str, optional
+        If set, generate hemisphere-split masks for this network.
+
+    Returns
+    -------
+    list of Path
+        Thresholded mask files (``*_thr.nii.gz``)
+    """
+    if yeo_targets is None:
+        yeo_targets = ["DefaultA", "ContA"]
+
+    # Helper to emit progress to both logger and callback
+    def emit_progress(step: str, detail: str = ""):
+        if detail:
+            logger.info(f"{step}: {detail}")
+        else:
+            logger.info(step)
+        if progress_callback:
+            progress_callback(step, detail)
+
+    emit_progress(f"MNI atlas mask extraction for {participant_id}")
+
+    # Convert to Path and validate
+    root_dir = Path(root_dir)
+    ref_file = Path(ref_file)
+    if not ref_file.exists():
+        raise FileNotFoundError(f"Reference file not found: {ref_file}")
+
+    # Derive n_networks from network_atlas
+    if network_atlas in ATLAS_SOURCES:
+        n_networks = ATLAS_SOURCES[network_atlas]["n_networks"]
+    else:
+        if n_yeo not in (7, 17):
+            raise ValueError(f"n_yeo must be 7 or 17, got {n_yeo}")
+        n_networks = n_yeo
+        network_atlas = f"yeo_{n_yeo}"
+
+    # Validate targets
+    if isinstance(yeo_targets, str):
+        yeo_targets = [yeo_targets]
+    labels = get_yeo_labels(n_networks=n_networks)
+    for target in yeo_targets:
+        if target not in labels:
+            raise ValueError(
+                f"Label '{target}' not in labels for {network_atlas} "
+                f"({n_networks}-network parcellation). Available: {labels}"
+            )
+
+    # Step 1/2: Register atlas to subject space
+    emit_progress("Step 1/2: MNI registration", "Computing transforms...")
+    mnireg_dir = root_dir / "02_mnireg"
+
+    def _reg_progress(step: str, detail: str = ""):
+        emit_progress("Step 1/2", detail)
+
+    atlas2sub, _fwd_xfm, inv_xfm = _register_atlas_to_subject(
+        ref_file=ref_file,
+        mnireg_dir=mnireg_dir,
+        network_atlas=network_atlas,
+        n_networks=n_networks,
+        overwrite=overwrite,
+        progress_callback=_reg_progress,
+    )
+
+    emit_progress("Step 1/2", "Registration complete")
+
+    # Step 2/2: Extract network masks from atlas
+    emit_progress("Step 2/2: Extracting network masks", f"Targets: {', '.join(yeo_targets)}")
+    masks_dir = root_dir / "03_masks"
+    masks_dir.mkdir(parents=True, exist_ok=True)
+
+    network_thr_files: list[Path] = []
+    for target in yeo_targets:
+        thr_file = masks_dir / f"{participant_id}_{target}_thr.nii.gz"
+        if not thr_file.exists() or overwrite:
+            extract_yeo_mask_for_network(
+                yeo_subject_space=atlas2sub,
+                network_name=target,
+                output_file=thr_file,
+                n_yeo=n_networks,
+                threshold=threshold,
+                overwrite=True,
+            )
+        network_thr_files.append(thr_file)
+
+    emit_progress("Step 2/2", f"Complete ({len(network_thr_files)} masks extracted)")
+
+    # Save mask selections metadata
+    selections: dict[str, MaskSelection] = {}
+    for target in yeo_targets:
+        selections[target] = MaskSelection(
+            network_name=target,
+            source_type="mni_atlas",
+            component_index=None,
+            correlation=0.0,
+            selection_reason="mni_fallback",
+        )
+    save_mask_selections(masks_dir, selections)
+
+    # Hemisphere-split masks for sham
+    if sham_hemisphere_network:
+        emit_progress("Generating hemisphere-split masks", f"Network: {sham_hemisphere_network}")
+
+        if sham_hemisphere_network not in labels:
+            logger.warning(
+                f"Sham hemisphere network '{sham_hemisphere_network}' not in "
+                f"{network_atlas} labels. Skipping hemisphere split."
+            )
+        else:
+            # Extract sham network from atlas (unthresholded for splitting)
+            sham_network_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}.nii.gz"
+            network_index = labels.index(sham_hemisphere_network) + 1
+            atlas_img = cast(Nifti1Image, load(atlas2sub))
+            atlas_data = atlas_img.get_fdata()
+            sham_mask = (atlas_data == network_index).astype(float)
+            save(Nifti1Image(sham_mask, atlas_img.affine, atlas_img.header), sham_network_file)
+
+            # Also save the thresholded version if not already in targets
+            if sham_hemisphere_network not in yeo_targets:
+                sham_thr_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_thr.nii.gz"
+                extract_yeo_mask_for_network(
+                    yeo_subject_space=atlas2sub,
+                    network_name=sham_hemisphere_network,
+                    output_file=sham_thr_file,
+                    n_yeo=n_networks,
+                    threshold=threshold,
+                    overwrite=overwrite,
+                )
+
+            left_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_left_thr.nii.gz"
+            right_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_right_thr.nii.gz"
+            split_mask_by_hemisphere(
+                sham_network_file, left_file, right_file, threshold=threshold, overwrite=overwrite
+            )
+            emit_progress(
+                "Hemisphere split", f"Created {left_file.name} and {right_file.name} ({threshold} voxels each)"
+            )
+
+    # Generate QC report
+    if qc_enabled:
+        emit_progress("Generating QC report...")
+        qc_output_dir = Path(qc_dir) if qc_dir is not None else root_dir.parent / "qc"
+
         network_names = [str(target) for target in yeo_targets]
         report_path = qc.generate_mask_extraction_report(
             mask_extraction_dir=root_dir,

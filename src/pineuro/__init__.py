@@ -10,6 +10,7 @@ preprocessing : DICOM conversion, motion correction, brain extraction
 collect_volumes : Watch for and collect incoming scanner volumes (DICOM or NIfTI)
 collect_dicoms : Alias for collect_volumes (backward compatibility)
 mask_extraction_rest : Extract network masks using ICA and Yeo atlas
+mask_extraction_mni : Extract network masks directly from MNI atlas (no localizer needed)
 mask_extraction_task : Extract network masks using GLM contrasts from task localizer
 coregister_reference : Coregister masks to real-time scanner position
 
@@ -87,6 +88,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "collect_dicoms": (".preprocessing", "collect_dicoms"),
     # --- mask_extraction.py (heavy: nibabel, scipy, pandas) ---
     "mask_extraction_rest": (".mask_extraction", "mask_extraction_rest"),
+    "mask_extraction_mni": (".mask_extraction", "mask_extraction_mni"),
     "mask_extraction_task": (".mask_extraction", "mask_extraction_task"),
     "import_manual_masks": (".mask_extraction", "import_manual_masks"),
     "coregister_reference": (".mask_extraction", "coregister_reference"),
@@ -188,6 +190,7 @@ __all__ = [
     "collect_volumes",
     "collect_dicoms",
     "mask_extraction_rest",
+    "mask_extraction_mni",
     "mask_extraction_task",
     "import_manual_masks",
     "coregister_reference",

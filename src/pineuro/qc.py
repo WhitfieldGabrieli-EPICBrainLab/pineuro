@@ -1442,6 +1442,17 @@ def generate_mask_extraction_report(
     ica_dir = mask_extraction_dir / "01_ica"
     masks_dir = mask_extraction_dir / "03_masks"
 
+    # Detect mask source type from mask_selections.json
+    is_mni_atlas = False
+    selections_file = masks_dir / "mask_selections.json"
+    if selections_file.exists():
+        import json
+        sel_data = json.loads(selections_file.read_text())
+        is_mni_atlas = any(
+            isinstance(v, dict) and v.get("source_type") == "mni_atlas"
+            for v in sel_data.values()
+        )
+
     # Find ICA components and reference
     components_file = ica_dir / f"{participant_id}_components.nii.gz"
     # Search for boldref in preprocessing directory (sibling to mask_extraction)
@@ -1452,6 +1463,13 @@ def generate_mask_extraction_report(
         # Fallback: search in parent directory
         ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
     ref_file = Path(ref_files[0]) if ref_files else None
+
+    # For MNI atlas mode, also check for reference in mni_ref subdirectory
+    if ref_file is None and is_mni_atlas:
+        mni_ref_dir = mask_extraction_dir / "00_mni_ref"
+        if mni_ref_dir.exists():
+            mni_ref_files = sorted(glob(str(mni_ref_dir / "*.nii.gz")))
+            ref_file = Path(mni_ref_files[0]) if mni_ref_files else None
 
     # Find correlation matrix (new name or legacy Yeo name)
     corr_file = masks_dir / "network_IC_spatial_correlation.csv"
@@ -1473,12 +1491,19 @@ def generate_mask_extraction_report(
     sections: list[dict[str, Any]] = []
 
     # Summary box
-    summary_data = {
-        "Participant": participant_id,
-        "ICA components": str(components_file.exists()),
-        "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
-        "Correlation matrix": str(corr_file.exists()),
-    }
+    if is_mni_atlas:
+        summary_data = {
+            "Participant": participant_id,
+            "Mask source": "MNI Atlas (no localizer)",
+            "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
+        }
+    else:
+        summary_data = {
+            "Participant": participant_id,
+            "ICA components": str(components_file.exists()),
+            "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
+            "Correlation matrix": str(corr_file.exists()),
+        }
     sections.append({"type": "summary", "content": summary_data})
 
     # Load correlation data if available
@@ -1691,30 +1716,48 @@ def generate_mask_extraction_report(
     if network_masks:
         sections.append({"type": "heading", "content": "Mask Summary"})
         table_rows = []
-        for network, mask_path in network_masks.items():
-            chosen_comp = chosen_components.get(network, -1)
-            correlation = (
-                float(corr_df.loc[chosen_comp, network]) if corr_df is not None and network in corr_df.columns else 0.0
+        if is_mni_atlas:
+            for network, mask_path in network_masks.items():
+                summary = summarize_mask(mask_path, name=network)
+                table_rows.append(
+                    [
+                        summary.name,
+                        str(summary.voxels),
+                        f"{summary.volume_ml:.2f}",
+                        str(summary.centroid_ijk),
+                    ]
+                )
+            sections.append(
+                {
+                    "type": "table",
+                    "headers": ["Name", "Voxels", "Volume (mL)", "Centroid (i,j,k)"],
+                    "rows": table_rows,
+                }
             )
-            summary = summarize_mask(mask_path, name=network, chosen_component=chosen_comp, correlation=correlation)
-            table_rows.append(
-                [
-                    summary.name,
-                    str(summary.voxels),
-                    f"{summary.volume_ml:.2f}",
-                    str(summary.centroid_ijk),
-                    str(summary.chosen_component),
-                    f"{summary.correlation:.3f}",
-                ]
+        else:
+            for network, mask_path in network_masks.items():
+                chosen_comp = chosen_components.get(network, -1)
+                correlation = (
+                    float(corr_df.loc[chosen_comp, network]) if corr_df is not None and network in corr_df.columns else 0.0
+                )
+                summary = summarize_mask(mask_path, name=network, chosen_component=chosen_comp, correlation=correlation)
+                table_rows.append(
+                    [
+                        summary.name,
+                        str(summary.voxels),
+                        f"{summary.volume_ml:.2f}",
+                        str(summary.centroid_ijk),
+                        str(summary.chosen_component),
+                        f"{summary.correlation:.3f}",
+                    ]
+                )
+            sections.append(
+                {
+                    "type": "table",
+                    "headers": ["Name", "Voxels", "Volume (mL)", "Centroid (i,j,k)", "Chosen component", "Correlation (r)"],
+                    "rows": table_rows,
+                }
             )
-
-        sections.append(
-            {
-                "type": "table",
-                "headers": ["Name", "Voxels", "Volume (mL)", "Centroid (i,j,k)", "Chosen component", "Correlation (r)"],
-                "rows": table_rows,
-            }
-        )
 
     # Generate HTML report
     html_report = output_dir / f"{participant_id}_mask_extraction_qc.html"

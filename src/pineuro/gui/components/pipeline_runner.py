@@ -219,6 +219,8 @@ class PipelineRunner:
                 self._run_preprocessing()
             elif step_id == "mask_extraction":
                 self._run_mask_extraction()
+            elif step_id == "mni_mask_extraction":
+                self._run_mni_mask_extraction()
             elif step_id == "coregistration":
                 self._run_coregistration(run_id=1)
             elif step_id == "reference_realtime":
@@ -893,6 +895,160 @@ class PipelineRunner:
             tissue_dir = mask_extraction_dir / "05_tissue"
 
             # Try to reuse MNI inverse transforms from ICA pathway's 02_mnireg/
+            inv_xfm = None
+            mnireg_dir = mask_extraction_dir / "02_mnireg"
+            if mnireg_dir.exists():
+                inv_files = sorted(mnireg_dir.glob("*_inv_*"))
+                if inv_files:
+                    inv_xfm = [str(f) for f in inv_files]
+                    self._emit_progress(f"Reusing MNI inverse transforms from {mnireg_dir.name}/")
+
+            create_tissue_masks(
+                ref_file=str(ref_file),
+                output_dir=tissue_dir,
+                participant_id=self.participant_id,
+                inv_transform_files=inv_xfm,
+                overwrite=self.overwrite,
+                progress_callback=progress_callback,
+            )
+            self._emit_progress("WM/CSF tissue masks created")
+
+    def _find_best_reference(self) -> Path:
+        """Find the best available reference image for MNI registration.
+
+        Priority:
+        1. boldref from preprocessing (best quality, brain-extracted)
+        2. Mean of initial reference DICOMs (converted to NIfTI)
+
+        Returns:
+            Path to reference NIfTI file
+
+        Raises:
+            FileNotFoundError: If no suitable reference is available
+        """
+        config = self.config
+        base_dir = Path(config["paths"]["base_dir"])
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+
+        # Option 1: boldref from preprocessing
+        preprocessing_dir = base_dir / "preprocessing"
+        boldref = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+        if boldref.exists():
+            self._emit_progress(f"Using boldref from preprocessing: {boldref.name}")
+            return boldref
+
+        # Option 2: Initial reference DICOMs → convert to NIfTI → compute mean
+        collection_dir = base_dir / "collection"
+        ref_dirs = sorted(collection_dir.glob("task-reference_acq-*_run-01"))
+        for ref_dir in reversed(ref_dirs):  # newest acq first
+            dicoms = list(ref_dir.iterdir())
+            if dicoms:
+                from pineuro.utils import compute_mean, dicom_to_nifti
+
+                mni_ref_dir = base_dir / "mask_extraction" / "00_mni_ref"
+                mni_ref_dir.mkdir(parents=True, exist_ok=True)
+
+                mean_file = mni_ref_dir / f"{self.participant_id}_task-reference_mean.nii.gz"
+                if mean_file.exists():
+                    self._emit_progress(f"Using existing reference mean: {mean_file.name}")
+                    return mean_file
+
+                self._emit_progress(f"Converting reference DICOMs from {ref_dir.name}...")
+                nifti_file = dicom_to_nifti(
+                    input_path=ref_dir,
+                    output_dir=mni_ref_dir,
+                    output_name=f"{self.participant_id}_task-reference",
+                )
+                nifti_path = Path(nifti_file)
+                if nifti_path.exists():
+                    self._emit_progress("Computing mean reference volume...")
+                    compute_mean(input_file=nifti_path, output_file=mean_file)
+                    if mean_file.exists():
+                        return mean_file
+
+        raise FileNotFoundError(
+            "No reference image available for MNI registration. "
+            "Collect an initial reference scan or run preprocessing first."
+        )
+
+    def _run_mni_mask_extraction(self) -> None:
+        """Extract network masks from MNI atlas (no localizer/ICA required).
+
+        This is the fallback pathway that registers a network atlas from MNI
+        space to the participant's reference scan and extracts binary masks.
+        """
+        from pineuro.mask_extraction import mask_extraction_mni
+
+        config = self.config
+        base_dir = Path(config["paths"]["base_dir"])
+        mask_extraction_dir = base_dir / "mask_extraction"
+
+        # Find the best available reference image
+        ref_file = self._find_best_reference()
+
+        # Read atlas/network config (same settings used for ICA pipeline)
+        mask_cfg = config.get("mask", {})
+        n_yeo = mask_cfg.get("n_yeo", 17)
+        network_atlas = mask_cfg.get("network_atlas", f"yeo_{n_yeo}")
+        yeo_targets = list(mask_cfg.get("yeo_targets", ["DefaultA", "ContA"]))
+        threshold = mask_cfg.get("threshold", 2000)
+
+        # Handle sham networks (same logic as _run_mask_extraction)
+        sham_config = config.get("sham", {})
+        sham_hemisphere_network = None
+        if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
+            mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+            if mask_mode == "hemisphere_split":
+                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                if hemisphere_network and hemisphere_network not in yeo_targets:
+                    yeo_targets.append(hemisphere_network)
+                    if self._is_blind_mode():
+                        self._emit_progress_file_only(f"Including sham hemisphere network: {hemisphere_network}")
+                        self._emit_progress("Including additional network for mask extraction")
+                    else:
+                        self._emit_progress(f"Including sham hemisphere network: {hemisphere_network}")
+                sham_hemisphere_network = hemisphere_network
+            else:
+                alternative_targets = sham_config.get("alternative_mask_targets", [])
+                for target in alternative_targets:
+                    if target and target not in yeo_targets:
+                        yeo_targets.append(target)
+                        if self._is_blind_mode():
+                            self._emit_progress_file_only(f"Including sham alternative network: {target}")
+                            self._emit_progress("Including additional network for mask extraction")
+                        else:
+                            self._emit_progress(f"Including sham alternative network: {target}")
+
+        def progress_callback(step: str, detail: str = ""):
+            if detail:
+                self._emit_progress(f"{step}: {detail}")
+            else:
+                self._emit_progress(step)
+
+        _mask_files = mask_extraction_mni(
+            participant_id=self.participant_id,
+            root_dir=mask_extraction_dir,
+            ref_file=ref_file,
+            n_yeo=n_yeo,
+            yeo_targets=yeo_targets,
+            network_atlas=network_atlas,
+            threshold=threshold,
+            overwrite=self.overwrite,
+            qc_enabled=True,
+            progress_callback=progress_callback,
+            sham_hemisphere_network=sham_hemisphere_network,
+        )
+
+        # Create WM/CSF tissue masks for nuisance regression (if enabled)
+        fb_cfg = config.get("feedback", {})
+        if fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False):
+            from pineuro.mask_extraction import create_tissue_masks
+
+            self._emit_progress("Creating WM/CSF tissue masks for nuisance regression...")
+            tissue_dir = mask_extraction_dir / "05_tissue"
+
+            # Reuse MNI inverse transforms from 02_mnireg/
             inv_xfm = None
             mnireg_dir = mask_extraction_dir / "02_mnireg"
             if mnireg_dir.exists():

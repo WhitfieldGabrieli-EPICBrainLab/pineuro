@@ -1808,11 +1808,17 @@ class StudyEditorScreen:
         is_rest = localizer_task_type == "rest"
         self.study_config.session_config["mask"]["localizer_type"] = "rest" if is_rest else "task"
 
-        # Toggle network extraction section visibility
+        # Toggle ICA settings section visibility (rest localizer only)
         if hasattr(self, "networks_section"):
             self.networks_section.visible = is_rest
             with contextlib.suppress(Exception):
                 self.networks_section.update()
+
+        # Toggle MNI fallback hint visibility (task localizer only)
+        if hasattr(self, "_mni_fallback_hint"):
+            self._mni_fallback_hint.visible = not is_rest
+            with contextlib.suppress(Exception):
+                self._mni_fallback_hint.update()
 
         # Update contrast info
         if hasattr(self, "contrast_info_text"):
@@ -2340,31 +2346,50 @@ class StudyEditorScreen:
 
         self.network_dropdowns_row = ft.Row(network_dropdowns)
 
-        # Network Configuration section (only visible when localizer is rest)
-        self.networks_section = ft.Container(
+        # Target Networks section (always visible — used for both ICA and MNI atlas fallback)
+        mni_fallback_hint = ft.Text(
+            "Also used as target networks for MNI atlas mask fallback.",
+            size=11,
+            color=ft.Colors.GREY_600,
+            italic=True,
+            visible=not is_rest_localizer,
+        )
+        self._mni_fallback_hint = mni_fallback_hint
+
+        self.target_networks_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Network Extraction", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "ICA-based network extraction from resting-state localizer",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
-                    ft.Divider(),
-                    ft.Text("Network Atlas", size=14, weight=ft.FontWeight.BOLD),
-                    self.network_atlas_dropdown,
-                    ft.Divider(),
-                    self.target_networks_label,
+                    ft.Text("Target Networks", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text(
                         "Select target networks for neurofeedback training.",
                         size=11,
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
+                    mni_fallback_hint,
+                    ft.Divider(),
+                    ft.Text("Network Atlas", size=14, weight=ft.FontWeight.BOLD),
+                    self.network_atlas_dropdown,
+                    ft.Divider(),
+                    self.target_networks_label,
                     self.network_dropdowns_row,
                     ft.Divider(),
-                    ft.Text("ICA Settings", size=14, weight=ft.FontWeight.BOLD),
+                ]
+            ),
+        )
+
+        # ICA Settings section (only visible when localizer is rest)
+        self.networks_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("ICA Settings", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "ICA decomposition parameters for resting-state localizer",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    ft.Divider(),
                     self.n_components_field,
                     self.smooth_fwhm_field,
                     self.highpass_field,
@@ -2393,6 +2418,7 @@ class StudyEditorScreen:
                     self.localizer_n_volumes_field,
                     self.localizer_n_runs_field,
                     ft.Divider(),
+                    self.target_networks_section,
                     self.networks_section,
                     self.localizer_task_params_section,
                     self.include_reverse_contrasts_checkbox,

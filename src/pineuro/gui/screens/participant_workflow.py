@@ -189,6 +189,8 @@ class ParticipantWorkflowScreen:
         visit_conf_dict: dict = self.study_config.session_config.get("visit", {})
         self._is_mask_reuse_mode = visit_conf_dict.get("mask_source") == "reuse"
         self._mask_source_visit = visit_conf_dict.get("mask_source_visit")
+        # Track whether user switched to MNI atlas masks mid-session
+        self._is_mni_atlas_mode: bool = False
         self._log_file_path: Path | None = None
         self._setup_file_logging()
 
@@ -260,6 +262,145 @@ class ParticipantWorkflowScreen:
 
         return any(sel.selection_reason in ("manual", "yeo_fallback") for sel in selections.values())
 
+    def _check_reference_available(self) -> tuple[bool, str]:
+        """Check if a reference image is available for MNI registration.
+
+        Returns:
+            (available, description) tuple
+        """
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+
+        # Check boldref from preprocessing
+        preprocessing_dir = base_dir / "preprocessing"
+        boldref = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+        if boldref.exists():
+            return True, "boldref from preprocessing"
+
+        # Check initial reference DICOMs
+        collection_dir = base_dir / "collection"
+        ref_dirs = sorted(collection_dir.glob("task-reference_acq-*_run-01"))
+        for ref_dir in reversed(ref_dirs):
+            if any(ref_dir.iterdir()):
+                return True, f"initial reference scan ({ref_dir.name})"
+
+        return False, ""
+
+    def _confirm_mni_fallback(self, from_stage: str):
+        """Show confirmation dialog before switching to MNI atlas masks.
+
+        Args:
+            from_stage: Which stage triggered the fallback ("localizer" or "mask_extraction")
+        """
+        if self._is_running:
+            return
+
+        has_ref, ref_source = self._check_reference_available()
+
+        if not has_ref:
+            # No reference available
+            dialog = ft.AlertDialog(
+                title=ft.Text("Reference Scan Required"),
+                content=ft.Text(
+                    "MNI atlas mask extraction requires a reference scan for "
+                    "registration to subject space.\n\n"
+                    "Please collect an initial reference scan first, or run "
+                    "preprocessing to generate a BOLD reference."
+                ),
+                actions=[ft.TextButton("OK", on_click=lambda e: self._close_mni_dialog())],
+            )
+            self._mni_dialog = dialog
+            self.page.overlay.append(dialog)
+            dialog.open = True
+            self.page.update()
+            return
+
+        config = self.study_config.session_config
+        atlas_name = config.get("mask", {}).get("network_atlas", "yeo_17")
+        targets = config.get("mask", {}).get("yeo_targets", ["DefaultA", "ContA"])
+        targets_str = ", ".join(targets) if targets else "(none configured)"
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Use MNI Atlas Masks?"),
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "This will skip the localizer/ICA pipeline and create masks "
+                        "directly from the MNI atlas registered to subject space."
+                    ),
+                    ft.Container(height=10),
+                    ft.Text(f"Reference: {ref_source}", size=12, color=ft.Colors.GREY_600),
+                    ft.Text(f"Atlas: {atlas_name}", size=12, color=ft.Colors.GREY_600),
+                    ft.Text(f"Networks: {targets_str}", size=12, color=ft.Colors.GREY_600),
+                    ft.Container(height=10),
+                    ft.Text(
+                        "Note: Atlas masks reflect population-average network boundaries, "
+                        "not individual functional topography. They are less specific than "
+                        "ICA-derived masks.",
+                        size=11,
+                        italic=True,
+                        color=ft.Colors.ORANGE_700,
+                    ),
+                ],
+                tight=True,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: self._close_mni_dialog()),
+                ft.FilledButton(
+                    "Use MNI Masks",
+                    on_click=lambda e: self._execute_mni_fallback(from_stage),
+                ),
+            ],
+        )
+        self._mni_dialog = dialog
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
+    def _close_mni_dialog(self):
+        """Close the MNI fallback dialog."""
+        if hasattr(self, "_mni_dialog") and self._mni_dialog:
+            self._mni_dialog.open = False
+            self.page.update()
+
+    def _execute_mni_fallback(self, from_stage: str):
+        """Execute the MNI atlas mask extraction after user confirmation.
+
+        Args:
+            from_stage: Which stage triggered it ("localizer" or "mask_extraction")
+        """
+        self._close_mni_dialog()
+
+        # Switch to MNI atlas mode
+        self._is_mni_atlas_mode = True
+
+        # Mark skipped steps as complete
+        config = self.study_config.session_config
+        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+
+        if from_stage == "localizer":
+            # Skipping from localizer: mark all localizer runs as complete
+            for run_num in range(1, n_localizer_runs + 1):
+                step_id = f"rest_run_{run_num}"
+                if self.step_statuses.get(step_id) != StepStatus.COMPLETE:
+                    self.step_statuses[step_id] = StepStatus.COMPLETE
+
+        # Mark preprocessing and standard mask extraction as complete (skipped)
+        if self.step_statuses.get("preprocessing") != StepStatus.COMPLETE:
+            self.step_statuses["preprocessing"] = StepStatus.COMPLETE
+        if self.step_statuses.get("mask_extraction") != StepStatus.COMPLETE:
+            self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
+
+        # Register the MNI step as pending
+        self.step_statuses["mni_mask_extraction"] = StepStatus.PENDING
+
+        # Rebuild the step list UI and start the MNI extraction immediately
+        self._refresh_step_list()
+        self._pending_overwrite = False
+        self._start_step("mni_mask_extraction")
+
     def _show_mask_review_dialog(self):
         """Show the mask review/selection dialog."""
         from glob import glob
@@ -273,6 +414,11 @@ class ParticipantWorkflowScreen:
         mask_extraction_dir = base_dir / "mask_extraction"
         qc_dir = base_dir / "qc"
         config = self.study_config.session_config
+
+        # MNI atlas masks use a simple review flow (no ICA/GLM, just atlas overlays)
+        if self._is_mni_atlas_mode:
+            self._show_mni_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir)
+            return
 
         # Task-based localizers use a simpler review flow (no ICA component selection)
         localizer_type = config.get("mask", {}).get("localizer_type", "rest")
@@ -604,9 +750,12 @@ class ParticipantWorkflowScreen:
                 parts.append(f"peak t = {peak:.2f}")
             stat_text = "  |  ".join(parts)
 
-            # Find overlay image — generate on-demand if missing
+            # Find overlay image — generate on-demand if missing or stale (mask newer than overlay)
             overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
-            if not overlay_path.exists() and ref_file.exists() and mask_file.exists():
+            needs_overlay = not overlay_path.exists() or (
+                overlay_path.exists() and mask_file.exists() and mask_file.stat().st_mtime > overlay_path.stat().st_mtime
+            )
+            if needs_overlay and ref_file.exists() and mask_file.exists():
                 try:
                     from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas, summarize_mask
 
@@ -1032,6 +1181,235 @@ class ParticipantWorkflowScreen:
                         ft.Text(
                             f"Extracted {len(mask_files)} mask(s) from GLM contrasts. "
                             "Review the overlays below, then approve or reject.",
+                            size=13,
+                            color=ft.Colors.GREY_700,
+                        ),
+                        *mask_cards,
+                    ],
+                    spacing=15,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                width=650,
+                height=500,
+            ),
+            actions=[
+                ft.OutlinedButton(
+                    "View QC Report",
+                    icon=ft.Icons.ASSESSMENT,
+                    on_click=on_open_qc,
+                ),
+                ft.OutlinedButton(
+                    "Reject",
+                    icon=ft.Icons.CLOSE,
+                    on_click=on_reject,
+                ),
+                ft.FilledButton(
+                    "Approve",
+                    icon=ft.Icons.CHECK,
+                    on_click=on_approve,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
+    def _show_mni_mask_review_dialog(self, config: dict, base_dir: Path, mask_extraction_dir: Path, qc_dir: Path):
+        """Show mask review dialog for MNI atlas masks.
+
+        MNI atlas masks don't have ICA components or GLM contrasts — the user
+        reviews the atlas-derived mask overlays on the reference and approves.
+        """
+        import base64
+
+        from pineuro.gui.components.qc_viewer import open_qc_report
+
+        masks_dir = mask_extraction_dir / "03_masks"
+        if not masks_dir.exists():
+            _snack = ft.SnackBar(
+                ft.Text("MNI atlas masks not found. Run MNI mask extraction first."), bgcolor=ft.Colors.ORANGE
+            )
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
+        mask_files = sorted(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
+        if not mask_files:
+            _snack = ft.SnackBar(
+                ft.Text("No thresholded masks found. Run MNI mask extraction first."), bgcolor=ft.Colors.ORANGE
+            )
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
+        # Find reference file (boldref or MNI ref)
+        from glob import glob
+
+        preprocessing_dir = base_dir / "preprocessing"
+        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz"))) if preprocessing_dir.exists() else []
+        if not ref_files:
+            mni_ref_dir = mask_extraction_dir / "00_mni_ref"
+            if mni_ref_dir.exists():
+                ref_files = sorted(glob(str(mni_ref_dir / "*.nii.gz")))
+        ref_file = Path(ref_files[0]) if ref_files else None
+
+        # Find QC report
+        qc_report_path = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
+        qc_report: Path | None = qc_report_path
+        if not qc_report_path.exists():
+            matches = list(qc_dir.glob("*mask_extraction_qc.html"))
+            qc_report = matches[0] if matches else None
+
+        # Load mask selections for stats
+        import json
+
+        selections_data = {}
+        selections_file = masks_dir / "mask_selections.json"
+        if selections_file.exists():
+            with open(selections_file) as f:
+                selections_data = json.load(f)
+
+        atlas_name = config.get("mask", {}).get("network_atlas", "yeo_17")
+
+        # Build mask cards with overlay images
+        overlays_dir = qc_dir / "overlays" / "subject"
+        overlays_dir.mkdir(parents=True, exist_ok=True)
+        mask_cards: list[ft.Control] = []
+
+        for mask_file in mask_files:
+            bare = mask_file.name.replace(".nii.gz", "").replace(".nii", "")
+            mask_name = bare.replace(f"{self.participant_id}_", "").replace("_thr", "")
+
+            # Get stats from selections
+            sel = selections_data.get(mask_name, {})
+            n_voxels = sel.get("n_voxels_thresholded", "?")
+            stat_text = f"{n_voxels} voxels  |  Atlas: {atlas_name}"
+
+            # Find or generate overlay (regenerate if mask is newer than existing overlay)
+            overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
+            needs_overlay = not overlay_path.exists() or (
+                overlay_path.exists() and mask_file.exists() and mask_file.stat().st_mtime > overlay_path.stat().st_mtime
+            )
+            if needs_overlay and ref_file and ref_file.exists() and mask_file.exists():
+                try:
+                    from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas, summarize_mask
+
+                    summary = summarize_mask(mask_file, name=mask_name)
+                    atlas_slices = select_slices_from_atlas(
+                        atlas_path=ref_file,
+                        labels=[],
+                        target_label="",
+                        top_n_per_plane=1,
+                        mask_path=mask_file,
+                    )
+                    plot_mask_overlay_tripanel(
+                        mask_path=mask_file,
+                        ref_path=ref_file,
+                        out_path=overlay_path,
+                        slices=atlas_slices,
+                        title=f"{mask_name} (MNI Atlas, {summary.voxels} voxels)",
+                    )
+                except Exception as ex:
+                    logger.warning(f"Failed to generate overlay for {mask_name}: {ex}")
+
+            if overlay_path.exists():
+                b64 = base64.b64encode(overlay_path.read_bytes()).decode("utf-8")
+                overlay_content: ft.Control = ft.Image(
+                    src=f"data:image/png;base64,{b64}",
+                    fit=ft.BoxFit.CONTAIN,
+                    height=150,
+                )
+            else:
+                overlay_content = ft.Container(
+                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
+                    height=150,
+                    alignment=ft.Alignment(0, 0),
+                    bgcolor=ft.Colors.GREY_200,
+                )
+
+            card = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                ft.Text(mask_name, size=16, weight=ft.FontWeight.W_500),
+                                ft.Container(expand=True),
+                                ft.Text(stat_text, size=13, color=ft.Colors.GREY_700),
+                            ],
+                        ),
+                        ft.Container(
+                            content=overlay_content,
+                            border=ft.border.all(1, ft.Colors.GREY_300),
+                            border_radius=5,
+                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                        ),
+                    ],
+                    spacing=10,
+                ),
+                padding=15,
+                bgcolor=ft.Colors.GREY_100,
+                border_radius=8,
+                border=ft.border.all(2, ft.Colors.GREY_300),
+            )
+            mask_cards.append(card)
+
+        def _close_dialog(dlg):
+            dlg.open = False
+            self.page.update()
+
+        def on_approve(e):
+            self._set_qc_approved("initial", True)
+            self._add_log("[SUCCESS] MNI atlas masks reviewed and approved")
+            dialog.open = False
+            self.page.update()
+            self._refresh_step_list()
+            self._update_run_next_button()
+            _snack = ft.SnackBar(
+                ft.Text("MNI atlas masks approved! You can now proceed."), bgcolor=ft.Colors.GREEN
+            )
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+
+        def on_reject(e):
+            _close_dialog(dialog)
+            self._add_log("[INFO] MNI atlas masks rejected — re-run with different atlas/network settings")
+
+        def on_open_qc(e):
+            if qc_report and qc_report.exists():
+                open_qc_report(qc_report)
+            else:
+                _snack = ft.SnackBar(ft.Text("QC report not found."), bgcolor=ft.Colors.ORANGE)
+                _snack.open = True
+                self.page.overlay.append(_snack)
+                self.page.update()
+
+        def on_close(e):
+            _close_dialog(dialog)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.MAP, color=ft.Colors.TEAL),
+                    ft.Text("Review MNI Atlas Masks", expand=True),
+                    ft.IconButton(
+                        icon=ft.Icons.CLOSE,
+                        on_click=on_close,
+                        tooltip="Close",
+                    ),
+                ],
+            ),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            f"Extracted {len(mask_files)} mask(s) from {atlas_name} atlas "
+                            "registered to subject space. Review the overlays below, then approve or reject.",
                             size=13,
                             color=ft.Colors.GREY_700,
                         ),
@@ -1510,6 +1888,20 @@ class ParticipantWorkflowScreen:
             if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
                 self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
 
+            # Check if masks were created via MNI atlas fallback
+            selections_file = masks_dir / "mask_selections.json"
+            if selections_file.exists():
+                try:
+                    import json
+
+                    with open(selections_file) as f:
+                        sel_data = json.load(f)
+                    if any(s.get("source_type") == "mni_atlas" for s in sel_data.values() if isinstance(s, dict)):
+                        self._is_mni_atlas_mode = True
+                        self.step_statuses["mni_mask_extraction"] = StepStatus.COMPLETE
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
             # Check mask approval status (based on approval marker file)
             if self._initial_qc_approved:
                 self.step_statuses["mask_approval"] = StepStatus.COMPLETE
@@ -1615,6 +2007,7 @@ class ParticipantWorkflowScreen:
             "reference_initial": "localizer",
             "preprocessing": "mask_extraction",
             "mask_extraction": "mask_extraction",
+            "mni_mask_extraction": "mask_extraction",
             "mask_approval": "mask_extraction",
             "coregistration": "mask_extraction",
             "reference_realtime": "feedback",
@@ -1782,6 +2175,22 @@ class ParticipantWorkflowScreen:
                 )
             )
 
+        # MNI atlas fallback button (skip localizer entirely)
+        if not self._is_mask_reuse_mode and not self._is_mni_atlas_mode:
+            controls.extend(
+                [
+                    ft.Divider(),
+                    ft.Container(
+                        content=ft.OutlinedButton(
+                            "Skip Localizer: Use MNI Atlas Masks",
+                            icon=ft.Icons.MAP,
+                            on_click=lambda e: self._confirm_mni_fallback("localizer"),
+                        ),
+                        padding=ft.padding.only(top=5),
+                    ),
+                ]
+            )
+
         return ft.ExpansionPanel(
             header=ft.ListTile(
                 title=ft.Text("Localizer Session", weight=ft.FontWeight.BOLD),
@@ -1796,8 +2205,103 @@ class ParticipantWorkflowScreen:
         Returns:
             ExpansionPanel control
         """
-        # Build controls list
-        controls = [
+        config = self.study_config.session_config
+
+        # In MNI atlas mode, show simplified section
+        if self._is_mni_atlas_mode:
+            controls: list[ft.Control] = [
+                ft.Text("MNI Atlas Masks", size=14, weight=ft.FontWeight.W_500),
+            ]
+            mni_status = self.step_statuses.get("mni_mask_extraction", StepStatus.PENDING)
+            if mni_status == StepStatus.COMPLETE:
+                atlas_name = config.get("mask", {}).get("network_atlas", "yeo_17")
+                controls.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Text(f"MNI Atlas ({atlas_name})", size=12, color=ft.Colors.GREY_600),
+                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                            ],
+                            spacing=5,
+                        ),
+                        padding=ft.padding.only(left=10),
+                    )
+                )
+                # Mask review/approval gate
+                if self._initial_qc_approved:
+                    controls.append(
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    ft.TextButton(
+                                        "Review Masks",
+                                        icon=ft.Icons.TUNE,
+                                        on_click=lambda e: self._show_mask_review_dialog(),
+                                    ),
+                                    ft.Text("(MNI Atlas)", size=12, color=ft.Colors.GREY_600),
+                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                ],
+                                spacing=5,
+                            ),
+                            padding=ft.padding.only(left=10),
+                        )
+                    )
+                else:
+                    controls.append(
+                        ft.Container(
+                            content=ft.FilledButton(
+                                "Review & Approve Masks",
+                                icon=ft.Icons.APPROVAL,
+                                bgcolor=ft.Colors.ORANGE,
+                                on_click=lambda e: self._show_mask_review_dialog(),
+                            ),
+                            padding=ft.padding.only(left=10, top=5),
+                        )
+                    )
+            else:
+                controls.append(
+                    self._create_step_button(
+                        "mni_mask_extraction",
+                        "Extract MNI Atlas Masks",
+                        lambda e: self._on_step_clicked("mni_mask_extraction"),
+                    ),
+                )
+
+            # Still show coregistration if initial reference is enabled
+            if config["scan"].get("reference_initial_enabled", True):
+                controls.extend(
+                    [
+                        ft.Divider(),
+                        ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+                        self._create_step_button(
+                            "coregistration",
+                            "Coregister to Reference",
+                            lambda e: self._on_step_clicked("coregistration"),
+                        ),
+                    ]
+                )
+                if self.step_statuses.get("coregistration") == StepStatus.COMPLETE:
+                    controls.append(
+                        ft.Container(
+                            content=ft.TextButton(
+                                "View Coregistration QC",
+                                icon=ft.Icons.ASSESSMENT,
+                                on_click=lambda e: self._show_coregistration_qc("initial"),
+                            ),
+                            padding=ft.padding.only(left=10),
+                        )
+                    )
+
+            return ft.ExpansionPanel(
+                header=ft.ListTile(
+                    title=ft.Text("Mask Extraction", weight=ft.FontWeight.BOLD),
+                ),
+                content=ft.Column(controls, spacing=10),
+                expanded=self._get_session_for_next_step() == "mask_extraction",
+            )
+
+        # Standard mode: preprocessing + ICA/GLM extraction
+        controls = [  # type: ignore[no-redef]
             ft.Text("Preprocessing", size=14, weight=ft.FontWeight.W_500),
             self._create_step_button(
                 "preprocessing",
@@ -1854,6 +2358,22 @@ class ParticipantWorkflowScreen:
                         padding=ft.padding.only(left=10, top=5),
                     )
                 )
+
+        # MNI fallback button (always available unless in mask-reuse or already MNI mode)
+        if not self._is_mask_reuse_mode and not self._is_mni_atlas_mode:
+            controls.extend(
+                [
+                    ft.Divider(),
+                    ft.Container(
+                        content=ft.OutlinedButton(
+                            "Use MNI Atlas Masks Instead",
+                            icon=ft.Icons.MAP,
+                            on_click=lambda e: self._confirm_mni_fallback("mask_extraction"),
+                        ),
+                        padding=ft.padding.only(top=5),
+                    ),
+                ]
+            )
 
         # Add coregistration section only if initial reference is enabled
         config = self.study_config.session_config
@@ -3556,6 +4076,17 @@ class ParticipantWorkflowScreen:
                 "output_pattern": "0*",
             },
             "mask_extraction": self._get_mask_extraction_step_info(config, base_dir),
+            "mni_mask_extraction": {
+                "label": "Extract MNI Atlas Masks",
+                "description": "Register MNI atlas to subject space and extract network masks directly from atlas parcellation.",
+                "parameters": {
+                    "Atlas": config.get("mask", {}).get("network_atlas", "yeo_17"),
+                    "Networks": ", ".join(config.get("mask", {}).get("yeo_targets", ["DefaultA", "ContA"])),
+                    "Output": base_dir / "mask_extraction" / "03_masks",
+                },
+                "output_path": base_dir / "mask_extraction" / "03_masks",
+                "output_pattern": f"{participant_id}_*_thr.nii.gz",
+            },
             "coregistration": {
                 "label": "Coregister to Reference",
                 "description": "Register network masks from rest space to reference feedback space.",
@@ -4784,6 +5315,7 @@ class ParticipantWorkflowScreen:
             "reference_initial": "Collect Initial Reference",
             "preprocessing": "Run Preprocessing",
             "mask_extraction": "Extract Masks",
+            "mni_mask_extraction": "Extract MNI Atlas Masks",
             "coregistration": "Coregister to Reference",
             "reference_realtime": "Collect Real-time Reference",
             "coregistration_realtime": "Coregister to Real-time Reference",
@@ -5137,7 +5669,15 @@ class ParticipantWorkflowScreen:
         workflow = []
 
         # In mask reuse mode, skip localizer and mask extraction steps
-        if not self._is_mask_reuse_mode:
+        if self._is_mni_atlas_mode:
+            # MNI atlas mode: reference + MNI extraction + approval + coregistration
+            if reference_initial_enabled:
+                workflow.append(("reference_initial", "Collect Initial Reference"))
+            workflow.append(("mni_mask_extraction", "Extract MNI Atlas Masks"))
+            workflow.append(("mask_approval", "Review & Approve Masks"))
+            if reference_initial_enabled:
+                workflow.append(("coregistration", "Coregister to Reference"))
+        elif not self._is_mask_reuse_mode:
             # Add Initial Reference if enabled
             if reference_initial_enabled:
                 workflow.append(("reference_initial", "Collect Initial Reference"))
