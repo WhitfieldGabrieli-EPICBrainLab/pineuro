@@ -956,7 +956,7 @@ class PipelineRunner:
 
                 self._emit_progress(f"Converting reference DICOMs from {ref_dir.name}...")
                 nifti_file = dicom_to_nifti(
-                    input_path=ref_dir,
+                    dicom_dir=ref_dir,
                     output_dir=mni_ref_dir,
                     output_name=f"{self.participant_id}_task-reference",
                 )

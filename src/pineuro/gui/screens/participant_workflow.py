@@ -393,13 +393,65 @@ class ParticipantWorkflowScreen:
         if self.step_statuses.get("mask_extraction") != StepStatus.COMPLETE:
             self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
 
+        # Revoke any prior mask approval (new masks need fresh review)
+        self._set_qc_approved("initial", False)
+
         # Register the MNI step as pending
         self.step_statuses["mni_mask_extraction"] = StepStatus.PENDING
 
         # Rebuild the step list UI and start the MNI extraction immediately
+        # Force overwrite — we're deliberately replacing existing masks
         self._refresh_step_list()
-        self._pending_overwrite = False
+        self._pending_overwrite = True
         self._start_step("mni_mask_extraction")
+
+    def _revert_from_mni(self):
+        """Revert from MNI atlas mode back to standard mask extraction.
+
+        Re-runs the original mask extraction pipeline with overwrite=True
+        so ICA/GLM masks replace the MNI atlas masks.
+        """
+        if self._is_running:
+            return
+
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        mask_extraction_dir = base_dir / "mask_extraction"
+
+        # Check that ICA/GLM outputs exist to revert to
+        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+        if localizer_type == "rest":
+            ica_dir = mask_extraction_dir / "01_ica"
+            has_original = ica_dir.exists() and any(ica_dir.glob("*_components.nii.gz"))
+        else:
+            glm_dir = mask_extraction_dir / "01_glm"
+            has_original = glm_dir.exists() and any(glm_dir.glob("*.nii.gz"))
+
+        if not has_original:
+            _snack = ft.SnackBar(
+                ft.Text("No original ICA/GLM outputs found. Run the full localizer pipeline first."),
+                bgcolor=ft.Colors.ORANGE,
+            )
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
+        # Switch back to standard mode
+        self._is_mni_atlas_mode = False
+        self._set_qc_approved("initial", False)
+
+        # Reset mask extraction to pending so user can re-run it
+        self.step_statuses["mask_extraction"] = StepStatus.PENDING
+        self.step_statuses.pop("mni_mask_extraction", None)
+
+        self._add_log("[INFO] Reverted to standard mask extraction mode")
+        self._refresh_step_list()
+        self._update_run_next_button()
+
+        # Start mask extraction immediately with overwrite
+        self._pending_overwrite = True
+        self._start_step("mask_extraction")
 
     def _show_mask_review_dialog(self):
         """Show the mask review/selection dialog."""
@@ -2315,6 +2367,21 @@ class ParticipantWorkflowScreen:
                             padding=ft.padding.only(left=10),
                         )
                     )
+
+            # Revert to original masks option
+            controls.extend(
+                [
+                    ft.Divider(),
+                    ft.Container(
+                        content=ft.OutlinedButton(
+                            "Revert to Original Masks",
+                            icon=ft.Icons.UNDO,
+                            on_click=lambda e: self._revert_from_mni(),
+                        ),
+                        padding=ft.padding.only(top=5),
+                    ),
+                ]
+            )
 
             return ft.ExpansionPanel(
                 header=ft.ListTile(
