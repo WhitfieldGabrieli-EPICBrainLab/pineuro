@@ -28,10 +28,9 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 if TYPE_CHECKING:
     from pineuro.session import VisitConfig
 
+# Heavy pineuro imports (feedback, preprocessing, session, sham, tasks.session)
+# are deferred to method bodies to avoid loading numpy/nibabel/scipy at import time.
 import flet as ft
-
-# Heavy pineuro imports are deferred to method bodies to avoid loading
-# numpy/nibabel/scipy when this screen module is first imported.
 
 from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, scan_collection_acqs
 from ..components.activation_plot import ActivationPlot

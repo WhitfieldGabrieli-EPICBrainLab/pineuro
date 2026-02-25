@@ -47,6 +47,13 @@ dev = ["build", "mypy>=1.10", "pytest>=8.0", "ruff>=0.9.0", "types-PyYAML"]
 [project.scripts]
 pineuro-gui = "pineuro.gui.app:main"
 
+# Third-party task plugins register under this entry-point group.
+# In a plugin package's pyproject.toml:
+#   [project.entry-points."pineuro.tasks"]
+#   my_task = "my_package.tasks"
+# pineuro auto-discovers all registered plugins at GUI startup.
+[project.entry-points."pineuro.tasks"]
+
 # ---------------------------------------------------------------------------
 # Ruff — linter + formatter
 # ---------------------------------------------------------------------------

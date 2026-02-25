@@ -25,7 +25,10 @@ Example YAML structure:
         ...
 """
 
+import hashlib
 import logging
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -65,6 +68,144 @@ class ConfigManager:
         # Sanitize filename
         safe_name = study_name.replace(" ", "_").replace("/", "_")
         return self.studies_dir / f"{safe_name}.yaml"
+
+    # ------------------------------------------------------------------
+    # Version history helpers
+    # ------------------------------------------------------------------
+
+    def _get_study_versions_dir(self, study_name: str) -> Path:
+        """Get the versions directory for a study.
+
+        Args:
+            study_name: Name of the study
+
+        Returns:
+            Path to .versions/{sanitized_name}/
+        """
+        safe_name = study_name.replace(" ", "_").replace("/", "_")
+        return self.studies_dir / ".versions" / safe_name
+
+    @staticmethod
+    def _content_hash(file_path: Path) -> str:
+        """Return SHA-256 hex digest of a file's contents."""
+        return hashlib.sha256(file_path.read_bytes()).hexdigest()
+
+    def _next_version_number(self, versions_dir: Path) -> int:
+        """Return the next version number for a study.
+
+        Scans existing version files and returns max + 1, or 1 if none exist.
+        """
+        if not versions_dir.exists():
+            return 1
+        existing = sorted(versions_dir.glob("*.yaml"))
+        if not existing:
+            return 1
+        last = existing[-1].stem
+        try:
+            return int(last.split("_", 1)[0]) + 1
+        except (ValueError, IndexError):
+            return len(existing) + 1
+
+    def _snapshot_version(self, study_config: StudyConfig) -> Path | None:
+        """Create a version snapshot if content has changed.
+
+        Copies the CURRENT on-disk file to .versions/ BEFORE the overwrite,
+        so the version history records previous states.
+
+        Args:
+            study_config: The study config about to be saved (file_path must be set)
+
+        Returns:
+            Path to the snapshot file, or None if no snapshot was needed.
+        """
+        file_path = study_config.file_path
+        if file_path is None or not file_path.exists():
+            return None
+
+        old_hash = self._content_hash(file_path)
+
+        new_yaml = yaml.safe_dump(
+            study_config.to_dict(),
+            default_flow_style=False,
+            sort_keys=False,
+        )
+        new_hash = hashlib.sha256(new_yaml.encode("utf-8")).hexdigest()
+
+        if old_hash == new_hash:
+            return None
+
+        versions_dir = self._get_study_versions_dir(study_config.metadata.name)
+        versions_dir.mkdir(parents=True, exist_ok=True)
+
+        version_num = self._next_version_number(versions_dir)
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        snapshot_path = versions_dir / f"{version_num:03d}_{timestamp}.yaml"
+
+        shutil.copy2(file_path, snapshot_path)
+        logger.info(f"Version snapshot: {snapshot_path.name}")
+        return snapshot_path
+
+    def list_versions(self, study_name: str) -> list[dict]:
+        """List all version snapshots for a study.
+
+        Args:
+            study_name: Name of the study
+
+        Returns:
+            List of dicts with keys 'version', 'timestamp', 'path',
+            sorted oldest to newest.
+        """
+        versions_dir = self._get_study_versions_dir(study_name)
+        if not versions_dir.exists():
+            return []
+
+        versions = []
+        for yaml_file in sorted(versions_dir.glob("*.yaml")):
+            parts = yaml_file.stem.split("_", 1)
+            try:
+                version_num = int(parts[0])
+            except (ValueError, IndexError):
+                continue
+            timestamp_str = parts[1] if len(parts) > 1 else ""
+            # Convert "2026-02-25T10-30-00" → "2026-02-25 10:30:00"
+            display_ts = timestamp_str.replace("T", " ")
+            if len(display_ts) > 11:
+                display_ts = display_ts[:10] + " " + display_ts[11:].replace("-", ":")
+
+            versions.append({
+                "version": version_num,
+                "timestamp": display_ts,
+                "path": yaml_file,
+            })
+        return versions
+
+    def restore_version(self, study_name: str, version_path: Path) -> StudyConfig:
+        """Restore a study from a version snapshot.
+
+        Creates a NEW version snapshot of the current state, then overwrites
+        HEAD with the old version's content. Never destructive.
+
+        Args:
+            study_name: Name of the study
+            version_path: Path to the version file to restore
+
+        Returns:
+            The restored StudyConfig
+
+        Raises:
+            FileNotFoundError: If the version file doesn't exist
+        """
+        if not version_path.exists():
+            raise FileNotFoundError(f"Version file not found: {version_path}")
+
+        restored_config = self.load_study_from_file(version_path)
+        restored_config.file_path = self._get_study_path(study_name)
+
+        # save_study will snapshot the current HEAD before overwriting
+        self.save_study(restored_config, overwrite=True)
+
+        logger.info(f"Restored study '{study_name}' from {version_path.name}")
+        return restored_config
 
     def list_studies(self) -> list[StudyMetadata]:
         """List all available studies.
@@ -147,6 +288,9 @@ class ConfigManager:
         if study_config.file_path.exists() and not overwrite:
             raise FileExistsError(f"Study file already exists: {study_config.file_path}")
 
+        # Snapshot the current version before overwriting
+        self._snapshot_version(study_config)
+
         # Save to YAML
         logger.info(f"Saving study to {study_config.file_path}")
 
@@ -177,6 +321,13 @@ class ConfigManager:
 
         logger.info(f"Deleting study: {study_path}")
         study_path.unlink()
+
+        # Clean up version history
+        versions_dir = self._get_study_versions_dir(study_name)
+        if versions_dir.exists():
+            shutil.rmtree(versions_dir)
+            logger.info(f"Deleted version history for: {study_name}")
+
         return True
 
     def _next_unique_name(self, base: str, existing_names: set[str]) -> str:
@@ -256,8 +407,6 @@ class ConfigManager:
         bool
             ``True`` if the file was written, ``False`` if the study was not found.
         """
-        import shutil
-
         source = self._get_study_path(study_name)
         if not source.exists():
             logger.warning(f"Study not found for export: {study_name}")

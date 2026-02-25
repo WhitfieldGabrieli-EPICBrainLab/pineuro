@@ -223,3 +223,108 @@ class TestExportImport:
         manager.import_study(dest)
         assert manager.load_study("Test Study") is not None
         assert manager.load_study("Test Study_2") is not None
+
+
+# =============================================================================
+# Version history
+# =============================================================================
+
+
+class TestVersionHistory:
+    def test_first_save_creates_no_snapshot(self, manager):
+        """First save has nothing to snapshot (no previous file)."""
+        study = make_study()
+        manager.save_study(study)
+        assert manager.list_versions("Test Study") == []
+
+    def test_second_save_creates_snapshot(self, manager):
+        """Saving after a change snapshots the previous version."""
+        study = make_study()
+        manager.save_study(study)
+        study.metadata.description = "Updated"
+        manager.save_study(study)
+        versions = manager.list_versions("Test Study")
+        assert len(versions) == 1
+        assert versions[0]["version"] == 1
+
+    def test_multiple_saves_increment_version(self, manager):
+        """Multiple saves produce incrementing version numbers."""
+        study = make_study()
+        manager.save_study(study)
+        study.metadata.description = "v2"
+        manager.save_study(study)
+        study.metadata.description = "v3"
+        manager.save_study(study)
+        versions = manager.list_versions("Test Study")
+        assert len(versions) == 2
+        assert versions[0]["version"] == 1
+        assert versions[1]["version"] == 2
+
+    def test_restore_creates_new_snapshot(self, manager):
+        """Restoring a version snapshots the current state first."""
+        study = make_study()
+        manager.save_study(study)
+        study.metadata.description = "Changed"
+        manager.save_study(study)
+        versions = manager.list_versions("Test Study")
+        assert len(versions) == 1
+
+        manager.restore_version("Test Study", versions[0]["path"])
+        assert len(manager.list_versions("Test Study")) == 2
+
+    def test_restore_loads_old_content(self, manager):
+        """Restoring actually brings back old content."""
+        study = make_study(description="Original desc")
+        manager.save_study(study)
+        study.metadata.description = "New desc"
+        manager.save_study(study)
+
+        versions = manager.list_versions("Test Study")
+        manager.restore_version("Test Study", versions[0]["path"])
+
+        loaded = manager.load_study("Test Study")
+        assert loaded.metadata.description == "Original desc"
+
+    def test_delete_study_cleans_versions(self, manager):
+        """Deleting a study removes its version history."""
+        study = make_study()
+        manager.save_study(study)
+        study.metadata.description = "v2"
+        manager.save_study(study)
+        assert len(manager.list_versions("Test Study")) == 1
+
+        manager.delete_study("Test Study")
+        assert manager.list_versions("Test Study") == []
+
+    def test_list_versions_nonexistent_study(self, manager):
+        """Listing versions for a nonexistent study returns empty list."""
+        assert manager.list_versions("Ghost") == []
+
+    def test_restore_nonexistent_version_raises(self, manager):
+        """Restoring from a nonexistent path raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            manager.restore_version("Test Study", manager.studies_dir / "fake.yaml")
+
+    def test_version_files_are_valid_yaml(self, manager):
+        """Version snapshot files are loadable study configs."""
+        study = make_study()
+        manager.save_study(study)
+        study.metadata.description = "Updated"
+        manager.save_study(study)
+
+        versions = manager.list_versions("Test Study")
+        loaded = manager.load_study_from_file(versions[0]["path"])
+        assert loaded.metadata.name == "Test Study"
+        assert loaded.metadata.description == "A test study"
+
+    def test_versions_sorted_oldest_first(self, manager):
+        """Versions are returned sorted oldest to newest."""
+        study = make_study()
+        manager.save_study(study)
+        for i in range(3):
+            study.metadata.description = f"edit {i}"
+            manager.save_study(study)
+
+        versions = manager.list_versions("Test Study")
+        assert len(versions) == 3
+        assert versions[0]["version"] < versions[1]["version"] < versions[2]["version"]

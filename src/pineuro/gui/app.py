@@ -132,6 +132,9 @@ class PyrtnfApp:
         self.config_manager = ConfigManager()
         self.current_study: StudyConfig | None = None
 
+        # Discover third-party task plugins via entry points
+        self._discover_task_plugins()
+
         # Configure page
         self._setup_page()
 
@@ -152,6 +155,21 @@ class PyrtnfApp:
         )
 
         logger.info("pineuro GUI initialized")
+
+    def _discover_task_plugins(self):
+        """Discover and register third-party task plugins.
+
+        Uses importlib.metadata entry points (group='pineuro.tasks') to
+        find and load externally installed task packages.
+        """
+        from pineuro.tasks.task_registry import discover_tasks
+
+        try:
+            count = discover_tasks()
+            if count > 0:
+                logger.info(f"Discovered {count} task plugin(s) via entry points")
+        except Exception as exc:
+            logger.warning(f"Task plugin discovery failed: {exc}")
 
     def show_study_manager(self):
         """Show the study manager screen."""
@@ -317,6 +335,12 @@ class PyrtnfApp:
                                     icon_size=24,
                                     tooltip="Export study config to file",
                                     on_click=lambda _, name=study_meta.name: self._export_study(name),
+                                ),
+                                ft.IconButton(
+                                    icon=ft.Icons.HISTORY,
+                                    icon_size=24,
+                                    tooltip="Version History",
+                                    on_click=lambda _, name=study_meta.name: self._show_version_history(name),
                                 ),
                                 ft.IconButton(
                                     icon=ft.Icons.DELETE_OUTLINE,
@@ -574,6 +598,77 @@ class PyrtnfApp:
             ],
         )
 
+        self.page.show_dialog(dialog)
+
+    def _show_version_history(self, study_name: str):
+        """Show version history dialog for a study.
+
+        Args:
+            study_name: Name of the study
+        """
+        versions = self.config_manager.list_versions(study_name)
+
+        if not versions:
+            _snack = ft.SnackBar(ft.Text(f"No version history for '{study_name}'"))
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
+        def restore_version(version_info):
+            self.page.pop_dialog()
+            try:
+                self.config_manager.restore_version(study_name, version_info["path"])
+                _snack = ft.SnackBar(
+                    ft.Text(f"Restored version {version_info['version']} of '{study_name}'")
+                )
+                _snack.open = True
+                self.page.overlay.append(_snack)
+                self.page.update()
+                self.show_study_manager()
+            except Exception as ex:
+                logger.error(f"Failed to restore version: {ex}")
+                _snack = ft.SnackBar(ft.Text(f"Restore failed: {ex}"))
+                _snack.open = True
+                self.page.overlay.append(_snack)
+                self.page.update()
+
+        # Build version list (newest first for display)
+        version_rows: list[ft.Control] = []
+        for v in reversed(versions):
+            version_rows.append(
+                ft.ListTile(
+                    leading=ft.Icon(ft.Icons.SAVE, color=ft.Colors.BLUE_400),
+                    title=ft.Text(f"Version {v['version']}"),
+                    subtitle=ft.Text(v["timestamp"], size=12, color=ft.Colors.GREY_600),
+                    trailing=ft.OutlinedButton(
+                        "Restore",
+                        on_click=lambda _, info=v: restore_version(info),
+                    ),
+                )
+            )
+
+        dialog = ft.AlertDialog(
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.HISTORY, color=ft.Colors.BLUE_400),
+                    ft.Text(f"Version History: {study_name}", weight=ft.FontWeight.BOLD),
+                ],
+                spacing=8,
+            ),
+            content=ft.Container(
+                content=ft.Column(
+                    version_rows,
+                    spacing=4,
+                    tight=True,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                width=500,
+                height=400,
+            ),
+            actions=[ft.TextButton("Close", on_click=lambda _: self.page.pop_dialog())],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
         self.page.show_dialog(dialog)
 
     def _show_template_dialog(self):
