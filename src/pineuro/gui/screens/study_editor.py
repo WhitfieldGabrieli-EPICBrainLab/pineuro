@@ -345,7 +345,7 @@ class StudyEditorScreen:
         )
 
         self.reference_initial_n_volumes_field = ft.TextField(
-            width=200,
+            width=600,
             label="Number of volumes",
             value=str(config["scan"].get("reference_initial_n_volumes", 2)),
             visible=config["scan"].get("reference_initial_enabled", True),
@@ -363,7 +363,7 @@ class StudyEditorScreen:
         )
 
         self.reference_realtime_n_volumes_field = ft.TextField(
-            width=200,
+            width=600,
             label="Number of volumes",
             value=str(config["scan"].get("reference_realtime_n_volumes", 2)),
             visible=config["scan"].get("reference_realtime_enabled", True),
