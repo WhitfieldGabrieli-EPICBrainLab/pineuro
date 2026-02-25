@@ -1884,8 +1884,7 @@ def setup_visit_with_reused_masks(
     if not source_masks:
         source_base = config.paths.base_dir / config.paths.participant_id / source_visit / "mask_extraction"
         raise FileNotFoundError(
-            f"No masks found in source visit {source_visit}. "
-            f"Expected masks in: {source_base / '03_masks'}"
+            f"No masks found in source visit {source_visit}. Expected masks in: {source_base / '03_masks'}"
         )
 
     if not source_ref.exists():

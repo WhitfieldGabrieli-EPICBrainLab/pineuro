@@ -1,7 +1,5 @@
 """Tests for pineuro.tasks.rnt_experience_sampling — trigger logic and registration."""
 
-import pytest
-
 
 # =============================================================================
 # Registration
@@ -92,6 +90,7 @@ class TestTriggerDetection:
 
         class TriggerStub:
             """Minimal stub mimicking RNTExperienceSamplingTask for trigger testing."""
+
             pass
 
         stub = TriggerStub()

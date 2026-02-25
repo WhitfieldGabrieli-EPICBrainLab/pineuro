@@ -108,10 +108,21 @@ class TaskBase(ABC):  # noqa: B024
     # task loop.
 
     _PSYCHOPY_TO_VK: dict[str, int] = {
-        "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
-        "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
-        "t": 0x54, "equal": 0xBB, "+": 0x6B,
-        "space": 0x20, "return": 0x0D,
+        "0": 0x30,
+        "1": 0x31,
+        "2": 0x32,
+        "3": 0x33,
+        "4": 0x34,
+        "5": 0x35,
+        "6": 0x36,
+        "7": 0x37,
+        "8": 0x38,
+        "9": 0x39,
+        "t": 0x54,
+        "equal": 0xBB,
+        "+": 0x6B,
+        "space": 0x20,
+        "return": 0x0D,
     }
 
     def _reset_poll_state(self) -> None:

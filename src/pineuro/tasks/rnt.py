@@ -315,9 +315,7 @@ class RNTTask(BaseLocalizerTask):
         """
         if self._keywords_file_override is not None:
             if not self._keywords_file_override.exists():
-                raise FileNotFoundError(
-                    f"Keywords file not found: {self._keywords_file_override}"
-                )
+                raise FileNotFoundError(f"Keywords file not found: {self._keywords_file_override}")
             return self._keywords_file_override
 
         if self.keywords_dir is None or not self.keywords_dir.is_dir():
@@ -334,11 +332,7 @@ class RNTTask(BaseLocalizerTask):
         ]
 
         for pattern in patterns:
-            matches = [
-                p
-                for p in self.keywords_dir.glob(pattern)
-                if p.suffix in (".json", ".tsv", ".csv")
-            ]
+            matches = [p for p in self.keywords_dir.glob(pattern) if p.suffix in (".json", ".tsv", ".csv")]
             if matches:
                 keywords_file = matches[0]
                 logger.info(f"Found keywords file: {keywords_file}")
@@ -397,18 +391,13 @@ class RNTTask(BaseLocalizerTask):
         start = (self.run_number - 1) * self.n_trials_per_run
         end = start + self.n_trials_per_run
         self._rumination_prompts = [
-            RUMINATION_PROMPTS[rumination_order[i % len(RUMINATION_PROMPTS)]]
-            for i in range(start, end)
+            RUMINATION_PROMPTS[rumination_order[i % len(RUMINATION_PROMPTS)]] for i in range(start, end)
         ]
         self._distraction_prompts = [
-            DISTRACTION_PROMPTS[distraction_order[i % len(DISTRACTION_PROMPTS)]]
-            for i in range(start, end)
+            DISTRACTION_PROMPTS[distraction_order[i % len(DISTRACTION_PROMPTS)]] for i in range(start, end)
         ]
 
-        logger.info(
-            f"Loaded {len(self._memories)} memories for run {self.run_number} "
-            f"(pass {target_pass})"
-        )
+        logger.info(f"Loaded {len(self._memories)} memories for run {self.run_number} (pass {target_pass})")
 
     def _parse_keywords_file(self, path: Path) -> list[dict[str, Any]]:
         """Parse a keywords file (JSON or TSV/CSV).
@@ -426,7 +415,7 @@ class RNTTask(BaseLocalizerTask):
         if path.suffix == ".json":
             with open(path) as f:
                 data = json.load(f)
-            memories = data.get("memories", data) if isinstance(data, dict) else data
+            memories: list[dict[str, Any]] = data.get("memories", data) if isinstance(data, dict) else data
             for m in memories:
                 m["pass"] = int(m["pass"])
             return memories
@@ -650,10 +639,7 @@ class RNTTask(BaseLocalizerTask):
 
         # 3. Rumination prompt
         onset = self._experiment_clock.getTime()
-        logger.info(
-            f"[TIMING] Rumination START: onset={onset:.2f}s, "
-            f"duration={self.rumination_duration}s"
-        )
+        logger.info(f"[TIMING] Rumination START: onset={onset:.2f}s, duration={self.rumination_duration}s")
         self._show_text(rumination_prompt, self.rumination_duration)
         self.record_event(
             onset,
@@ -700,18 +686,13 @@ class RNTTask(BaseLocalizerTask):
         # 6. Rest/fixation with jitter
         rest_duration = random.uniform(self.rest_min, self.rest_max)
         onset = self._experiment_clock.getTime()
-        logger.info(
-            f"[TIMING] Rest: onset={onset:.2f}s, duration={rest_duration:.2f}s"
-        )
+        logger.info(f"[TIMING] Rest: onset={onset:.2f}s, duration={rest_duration:.2f}s")
         self._show_fixation(rest_duration)
         self.record_event(onset, rest_duration, "rest", trial=trial_num)
 
         # 7. Distraction prompt
         onset = self._experiment_clock.getTime()
-        logger.info(
-            f"[TIMING] Distraction START: onset={onset:.2f}s, "
-            f"duration={self.rumination_duration}s"
-        )
+        logger.info(f"[TIMING] Distraction START: onset={onset:.2f}s, duration={self.rumination_duration}s")
         self._show_text(distraction_prompt, self.rumination_duration)
         self.record_event(
             onset,
@@ -755,9 +736,7 @@ class RNTTask(BaseLocalizerTask):
             response_time=rt,
         )
 
-        logger.info(
-            f"[TIMING] Trial {trial_num} END: t={self._experiment_clock.getTime():.2f}s"
-        )
+        logger.info(f"[TIMING] Trial {trial_num} END: t={self._experiment_clock.getTime():.2f}s")
 
     # =========================================================================
     # Lifecycle
@@ -769,10 +748,7 @@ class RNTTask(BaseLocalizerTask):
         self.create_window(monitor_position=self.monitor_position)
         self._create_stimuli()
 
-        logger.info(
-            f"RNTTask setup: run={self.run_number}, "
-            f"{len(self._memories)} memories loaded"
-        )
+        logger.info(f"RNTTask setup: run={self.run_number}, {len(self._memories)} memories loaded")
 
     def _create_stimuli(self) -> None:
         """Pre-create reusable PsychoPy stimuli to avoid GPU memory leaks."""
@@ -780,12 +756,19 @@ class RNTTask(BaseLocalizerTask):
 
         # Reusable text stimulus for _show_text()
         self._text_stim = visual.TextStim(
-            self.win, text="", height=0.06, color="white", wrapWidth=1.2,
+            self.win,
+            text="",
+            height=0.06,
+            color="white",
+            wrapWidth=1.2,
         )
 
         # Reusable fixation stimulus
         self._fixation_stim = visual.TextStim(
-            self.win, text="+", height=0.3, color="white",
+            self.win,
+            text="+",
+            height=0.3,
+            color="white",
         )
 
         # Rating scale components (static geometry reused across all ratings)
@@ -800,35 +783,52 @@ class RNTTask(BaseLocalizerTask):
             self.win,
             start=(-scale_width / 2, scale_y),
             end=(scale_width / 2, scale_y),
-            lineColor="white", lineWidth=2,
+            lineColor="white",
+            lineWidth=2,
         )
         self._rating_tick_marks = []
         self._rating_tick_labels = []
         for i, val in enumerate(range(1, 6)):
-            self._rating_tick_marks.append(visual.Line(
-                self.win,
-                start=(tick_x[i], scale_y - 0.015),
-                end=(tick_x[i], scale_y + 0.015),
-                lineColor="white", lineWidth=2,
-            ))
-            self._rating_tick_labels.append(visual.TextStim(
-                self.win,
-                text=str(val),
-                pos=(tick_x[i], scale_y - 0.05),
-                height=0.035, color="white",
-            ))
+            self._rating_tick_marks.append(
+                visual.Line(
+                    self.win,
+                    start=(tick_x[i], scale_y - 0.015),
+                    end=(tick_x[i], scale_y + 0.015),
+                    lineColor="white",
+                    lineWidth=2,
+                )
+            )
+            self._rating_tick_labels.append(
+                visual.TextStim(
+                    self.win,
+                    text=str(val),
+                    pos=(tick_x[i], scale_y - 0.05),
+                    height=0.035,
+                    color="white",
+                )
+            )
 
         self._rating_left_label = visual.TextStim(
-            self.win, text="", pos=(tick_x[0], scale_y - 0.1),
-            height=0.035, color="white",
+            self.win,
+            text="",
+            pos=(tick_x[0], scale_y - 0.1),
+            height=0.035,
+            color="white",
         )
         self._rating_right_label = visual.TextStim(
-            self.win, text="", pos=(tick_x[-1], scale_y - 0.1),
-            height=0.035, color="white",
+            self.win,
+            text="",
+            pos=(tick_x[-1], scale_y - 0.1),
+            height=0.035,
+            color="white",
         )
         self._rating_question = visual.TextStim(
-            self.win, text="", pos=(0, 0.15),
-            height=0.06, color="white", wrapWidth=1.2,
+            self.win,
+            text="",
+            pos=(0, 0.15),
+            height=0.06,
+            color="white",
+            wrapWidth=1.2,
         )
 
         # Reusable triangle marker — vertices defined relative to (0,0),
@@ -842,7 +842,9 @@ class RNTTask(BaseLocalizerTask):
                 (marker_size, scale_y + marker_gap + marker_size * 2),
                 (0, scale_y + marker_gap),
             ],
-            fillColor="white", lineColor="white", closeShape=True,
+            fillColor="white",
+            lineColor="white",
+            closeShape=True,
         )
         self._scale_left_x = scale_left_x
         self._tick_spacing = tick_spacing
@@ -879,10 +881,7 @@ class RNTTask(BaseLocalizerTask):
             self._run_trial(trial_idx)
 
         total_time = self._experiment_clock.getTime()
-        logger.info(
-            f"[TIMING] Paradigm complete: {self.n_trials_per_run} trials, "
-            f"total={total_time:.1f}s"
-        )
+        logger.info(f"[TIMING] Paradigm complete: {self.n_trials_per_run} trials, total={total_time:.1f}s")
 
     def cleanup(self) -> None:
         """Release resources after task completes."""

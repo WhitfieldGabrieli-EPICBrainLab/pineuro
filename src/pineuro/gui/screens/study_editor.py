@@ -305,7 +305,6 @@ class StudyEditorScreen:
         )
 
         # Reverse contrasts checkbox (task-based localizers only)
-        is_task_localizer = config["scan"].get("localizer_task_type", "rest") != "rest"
         self.include_reverse_contrasts_checkbox = ft.Checkbox(
             label="Include reverse contrasts (enables dual-network from single-contrast localizer)",
             value=config.get("mask", {}).get("include_reverse_contrasts", False),
@@ -1772,6 +1771,7 @@ class StudyEditorScreen:
             return ""
         try:
             from pineuro.tasks.task_registry import get_task_metadata
+
             metadata = get_task_metadata(task_type)
             if metadata.default_contrasts:
                 parts = [f"{name}: {expr}" for name, expr in metadata.default_contrasts.items()]

@@ -2352,7 +2352,7 @@ def compute_cluster_table(
                     label = f"region_{val}"
                 overlap[label] = int((atlas_vals == val).sum())
             if overlap:
-                entry["anatomical_label"] = max(overlap, key=overlap.get)
+                entry["anatomical_label"] = max(overlap, key=lambda k: overlap[k])
                 entry["label_overlap"] = overlap
             else:
                 entry["anatomical_label"] = "Unlabeled"
@@ -2364,7 +2364,7 @@ def compute_cluster_table(
         clusters.append(entry)
 
     # Sort by size descending, limit
-    clusters.sort(key=lambda c: c["n_voxels"], reverse=True)
+    clusters.sort(key=lambda c: c["n_voxels"], reverse=True)  # type: ignore[arg-type, return-value]
     # Re-number after sorting
     for i, c in enumerate(clusters[:max_clusters]):
         c["cluster_id"] = i + 1

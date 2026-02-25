@@ -179,10 +179,10 @@ def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
 from .ball import BallTask  # Registers "ball" task
 from .fixation import FixationTask  # Registers "fixation" localizer task
 from .gauge import GaugeTask  # Registers "gauge" task
-from .self_other import SelfOtherTask  # Registers "self_other" localizer task
-from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
 from .rnt import RNTTask  # Registers "rnt" localizer task
 from .rnt_experience_sampling import RNTExperienceSamplingTask  # Registers "rnt_experience_sampling" task
+from .self_other import SelfOtherTask  # Registers "self_other" localizer task
+from .thermometer import ThermometerTask  # Registers "thermometer" task (example)
 
 __all__ = [
     # Base classes

@@ -662,7 +662,9 @@ class ParticipantWorkflowScreen:
                         ft.DataRow(
                             cells=[
                                 ft.DataCell(ft.Text("...", size=11, italic=True)),
-                                ft.DataCell(ft.Text(f"+{len(cluster_table_data) - max_display} more", size=11, italic=True)),
+                                ft.DataCell(
+                                    ft.Text(f"+{len(cluster_table_data) - max_display} more", size=11, italic=True)
+                                ),
                                 ft.DataCell(ft.Text("")),
                                 ft.DataCell(ft.Text("")),
                             ],
@@ -671,10 +673,10 @@ class ParticipantWorkflowScreen:
                 table_content = ft.Container(
                     content=ft.DataTable(
                         columns=[
-                            ft.DataColumn(ft.Text("#", size=11, weight=ft.FontWeight.BOLD)),
-                            ft.DataColumn(ft.Text("Voxels", size=11, weight=ft.FontWeight.BOLD), numeric=True),
-                            ft.DataColumn(ft.Text("Peak", size=11, weight=ft.FontWeight.BOLD), numeric=True),
-                            ft.DataColumn(ft.Text("Region", size=11, weight=ft.FontWeight.BOLD)),
+                            ft.DataColumn(ft.Text("#", size=11, weight=ft.FontWeight.BOLD)),  # type: ignore[arg-type, call-arg]
+                            ft.DataColumn(ft.Text("Voxels", size=11, weight=ft.FontWeight.BOLD), numeric=True),  # type: ignore[arg-type, call-arg]
+                            ft.DataColumn(ft.Text("Peak", size=11, weight=ft.FontWeight.BOLD), numeric=True),  # type: ignore[arg-type, call-arg]
+                            ft.DataColumn(ft.Text("Region", size=11, weight=ft.FontWeight.BOLD)),  # type: ignore[arg-type, call-arg]
                         ],
                         rows=table_rows,
                         column_spacing=15,
@@ -706,7 +708,7 @@ class ParticipantWorkflowScreen:
                     spacing=0,
                 )
 
-            card_children = [
+            card_children: list[ft.Control] = [
                 ft.Row(
                     [
                         ft.Text(mask_name, size=16, weight=ft.FontWeight.W_500),
@@ -849,6 +851,7 @@ class ParticipantWorkflowScreen:
             _close_dialog(dialog)
 
             atlas_name = config.get("mask", {}).get("atlas_name")
+            threshold_method = config.get("mask", {}).get("threshold_method", "top_n")
             if threshold_method != "cluster" or not atlas_name:
                 self._add_log("[INFO] Masks rejected — re-run mask extraction with different parameters")
                 return
@@ -3451,8 +3454,6 @@ class ParticipantWorkflowScreen:
             return ", ".join(parts) if parts else "initial"
 
         # Map step IDs to their information
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-        loc_task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
         step_info_map = {
             "reference_initial": self._get_reference_initial_step_info(config, base_dir),
             "preprocessing": {

@@ -96,6 +96,7 @@ References
 
 # --- Standard Library ---
 # Type hints for function signatures (improves IDE support and documentation)
+import contextlib
 import heapq  # Priority queue for ordered volume collection
 import logging  # Structured logging throughout the pipeline
 import shutil  # File operations (copy during DICOM collection)
@@ -1443,13 +1444,10 @@ def collect_volumes(
                     collected_count += 1
                     if progress_callback is not None and start_time is not None:
                         elapsed = time.time() - start_time
-                        try:
+                        with contextlib.suppress(Exception):
                             progress_callback(collected_count, n_volumes, elapsed, dest_path)
-                        except Exception:
-                            pass
                 logger.info(
-                    f"Task done — collection stopped after {collected_count} volumes "
-                    f"(configured max: {n_volumes})"
+                    f"Task done — collection stopped after {collected_count} volumes (configured max: {n_volumes})"
                 )
                 break
 

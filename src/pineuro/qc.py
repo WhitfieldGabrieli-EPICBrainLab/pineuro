@@ -1957,8 +1957,13 @@ def generate_task_mask_extraction_report(
             {
                 "type": "table",
                 "headers": [
-                    "Name", "Contrast", f"Peak {stat_type}",
-                    "Positive voxels", "Mask voxels", "Volume (mL)", "Centroid (i,j,k)",
+                    "Name",
+                    "Contrast",
+                    f"Peak {stat_type}",
+                    "Positive voxels",
+                    "Mask voxels",
+                    "Volume (mL)",
+                    "Centroid (i,j,k)",
                 ],
                 "rows": table_rows,
             }
@@ -3384,9 +3389,7 @@ def _generate_interactive_viewers(
     try:
         from nilearn.plotting import view_img  # type: ignore[import-untyped]
     except ImportError:
-        logging.getLogger(__name__).warning(
-            "nilearn not available — skipping interactive viewers"
-        )
+        logging.getLogger(__name__).warning("nilearn not available — skipping interactive viewers")
         return ""
 
     ref_str = str(ref_file)

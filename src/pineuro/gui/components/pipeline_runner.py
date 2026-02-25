@@ -751,13 +751,12 @@ class PipelineRunner:
             localizer_task_type = config["scan"].get("localizer_task_type", "")
             if not contrasts and localizer_task_type:
                 from pineuro.tasks.task_registry import get_task_metadata
+
                 try:
                     metadata = get_task_metadata(localizer_task_type)
                     contrasts = metadata.default_contrasts or {}
                     if contrasts:
-                        self._emit_progress(
-                            f"Using default contrasts from {metadata.display_name}: {contrasts}"
-                        )
+                        self._emit_progress(f"Using default contrasts from {metadata.display_name}: {contrasts}")
                 except KeyError:
                     pass
 

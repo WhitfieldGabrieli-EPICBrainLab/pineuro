@@ -166,16 +166,14 @@ class TestClusterThreshold:
         # Two clearly separated clusters (gap of ~16 voxels between them)
         # Each: 4 * 4 * 4 = 64 voxels
         stat = np.zeros((30, 10, 10), dtype=np.float64)
-        stat[1:5, 1:5, 1:5] = 5.0   # cluster A: 64 voxels
+        stat[1:5, 1:5, 1:5] = 5.0  # cluster A: 64 voxels
         stat[25:29, 1:5, 1:5] = 5.0  # cluster B: 64 voxels, far from A
 
         # Whole-brain atlas covering both
         atlas = np.ones((30, 10, 10), dtype=np.float64)
 
         # Single-cluster mode (default) — should return only the largest (either A or B)
-        mask_single, _ = cluster_threshold_stat_map(
-            stat, atlas, target_n_voxels=70, start_threshold=1.0
-        )
+        mask_single, _ = cluster_threshold_stat_map(stat, atlas, target_n_voxels=70, start_threshold=1.0)
         # Each cluster is 64 voxels; single mode should return exactly one
         assert mask_single.sum() <= 64
 
@@ -191,7 +189,7 @@ class TestClusterThreshold:
         from pineuro.mask_extraction import cluster_threshold_stat_map
 
         stat = np.zeros((30, 10, 10), dtype=np.float64)
-        stat[2:8, 4:6, 4:6] = 5.0   # cluster A: 48 voxels
+        stat[2:8, 4:6, 4:6] = 5.0  # cluster A: 48 voxels
         stat[22:28, 4:6, 4:6] = 5.0  # cluster B: 48 voxels
 
         atlas = np.ones((30, 10, 10), dtype=np.float64)

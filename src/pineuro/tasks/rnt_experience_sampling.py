@@ -59,7 +59,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
 # ============================================================================
 # Data structures
 # ============================================================================
@@ -328,7 +327,7 @@ class RNTExperienceSamplingTask(BaseTask):
         if len(history) < self.consecutive_volumes:
             return None
 
-        recent = history[-self.consecutive_volumes:]
+        recent = history[-self.consecutive_volumes :]
         if self.activation_trend == "increasing":
             trending = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
         else:
@@ -349,7 +348,11 @@ class RNTExperienceSamplingTask(BaseTask):
 
         # Fixation cross
         self._fixation = visual.TextStim(
-            self.win, text="+", pos=(0, 0), height=0.3, color="white",
+            self.win,
+            text="+",
+            pos=(0, 0),
+            height=0.3,
+            color="white",
         )
 
         # Rating scale components (1-5 scale, matching RNT pattern)
@@ -364,35 +367,52 @@ class RNTExperienceSamplingTask(BaseTask):
             self.win,
             start=(-scale_width / 2, scale_y),
             end=(scale_width / 2, scale_y),
-            lineColor="white", lineWidth=2,
+            lineColor="white",
+            lineWidth=2,
         )
         self._rating_tick_marks = []
         self._rating_tick_labels = []
         for i, val in enumerate(range(1, 6)):
-            self._rating_tick_marks.append(visual.Line(
-                self.win,
-                start=(tick_x[i], scale_y - 0.015),
-                end=(tick_x[i], scale_y + 0.015),
-                lineColor="white", lineWidth=2,
-            ))
-            self._rating_tick_labels.append(visual.TextStim(
-                self.win,
-                text=str(val),
-                pos=(tick_x[i], scale_y - 0.05),
-                height=0.035, color="white",
-            ))
+            self._rating_tick_marks.append(
+                visual.Line(
+                    self.win,
+                    start=(tick_x[i], scale_y - 0.015),
+                    end=(tick_x[i], scale_y + 0.015),
+                    lineColor="white",
+                    lineWidth=2,
+                )
+            )
+            self._rating_tick_labels.append(
+                visual.TextStim(
+                    self.win,
+                    text=str(val),
+                    pos=(tick_x[i], scale_y - 0.05),
+                    height=0.035,
+                    color="white",
+                )
+            )
 
         self._rating_left_label = visual.TextStim(
-            self.win, text="", pos=(tick_x[0], scale_y - 0.1),
-            height=0.035, color="white",
+            self.win,
+            text="",
+            pos=(tick_x[0], scale_y - 0.1),
+            height=0.035,
+            color="white",
         )
         self._rating_right_label = visual.TextStim(
-            self.win, text="", pos=(tick_x[-1], scale_y - 0.1),
-            height=0.035, color="white",
+            self.win,
+            text="",
+            pos=(tick_x[-1], scale_y - 0.1),
+            height=0.035,
+            color="white",
         )
         self._rating_question = visual.TextStim(
-            self.win, text="", pos=(0, 0.15),
-            height=0.06, color="white", wrapWidth=1.2,
+            self.win,
+            text="",
+            pos=(0, 0.15),
+            height=0.06,
+            color="white",
+            wrapWidth=1.2,
         )
 
         # Triangle marker — vertices relative to (0,0), moved via .pos
@@ -405,7 +425,9 @@ class RNTExperienceSamplingTask(BaseTask):
                 (marker_size, scale_y + marker_gap + marker_size * 2),
                 (0, scale_y + marker_gap),
             ],
-            fillColor="white", lineColor="white", closeShape=True,
+            fillColor="white",
+            lineColor="white",
+            closeShape=True,
         )
         self._scale_left_x = scale_left_x
         self._tick_spacing = tick_spacing
@@ -661,7 +683,7 @@ class RNTExperienceSamplingTask(BaseTask):
         if self._rating_timer.getTime() <= 0:
             self._rating_responses.append((None, None))
             q = _RATINGS[self._current_rating_index][0]
-            logger.info(f"  Timed out (no response) — \"{q}\"")
+            logger.info(f'  Timed out (no response) — "{q}"')
             self._advance_rating()
             return
 
@@ -686,7 +708,7 @@ class RNTExperienceSamplingTask(BaseTask):
                 response = int(round(self._rating_marker_pos))
                 self._rating_responses.append((response, round(t, 3)))
                 q = _RATINGS[self._current_rating_index][0]
-                logger.info(f"  Response: {response}/5 (RT={t:.2f}s) — \"{q}\"")
+                logger.info(f'  Response: {response}/5 (RT={t:.2f}s) — "{q}"')
                 self._advance_rating()
                 return
 
@@ -718,7 +740,7 @@ class RNTExperienceSamplingTask(BaseTask):
         from psychopy import core, event
 
         q, left, right = _RATINGS[self._current_rating_index]
-        logger.info(f"  Question {self._current_rating_index + 1}/{len(_RATINGS)}: \"{q}\"")
+        logger.info(f'  Question {self._current_rating_index + 1}/{len(_RATINGS)}: "{q}"')
         self._rating_question.text = q
         self._rating_left_label.text = left
         self._rating_right_label.text = right
@@ -768,10 +790,7 @@ class RNTExperienceSamplingTask(BaseTask):
         self._trigger_state.activation_history.clear()
         self._trigger_state.volume_history.clear()
 
-        logger.info(
-            f"Prompt #{self._prompt_number} complete: "
-            f"sadness={sadness[0]}, focus={focus[0]}"
-        )
+        logger.info(f"Prompt #{self._prompt_number} complete: sadness={sadness[0]}, focus={focus[0]}")
 
         self._phase = _PHASE_MONITORING
 
@@ -808,10 +827,7 @@ class RNTExperienceSamplingTask(BaseTask):
                 focus_rt=focus[1] if focus[1] is not None else "n/a",
                 prompt_number=self._prompt_number,
             )
-            logger.info(
-                f"Prompt #{self._prompt_number} incomplete (run ended): "
-                f"sadness={sadness[0]}, focus={focus[0]}"
-            )
+            logger.info(f"Prompt #{self._prompt_number} incomplete (run ended): sadness={sadness[0]}, focus={focus[0]}")
 
         logger.info(
             f"RNTExperienceSamplingTask cleanup: "
