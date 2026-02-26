@@ -76,6 +76,37 @@ Then enable SMB sharing:
 6. Click Options... > ensure "Share files using SMB" is checked
 7. Check the box next to your username in the SMB user list
 
+### Linux
+
+```bash
+# 1. Install Samba (if not already installed)
+sudo apt-get install samba
+
+# 2. Create the DICOM watch directory
+sudo mkdir -p /BOLD_DICOM
+sudo chmod 777 /BOLD_DICOM
+
+# 3. Create a Samba user (must also exist as a Linux system user)
+sudo useradd -M -s /usr/sbin/nologin <samba-username>
+sudo smbpasswd -a <samba-username>
+
+# 4. Add the share to /etc/samba/smb.conf:
+#    [BOLD_DICOM]
+#      path = /BOLD_DICOM
+#      read only = no
+#      browseable = yes
+#      create mask = 0777
+
+# 5. Restart Samba
+sudo systemctl restart smbd
+```
+
+**If a Samba share already exists** (e.g., from a previous MURFI setup): you may need to ensure the directory has read permission for the connecting user. Check with `ls -ld /BOLD_DICOM` — if the "others" column is missing `r` (e.g., `-wx` instead of `rwx`), fix with:
+
+```bash
+sudo chmod o+r /BOLD_DICOM
+```
+
 ## Step 3: Mount the Share on the Sender Machine
 
 From the sender machine, mount the analysis machine's share so the simulator can write to it.
@@ -83,15 +114,26 @@ From the sender machine, mount the analysis machine's share so the simulator can
 ### Windows Sender
 
 ```powershell
-net use Z: \\192.168.2.5\BOLD_DICOM /user:192.168.2.5\<username> <password>
+net use Z: \\192.168.2.5\BOLD_DICOM /user:<username> *
 ```
+
+The `*` prompts for the password interactively, which avoids issues with special characters (e.g., `&`) in passwords.
 
 ### macOS Sender
 
+The easiest approach is to mount via Finder, which handles authentication reliably:
+
+1. Finder > Go > Connect to Server (Cmd+K)
+2. Enter: `smb://username@192.168.2.5/BOLD_DICOM`
+3. Enter the analysis machine's password when prompted
+
+Or from the command line (uses the same Finder mechanism):
+
 ```bash
-mkdir -p /Volumes/BOLD_DICOM
-mount_smbfs //username:password@192.168.2.5/BOLD_DICOM /Volumes/BOLD_DICOM
+open "smb://username@192.168.2.5/BOLD_DICOM"
 ```
+
+The share will be mounted at `/Volumes/BOLD_DICOM`. Use that path as the simulator target.
 
 ### Linux Sender
 
@@ -115,21 +157,21 @@ Open a terminal on each machine.
 
 ### Analysis machine — start pineuro
 
-Run a normal pineuro session (via `pineuro-gui` or programmatically) with the watch directory set to your SMB share path (`C:\BOLD_DICOM` on Windows, `/BOLD_DICOM` on macOS).
+Run a normal pineuro session (via `pineuro-gui` or programmatically) with the watch directory set to your SMB share path (`C:\BOLD_DICOM` on Windows, `/BOLD_DICOM` on macOS or Linux).
 
-Alternatively, for a quicker check, use the simulator integration built into `collect_volumes` but point the watch directory at the share — then the sender machine writes to it externally.
+**Trigger:** For localizer and feedback runs, PsychoPy will wait for a trigger key before starting the task. Since the simulator on the other machine can't send a keystroke, you need to manually press the trigger key on the analysis machine's keyboard when you start the simulator. This matches the real scanner workflow where a TTL pulse or key event triggers the task.
 
 ### Sender machine — start the simulator
 
 ```bash
 python -m pineuro.simulator \
     --source /path/to/your/dicoms \
-    --target Z:\ \
+    --target Z:/ \
     --speed 1.0 \
     --n 50
 ```
 
-Replace `Z:\` with your mounted share path (`/Volumes/BOLD_DICOM` on macOS, `/mnt/BOLD_DICOM` on Linux).
+Replace `Z:/` with your mounted share path (`/Volumes/BOLD_DICOM` on macOS, `/mnt/BOLD_DICOM` on Linux). Use forward slashes — backslashes are interpreted as escape characters in bash.
 
 Use `--speed 1.0` for real-time pacing (recommended for the first test). Use `--speed 10.0` for a faster dry run once you've confirmed it works.
 
@@ -161,6 +203,10 @@ python -m pineuro.simulator --source /path/to/dicoms --target C:\BOLD_DICOM_TEST
 ```
 
 This tests the file-watching pipeline but not the network path.
+
+## After Testing: Reset the Ethernet IP
+
+If the laptop you used as the "sender" (scanner role) will later be used as the analysis machine at the scanner site, remember to change its ethernet static IP back to the analysis address (e.g., `192.168.2.5`) before going to the scanner. During testing the sender uses a different IP (e.g., `192.168.2.1`), and the scanner's BOLD dot-addin expects to reach the analysis machine at its configured address.
 
 ## Platform Notes
 

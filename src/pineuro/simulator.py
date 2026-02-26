@@ -253,9 +253,11 @@ class VolumeSimulator:
         dst_file = self.target_dir / src_file.name
         tmp_file = self.target_dir / f".{src_file.name}.tmp"
 
-        # Atomic copy: write to temp file, then rename
+        # Atomic copy: write to temp file, then move to final name.
+        # shutil.move is used instead of Path.rename because rename can fail
+        # with EINVAL on network filesystems (e.g., macOS SMB mounts).
         shutil.copy2(src_file, tmp_file)
-        tmp_file.rename(dst_file)
+        shutil.move(str(tmp_file), str(dst_file))
 
         # For NIfTI files, also copy the JSON sidecar if it exists
         if is_nifti_file(src_file):
@@ -265,7 +267,7 @@ class VolumeSimulator:
                 json_tmp = self.target_dir / f".{json_src.name}.tmp"
                 try:
                     shutil.copy2(json_src, json_tmp)
-                    json_tmp.replace(json_dst)
+                    shutil.move(str(json_tmp), str(json_dst))
                 except Exception:
                     if json_tmp.exists():
                         json_tmp.unlink()
