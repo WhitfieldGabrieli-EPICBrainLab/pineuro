@@ -219,25 +219,29 @@ def _rotation_matrix_to_euler(R: NDArray[np.float64]) -> NDArray[np.float64]:
 
 
 def _ants_register_volume(
-    ref_vol: NDArray[np.float64],
+    ref_ants: Any,
     mov_vol: NDArray[np.float64],
-    affine: NDArray[np.float64],
-) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Rigid body registration using ANTsPy with multi-resolution for speed.
+    spacing: list[float],
+    *,
+    initial_transform: str | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], str]:
+    """Frame-to-reference rigid registration with warm-start using ANTsPy.
 
-    Registers the moving volume to the reference using ANTsPy's Rigid transform
-    with a multi-resolution strategy: 5 iterations at 2x shrink factor, then
-    2 iterations at full resolution. This achieves ~400-500ms per volume while
-    maintaining motion parameter accuracy.
+    Registers the moving volume to a cached reference ANTs image using a
+    single-level strategy (3 iterations at 2x shrink) with optional warm-start
+    from the previous frame's transform. Benchmarked at ~300ms per volume.
 
     Parameters
     ----------
-    ref_vol : ndarray, shape (X, Y, Z)
-        Reference volume (typically first volume of feedback session).
+    ref_ants : ants.ANTsImage
+        Pre-built ANTs image of the reference volume (cached by caller).
     mov_vol : ndarray, shape (X, Y, Z)
         Moving volume to register to reference.
-    affine : ndarray, shape (4, 4)
-        Affine matrix for the volumes (used to extract voxel spacing).
+    spacing : list of float
+        Voxel spacing [sx, sy, sz] in mm for the moving volume.
+    initial_transform : str or None
+        Path to ANTs transform file from previous registration, used as
+        warm-start initialization. None for first volume (no warm-start).
 
     Returns
     -------
@@ -247,29 +251,30 @@ def _ants_register_volume(
         Motion parameters in standard format:
         [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z]
         Translations in mm, rotations in degrees.
+    transform_path : str
+        Path to the forward transform file, to be passed as
+        initial_transform on the next call for warm-starting.
     """
     import ants  # Lazy import: ~9s cold start, only needed when running pipeline
 
-    # Extract voxel spacing from affine (diagonal elements give scale)
-    spacing = np.sqrt(np.sum(affine[:3, :3] ** 2, axis=0))
+    # Convert moving volume to ANTs image with proper spacing
+    mov_ants = ants.from_numpy(mov_vol.astype(np.float32), spacing=spacing)
 
-    # Convert numpy arrays to ANTs images with proper spacing
-    ref_ants = ants.from_numpy(ref_vol.astype(np.float32), spacing=spacing.tolist())
-    mov_ants = ants.from_numpy(mov_vol.astype(np.float32), spacing=spacing.tolist())
+    # Single-level rigid registration with warm-start
+    # 2 iterations at 2x shrink with sigma=1 smoothing (A8_warm_2iter_2x)
+    kwargs: dict[str, Any] = {
+        "fixed": ref_ants,
+        "moving": mov_ants,
+        "type_of_transform": "Rigid",
+        "aff_iterations": (2,),
+        "aff_shrink_factors": (2,),
+        "aff_smoothing_sigmas": (1,),
+        "verbose": False,
+    }
+    if initial_transform is not None:
+        kwargs["initial_transform"] = initial_transform
 
-    # Multi-resolution rigid registration for speed + accuracy balance
-    # - 5 iterations at 2x shrink (coarse alignment, fast)
-    # - 2 iterations at full resolution (fine alignment)
-    # Benchmarked at ~400-500ms max, with FD closest to Siemens MoCo reference
-    result = ants.registration(
-        fixed=ref_ants,
-        moving=mov_ants,
-        type_of_transform="Rigid",
-        aff_iterations=(5, 2),
-        aff_shrink_factors=(2, 1),
-        aff_smoothing_sigmas=(1, 0),
-        verbose=False,
-    )
+    result = ants.registration(**kwargs)
 
     corrected_vol = result["warpedmovout"].numpy()
 
@@ -332,7 +337,185 @@ def _ants_register_volume(
         logger.warning(f"Unexpected ANTs transform params length: {len(params)}")
         motion_params = np.zeros(6, dtype=np.float64)
 
-    return corrected_vol, motion_params
+    return corrected_vol, motion_params, tx_path
+
+
+class _DicomGeometryCache:
+    """Cached DICOM geometry for fast subsequent reads.
+
+    After the first volume, stores the affine, spacing, and orientation
+    transform so that subsequent volumes only need to read pixel_array.
+    """
+
+    __slots__ = ("affine", "spacing", "ornt_transform")
+
+    def __init__(
+        self,
+        affine: NDArray[np.float64],
+        spacing: list[float],
+        ornt_transform: NDArray[np.float64] | None,
+    ):
+        self.affine = affine
+        self.spacing = spacing
+        self.ornt_transform = ornt_transform
+
+
+def _read_dicom_volume(
+    dicom_path: Path,
+    target_ornt: NDArray[np.float64] | None = None,
+    geometry_cache: _DicomGeometryCache | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], list[float], _DicomGeometryCache]:
+    """Read an enhanced (multiframe) DICOM volume directly with pydicom.
+
+    Builds a proper affine from ImageOrientationPatient and ImagePositionPatient,
+    then reorients the data to match a target orientation (e.g. the mask orientation).
+    Only supports Enhanced MR Image Storage (one file = one 3D volume).
+
+    On the first call, pass ``geometry_cache=None`` to parse the full DICOM
+    header and build the affine.  The returned cache object can be passed on
+    subsequent calls to skip header parsing entirely.
+
+    Parameters
+    ----------
+    dicom_path : Path
+        Path to enhanced/multiframe DICOM file.
+    target_ornt : ndarray, shape (N, 2), optional
+        Target orientation from ``nibabel.io_orientation(mask_affine)``.
+        If provided, reorients the volume to match this orientation.
+        If None, returns data in the native DICOM orientation after
+        LPS-to-RAS conversion.
+    geometry_cache : _DicomGeometryCache or None
+        Cached geometry from a previous call.  When provided, skips all
+        header parsing and affine construction.
+
+    Returns
+    -------
+    data : ndarray, shape (X, Y, Z)
+        Volume data as float64, reoriented to match target.
+    affine : ndarray, shape (4, 4)
+        Affine matrix mapping voxel indices to RAS coordinates.
+    spacing : list of float
+        Voxel spacing [sx, sy, sz] in mm, in output axis order.
+    cache : _DicomGeometryCache
+        Geometry cache to pass on subsequent calls.
+
+    Raises
+    ------
+    ValueError
+        If the DICOM is not an enhanced multiframe file or required
+        header fields are missing.
+    """
+    import pydicom
+    from nibabel.orientations import apply_orientation, inv_ornt_aff, ornt_transform
+
+    # --- Fast path: use cached geometry ---
+    if geometry_cache is not None:
+        dcm = pydicom.dcmread(dicom_path)
+        data = dcm.pixel_array.astype(np.float64)
+        if geometry_cache.ornt_transform is not None:
+            data = apply_orientation(data, geometry_cache.ornt_transform)
+        return data, geometry_cache.affine, geometry_cache.spacing, geometry_cache
+
+    # --- First volume: full header parse ---
+    dcm = pydicom.dcmread(dicom_path)
+
+    # Require enhanced (multiframe) DICOM
+    if not hasattr(dcm, "NumberOfFrames"):
+        raise ValueError(
+            f"Not an enhanced multiframe DICOM: {dicom_path.name}. "
+            "Single-slice DICOMs are not supported for direct reading."
+        )
+
+    data = dcm.pixel_array.astype(np.float64)
+    n_slices = int(dcm.NumberOfFrames)
+
+    # --- Extract geometry from functional group sequences ---
+    pixel_spacing = None
+    iop = None
+    ipp_first = None
+    ipp_last = None
+
+    for seq_attr in ("PerFrameFunctionalGroupsSequence", "SharedFunctionalGroupsSequence"):
+        seq = getattr(dcm, seq_attr, None)
+        if not seq:
+            continue
+        f0 = seq[0]
+
+        # Pixel spacing
+        if pixel_spacing is None and hasattr(f0, "PixelMeasuresSequence"):
+            pm = f0.PixelMeasuresSequence[0]
+            pixel_spacing = [float(x) for x in pm.PixelSpacing]
+
+        # Orientation
+        if iop is None and hasattr(f0, "PlaneOrientationSequence"):
+            iop = [float(x) for x in f0.PlaneOrientationSequence[0].ImageOrientationPatient]
+
+        # Position (first frame)
+        if ipp_first is None and hasattr(f0, "PlanePositionSequence"):
+            ipp_first = [float(x) for x in f0.PlanePositionSequence[0].ImagePositionPatient]
+
+    # Position of last frame (for slice direction) — always from PerFrame
+    pffgs = getattr(dcm, "PerFrameFunctionalGroupsSequence", None)
+    if pffgs and hasattr(pffgs[-1], "PlanePositionSequence"):
+        ipp_last = [float(x) for x in pffgs[-1].PlanePositionSequence[0].ImagePositionPatient]
+
+    # Fallbacks for spacing
+    if pixel_spacing is None:
+        if hasattr(dcm, "PixelSpacing"):
+            pixel_spacing = [float(x) for x in dcm.PixelSpacing]
+        else:
+            raise ValueError(f"Cannot extract PixelSpacing from {dicom_path.name}")
+
+    if iop is None:
+        raise ValueError(f"Cannot extract ImageOrientationPatient from {dicom_path.name}")
+    if ipp_first is None:
+        raise ValueError(f"Cannot extract ImagePositionPatient from {dicom_path.name}")
+
+    # --- Build affine from DICOM geometry ---
+    # DICOM IOP: row_cosine (direction of increasing col) and col_cosine (direction of increasing row)
+    row_cosine = np.array(iop[:3])
+    col_cosine = np.array(iop[3:])
+
+    # Slice direction from actual frame positions (handles oblique acquisitions)
+    if ipp_last is not None and n_slices > 1:
+        slice_vec = (np.array(ipp_last) - np.array(ipp_first)) / (n_slices - 1)
+    else:
+        # Fallback: cross product for single-frame or missing last position
+        slice_vec = np.cross(row_cosine, col_cosine)
+        sbs = float(getattr(dcm, "SpacingBetweenSlices", None) or getattr(dcm, "SliceThickness", 1.0))  # type: ignore[arg-type]
+        slice_vec = slice_vec / np.linalg.norm(slice_vec) * sbs
+
+    origin = np.array(ipp_first)
+
+    # pydicom pixel_array is (n_frames, rows, cols)
+    # Affine maps (frame_idx, row_idx, col_idx) -> (x, y, z) in LPS
+    # axis 0 = frame/slice: slice direction
+    # axis 1 = row: col_cosine direction, step = pixel_spacing[0]
+    # axis 2 = col: row_cosine direction, step = pixel_spacing[1]
+    affine_lps = np.eye(4)
+    affine_lps[:3, 0] = slice_vec
+    affine_lps[:3, 1] = col_cosine * pixel_spacing[0]
+    affine_lps[:3, 2] = row_cosine * pixel_spacing[1]
+    affine_lps[:3, 3] = origin
+
+    # Convert LPS -> RAS (negate x and y rows)
+    affine = affine_lps.copy()
+    affine[0, :] *= -1
+    affine[1, :] *= -1
+
+    # --- Reorient to match target orientation ---
+    cached_ornt_transform = None
+    if target_ornt is not None:
+        current_ornt = nib.io_orientation(affine)
+        cached_ornt_transform = ornt_transform(current_ornt, target_ornt)
+        data = apply_orientation(data, cached_ornt_transform)
+        affine = affine @ inv_ornt_aff(cached_ornt_transform, data.shape)
+
+    # Compute spacing in output axis order
+    spacing = np.sqrt(np.sum(affine[:3, :3] ** 2, axis=0)).tolist()
+
+    cache = _DicomGeometryCache(affine, spacing, cached_ornt_transform)
+    return data, affine, spacing, cache
 
 
 # =============================================================================
@@ -486,7 +669,6 @@ class IncrementalGLM:
         weight : float
             Updated weight after this rotation.
         """
-        p = self.n_regressors
         r_jj = self._R[j, j]
         x_j = aug_row[j]
 
@@ -520,13 +702,12 @@ class IncrementalGLM:
 
         weight = cbar * weight
 
-        # Update R[j, j:]
+        # Update R[j, j:] (vectorized for speed with n_outputs >> 1)
         self._R[j, j] = c * r_jj + s * x_j
-        for k in range(j + 1, p + self.n_outputs):
-            r_jk = self._R[j, k]
-            x_k = aug_row[k]
-            self._R[j, k] = c * r_jk + s * x_k
-            aug_row[k] = -s * r_jk + c * x_k
+        r_tail = self._R[j, j + 1 :].copy()
+        x_tail = aug_row[j + 1 :].copy()
+        self._R[j, j + 1 :] = c * r_tail + s * x_tail
+        aug_row[j + 1 :] = -s * r_tail + c * x_tail
 
         return weight
 
@@ -1139,9 +1320,10 @@ class FeedbackEstimator:
         This orchestrates loading all masks, building a master voxel index,
         and creating mappings from each mask to the master index.
         """
-        # Load first mask to get reference shape for validation
+        # Load first mask to get reference shape and orientation for validation
         first_img = cast(Nifti1Image, nib.loadsave.load(mask_paths[0]))
         self._shape = first_img.shape[:3]
+        self._mask_ornt = nib.io_orientation(first_img.affine)
 
         # Load all masks and collect coordinates
         mask_indices: dict[str, NDArray[np.intp]] = {}
@@ -1451,18 +1633,28 @@ class FeedbackEstimator:
         self,
         nifti_path: Path | str,
         motion_source: Path | str | NDArray[np.float64] | None = None,
+        *,
+        volume_data: NDArray[np.float64] | None = None,
+        volume_affine: NDArray[np.float64] | None = None,
     ) -> dict[str, float]:
         """Process a new fMRI volume and return activation estimates.
 
         Parameters
         ----------
         nifti_path : Path or str
-            Path to NIfTI volume file.
+            Path to NIfTI volume file. Used as fallback when volume_data is
+            not provided (e.g. NIfTI input).
         motion_source : Path, str, ndarray, or None, optional
             Source of motion parameters. Can be:
             - Path to JSON file (dcm2niix sidecar): extracts motion from ImageComments field
             - ndarray of shape (6,): use provided motion parameters directly
             - None: use zeros for motion parameters
+        volume_data : ndarray or None, optional
+            Pre-loaded volume data to use instead of loading from nifti_path.
+            When provided, skips the disk load entirely.
+        volume_affine : ndarray or None, optional
+            Affine matrix for volume_data. Required when volume_data is provided
+            and spatial smoothing is configured.
 
         Returns
         -------
@@ -1473,15 +1665,28 @@ class FeedbackEstimator:
         nifti_path = Path(nifti_path)
 
         # ===== 1. Load volume data =====
-        img = cast(Nifti1Image, nib.loadsave.load(nifti_path))
+        if volume_data is not None:
+            # Fast path: use in-memory data directly
+            data = np.asarray(volume_data, dtype=np.float64)
+            if self._smooth_fwhm is not None:
+                from nilearn.image import smooth_img
 
-        # Apply spatial smoothing if configured
-        if self._smooth_fwhm is not None:
-            from nilearn.image import smooth_img
+                if volume_affine is None:
+                    raise ValueError("volume_affine is required when smoothing is enabled with in-memory data")
+                img = nib.Nifti1Image(data.astype(np.float32), volume_affine)
+                img = smooth_img(img, fwhm=self._smooth_fwhm)
+                data = np.asarray(img.dataobj, dtype=np.float64)
+        else:
+            # Standard path: load from disk
+            img = cast(Nifti1Image, nib.loadsave.load(nifti_path))
 
-            img = smooth_img(img, fwhm=self._smooth_fwhm)
+            # Apply spatial smoothing if configured
+            if self._smooth_fwhm is not None:
+                from nilearn.image import smooth_img
 
-        data = np.asarray(img.dataobj, dtype=np.float64)
+                img = smooth_img(img, fwhm=self._smooth_fwhm)
+
+            data = np.asarray(img.dataobj, dtype=np.float64)
 
         # Verify shape matches masks
         if data.shape[:3] != self._shape:
@@ -2204,10 +2409,18 @@ class NeurofeedbackCoordinator:
         self._motion_correction = motion_correction
         self._moco_reference_vol: NDArray[np.float64] | None = None
         self._moco_reference_affine: NDArray[np.float64] | None = None
-        self._moco_prev_vol: NDArray[np.float64] | None = None  # For incremental registration
+        self._moco_reference_ants: Any | None = None  # Cached ANTs image of vol 0
+        self._moco_spacing: list[float] | None = None  # Cached voxel spacing
+        self._moco_prev_transform: str | None = None  # Warm-start transform path
+        self._dicom_geometry_cache: _DicomGeometryCache | None = None
         logger.info(f"Motion correction mode: {motion_correction}")
         if motion_correction == "software":
-            logger.info("Will use ANTsPy multi-resolution rigid registration (~400-500ms/volume)")
+            # Eagerly import ANTs to pay the ~3-4s cold start now (during setup),
+            # not on the first volume when latency matters
+            import ants  # noqa: F811
+
+            logger.info(f"ANTs {ants.__version__} loaded")
+            logger.info("Will use ANTsPy frame-to-reference rigid registration with warm-start (~300ms/volume)")
 
         # GLM regressor configuration (passed through to FeedbackEstimator)
         self._include_drift = include_drift
@@ -2342,6 +2555,8 @@ class NeurofeedbackCoordinator:
         self._timing_stats: dict[str, list[float]] = {
             "dcm2niix_ms": [],
             "glm_ms": [],
+            "registration_ms": [],
+            "estimator_ms": [],
             "total_ms": [],
             "queue_depth": [],
         }
@@ -2717,13 +2932,10 @@ class NeurofeedbackCoordinator:
     def _process_volume(self, volume_path: Path) -> None:
         """Convert volume (if DICOM) and process through estimator, tracking timing.
 
-        Handles both DICOM and NIfTI input files. For DICOM, converts via dcm2niix.
+        Handles both DICOM and NIfTI input files. For DICOM, reads pixel data
+        directly with pydicom (~15ms) instead of spawning dcm2niix (~206ms).
         For NIfTI, copies directly to the output directory along with JSON sidecar.
         """
-        import shutil
-
-        from .utils import dicom_to_nifti
-
         process_start = time.monotonic()
 
         # Extract TR from first volume if not yet set
@@ -2733,6 +2945,8 @@ class NeurofeedbackCoordinator:
 
         # Copy volume to collection directory (for unified collection with rest/reference)
         try:
+            import shutil
+
             dest_path = self._dicom_collection_dir / volume_path.name
             shutil.copy2(volume_path, dest_path)
             # For NIfTI, also copy JSON sidecar
@@ -2742,13 +2956,18 @@ class NeurofeedbackCoordinator:
                     json_dst = get_json_sidecar_path(dest_path)
                     shutil.copy2(json_src, json_dst)
         except Exception as e:
-            logger.warning(f"Failed to copy volume to collection: {e}")
+            logger.warning(f"Failed to copy volume to collection dir: {e}")
 
-        # Convert to NIfTI or copy if already NIfTI (timed for diagnostics)
+        # Read volume data (timed for diagnostics)
         volume_num = self.n_processed + 1
         output_name = f"vol_{volume_num:04d}"
 
         dcm2niix_start = time.monotonic()
+
+        # In-memory data from DICOM read (None for NIfTI input)
+        vol_data_mem: NDArray[np.float64] | None = None
+        vol_affine_mem: NDArray[np.float64] | None = None
+        dicom_image_comments: str | None = None
 
         if is_nifti_file(volume_path):
             # Input is already NIfTI - copy directly to output directory
@@ -2777,36 +2996,76 @@ class NeurofeedbackCoordinator:
                 logger.error(f"Failed to copy NIfTI {volume_path}: {e}")
                 return
         else:
-            # Input is DICOM - convert to NIfTI
+            # Input is DICOM — read directly with pydicom (bypasses dcm2niix)
+            json_path = None
+            nifti_path = self.nifti_dir / f"{output_name}.nii"
             try:
-                nifti_path = dicom_to_nifti(
-                    dicom_dir=volume_path,
-                    output_dir=self.nifti_dir,
-                    output_name=output_name,
-                    overwrite=True,
-                    verbose=False,
-                    compress=False,  # Uncompressed for faster real-time processing
+                vol_data_mem, vol_affine_mem, _spacing, self._dicom_geometry_cache = _read_dicom_volume(
+                    volume_path,
+                    target_ornt=self._estimator._mask_ornt,
+                    geometry_cache=self._dicom_geometry_cache,
                 )
+
+                # For siemens_moco, extract ImageComments from DICOM header
+                # (already loaded by _read_dicom_volume, but we need the header field)
+                if self._motion_correction == "siemens_moco":
+                    import pydicom
+
+                    dcm = pydicom.dcmread(volume_path, stop_before_pixels=True)
+                    dicom_image_comments = str(getattr(dcm, "ImageComments", ""))
             except Exception as e:
-                logger.error(f"Failed to convert DICOM {volume_path}: {e}")
+                logger.error(f"Failed to read DICOM {volume_path}: {e}")
                 return
-            json_path = Path(str(nifti_path).replace(".nii.gz", ".json").replace(".nii", ".json"))
 
         dcm2niix_duration = (time.monotonic() - dcm2niix_start) * 1000  # ms
 
         # Process through estimator (timed for diagnostics)
         glm_start = time.monotonic()
+        _reg_ms = 0.0
+        _est_ms = 0.0
         try:
             # Determine motion source based on motion correction mode
             motion_source: Path | NDArray[np.float64] | None
+            corrected_data: NDArray[np.float64] | None = None
+            corrected_affine: NDArray[np.float64] | None = None
             if self._motion_correction == "siemens_moco":
-                # Siemens MoCo: extract motion from JSON sidecar ImageComments
-                motion_source = json_path
+                if json_path is not None:
+                    # NIfTI input: use JSON sidecar (existing path)
+                    motion_source = json_path
+                elif dicom_image_comments is not None:
+                    # DICOM input: parse motion params directly from ImageComments
+                    if "Reference volume for motion correction" in dicom_image_comments:
+                        motion_source = np.zeros(6, dtype=np.float64)
+                    else:
+                        match = self._estimator._MOTION_PATTERN.search(dicom_image_comments)
+                        if match:
+                            motion_source = np.array(
+                                [float(m) for m in match.groups()], dtype=np.float64
+                            )
+                        else:
+                            logger.warning(
+                                f"No motion parameters in DICOM ImageComments for volume {volume_num}, using zeros"
+                            )
+                            motion_source = np.zeros(6, dtype=np.float64)
+                else:
+                    motion_source = np.zeros(6, dtype=np.float64)
+
+                if vol_data_mem is not None:
+                    corrected_data = vol_data_mem
+                    corrected_affine = vol_affine_mem
+
             elif self._motion_correction == "software":
-                # Software (ANTsPy): compute motion via rigid registration
-                vol_img = cast(Nifti1Image, nib.load(nifti_path))
-                vol_data = np.asarray(vol_img.get_fdata(), dtype=np.float64)
-                vol_affine = np.asarray(vol_img.affine, dtype=np.float64)
+                # Software (ANTsPy): frame-to-reference rigid registration with warm-start
+                if vol_data_mem is not None:
+                    # DICOM input: use in-memory data directly
+                    assert vol_affine_mem is not None
+                    vol_data = vol_data_mem
+                    vol_affine = vol_affine_mem
+                else:
+                    # NIfTI input: load from disk
+                    vol_img = cast(Nifti1Image, nib.load(nifti_path))
+                    vol_data = np.asarray(vol_img.get_fdata(), dtype=np.float64)
+                    vol_affine = np.asarray(vol_img.affine, dtype=np.float64)
 
                 # Ensure we have a 3D volume, not 4D
                 if vol_data.ndim == 4:
@@ -2816,38 +3075,59 @@ class NeurofeedbackCoordinator:
                     vol_data = vol_data[..., 0]
 
                 if self._moco_reference_vol is None:
-                    # First volume becomes reference
+                    # First volume becomes reference — cache ANTs image + spacing
+                    import ants
+
                     self._moco_reference_vol = np.array(vol_data, dtype=np.float64)
                     self._moco_reference_affine = np.array(vol_affine, dtype=np.float64)
-                    self._moco_prev_vol = np.array(vol_data, dtype=np.float64)
+                    self._moco_spacing = np.sqrt(
+                        np.sum(vol_affine[:3, :3] ** 2, axis=0)
+                    ).tolist()
+                    self._moco_reference_ants = ants.from_numpy(
+                        vol_data.astype(np.float32), spacing=self._moco_spacing
+                    )
+                    self._moco_prev_transform = None
                     motion_source = np.zeros(6, dtype=np.float64)
+                    corrected_data = vol_data
+                    corrected_affine = vol_affine
                     logger.info(f"Software MoCo: volume {volume_num} set as reference, shape={vol_data.shape}")
                 else:
-                    assert self._moco_prev_vol is not None  # set when reference is set
-                    assert self._moco_reference_affine is not None  # set when reference is set
+                    assert self._moco_reference_ants is not None
+                    assert self._moco_reference_affine is not None
+                    assert self._moco_spacing is not None
                     # Verify shapes match
-                    if vol_data.shape != self._moco_prev_vol.shape:
-                        logger.error(f"MoCo shape mismatch: prev={self._moco_prev_vol.shape}, mov={vol_data.shape}")
+                    if vol_data.shape != self._moco_reference_vol.shape:
+                        logger.error(
+                            f"MoCo shape mismatch: ref={self._moco_reference_vol.shape}, mov={vol_data.shape}"
+                        )
 
-                    # Register to PREVIOUS volume (incremental, like Siemens PACE)
-                    corrected_vol, motion_params = _ants_register_volume(
-                        self._moco_prev_vol,
+                    # Register to REFERENCE volume (frame-to-ref) with warm-start
+                    _reg_start = time.monotonic()
+                    corrected_vol, motion_params, tx_path = _ants_register_volume(
+                        self._moco_reference_ants,
                         np.asarray(vol_data, dtype=np.float64),
-                        self._moco_reference_affine,
+                        self._moco_spacing,
+                        initial_transform=self._moco_prev_transform,
                     )
-
-                    # Update previous volume to the corrected one for next iteration
-                    self._moco_prev_vol = np.array(corrected_vol, dtype=np.float64)
-
-                    # Overwrite NIfTI with corrected volume
-                    corrected_img = nib.Nifti1Image(corrected_vol.astype(np.float32), self._moco_reference_affine)
-                    nib.save(corrected_img, nifti_path)
+                    _reg_ms = (time.monotonic() - _reg_start) * 1000
+                    self._moco_prev_transform = tx_path
                     motion_source = motion_params
+                    corrected_data = corrected_vol
+                    corrected_affine = self._moco_reference_affine
             else:
                 # None: no motion correction, no motion parameters
                 motion_source = None
+                if vol_data_mem is not None:
+                    corrected_data = vol_data_mem
+                    corrected_affine = vol_affine_mem
 
-            activations = self._estimator.process_volume(nifti_path, motion_source)
+            _est_start = time.monotonic()
+            activations = self._estimator.process_volume(
+                nifti_path, motion_source,
+                volume_data=corrected_data,
+                volume_affine=corrected_affine,
+            )
+            _est_ms = (time.monotonic() - _est_start) * 1000
             # Compute differential signal (explicit pair)
             if self._differential_name is not None:
                 assert self._differential_pair is not None  # set alongside _differential_name
@@ -2876,6 +3156,8 @@ class NeurofeedbackCoordinator:
 
         self._timing_stats["dcm2niix_ms"].append(dcm2niix_duration)
         self._timing_stats["glm_ms"].append(glm_duration)
+        self._timing_stats["registration_ms"].append(_reg_ms)
+        self._timing_stats["estimator_ms"].append(_est_ms)
         self._timing_stats["total_ms"].append(total_duration)
         self._timing_stats["queue_depth"].append(queue_depth)
 
@@ -3119,6 +3401,16 @@ class NeurofeedbackCoordinator:
         logger.info(
             f"  GLM update:      mean={glm_ms.mean():.1f}ms, std={glm_ms.std():.1f}ms, max={glm_ms.max():.1f}ms"
         )
+        reg_ms = np.array(self._timing_stats["registration_ms"])
+        est_ms = np.array(self._timing_stats["estimator_ms"])
+        if reg_ms.sum() > 0:
+            logger.info(
+                f"    registration:  mean={reg_ms.mean():.1f}ms, std={reg_ms.std():.1f}ms, max={reg_ms.max():.1f}ms"
+            )
+        if est_ms.sum() > 0:
+            logger.info(
+                f"    estimator:     mean={est_ms.mean():.1f}ms, std={est_ms.std():.1f}ms, max={est_ms.max():.1f}ms"
+            )
         logger.info("-" * 40)
 
         # Check if processing typically exceeded TR
@@ -3346,10 +3638,8 @@ def run_feedback_session(
     output_dir : Path or str
         Base directory for all outputs (NIfTI conversions, logs, etc.).
     collection_dir : Path or str
-        Directory for collecting raw volumes (consistent with rest/reference collection).
-        Volumes are copied to collection_dir/{task}_run-{XX}/ and incoming_dir
-        defaults to collection_dir/incoming. This provides a unified collection
-        structure for all scan types.
+        Base directory for incoming volumes. When incoming_dir is not specified,
+        defaults to collection_dir/incoming as the watch directory.
     n_baseline : int
         Number of initial volumes for baseline.
     n_volumes : int
@@ -3561,10 +3851,9 @@ def run_feedback_session(
         archive_path = _archive_interrupted_run(output_dir, subject, task, run, acq=acq)
         logger.info(f"Archived interrupted run to: {archive_path}")
 
-    # Set up collection directory (required)
+    # Create DICOM collection folder for this run (e.g., collection/feedback_run-01 or feedback_acq-01_run-01)
     collection_dir = Path(collection_dir)
     collection_dir.mkdir(parents=True, exist_ok=True)
-    # Create DICOM collection folder for this run (e.g., collection/feedback_run-01 or feedback_acq-01_run-01)
     run_str = f"{run:02d}"
     if acq is not None:
         # Format acq as 2-digit number if int
@@ -3573,6 +3862,7 @@ def run_feedback_session(
     else:
         dicom_collection_dir = collection_dir / f"{task}_run-{run_str}"
     dicom_collection_dir.mkdir(parents=True, exist_ok=True)
+
     # Default incoming_dir to collection_dir/incoming if not specified
     if incoming_dir is None:
         incoming_dir = collection_dir / "incoming"

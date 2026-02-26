@@ -748,8 +748,8 @@ class FeedbackConfig:
         and how motion parameters are obtained:
         - ``"siemens_moco"``: Parse motion from Siemens MoCo JSON sidecar
           (``ImageComments`` field). Fast (~0 ms). Siemens scanners only.
-        - ``"software"``: ANTsPy multi-resolution rigid registration.
-          Works on any scanner (~400-500 ms per volume).
+        - ``"software"``: ANTsPy frame-to-reference rigid registration
+          with warm-start. Works on any scanner (~300 ms per volume).
         - ``"none"``: No motion correction. No motion parameters available.
     include_drift : bool
         Include linear drift regressor in the GLM nuisance model.
