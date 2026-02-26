@@ -709,58 +709,52 @@ class PyrtnfApp:
 
 def main():
     """Main entry point for the Flet app."""
-    import sys
+    import signal
+    import threading
+
+    from pineuro.gui.dispatch import MainThreadDispatcher, set_dispatcher
 
     def create_app(page: ft.Page):
         PyrtnfApp(page)
 
-    if sys.platform == "darwin":
-        # macOS: Cocoa requires NSWindow on the main thread, but Flet's
-        # ft.app() blocks whatever thread calls it.  Flet desktop actually
-        # spawns a separate viewer process, so it doesn't need the *main*
-        # thread — any thread will do.  We run Flet in a daemon thread and
-        # keep the main thread free for PsychoPy task dispatch.
-        import threading
+    # Run Flet in a background thread and keep the main thread free for
+    # PsychoPy task dispatch.  Flet's desktop viewer runs as a separate
+    # process, so ft.app() doesn't need the main thread.  On macOS this
+    # is required (Cocoa NSWindow must be created on the main thread);
+    # on all platforms it gives a consistent single-code-path architecture.
+    dispatcher = MainThreadDispatcher()
+    set_dispatcher(dispatcher)
 
-        from pineuro.gui.dispatch import MainThreadDispatcher, set_dispatcher
+    # Python only allows signal.signal() from the main thread.  Flet
+    # (or its dependencies) registers signal handlers internally — this
+    # fails when ft.app() runs in a background thread.  Patch it to
+    # silently skip registration from non-main threads.
+    _original_signal = signal.signal
 
-        dispatcher = MainThreadDispatcher()
-        set_dispatcher(dispatcher)
+    def _safe_signal(signum, handler):
+        if threading.current_thread() is threading.main_thread():
+            return _original_signal(signum, handler)
+        return signal.getsignal(signum)
 
-        # Python only allows signal.signal() from the main thread.  Flet
-        # (or its dependencies) registers signal handlers internally — this
-        # fails when ft.app() runs in a background thread.  Patch it to
-        # silently skip registration from non-main threads.
-        import signal
+    signal.signal = _safe_signal
 
-        _original_signal = signal.signal
+    flet_thread = threading.Thread(
+        target=ft.app, args=(create_app,), daemon=True, name="FletApp"
+    )
+    flet_thread.start()
 
-        def _safe_signal(signum, handler):
-            if threading.current_thread() is threading.main_thread():
-                return _original_signal(signum, handler)
-            return signal.getsignal(signum)
+    # When the user closes the Flet window, ft.app() returns and the
+    # daemon thread exits.  Shut down the dispatcher so the main thread
+    # (run_forever) can exit too.
+    def _watch_flet_exit():
+        flet_thread.join()
+        dispatcher.shutdown()
 
-        signal.signal = _safe_signal
+    threading.Thread(
+        target=_watch_flet_exit, daemon=True, name="FletExitWatcher"
+    ).start()
 
-        flet_thread = threading.Thread(
-            target=ft.app, args=(create_app,), daemon=True, name="FletApp"
-        )
-        flet_thread.start()
-
-        # When the user closes the Flet window, ft.app() returns and the
-        # daemon thread exits.  Shut down the dispatcher so the main thread
-        # (run_forever) can exit too.
-        def _watch_flet_exit():
-            flet_thread.join()
-            dispatcher.shutdown()
-
-        threading.Thread(
-            target=_watch_flet_exit, daemon=True, name="FletExitWatcher"
-        ).start()
-
-        dispatcher.run_forever()
-    else:
-        ft.app(target=create_app)
+    dispatcher.run_forever()
 
 
 if __name__ == "__main__":

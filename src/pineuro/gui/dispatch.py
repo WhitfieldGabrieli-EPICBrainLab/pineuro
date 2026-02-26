@@ -1,16 +1,13 @@
-"""Main-thread task dispatcher for macOS PsychoPy compatibility.
+"""Main-thread task dispatcher for PsychoPy compatibility.
 
-On macOS, Cocoa requires ``NSWindow`` creation on the main thread.  Since the
-Flet GUI normally occupies the main thread, PsychoPy tasks launched from
-background pipeline threads cannot create windows.
+Flet's ``ft.app()`` blocks whatever thread calls it, but PsychoPy (via
+pyglet/Cocoa) needs window creation on the main thread — at least on macOS.
+To keep a single code path across all platforms, we run ``ft.app()`` in a
+background thread and reserve the main thread for PsychoPy task dispatch.
 
-This module provides a simple dispatcher: the main thread runs
-:meth:`MainThreadDispatcher.run_forever`, pulling callables from a queue.
-Background threads submit work via :meth:`submit` and receive a
-:class:`~concurrent.futures.Future` for the result.
-
-Only used on macOS (``sys.platform == "darwin"``).  Windows and Linux continue
-to use the existing thread-based approach.
+The main thread runs :meth:`MainThreadDispatcher.run_forever`, pulling
+callables from a queue.  Background threads submit work via :meth:`submit`
+and receive a :class:`~concurrent.futures.Future` for the result.
 """
 
 from __future__ import annotations
@@ -25,7 +22,7 @@ _dispatcher: MainThreadDispatcher | None = None
 def get_dispatcher() -> MainThreadDispatcher:
     """Return the global dispatcher.  Raises if not initialised."""
     if _dispatcher is None:
-        raise RuntimeError("MainThreadDispatcher not initialised — is this macOS?")
+        raise RuntimeError("MainThreadDispatcher not initialised")
     return _dispatcher
 
 
@@ -82,7 +79,14 @@ def _flush_cocoa_events() -> None:
     ``win.close()``, the Cocoa run loop must pump for the window to
     actually disappear.  Since our dispatcher blocks on a Python queue
     (not the Cocoa run loop), we pump it explicitly here.
+
+    No-op on non-macOS platforms.
     """
+    import sys
+
+    if sys.platform != "darwin":
+        return
+
     try:
         import ctypes
         import ctypes.util
