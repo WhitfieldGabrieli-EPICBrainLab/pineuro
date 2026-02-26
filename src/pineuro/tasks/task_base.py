@@ -199,10 +199,13 @@ class TaskBase(ABC):  # noqa: B024
     def _poll_keys_win32(self, key_names: list[str]) -> None:
         """Poll global key state on Windows via GetAsyncKeyState."""
         import ctypes
+        import sys
 
         from psychopy import core
         from psychopy import event as psychopy_event
 
+        if sys.platform != "win32":
+            return
         user32 = ctypes.windll.user32
         try:
             hwnd = self.win.winHandle._hwnd

@@ -49,7 +49,7 @@ class PipelineRunner:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._current_coordinator = None  # Track coordinator for feedback tasks
-        self._current_feedback_task = None  # Track feedback task for stop support
+        self._current_feedback_task: Any = None  # Track feedback task for stop support
         self._current_localizer_task = None  # Track localizer task for stop support
         self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
         self.overwrite: bool = False
