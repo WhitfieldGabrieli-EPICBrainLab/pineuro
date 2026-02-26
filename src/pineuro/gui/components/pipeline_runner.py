@@ -446,6 +446,12 @@ class PipelineRunner:
 
             watch_dir = base_dir / "tmp" / f"incoming_{task_name}_run{run_num}"
             watch_dir.mkdir(parents=True, exist_ok=True)
+            # Clear stale files from previous runs so collect_dicoms doesn't
+            # catalog them as "already processed" (the simulator will re-copy
+            # files with the same names, which would then be skipped).
+            for f in watch_dir.iterdir():
+                if f.is_file():
+                    f.unlink()
             simulator_speed = config["scan"].get("collection_speed", 10.0)
         else:
             # Real-time mode: watch scanner DICOM directory
