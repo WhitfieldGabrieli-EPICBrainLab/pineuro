@@ -57,6 +57,7 @@ class StepStatus(Enum):
     COMPLETE = "complete"
     INTERRUPTED = "interrupted"  # Partial completion (user stopped early)
     FAILED = "failed"
+    SKIPPED = "skipped"  # Bypassed: downstream step already complete
 
 
 class ParticipantWorkflowScreen:
@@ -2052,6 +2053,24 @@ class ParticipantWorkflowScreen:
             )
             self.step_statuses[step_id] = status
 
+        # --- Skip detection ---
+        # If preprocessing is complete, any uncollected localizer-session steps
+        # were intentionally bypassed (user proceeded with fewer runs).
+        if not is_mask_reuse and self.step_statuses.get("preprocessing") == StepStatus.COMPLETE:
+            if reference_initial_enabled:
+                if self.step_statuses.get("reference_initial") in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+                    self.step_statuses["reference_initial"] = StepStatus.SKIPPED
+
+            for run_num in range(1, n_localizer_runs + 1):
+                step_id = f"rest_run_{run_num}"
+                if self.step_statuses.get(step_id) in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+                    self.step_statuses[step_id] = StepStatus.SKIPPED
+
+            # Coregistration requires the initial reference — skip if reference was skipped
+            if reference_initial_enabled and self.step_statuses.get("reference_initial") == StepStatus.SKIPPED:
+                if self.step_statuses.get("coregistration") in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+                    self.step_statuses["coregistration"] = StepStatus.SKIPPED
+
     def _get_session_for_next_step(self) -> str | None:
         """Determine which session contains the earliest incomplete step.
 
@@ -2110,6 +2129,7 @@ class ParticipantWorkflowScreen:
             StepStatus.COMPLETE: ft.icons.Icons.CHECK_CIRCLE,
             StepStatus.INTERRUPTED: ft.icons.Icons.WARNING_AMBER,
             StepStatus.FAILED: ft.icons.Icons.ERROR,
+            StepStatus.SKIPPED: ft.Icons.FAST_FORWARD,
         }
 
         color_map = {
@@ -2118,6 +2138,7 @@ class ParticipantWorkflowScreen:
             StepStatus.COMPLETE: ft.Colors.GREEN_500,
             StepStatus.INTERRUPTED: ft.Colors.ORANGE_500,
             StepStatus.FAILED: ft.Colors.RED_500,
+            StepStatus.SKIPPED: ft.Colors.BLUE_GREY_300,
         }
 
         return ft.Icon(
