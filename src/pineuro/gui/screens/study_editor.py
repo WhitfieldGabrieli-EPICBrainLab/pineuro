@@ -356,7 +356,7 @@ class StudyEditorScreen:
             width=600,
             label="Number of localizer runs",
             value=str(config["scan"].get("localizer_n_runs", 2)),
-            hint_text="Number of localizer (rest) runs — typically 2",
+            hint_text="Number of localizer (rest) runs",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=self._on_localizer_n_runs_changed,
         )
@@ -372,7 +372,7 @@ class StudyEditorScreen:
             width=600,
             label="Number of volumes",
             value=str(config["scan"].get("reference_initial_n_volumes", 2)),
-            hint_text="Short scan to set receiver gain — typically 2–5 volumes",
+            hint_text="Short scan to set receiver gain; 2–5 volumes",
             visible=config["scan"].get("reference_initial_enabled", True),
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field(
@@ -391,7 +391,7 @@ class StudyEditorScreen:
             width=600,
             label="Number of volumes",
             value=str(config["scan"].get("reference_realtime_n_volumes", 2)),
-            hint_text="Short scan for day-of registration before feedback — typically 2–5 volumes",
+            hint_text="Short scan for day-of registration before feedback; 2–5 volumes",
             visible=config["scan"].get("reference_realtime_enabled", True),
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field(
@@ -466,7 +466,7 @@ class StudyEditorScreen:
             width=600,
             label="Spatial smoothing (mm FWHM)",
             value=str(config["mask"]["smooth_fwhm"]),
-            hint_text="Gaussian kernel size in mm (default: 5.0)",
+            hint_text="Gaussian kernel size in mm",
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
@@ -474,7 +474,7 @@ class StudyEditorScreen:
             width=600,
             label="Highpass filter (Hz)",
             value=str(config["mask"]["highpass"]),
-            hint_text="Cutoff frequency for highpass filter (default: 0.01)",
+            hint_text="Cutoff frequency for highpass filter",
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
@@ -482,7 +482,7 @@ class StudyEditorScreen:
             width=600,
             label="ICA components",
             value=str(config["mask"].get("n_components", 20)),
-            hint_text="Number of ICA components for decomposition (default: 20)",
+            hint_text="Number of ICA components for decomposition",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_components", self.n_components_field, validate_positive_int),
         )
@@ -501,7 +501,7 @@ class StudyEditorScreen:
             width=600,
             label="Thresholding method",
             options=[
-                ft.dropdown.Option(key="top_n", text="Top N voxels (default)"),
+                ft.dropdown.Option(key="top_n", text="Top N voxels"),
                 ft.dropdown.Option(key="cluster", text="Atlas-guided cluster"),
             ],
             value=config["mask"].get("threshold_method", "top_n"),
@@ -611,7 +611,7 @@ class StudyEditorScreen:
             label="FD threshold (mm)",
             value=str(config.get("feedback", {}).get("fd_threshold", 0.5)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            hint_text="Frames exceeding this will be flagged in real time",
+            hint_text="Frames exceeding this are flagged in real time (default: 0.5 mm)",
             on_change=lambda _: self._validate_field("fd_threshold", self.fd_threshold_field, validate_positive_number),
         )
 
@@ -621,7 +621,7 @@ class StudyEditorScreen:
             label="DVARS threshold (standardized)",
             value=str(config.get("feedback", {}).get("dvars_threshold", 1.5)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            hint_text="Standardized DVARS above this will be flagged in real time",
+            hint_text="Standardized DVARS above this are flagged in real time (default: 1.5)",
             on_change=lambda _: self._validate_field(
                 "dvars_threshold", self.dvars_threshold_field, validate_positive_number
             ),
@@ -633,7 +633,7 @@ class StudyEditorScreen:
             label="tSNR threshold",
             value=str(config.get("feedback", {}).get("tsnr_threshold", 20)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            hint_text="tSNR below this will be flagged in real time",
+            hint_text="tSNR below this is flagged in real time (default: 20)",
             on_change=lambda _: self._validate_field(
                 "tsnr_threshold", self.tsnr_threshold_field, validate_positive_number
             ),
@@ -695,7 +695,7 @@ class StudyEditorScreen:
             label="Smoothing FWHM (mm)",
             value=str(rt_smooth_val) if rt_smooth_val is not None else "6.0",
             keyboard_type=ft.KeyboardType.NUMBER,
-            hint_text="Gaussian kernel size in mm (e.g., 5.0 or 6.0)",
+            hint_text="Gaussian kernel size in mm",
             visible=rt_smooth_val is not None,
         )
 
@@ -782,7 +782,7 @@ class StudyEditorScreen:
             label="Sliding window size (volumes)",
             value=str(conn_window),
             keyboard_type=ft.KeyboardType.NUMBER,
-            hint_text="Number of volumes in correlation window (e.g., 10-30)",
+            hint_text="Number of volumes in correlation window",
         )
         self.connectivity_target_dropdown = ft.Dropdown(
             width=600,
@@ -849,7 +849,7 @@ class StudyEditorScreen:
                 width=540,
                 label=f"Localizer run {i + 1} source DICOMs",
                 value=localizer_dicoms[i] if i < len(localizer_dicoms) else "",
-                hint_text="Path to DICOM directory for simulator (optional)",
+                hint_text="Path to DICOM directory for simulator",
             )
             self.localizer_source_fields.append(field)
 
@@ -857,14 +857,14 @@ class StudyEditorScreen:
             width=540,
             label="Initial Reference Scan source DICOMs",
             value=config["scan"].get("reference_initial_dicoms", ""),
-            hint_text="Path to DICOM directory for simulator (optional)",
+            hint_text="Path to DICOM directory for simulator",
         )
 
         self.reference_realtime_field = ft.TextField(
             width=540,
             label="Real-Time Reference Scan source DICOMs",
             value=config["scan"].get("reference_realtime_dicoms", ""),
-            hint_text="Path to DICOM directory for simulator (optional)",
+            hint_text="Path to DICOM directory for simulator",
         )
 
         # Feedback source paths - create dynamically based on max_feedback_runs
@@ -883,7 +883,7 @@ class StudyEditorScreen:
                 width=540,
                 label=f"Feedback run {i + 1} source DICOMs",
                 value=feedback_dicoms[i] if i < len(feedback_dicoms) else "",
-                hint_text="Path to DICOM directory for simulator (optional)",
+                hint_text="Path to DICOM directory for simulator",
             )
             self.feedback_source_fields.append(field)
 
@@ -903,7 +903,7 @@ class StudyEditorScreen:
                 width=540,
                 label=f"Transfer run {i + 1} source DICOMs",
                 value=transfer_dicoms[i] if i < len(transfer_dicoms) else "",
-                hint_text="Path to DICOM directory for simulator (optional)",
+                hint_text="Path to DICOM directory for simulator",
             )
             self.transfer_source_fields.append(field)
 
