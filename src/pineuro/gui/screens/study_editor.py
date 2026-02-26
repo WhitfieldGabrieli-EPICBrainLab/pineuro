@@ -80,6 +80,24 @@ class StudyEditorScreen:
         # Create form fields
         self._create_form_fields()
 
+        # For new studies, clear all text field values so only hint text shows
+        if self.is_new:
+            self._clear_new_study_fields()
+
+    def _clear_new_study_fields(self):
+        """Clear all TextField values for a new study so hint text is visible."""
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name, None)
+            if isinstance(attr, ft.TextField):
+                attr.value = ""
+        # Also clear dynamically created list fields
+        for field in getattr(self, "localizer_source_fields", []):
+            field.value = ""
+        for field in getattr(self, "feedback_source_fields", []):
+            field.value = ""
+        for field in getattr(self, "transfer_source_fields", []):
+            field.value = ""
+
     def _create_default_config(self) -> StudyConfig:
         """Create a default study configuration.
 
@@ -448,6 +466,7 @@ class StudyEditorScreen:
             width=600,
             label="Spatial smoothing (mm FWHM)",
             value=str(config["mask"]["smooth_fwhm"]),
+            hint_text="Gaussian kernel size in mm (default: 5.0)",
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
@@ -455,6 +474,7 @@ class StudyEditorScreen:
             width=600,
             label="Highpass filter (Hz)",
             value=str(config["mask"]["highpass"]),
+            hint_text="Cutoff frequency for highpass filter (default: 0.01)",
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
@@ -462,6 +482,7 @@ class StudyEditorScreen:
             width=600,
             label="ICA components",
             value=str(config["mask"].get("n_components", 20)),
+            hint_text="Number of ICA components for decomposition (default: 20)",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_components", self.n_components_field, validate_positive_int),
         )
@@ -812,6 +833,7 @@ class StudyEditorScreen:
             width=540,
             label="Base data directory",
             value=config["paths"]["base_dir"],
+            hint_text="Root directory for participant data (e.g., /data/pineuro)",
         )
 
         # Simulator source paths - create dynamically based on n_runs
@@ -1874,7 +1896,7 @@ class StudyEditorScreen:
         # Update localizer source field visibility if paths tab has been built
         if hasattr(self, "localizer_source_rows"):
             try:
-                n_runs = int(self.localizer_n_runs_field.value)
+                n_runs = int(self.localizer_n_runs_field.value or 2)
             except (ValueError, TypeError):
                 n_runs = 2
 
@@ -1921,7 +1943,7 @@ class StudyEditorScreen:
         # Update feedback source field visibility if paths tab has been built
         if hasattr(self, "feedback_source_rows"):
             try:
-                n_runs = int(self.max_feedback_runs_field.value)
+                n_runs = int(self.max_feedback_runs_field.value or 2)
             except (ValueError, TypeError):
                 n_runs = 2
 
@@ -2864,13 +2886,13 @@ class StudyEditorScreen:
 
         # Get current number of localizer runs
         try:
-            n_localizer_runs = int(self.localizer_n_runs_field.value)
+            n_localizer_runs = int(self.localizer_n_runs_field.value or 2)
         except (ValueError, TypeError):
             n_localizer_runs = 2
 
         # Get current number of feedback runs
         try:
-            n_feedback_runs = int(self.max_feedback_runs_field.value)
+            n_feedback_runs = int(self.max_feedback_runs_field.value or 2)
         except (ValueError, TypeError):
             n_feedback_runs = 2
 
@@ -3247,9 +3269,9 @@ class StudyEditorScreen:
 
         try:
             # Localizer parameters
-            config["scan"]["localizer_tr"] = float(self.localizer_tr_field.value)
-            config["scan"]["localizer_n_volumes"] = int(self.localizer_n_volumes_field.value)
-            config["scan"]["localizer_n_runs"] = int(self.localizer_n_runs_field.value)
+            config["scan"]["localizer_tr"] = float(self.localizer_tr_field.value or 1.2)
+            config["scan"]["localizer_n_volumes"] = int(self.localizer_n_volumes_field.value or 200)
+            config["scan"]["localizer_n_runs"] = int(self.localizer_n_runs_field.value or 2)
             config["scan"]["localizer_task_type"] = self.localizer_task_type_dropdown.value
 
             # Sync mask.localizer_type (used by participant_workflow and pipeline_runner)
@@ -3258,19 +3280,19 @@ class StudyEditorScreen:
 
             # Reference scan parameters
             config["scan"]["reference_initial_enabled"] = self.reference_initial_enabled_checkbox.value
-            config["scan"]["reference_initial_n_volumes"] = int(self.reference_initial_n_volumes_field.value)
+            config["scan"]["reference_initial_n_volumes"] = int(self.reference_initial_n_volumes_field.value or 2)
             config["scan"]["reference_realtime_enabled"] = self.reference_realtime_enabled_checkbox.value
-            config["scan"]["reference_realtime_n_volumes"] = int(self.reference_realtime_n_volumes_field.value)
+            config["scan"]["reference_realtime_n_volumes"] = int(self.reference_realtime_n_volumes_field.value or 2)
 
             # Feedback parameters
-            config["scan"]["feedback_tr"] = float(self.feedback_tr_field.value)
-            config["scan"]["feedback_n_volumes"] = int(self.feedback_n_volumes_field.value)
+            config["scan"]["feedback_tr"] = float(self.feedback_tr_field.value or 1.2)
+            config["scan"]["feedback_n_volumes"] = int(self.feedback_n_volumes_field.value or 150)
 
             # Acquisition mode
             config["scan"]["simulator_enabled"] = self.simulator_enabled_checkbox.value
-            config["scan"]["collection_speed"] = float(self.collection_speed_field.value)
-            config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value)
-            config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip()
+            config["scan"]["collection_speed"] = float(self.collection_speed_field.value or 10.0)
+            config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value or 1.0)
+            config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip() or "/BOLD_DICOM"
             config["scan"]["scanner_ip"] = self.scanner_ip_field.value.strip()
             # Only save mapping if in mapping mode
             if self.simulator_source_mode_radio.value == "mapping":
@@ -3295,14 +3317,11 @@ class StudyEditorScreen:
 
             # Debug: log values if they look wrong
             if not smooth_val or smooth_val == "None":
-                logger.warning(f"smooth_fwhm_field has invalid value: {smooth_val!r}, using default 6.0")
-                smooth_val = "6.0"
+                smooth_val = "5.0"
             if not highpass_val or highpass_val == "None":
-                logger.warning(f"highpass_field has invalid value: {highpass_val!r}, using default 0.01")
                 highpass_val = "0.01"
             if not n_components_val or n_components_val == "None":
-                logger.warning(f"n_components_field has invalid value: {n_components_val!r}, using default 30")
-                n_components_val = "30"
+                n_components_val = "20"
 
             threshold_val = self.threshold_field.value
             if not threshold_val or threshold_val == "None":
@@ -3379,17 +3398,17 @@ class StudyEditorScreen:
         config["task"]["task_type"] = task_type
 
         try:
-            config["task"]["max_feedback_runs"] = int(self.max_feedback_runs_field.value)
+            config["task"]["max_feedback_runs"] = int(self.max_feedback_runs_field.value or 2)
 
             # Save n_baseline, n_volumes, and fd_threshold to feedback config (used by pipeline)
-            n_baseline = int(self.n_baseline_field.value)
+            n_baseline = int(self.n_baseline_field.value or 25)
             config["feedback"]["n_baseline"] = n_baseline
             # Sync n_volumes from scan config to feedback config
-            config["feedback"]["n_volumes"] = int(self.feedback_n_volumes_field.value)
+            config["feedback"]["n_volumes"] = int(self.feedback_n_volumes_field.value or 150)
             # FD threshold for motion monitoring
-            config["feedback"]["fd_threshold"] = float(self.fd_threshold_field.value)
-            config["feedback"]["dvars_threshold"] = float(self.dvars_threshold_field.value)
-            config["feedback"]["tsnr_threshold"] = float(self.tsnr_threshold_field.value)
+            config["feedback"]["fd_threshold"] = float(self.fd_threshold_field.value or 0.5)
+            config["feedback"]["dvars_threshold"] = float(self.dvars_threshold_field.value or 1.5)
+            config["feedback"]["tsnr_threshold"] = float(self.tsnr_threshold_field.value or 20)
             # Motion correction mode and GLM nuisance regressors
             config["feedback"]["motion_correction"] = self.motion_correction_dropdown.value
             config["feedback"]["include_drift"] = self.drift_checkbox.value
@@ -3536,11 +3555,11 @@ class StudyEditorScreen:
                 raise ValidationError(f"Invalid localizer task parameter: {e}") from e
 
         # Update paths
-        config["paths"]["base_dir"] = self.base_dir_field.value.strip()
+        config["paths"]["base_dir"] = self.base_dir_field.value.strip() or "/data/pineuro"
 
         # Update simulator source paths (dynamic based on n_runs)
         try:
-            n_localizer_runs = int(self.localizer_n_runs_field.value)
+            n_localizer_runs = int(self.localizer_n_runs_field.value or 2)
         except (ValueError, TypeError):
             n_localizer_runs = 2
         config["scan"]["localizer_source_dicoms"] = [
@@ -3551,7 +3570,7 @@ class StudyEditorScreen:
 
         # Update feedback source paths (per-run)
         try:
-            n_feedback_runs = int(self.max_feedback_runs_field.value)
+            n_feedback_runs = int(self.max_feedback_runs_field.value or 2)
         except (ValueError, TypeError):
             n_feedback_runs = 2
         config["scan"]["feedback_source_dicoms"] = [
