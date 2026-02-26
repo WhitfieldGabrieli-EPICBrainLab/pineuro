@@ -237,8 +237,9 @@ class VolumeSimulator:
         """
         Copy a volume file (and its JSON sidecar for NIfTI) to target directory.
 
-        Uses atomic copy (write to temp file, then rename) to prevent the file
-        watcher from seeing incomplete files during copy.
+        Copies directly to the final filename using shutil.copyfile (content
+        only, no metadata) for compatibility with network filesystems (SMB).
+        The file watcher's _wait_for_stable_file handles partially-written files.
 
         Parameters
         ----------
@@ -251,27 +252,14 @@ class VolumeSimulator:
             Path to copied volume file in target directory
         """
         dst_file = self.target_dir / src_file.name
-        tmp_file = self.target_dir / f".{src_file.name}.tmp"
-
-        # Atomic copy: write to temp file, then move to final name.
-        # shutil.move is used instead of Path.rename because rename can fail
-        # with EINVAL on network filesystems (e.g., macOS SMB mounts).
-        shutil.copy2(src_file, tmp_file)
-        shutil.move(str(tmp_file), str(dst_file))
+        shutil.copyfile(src_file, dst_file)
 
         # For NIfTI files, also copy the JSON sidecar if it exists
         if is_nifti_file(src_file):
             json_src = get_json_sidecar_path(src_file)
             if json_src.exists():
                 json_dst = get_json_sidecar_path(dst_file)
-                json_tmp = self.target_dir / f".{json_src.name}.tmp"
-                try:
-                    shutil.copy2(json_src, json_tmp)
-                    shutil.move(str(json_tmp), str(json_dst))
-                except Exception:
-                    if json_tmp.exists():
-                        json_tmp.unlink()
-                    raise
+                shutil.copyfile(json_src, json_dst)
 
         return dst_file
 
