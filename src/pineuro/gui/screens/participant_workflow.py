@@ -4607,8 +4607,12 @@ class ParticipantWorkflowScreen:
             # Clear running state and unlock UI
             self._is_running = False
 
+            stopped_by_user = not success and result_message and "stopped by user" in result_message
+
             if success:
                 self._add_log(f"[SUCCESS] {result_message}")
+            elif stopped_by_user:
+                self._add_log(f"[INFO] {result_message}")
             else:
                 self._add_log(f"[ERROR] {result_message}")
 
@@ -4618,14 +4622,14 @@ class ParticipantWorkflowScreen:
             # Update UI lock state (re-enables navigation controls)
             self._update_ui_lock_state()
 
-            if not success and completed_step_id is not None and self.right_panel_container is not None:
-                # Show interactive error recovery panel instead of restoring preview
+            if not success and not stopped_by_user and completed_step_id is not None and self.right_panel_container is not None:
+                # Show interactive error recovery panel only for actual failures
                 self._last_failed_step = completed_step_id
                 error = RuntimeError(result_message or "Unknown error")
                 self.right_panel_container.content = self._build_error_recovery_panel(error, completed_step_id)
                 self.right_panel_container.update()
             elif self.right_panel_container is not None:
-                # Restore empty preview panel on success
+                # Restore empty preview panel on success or user-initiated stop
                 self.right_panel_container.content = self._build_preview_panel()
                 self.right_panel_container.update()
 
