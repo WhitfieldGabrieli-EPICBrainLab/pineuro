@@ -1979,7 +1979,9 @@ class StudyEditorScreen:
             """Handle directory picker click event."""
             logger.info(f"Directory picker clicked for field: {field.label}")
 
-            # Use tkinter file dialog as a workaround for Flet FilePicker issues on Linux
+            # Use tkinter file dialog as a workaround for Flet FilePicker issues on Linux.
+            # Tkinter must run on the main thread (Cocoa NSWindow constraint on macOS),
+            # so we dispatch through the main-thread dispatcher.
             try:
                 import tkinter as tk
                 from tkinter import filedialog
@@ -1992,18 +1994,19 @@ class StudyEditorScreen:
                 return
 
             try:
-                # Create a temporary tkinter root window
-                root = tk.Tk()
-                root.withdraw()  # Hide the main window
-                root.attributes("-topmost", True)  # Bring to front
+                from pineuro.gui.dispatch import get_dispatcher
 
-                # Open directory picker
-                path = filedialog.askdirectory(
-                    title=f"Select {field.label}", initialdir=field.value if field.value else None
-                )
+                def _show_dialog():
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    result = filedialog.askdirectory(
+                        title=f"Select {field.label}", initialdir=field.value if field.value else None
+                    )
+                    root.destroy()
+                    return result
 
-                # Clean up
-                root.destroy()
+                path = get_dispatcher().submit(_show_dialog).result()
 
                 logger.info(f"Selected path: {path}")
                 if path:
@@ -2012,7 +2015,6 @@ class StudyEditorScreen:
 
             except Exception as ex:
                 logger.error(f"Error opening directory picker: {ex}")
-                # Show error to user
                 _snack = ft.SnackBar(ft.Text(f"Error opening file browser: {ex}"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
@@ -2046,7 +2048,9 @@ class StudyEditorScreen:
             """Handle file picker click event."""
             logger.info(f"File picker clicked for field: {field.label}")
 
-            # Use tkinter file dialog as a workaround for Flet FilePicker issues on Linux
+            # Use tkinter file dialog as a workaround for Flet FilePicker issues on Linux.
+            # Tkinter must run on the main thread (Cocoa NSWindow constraint on macOS),
+            # so we dispatch through the main-thread dispatcher.
             try:
                 import tkinter as tk
                 from tkinter import filedialog
@@ -2059,30 +2063,29 @@ class StudyEditorScreen:
                 return
 
             try:
-                # Create a temporary tkinter root window
-                root = tk.Tk()
-                root.withdraw()  # Hide the main window
-                root.attributes("-topmost", True)  # Bring to front
-
-                # Get initial directory from current value
                 import os
 
-                initial_dir = None
-                if field.value:
-                    if os.path.isfile(field.value):
-                        initial_dir = os.path.dirname(field.value)
-                    elif os.path.isdir(field.value):
-                        initial_dir = field.value
+                from pineuro.gui.dispatch import get_dispatcher
 
-                # Open file picker
-                path = filedialog.askopenfilename(
-                    title=f"Select {field.label}",
-                    initialdir=initial_dir,
-                    filetypes=filetypes,
-                )
+                def _show_dialog():
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    initial_dir = None
+                    if field.value:
+                        if os.path.isfile(field.value):
+                            initial_dir = os.path.dirname(field.value)
+                        elif os.path.isdir(field.value):
+                            initial_dir = field.value
+                    result = filedialog.askopenfilename(
+                        title=f"Select {field.label}",
+                        initialdir=initial_dir,
+                        filetypes=filetypes,
+                    )
+                    root.destroy()
+                    return result
 
-                # Clean up
-                root.destroy()
+                path = get_dispatcher().submit(_show_dialog).result()
 
                 logger.info(f"Selected file: {path}")
                 if path:
@@ -2091,7 +2094,6 @@ class StudyEditorScreen:
 
             except Exception as ex:
                 logger.error(f"Error opening file picker: {ex}")
-                # Show error to user
                 _snack = ft.SnackBar(ft.Text(f"Error opening file browser: {ex}"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
