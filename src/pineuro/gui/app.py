@@ -83,42 +83,6 @@ if TYPE_CHECKING:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Pre-built study templates — applied as overrides on top of StudyEditorScreen._create_default_config()
-STUDY_TEMPLATES: dict[str, dict] = {
-    "Ball Task — Single Visit": {
-        "description": "Standard single-visit neurofeedback with the ball task (default settings).",
-        "icon": "sports_soccer",
-        "overrides": {},
-    },
-    "Ball Task — Multi-Visit": {
-        "description": "Longitudinal neurofeedback study with the ball task across multiple visits.",
-        "icon": "calendar_month",
-        "overrides": {
-            "study": {"multi_visit_enabled": True},
-        },
-    },
-    "Thermometer Task": {
-        "description": "Single-network neurofeedback using the thermometer display (ContA target).",
-        "icon": "thermostat",
-        "overrides": {
-            "task": {"task_type": "thermometer"},
-            "mask": {"yeo_targets": ["ContA"], "mask_names": ["ContA"]},
-        },
-    },
-    "Sham-Controlled (Ball)": {
-        "description": "Ball task with blinded sham condition — hemisphere-split alternative masks.",
-        "icon": "science",
-        "overrides": {
-            "sham": {
-                "enabled": True,
-                "blind_mode": True,
-                "delivery_method": "alternative_masks",
-            },
-        },
-    },
-}
-
-
 class PyrtnfApp:
     """Main application class managing screen navigation and state."""
 
@@ -194,11 +158,6 @@ class PyrtnfApp:
                                     ),
                                     ft.Row(
                                         [
-                                            ft.OutlinedButton(
-                                                "New from Template",
-                                                icon=ft.Icons.AUTO_AWESOME,
-                                                on_click=lambda _: self._show_template_dialog(),
-                                            ),
                                             ft.OutlinedButton(
                                                 "Import Study",
                                                 icon=ft.Icons.DOWNLOAD,
@@ -670,96 +629,6 @@ class PyrtnfApp:
             actions_alignment=ft.MainAxisAlignment.END,
         )
         self.page.show_dialog(dialog)
-
-    def _show_template_dialog(self):
-        """Show a dialog for selecting a study template."""
-
-        def _use_template(template_name: str):
-            self.page.pop_dialog()
-            self._create_study_from_template(template_name)
-
-        template_cards: list[ft.Control] = []
-        for name, info in STUDY_TEMPLATES.items():
-            tname = name  # capture for lambda
-            template_cards.append(
-                ft.ListTile(
-                    leading=ft.Icon(ft.Icons.AUTO_AWESOME, color=ft.Colors.BLUE_400),
-                    title=ft.Text(tname, weight=ft.FontWeight.BOLD),
-                    subtitle=ft.Text(info["description"], size=12, color=ft.Colors.GREY_600),
-                    trailing=ft.OutlinedButton(
-                        "Use",
-                        on_click=lambda _, n=tname: _use_template(n),
-                    ),
-                )
-            )
-
-        dialog = ft.AlertDialog(
-            title=ft.Row(
-                [
-                    ft.Icon(ft.Icons.AUTO_AWESOME, color=ft.Colors.BLUE_400),
-                    ft.Text("New Study from Template", weight=ft.FontWeight.BOLD),
-                ],
-                spacing=8,
-            ),
-            content=ft.Container(
-                content=ft.Column(template_cards, spacing=4, tight=True),
-                width=520,
-            ),
-            actions=[ft.TextButton("Cancel", on_click=lambda _: self.page.pop_dialog())],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-        self.page.show_dialog(dialog)
-
-    def _create_study_from_template(self, template_name: str):
-        """Open the study editor pre-filled with a template configuration.
-
-        Args:
-            template_name: Key in STUDY_TEMPLATES dict
-        """
-        import copy
-
-        from .models import StudyConfig, StudyMetadata
-        from .screens.study_editor import StudyEditorScreen
-
-        template = STUDY_TEMPLATES.get(template_name)
-        if template is None:
-            return
-
-        # Build default config using the same helper as StudyEditorScreen
-        default_config = StudyEditorScreen(
-            page=self.page,
-            config_manager=self.config_manager,
-        ).study_config
-
-        # Deep-copy the session config and apply template overrides
-        session_config = copy.deepcopy(default_config.session_config)
-        for section, values in template["overrides"].items():
-            if section not in session_config:
-                session_config[section] = {}
-            session_config[section].update(values)
-
-        # Build the template StudyConfig
-        template_config = StudyConfig(
-            metadata=StudyMetadata(name=template_name, description=template["description"]),
-            session_config=session_config,
-            file_path=None,
-        )
-
-        logger.info(f"Opening study editor from template: {template_name}")
-        self.current_study = template_config
-        self.page.controls.clear()
-
-        from .screens.study_editor import StudyEditorScreen
-
-        editor = StudyEditorScreen(
-            page=self.page,
-            config_manager=self.config_manager,
-            study_config=template_config,
-            on_cancel=lambda: self.show_study_manager(),
-            on_save=lambda: self.show_study_manager(),
-        )
-        self.page.add(editor.build())
-        self.page.update()
 
     def show_study_editor(self, study_name: str | None):
         """Show the study editor screen.
