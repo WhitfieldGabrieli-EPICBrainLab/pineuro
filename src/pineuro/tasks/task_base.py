@@ -257,11 +257,21 @@ class TaskBase(ABC):  # noqa: B024
 
         try:
             window_id = self.win.winHandle._window
+        except Exception:
+            return
+
+        # get_input_focus() can return a Window object OR special constants
+        # (PointerRoot=1, InputFocus.NONE=0) which are plain ints.
+        try:
             focused, _ = d.get_input_focus()
-            if focused.id == window_id:
+            focused_id = focused.id if hasattr(focused, "id") else None
+            if focused_id == window_id:
                 self._poll_prev.clear()
                 return
+        except Exception:
+            pass  # Assume unfocused and poll anyway
 
+        try:
             keymap = d.query_keymap()
         except Exception:
             return
