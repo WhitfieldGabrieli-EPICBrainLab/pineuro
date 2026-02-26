@@ -4,6 +4,7 @@ This module provides thread-safe execution of pineuro pipeline steps,
 allowing the GUI to remain responsive during long-running operations.
 """
 
+import contextlib
 import logging
 import threading
 from collections.abc import Callable
@@ -31,10 +32,8 @@ class _DispatchedTask:
         return not self._future.done()
 
     def join(self, timeout: float | None = None) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._future.result(timeout=timeout)
-        except Exception:
-            pass  # errors already logged inside the submitted callable
 
 
 class PipelineRunner:
@@ -1868,10 +1867,8 @@ class PipelineRunner:
 
             # Wait for both coordinator and task to complete
             coordinator_thread.join()
-            try:
+            with contextlib.suppress(Exception):
                 task_future.result(timeout=30)
-            except Exception:
-                pass  # errors already logged in run_task
 
             # Extract results generically via task contract
             results = task.get_run_results()

@@ -2057,9 +2057,8 @@ class ParticipantWorkflowScreen:
         # If preprocessing is complete, any uncollected localizer-session steps
         # were intentionally bypassed (user proceeded with fewer runs).
         if not is_mask_reuse and self.step_statuses.get("preprocessing") == StepStatus.COMPLETE:
-            if reference_initial_enabled:
-                if self.step_statuses.get("reference_initial") in (StepStatus.PENDING, StepStatus.INTERRUPTED):
-                    self.step_statuses["reference_initial"] = StepStatus.SKIPPED
+            if reference_initial_enabled and self.step_statuses.get("reference_initial") in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+                self.step_statuses["reference_initial"] = StepStatus.SKIPPED
 
             for run_num in range(1, n_localizer_runs + 1):
                 step_id = f"rest_run_{run_num}"
@@ -2067,9 +2066,8 @@ class ParticipantWorkflowScreen:
                     self.step_statuses[step_id] = StepStatus.SKIPPED
 
             # Coregistration requires the initial reference — skip if reference was skipped
-            if reference_initial_enabled and self.step_statuses.get("reference_initial") == StepStatus.SKIPPED:
-                if self.step_statuses.get("coregistration") in (StepStatus.PENDING, StepStatus.INTERRUPTED):
-                    self.step_statuses["coregistration"] = StepStatus.SKIPPED
+            if reference_initial_enabled and self.step_statuses.get("reference_initial") == StepStatus.SKIPPED and self.step_statuses.get("coregistration") in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+                self.step_statuses["coregistration"] = StepStatus.SKIPPED
 
     def _get_session_for_next_step(self) -> str | None:
         """Determine which session contains the earliest incomplete step.
