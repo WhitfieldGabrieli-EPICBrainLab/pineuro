@@ -1810,12 +1810,12 @@ class ParticipantWorkflowScreen:
             StepStatus based on best attempt status (COMPLETE if any complete,
             INTERRUPTED if any partial, PENDING if none found)
         """
-        from pineuro.feedback import STEP_TO_RUN_NUMBER
+        from pineuro.feedback import parse_step_run_number
 
-        if step_id not in STEP_TO_RUN_NUMBER:
+        try:
+            run_num = parse_step_run_number(step_id)
+        except ValueError:
             return StepStatus.PENDING
-
-        run_num = STEP_TO_RUN_NUMBER[step_id]
         task_type = "transfer" if "transfer" in step_id else "feedback"
 
         if not output_dir.exists():

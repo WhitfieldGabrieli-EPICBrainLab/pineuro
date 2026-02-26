@@ -2140,15 +2140,34 @@ def get_next_run_number(
     return max(existing_runs) + 1
 
 
-# Mapping from workflow step_id to expected run number
-# transfer_1 and feedback_1 are slot 1 (run-01)
-# transfer_2 and feedback_2 are slot 2 (run-02)
-STEP_TO_RUN_NUMBER = {
-    "transfer_1": 1,
-    "transfer_2": 2,
-    "feedback_1": 1,
-    "feedback_2": 2,
-}
+def parse_step_run_number(step_id: str) -> int:
+    """Extract run number from a workflow step_id.
+
+    Parameters
+    ----------
+    step_id : str
+        Workflow step identifier (e.g., 'feedback_3', 'transfer_1')
+
+    Returns
+    -------
+    int
+        The run number extracted from the step_id.
+
+    Raises
+    ------
+    ValueError
+        If step_id is not in the expected format ``{type}_{number}``.
+    """
+    parts = step_id.rsplit("_", 1)
+    if len(parts) == 2 and parts[0] in ("feedback", "transfer"):
+        try:
+            return int(parts[1])
+        except ValueError:
+            pass
+    raise ValueError(
+        f"Invalid step_id: {step_id!r}. "
+        "Expected format 'feedback_N' or 'transfer_N' (e.g., 'feedback_3')."
+    )
 
 
 def get_slot_run_info(
@@ -2160,7 +2179,7 @@ def get_slot_run_info(
     """Get run info based on workflow slot with BIDS acq entity for retries.
 
     Uses a slot-based run numbering system where:
-    - run-01/run-02 corresponds to workflow slot (transfer_1/feedback_1 vs transfer_2/feedback_2)
+    - The run number is derived from the step_id suffix (e.g., feedback_3 -> run-03)
     - acq-a/acq-b/acq-c corresponds to attempt number (first, second, third...)
 
     Parameters
@@ -2172,15 +2191,15 @@ def get_slot_run_info(
     task : str
         Task name (e.g., 'feedback', 'transfer')
     step_id : str
-        Workflow step identifier (e.g., 'transfer_1', 'feedback_2')
+        Workflow step identifier (e.g., 'transfer_1', 'feedback_3')
 
     Returns
     -------
     dict
         Dictionary containing:
-        - 'run': int - The fixed run number for this slot (1 or 2)
+        - 'run': int - The run number for this slot
         - 'acq': int - The acquisition number for this attempt (1, 2, 3, ...)
-        - 'run_acq_string': str - Combined string like 'acq-01_run-01'
+        - 'run_acq_string': str - Combined string like 'acq-01_run-03'
         - 'existing_acqs': list - List of existing acquisition numbers for this slot
 
     Examples
@@ -2193,10 +2212,7 @@ def get_slot_run_info(
     >>> info
     {'run': 1, 'acq': 2, 'run_acq_string': 'acq-02_run-01', 'existing_acqs': [1]}
     """
-    if step_id not in STEP_TO_RUN_NUMBER:
-        raise ValueError(f"Unknown step_id: {step_id}. Expected one of {list(STEP_TO_RUN_NUMBER.keys())}")
-
-    run_num = STEP_TO_RUN_NUMBER[step_id]
+    run_num = parse_step_run_number(step_id)
 
     if not output_dir.exists():
         return {
