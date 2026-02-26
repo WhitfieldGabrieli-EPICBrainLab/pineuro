@@ -16,6 +16,27 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+class _DispatchedTask:
+    """Thin wrapper around a :class:`~concurrent.futures.Future`.
+
+    Exposes ``.is_alive()`` and ``.join()`` so it can be used as a drop-in
+    replacement for the :class:`threading.Thread` returned by
+    ``_launch_localizer_task()`` on Windows/Linux.
+    """
+
+    def __init__(self, future):
+        self._future = future
+
+    def is_alive(self) -> bool:
+        return not self._future.done()
+
+    def join(self, timeout: float | None = None) -> None:
+        try:
+            self._future.result(timeout=timeout)
+        except Exception:
+            pass  # errors already logged inside the submitted callable
+
+
 class PipelineRunner:
     """Execute pipeline steps in background threads with progress callbacks."""
 
@@ -515,11 +536,15 @@ class PipelineRunner:
         simulator=None,
         trigger_event=None,
         task_done_event: threading.Event | None = None,
-    ) -> threading.Thread:
+    ):
         """Launch a localizer PsychoPy task in a separate thread.
 
         The task runs concurrently with DICOM collection, presenting stimuli
         while the scanner acquires volumes.
+
+        On macOS, the task is dispatched to the main thread (required by Cocoa
+        for NSWindow creation).  On Windows/Linux the existing thread-based
+        path is used.
 
         Args:
             run_num: Run number (1-based)
@@ -532,7 +557,7 @@ class PipelineRunner:
                 collect_volumes to drain remaining volumes and stop
 
         Returns:
-            Thread running the localizer task
+            Thread (or _DispatchedTask on macOS) running the localizer task
         """
         from pineuro.tasks.factory import create_localizer_task
 
@@ -598,6 +623,17 @@ class PipelineRunner:
                 if task_done_event is not None:
                     task_done_event.set()
 
+        # --- macOS: dispatch task.run() to main thread (NSWindow constraint) ---
+        import sys
+
+        if sys.platform == "darwin":
+            from pineuro.gui.dispatch import get_dispatcher
+
+            future = get_dispatcher().submit(run_localizer)
+            logger.info(f"Dispatched localizer task '{task_id}' to main thread (macOS)")
+            return _DispatchedTask(future)
+
+        # --- Windows / Linux: run in a background thread -----------------------
         thread = threading.Thread(target=run_localizer, daemon=False, name=f"LocalizerTask-{task_id}-run{run_num}")
         thread.start()
         logger.info(f"Launched localizer task '{task_id}' in thread")
@@ -1816,24 +1852,39 @@ class PipelineRunner:
             if self._task_mirror_callback is not None:
                 task.set_mirror_callback(self._task_mirror_callback)
 
-            # Run task in separate thread (task will call coordinator.send_trigger())
+            # Run task — on macOS dispatch to main thread (NSWindow constraint),
+            # on Windows/Linux use a background thread as before.
             def run_task():
                 try:
-                    self._emit_progress("Task thread started...")
+                    self._emit_progress("Task started...")
                     task.run()
                     self._emit_progress("Task completed successfully")
                 except Exception as e:
                     logger.error(f"Task error: {e}", exc_info=True)
                     self._emit_progress(f"Task error: {e}")
 
-            task_thread = threading.Thread(target=run_task, daemon=False, name="PsychoPyTask")
-            task_thread.start()
+            import sys
+
+            if sys.platform == "darwin":
+                from pineuro.gui.dispatch import get_dispatcher
+
+                task_future = get_dispatcher().submit(run_task)
+                logger.info("Dispatched feedback task to main thread (macOS)")
+            else:
+                task_thread = threading.Thread(target=run_task, daemon=False, name="PsychoPyTask")
+                task_thread.start()
 
             self._emit_progress("Session running, waiting for completion...")
 
-            # Wait for both threads to complete
-            coordinator_thread.join()  # Wait for coordinator to finish
-            task_thread.join()  # Wait for task to finish
+            # Wait for both coordinator and task to complete
+            coordinator_thread.join()
+            if sys.platform == "darwin":
+                try:
+                    task_future.result(timeout=30)
+                except Exception:
+                    pass  # errors already logged in run_task
+            else:
+                task_thread.join()
 
             # Extract results generically via task contract
             results = task.get_run_results()

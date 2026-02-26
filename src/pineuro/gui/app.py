@@ -709,11 +709,43 @@ class PyrtnfApp:
 
 def main():
     """Main entry point for the Flet app."""
+    import sys
 
     def create_app(page: ft.Page):
         PyrtnfApp(page)
 
-    ft.app(target=create_app)
+    if sys.platform == "darwin":
+        # macOS: Cocoa requires NSWindow on the main thread, but Flet's
+        # ft.app() blocks whatever thread calls it.  Flet desktop actually
+        # spawns a separate viewer process, so it doesn't need the *main*
+        # thread — any thread will do.  We run Flet in a daemon thread and
+        # keep the main thread free for PsychoPy task dispatch.
+        import threading
+
+        from pineuro.gui.dispatch import MainThreadDispatcher, set_dispatcher
+
+        dispatcher = MainThreadDispatcher()
+        set_dispatcher(dispatcher)
+
+        flet_thread = threading.Thread(
+            target=ft.app, args=(create_app,), daemon=True, name="FletApp"
+        )
+        flet_thread.start()
+
+        # When the user closes the Flet window, ft.app() returns and the
+        # daemon thread exits.  Shut down the dispatcher so the main thread
+        # (run_forever) can exit too.
+        def _watch_flet_exit():
+            flet_thread.join()
+            dispatcher.shutdown()
+
+        threading.Thread(
+            target=_watch_flet_exit, daemon=True, name="FletExitWatcher"
+        ).start()
+
+        dispatcher.run_forever()
+    else:
+        ft.app(target=create_app)
 
 
 if __name__ == "__main__":
