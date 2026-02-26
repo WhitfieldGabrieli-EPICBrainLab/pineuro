@@ -330,7 +330,6 @@ class SelfOtherTask(BaseLocalizerTask):
                     snd = SoundPygame(audio_path, secs=duration)
                     snd.setVolume(1.0)
                     self._preloaded_sounds[audio_path] = snd
-                    logger.info(f"  Loaded: {Path(audio_path).name} (duration={duration:.2f}s)")
 
         logger.info(f"All {len(self._preloaded_sounds)} Sound objects pre-loaded!")
 
@@ -367,7 +366,6 @@ class SelfOtherTask(BaseLocalizerTask):
         logger.info(f"[TIMING] Baseline START: onset={onset:.2f}s, duration={self.baseline_duration}s")
         self.show_fixation(self.baseline_duration)
         self.record_event(onset, self.baseline_duration, "baseline")
-        logger.info(f"[TIMING] Baseline END: time={self._experiment_clock.getTime():.2f}s")
 
         # Main block sequence
         voice_block_idx = 0
@@ -378,32 +376,19 @@ class SelfOtherTask(BaseLocalizerTask):
             block_onset = self._experiment_clock.getTime()
 
             if block_entry == "rest":
-                logger.info(
-                    f"[TIMING] Block {block_num + 1}/12 REST START: onset={block_onset:.2f}s, duration={self.block_duration}s"
-                )
                 self._run_rest_block()
                 trial_type = "rest"
             else:
                 # Get inferred type (self/other) from stim file
                 trial_type = self._voice_block_types[voice_block_idx]
-                logger.info(
-                    f"[TIMING] Block {block_num + 1}/12 VOICE ({trial_type.upper()}) START: onset={block_onset:.2f}s, duration={self.block_duration}s"
-                )
                 self._run_voice_block(voice_block_idx, trial_type)
                 voice_block_idx += 1
 
-            logger.info(f"[TIMING] Block {block_num + 1}/12 END: time={self._experiment_clock.getTime():.2f}s")
             self.record_event(block_onset, self.block_duration, trial_type)
 
             # Comprehension question after each block
             q_onset = self._experiment_clock.getTime()
-            logger.info(
-                f"[TIMING] Question {block_num + 1} START: onset={q_onset:.2f}s, duration={self.question_duration}s, type={trial_type}"
-            )
             response, rt = self._run_question(block_num)
-            logger.info(
-                f"[TIMING] Question {block_num + 1} END: time={self._experiment_clock.getTime():.2f}s, response={response or 'none'}, rt={rt or 'n/a'}"
-            )
             self.record_event(
                 q_onset,
                 self.question_duration,
@@ -433,7 +418,6 @@ class SelfOtherTask(BaseLocalizerTask):
         from psychopy import core, visual
 
         block = self._voice_blocks[block_idx]
-        logger.info(f"Voice block {block_idx + 1} ({block_type}): {len(block)} sentences")
 
         # Show fixation cross throughout the block
         fixation = visual.TextStim(self.win, text="+", height=0.3, color="white")
@@ -464,7 +448,6 @@ class SelfOtherTask(BaseLocalizerTask):
 
     def _run_rest_block(self) -> None:
         """Display fixation cross for block_duration."""
-        logger.info(f"Rest block: {self.block_duration}s")
         self.show_fixation(self.block_duration)
 
     def _run_question(self, block_num: int) -> tuple[str, str]:

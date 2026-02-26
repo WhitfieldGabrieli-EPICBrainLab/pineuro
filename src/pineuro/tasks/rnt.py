@@ -639,7 +639,6 @@ class RNTTask(BaseLocalizerTask):
 
         # 3. Rumination prompt
         onset = self._experiment_clock.getTime()
-        logger.info(f"[TIMING] Rumination START: onset={onset:.2f}s, duration={self.rumination_duration}s")
         self._show_text(rumination_prompt, self.rumination_duration)
         self.record_event(
             onset,
@@ -686,13 +685,11 @@ class RNTTask(BaseLocalizerTask):
         # 6. Rest/fixation with jitter
         rest_duration = random.uniform(self.rest_min, self.rest_max)
         onset = self._experiment_clock.getTime()
-        logger.info(f"[TIMING] Rest: onset={onset:.2f}s, duration={rest_duration:.2f}s")
         self._show_fixation(rest_duration)
         self.record_event(onset, rest_duration, "rest", trial=trial_num)
 
         # 7. Distraction prompt
         onset = self._experiment_clock.getTime()
-        logger.info(f"[TIMING] Distraction START: onset={onset:.2f}s, duration={self.rumination_duration}s")
         self._show_text(distraction_prompt, self.rumination_duration)
         self.record_event(
             onset,
@@ -735,8 +732,6 @@ class RNTTask(BaseLocalizerTask):
             response=rating,
             response_time=rt,
         )
-
-        logger.info(f"[TIMING] Trial {trial_num} END: t={self._experiment_clock.getTime():.2f}s")
 
     # =========================================================================
     # Lifecycle

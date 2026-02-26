@@ -553,7 +553,6 @@ class BallTask(BaseTask):
             if abs(val) > self.pda_outlier_threshold:
                 self.outlier_count += 1
                 self._current_is_outlier = True
-                logger.info(f"Outlier detected: {key}={val:.4f} (threshold: {self.pda_outlier_threshold})")
                 return
             self._current_is_outlier = False
             self.current_activity = abs(val) / 10.0
@@ -575,7 +574,6 @@ class BallTask(BaseTask):
         if is_activation_outlier(acts, self.pda_outlier_threshold):
             self.outlier_count += 1
             self._current_is_outlier = True
-            logger.info(f"Outlier detected: {acts[0]:.2f}, {acts[1]:.2f} (threshold: {self.pda_outlier_threshold})")
             return
 
         # Not an outlier - clear flag
@@ -1108,19 +1106,24 @@ class BallTask(BaseTask):
             self._task_start_time = core.getTime()
             self._last_frame_time = core.getTime()  # Initialize for time-based movement
 
-            logger.info("=== BallTask Session Started ===")
-            logger.info(f"Mode: {'FEEDBACK' if self.feedback_mode else 'NON-FEEDBACK (transfer)'}")
-            logger.info(f"Signal mode: {self._signal_mode}")
+            mode = "FEEDBACK" if self.feedback_mode else "TRANSFER"
+            logger.info(f"=== BallTask Session Started ({mode}) ===")
             if self._signal_mode == "connectivity":
-                logger.info(f"Connectivity target: {self._connectivity_target}")
-                logger.info(f"Connectivity key: corr_{self.mask_names[0]}_{self.mask_names[1]}")
-                logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
+                logger.info(
+                    f"  Signal: connectivity ({self._connectivity_target}) | "
+                    f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom) | "
+                    f"Key: corr_{self.mask_names[0]}_{self.mask_names[1]}"
+                )
             else:
-                logger.info(f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)")
-            logger.info(f"Scale factor: {self.scale_factor}")
-            logger.info(f"Target volumes: {self.coordinator.n_volumes}")
-            logger.info(f"Baseline volumes: {self.coordinator.n_baseline}")
-            logger.info(f"PsychoPy log: {self._psychopy_log_path.name}")
+                logger.info(
+                    f"  Signal: activation | "
+                    f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)"
+                )
+            logger.info(
+                f"  Scale: {self.scale_factor} | "
+                f"Volumes: {self.coordinator.n_volumes} ({self.coordinator.n_baseline} baseline)"
+            )
+            logger.info(f"  PsychoPy log: {self._psychopy_log_path.name}")
 
             # Now start main task loop
             while self._running and not self.coordinator.is_complete():
@@ -1168,10 +1171,10 @@ class BallTask(BaseTask):
                 )
             logger.info(f"Total hits: {sum(self.hit_counters)}")
             logger.info(f"Final scale factor: {self.scale_factor:.1f}")
-            logger.info(f"Total frames rendered: {self._frame_counter}")
+            logger.debug(f"Total frames rendered: {self._frame_counter}")
             if self.current_volume > 0:
                 avg_frames_per_vol = self._frame_counter / self.current_volume
-                logger.info(f"Average frames per volume: {avg_frames_per_vol:.1f}")
+                logger.debug(f"Average frames per volume: {avg_frames_per_vol:.1f}")
             logger.info(f"PsychoPy log saved: {self._psychopy_log_path}")
 
             # cleanup() handles post-run questions via super().cleanup()

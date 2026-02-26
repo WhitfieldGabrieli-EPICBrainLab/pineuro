@@ -402,11 +402,11 @@ class SessionState:
                 slot_base_state=slot_base_state,
             )
             logger.info(f"Loaded session state from {state_file}")
-            logger.info(f"  Task: {state.task_id}")
-            logger.info(f"  Completed runs: {len(state.completed_runs)}")
-            logger.info(f"  Next run number: {state.next_run_number}")
-            logger.info(f"  Task state keys: {list(state.task_state.keys())}")
-            logger.info(f"  Feedback runs: {state.feedback_run_count}/{state.max_feedback_runs}")
+            logger.info(
+                f"  Task: {state.task_id}, {len(state.completed_runs)} completed, "
+                f"next: run {state.next_run_number}, "
+                f"feedback: {state.feedback_run_count}/{state.max_feedback_runs}"
+            )
             return state
         else:
             logger.info(f"No existing session state at {state_file}, creating fresh state")
@@ -531,5 +531,5 @@ class SessionState:
 
         logger.info(f"Recorded run {run_info.run_number} ({run_type})")
         if slot_run_number is not None:
-            logger.info(f"  Slot: {slot_run_number}, Acq: {acq}")
-        logger.info(f"  Task state: {self.task_state}")
+            logger.debug(f"  Slot: {slot_run_number}, Acq: {acq}")
+        logger.debug(f"  Task state: {self.task_state}")
