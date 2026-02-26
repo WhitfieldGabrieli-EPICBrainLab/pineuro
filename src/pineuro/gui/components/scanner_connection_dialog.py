@@ -5,7 +5,6 @@ results before starting scanner data collection.
 """
 
 import logging
-import threading
 from collections.abc import Callable
 
 import flet as ft
@@ -89,7 +88,7 @@ class ScannerConnectionDialog:
         self._dialog.open = True
         self.page.update()
 
-        threading.Thread(target=self._run_test, daemon=True, name="scanner-connection-test").start()
+        self.page.run_thread(self._run_test)
 
     def _run_test(self):
         """Execute connection test in background thread."""
@@ -199,7 +198,7 @@ class ScannerConnectionDialog:
             [
                 ft.Icon(icon, color=color, size=20),
                 ft.Text(f"{label}: ", weight=ft.FontWeight.W_500, size=13),
-                ft.Text(detail, size=12, color=ft.Colors.GREY_700),
+                ft.Text(detail, size=12, color=ft.Colors.GREY_700, expand=True),
             ],
             spacing=8,
         )
