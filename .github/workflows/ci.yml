@@ -30,7 +30,7 @@ jobs:
       - name: Install wxPython from pre-built wheel (Linux)
         run: pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
 
-      - run: pip install --no-build-isolation -e ".[dev]"
+      - run: pip install -e ".[dev]"
 
       - run: mypy src/pineuro/
 
@@ -72,6 +72,10 @@ jobs:
         if: runner.os == 'Linux'
         run: pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
 
-      - run: pip install --no-build-isolation -e ".[dev]"
+      - name: Pre-install build deps to avoid setuptools upgrade during editable install
+        if: runner.os == 'Windows'
+        run: pip install setuptools wheel
+
+      - run: pip install -e ".[dev]"
 
       - run: pytest
