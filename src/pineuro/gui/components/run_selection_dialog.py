@@ -243,4 +243,3 @@ class RunSelectionDialog(BaseDialog):
         self._close_dialog()
         if self.on_cancel:
             self.on_cancel()
-

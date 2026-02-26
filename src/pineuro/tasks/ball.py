@@ -906,9 +906,7 @@ class BallTask(BaseTask):
             max_scale = self._initial_scale_factor * 10
             if self.scale_factor > max_scale:
                 self.scale_factor = max_scale
-                logger.info(
-                    f"  Adaptive difficulty: scale_factor clamped to max {max_scale:.1f}"
-                )
+                logger.info(f"  Adaptive difficulty: scale_factor clamped to max {max_scale:.1f}")
             logger.info(
                 f"  Adaptive difficulty: {total_hits} total hits < {self._min_hits_threshold} min -> "
                 f"increasing scale_factor {old_scale:.1f} -> {self.scale_factor:.1f}"

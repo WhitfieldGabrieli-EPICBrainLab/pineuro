@@ -598,4 +598,3 @@ class FeedbackSummaryDialog(BaseDialog):
         self._close_dialog()
         if self.on_close:
             self.on_close()
-

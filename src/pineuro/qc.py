@@ -1447,11 +1447,9 @@ def generate_mask_extraction_report(
     selections_file = masks_dir / "mask_selections.json"
     if selections_file.exists():
         import json
+
         sel_data = json.loads(selections_file.read_text())
-        is_mni_atlas = any(
-            isinstance(v, dict) and v.get("source_type") == "mni_atlas"
-            for v in sel_data.values()
-        )
+        is_mni_atlas = any(isinstance(v, dict) and v.get("source_type") == "mni_atlas" for v in sel_data.values())
 
     # Find ICA components and reference
     components_file = ica_dir / f"{participant_id}_components.nii.gz"
@@ -1738,7 +1736,9 @@ def generate_mask_extraction_report(
             for network, mask_path in network_masks.items():
                 chosen_comp = chosen_components.get(network, -1)
                 correlation = (
-                    float(corr_df.loc[chosen_comp, network]) if corr_df is not None and network in corr_df.columns else 0.0
+                    float(corr_df.loc[chosen_comp, network])
+                    if corr_df is not None and network in corr_df.columns
+                    else 0.0
                 )
                 summary = summarize_mask(mask_path, name=network, chosen_component=chosen_comp, correlation=correlation)
                 table_rows.append(
@@ -1754,7 +1754,14 @@ def generate_mask_extraction_report(
             sections.append(
                 {
                     "type": "table",
-                    "headers": ["Name", "Voxels", "Volume (mL)", "Centroid (i,j,k)", "Chosen component", "Correlation (r)"],
+                    "headers": [
+                        "Name",
+                        "Voxels",
+                        "Volume (mL)",
+                        "Centroid (i,j,k)",
+                        "Chosen component",
+                        "Correlation (r)",
+                    ],
                     "rows": table_rows,
                 }
             )

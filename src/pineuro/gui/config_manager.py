@@ -172,11 +172,13 @@ class ConfigManager:
             if len(display_ts) > 11:
                 display_ts = display_ts[:10] + " " + display_ts[11:].replace("-", ":")
 
-            versions.append({
-                "version": version_num,
-                "timestamp": display_ts,
-                "path": yaml_file,
-            })
+            versions.append(
+                {
+                    "version": version_num,
+                    "timestamp": display_ts,
+                    "path": yaml_file,
+                }
+            )
         return versions
 
     def restore_version(self, study_name: str, version_path: Path) -> StudyConfig:

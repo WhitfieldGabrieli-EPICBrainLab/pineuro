@@ -83,6 +83,7 @@ if TYPE_CHECKING:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
 class PyrtnfApp:
     """Main application class managing screen navigation and state."""
 
@@ -578,9 +579,7 @@ class PyrtnfApp:
             self.page.pop_dialog()
             try:
                 self.config_manager.restore_version(study_name, version_info["path"])
-                _snack = ft.SnackBar(
-                    ft.Text(f"Restored version {version_info['version']} of '{study_name}'")
-                )
+                _snack = ft.SnackBar(ft.Text(f"Restored version {version_info['version']} of '{study_name}'"))
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()

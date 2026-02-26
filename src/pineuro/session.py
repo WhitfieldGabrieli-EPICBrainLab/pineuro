@@ -427,9 +427,7 @@ class PathConfig:
 
         # Validate visit_id format if provided
         if self.visit_id and not re.match(r"^ses-\d+$", self.visit_id):
-            raise ValueError(
-                f"visit_id must be in BIDS format 'ses-NN' (e.g., 'ses-01'), got '{self.visit_id}'"
-            )
+            raise ValueError(f"visit_id must be in BIDS format 'ses-NN' (e.g., 'ses-01'), got '{self.visit_id}'")
 
         # Compute participant + visit directory
         if self.visit_id:

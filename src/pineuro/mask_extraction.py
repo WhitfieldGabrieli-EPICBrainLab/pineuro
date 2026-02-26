@@ -1283,9 +1283,7 @@ def _register_atlas_to_subject(
 
         atlas2sub = mnireg_dir / f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz"
         if not yeo_mni.exists() or overwrite:
-            apply_xfm_sform_to_mni(
-                input_file=yeo, output_file=yeo_mni, interp="nearestneighbour", overwrite=overwrite
-            )
+            apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp="nearestneighbour", overwrite=overwrite)
 
         if not atlas2sub.exists() or overwrite:
             apply_xfm(
@@ -1351,8 +1349,7 @@ def _register_atlas_to_subject(
             )
     else:
         raise ValueError(
-            f"Unsupported network_atlas '{network_atlas}' for atlas registration. "
-            "Use a Yeo or Schaefer atlas."
+            f"Unsupported network_atlas '{network_atlas}' for atlas registration. Use a Yeo or Schaefer atlas."
         )
 
     emit("Registration complete")
@@ -1853,9 +1850,7 @@ def mask_extraction_mni(
 
             left_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_left_thr.nii.gz"
             right_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_right_thr.nii.gz"
-            split_mask_by_hemisphere(
-                sham_network_file, left_file, right_file, threshold=threshold, overwrite=overwrite
-            )
+            split_mask_by_hemisphere(sham_network_file, left_file, right_file, threshold=threshold, overwrite=overwrite)
             emit_progress(
                 "Hemisphere split", f"Created {left_file.name} and {right_file.name} ({threshold} voxels each)"
             )

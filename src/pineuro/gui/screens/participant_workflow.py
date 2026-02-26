@@ -475,10 +475,7 @@ class ParticipantWorkflowScreen:
 
             try:
                 _sel_data = _json.loads(selections_file.read_text())
-                if any(
-                    isinstance(v, dict) and v.get("source_type") == "mni_atlas"
-                    for v in _sel_data.values()
-                ):
+                if any(isinstance(v, dict) and v.get("source_type") == "mni_atlas" for v in _sel_data.values()):
                     # Ensure instance state is consistent
                     self._is_mni_atlas_mode = True
                     self._show_mni_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir)
@@ -829,7 +826,9 @@ class ParticipantWorkflowScreen:
             # Find overlay image — generate on-demand if missing or stale (mask newer than overlay)
             overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
             needs_overlay = not overlay_path.exists() or (
-                overlay_path.exists() and mask_file.exists() and mask_file.stat().st_mtime > overlay_path.stat().st_mtime
+                overlay_path.exists()
+                and mask_file.exists()
+                and mask_file.stat().st_mtime > overlay_path.stat().st_mtime
             )
             if needs_overlay and ref_file.exists() and mask_file.exists():
                 try:
@@ -1368,7 +1367,9 @@ class ParticipantWorkflowScreen:
             # Find or generate overlay (regenerate if mask is newer than existing overlay)
             overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
             needs_overlay = not overlay_path.exists() or (
-                overlay_path.exists() and mask_file.exists() and mask_file.stat().st_mtime > overlay_path.stat().st_mtime
+                overlay_path.exists()
+                and mask_file.exists()
+                and mask_file.stat().st_mtime > overlay_path.stat().st_mtime
             )
             if needs_overlay and ref_file and ref_file.exists() and mask_file.exists():
                 try:
@@ -1444,9 +1445,7 @@ class ParticipantWorkflowScreen:
             self.page.update()
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(
-                ft.Text("MNI atlas masks approved! You can now proceed."), bgcolor=ft.Colors.GREEN
-            )
+            _snack = ft.SnackBar(ft.Text("MNI atlas masks approved! You can now proceed."), bgcolor=ft.Colors.GREEN)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -4623,9 +4622,7 @@ class ParticipantWorkflowScreen:
                 # Show interactive error recovery panel instead of restoring preview
                 self._last_failed_step = completed_step_id
                 error = RuntimeError(result_message or "Unknown error")
-                self.right_panel_container.content = self._build_error_recovery_panel(
-                    error, completed_step_id
-                )
+                self.right_panel_container.content = self._build_error_recovery_panel(error, completed_step_id)
                 self.right_panel_container.update()
             elif self.right_panel_container is not None:
                 # Restore empty preview panel on success
@@ -4790,9 +4787,7 @@ class ParticipantWorkflowScreen:
             self._last_failed_step = failed_step
 
             if failed_step is not None and self.right_panel_container is not None:
-                self.right_panel_container.content = self._build_error_recovery_panel(
-                    error, failed_step
-                )
+                self.right_panel_container.content = self._build_error_recovery_panel(error, failed_step)
                 self.right_panel_container.update()
             else:
                 # Fallback: snackbar only (no step context)

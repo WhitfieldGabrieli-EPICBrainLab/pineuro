@@ -531,28 +531,30 @@ class MaskSelectionDialog:
                 )
             )
 
-        actions.extend([
-            ft.OutlinedButton(
-                "Generate Script",
-                icon=ft.Icons.CODE,
-                on_click=self._on_generate_script_clicked,
-            ),
-            ft.OutlinedButton(
-                "Reload",
-                icon=ft.Icons.REFRESH,
-                on_click=self._on_reload_clicked,
-                tooltip="Reload selections and images from disk (after running external script)",
-            ),
-            ft.OutlinedButton(
-                "Cancel",
-                on_click=self._on_cancel_clicked,
-            ),
-            ft.FilledButton(
-                "Accept All",
-                icon=ft.Icons.DONE_ALL,
-                on_click=self._on_accept_all_clicked,
-            ),
-        ])
+        actions.extend(
+            [
+                ft.OutlinedButton(
+                    "Generate Script",
+                    icon=ft.Icons.CODE,
+                    on_click=self._on_generate_script_clicked,
+                ),
+                ft.OutlinedButton(
+                    "Reload",
+                    icon=ft.Icons.REFRESH,
+                    on_click=self._on_reload_clicked,
+                    tooltip="Reload selections and images from disk (after running external script)",
+                ),
+                ft.OutlinedButton(
+                    "Cancel",
+                    on_click=self._on_cancel_clicked,
+                ),
+                ft.FilledButton(
+                    "Accept All",
+                    icon=ft.Icons.DONE_ALL,
+                    on_click=self._on_accept_all_clicked,
+                ),
+            ]
+        )
         return actions
 
     def _on_view_full_report(self, e):

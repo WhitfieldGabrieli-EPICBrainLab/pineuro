@@ -113,23 +113,59 @@ class TaskBase(ABC):  # noqa: B024
 
     # Windows virtual-key codes
     _PSYCHOPY_TO_VK: dict[str, int] = {
-        "0": 0x30, "1": 0x31, "2": 0x32, "3": 0x33, "4": 0x34,
-        "5": 0x35, "6": 0x36, "7": 0x37, "8": 0x38, "9": 0x39,
-        "t": 0x54, "equal": 0xBB, "+": 0x6B, "space": 0x20, "return": 0x0D,
+        "0": 0x30,
+        "1": 0x31,
+        "2": 0x32,
+        "3": 0x33,
+        "4": 0x34,
+        "5": 0x35,
+        "6": 0x36,
+        "7": 0x37,
+        "8": 0x38,
+        "9": 0x39,
+        "t": 0x54,
+        "equal": 0xBB,
+        "+": 0x6B,
+        "space": 0x20,
+        "return": 0x0D,
     }
 
     # X11 keysym string names (for XK.string_to_keysym)
     _PSYCHOPY_TO_XKEYSYM: dict[str, str] = {
-        "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
-        "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
-        "t": "t", "equal": "equal", "+": "plus", "space": "space", "return": "Return",
+        "0": "0",
+        "1": "1",
+        "2": "2",
+        "3": "3",
+        "4": "4",
+        "5": "5",
+        "6": "6",
+        "7": "7",
+        "8": "8",
+        "9": "9",
+        "t": "t",
+        "equal": "equal",
+        "+": "plus",
+        "space": "space",
+        "return": "Return",
     }
 
     # macOS ANSI virtual keycodes
     _PSYCHOPY_TO_MAC_VK: dict[str, int] = {
-        "0": 0x1D, "1": 0x12, "2": 0x13, "3": 0x14, "4": 0x15,
-        "5": 0x17, "6": 0x16, "7": 0x1A, "8": 0x1C, "9": 0x19,
-        "t": 0x11, "equal": 0x18, "+": 0x45, "space": 0x31, "return": 0x24,
+        "0": 0x1D,
+        "1": 0x12,
+        "2": 0x13,
+        "3": 0x14,
+        "4": 0x15,
+        "5": 0x17,
+        "6": 0x16,
+        "7": 0x1A,
+        "8": 0x1C,
+        "9": 0x19,
+        "t": 0x11,
+        "equal": 0x18,
+        "+": 0x45,
+        "space": 0x31,
+        "return": 0x24,
     }
 
     def _reset_poll_state(self) -> None:
@@ -519,9 +555,11 @@ class TaskBase(ABC):  # noqa: B024
         try:
             if sys.platform == "win32":
                 from ctypes import windll  # type: ignore[attr-defined]  # Windows-only
+
                 current_thread = windll.kernel32.GetCurrentThreadId()
             else:
                 import threading
+
                 current_thread = threading.get_ident()
         except Exception as e:
             logger.debug(f"Could not get current thread ID: {e}")

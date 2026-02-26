@@ -122,9 +122,7 @@ def create_task(
     valid_keys = {p.key for p in metadata.parameters} | RUNTIME_PARAMETERS
     unknown_keys = set(config) - valid_keys
     if unknown_keys:
-        logger.warning(
-            f"Task '{task_id}': ignoring unrecognized config keys: {sorted(unknown_keys)}"
-        )
+        logger.warning(f"Task '{task_id}': ignoring unrecognized config keys: {sorted(unknown_keys)}")
     filtered_config = {k: v for k, v in config.items() if k in valid_keys}
 
     logger.info(f"Creating task '{task_id}' with {len(mask_names)} mask(s)")

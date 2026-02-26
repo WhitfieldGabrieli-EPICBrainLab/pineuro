@@ -3039,9 +3039,7 @@ class NeurofeedbackCoordinator:
                     else:
                         match = self._estimator._MOTION_PATTERN.search(dicom_image_comments)
                         if match:
-                            motion_source = np.array(
-                                [float(m) for m in match.groups()], dtype=np.float64
-                            )
+                            motion_source = np.array([float(m) for m in match.groups()], dtype=np.float64)
                         else:
                             logger.warning(
                                 f"No motion parameters in DICOM ImageComments for volume {volume_num}, using zeros"
@@ -3080,12 +3078,8 @@ class NeurofeedbackCoordinator:
 
                     self._moco_reference_vol = np.array(vol_data, dtype=np.float64)
                     self._moco_reference_affine = np.array(vol_affine, dtype=np.float64)
-                    self._moco_spacing = np.sqrt(
-                        np.sum(vol_affine[:3, :3] ** 2, axis=0)
-                    ).tolist()
-                    self._moco_reference_ants = ants.from_numpy(
-                        vol_data.astype(np.float32), spacing=self._moco_spacing
-                    )
+                    self._moco_spacing = np.sqrt(np.sum(vol_affine[:3, :3] ** 2, axis=0)).tolist()
+                    self._moco_reference_ants = ants.from_numpy(vol_data.astype(np.float32), spacing=self._moco_spacing)
                     self._moco_prev_transform = None
                     motion_source = np.zeros(6, dtype=np.float64)
                     corrected_data = vol_data
@@ -3097,9 +3091,7 @@ class NeurofeedbackCoordinator:
                     assert self._moco_spacing is not None
                     # Verify shapes match
                     if vol_data.shape != self._moco_reference_vol.shape:
-                        logger.error(
-                            f"MoCo shape mismatch: ref={self._moco_reference_vol.shape}, mov={vol_data.shape}"
-                        )
+                        logger.error(f"MoCo shape mismatch: ref={self._moco_reference_vol.shape}, mov={vol_data.shape}")
 
                     # Register to REFERENCE volume (frame-to-ref) with warm-start
                     _reg_start = time.monotonic()
@@ -3123,7 +3115,8 @@ class NeurofeedbackCoordinator:
 
             _est_start = time.monotonic()
             activations = self._estimator.process_volume(
-                nifti_path, motion_source,
+                nifti_path,
+                motion_source,
                 volume_data=corrected_data,
                 volume_affine=corrected_affine,
             )

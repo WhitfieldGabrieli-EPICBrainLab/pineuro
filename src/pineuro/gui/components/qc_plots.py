@@ -207,11 +207,7 @@ class BaseQCPlot:
         DVARSPlot DVARS standardization).
         """
         self.data.add_point(volume, value)
-        if (
-            self._incremental_append
-            and self.chart is not None
-            and self._data_series
-        ):
+        if self._incremental_append and self.chart is not None and self._data_series:
             self._append_latest_point()
             self._update_axis_and_summary()
         else:
