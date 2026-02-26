@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
     "antspyx>=0.6.1",
     "dcm2niix",
-    "flet>=0.23.0",
+    "flet==0.80.5",
     "flet-charts>=0.1.0",
     "matplotlib",
     "nibabel>=5.3.0",
