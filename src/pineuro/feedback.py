@@ -1875,14 +1875,42 @@ class _DicomEventHandler(FileSystemEventHandler):
         super().__init__()
         self._callback = callback
 
+    @staticmethod
+    def _wait_for_stable_file(path: Path, interval: float = 0.05, stable_count: int = 3) -> None:
+        """Poll file size until stable, indicating the writer has finished.
+
+        Needed for non-atomic writers (e.g., real scanners pushing over SMB)
+        where the file creation event fires before writing is complete.
+        """
+        prev_size = -1
+        count = 0
+        for _ in range(60):  # Max ~3 seconds of polling
+            try:
+                size = path.stat().st_size
+            except OSError:
+                time.sleep(interval)
+                continue
+            if size == prev_size and size > 0:
+                count += 1
+                if count >= stable_count:
+                    return
+            else:
+                count = 0
+                prev_size = size
+            time.sleep(interval)
+
     def on_created(self, event: FileCreatedEvent | DirCreatedEvent) -> None:
         if event.is_directory:
             return
         src_path = event.src_path
         if isinstance(src_path, bytes):
-            self._callback(Path(src_path.decode()))
+            file_path = Path(src_path.decode())
         elif isinstance(src_path, str):
-            self._callback(Path(src_path))
+            file_path = Path(src_path)
+        else:
+            return
+        self._wait_for_stable_file(file_path)
+        self._callback(file_path)
 
 
 # ==============================================================================
