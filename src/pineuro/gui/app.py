@@ -727,6 +727,21 @@ def main():
         dispatcher = MainThreadDispatcher()
         set_dispatcher(dispatcher)
 
+        # Python only allows signal.signal() from the main thread.  Flet
+        # (or its dependencies) registers signal handlers internally — this
+        # fails when ft.app() runs in a background thread.  Patch it to
+        # silently skip registration from non-main threads.
+        import signal
+
+        _original_signal = signal.signal
+
+        def _safe_signal(signum, handler):
+            if threading.current_thread() is threading.main_thread():
+                return _original_signal(signum, handler)
+            return signal.getsignal(signum)
+
+        signal.signal = _safe_signal
+
         flet_thread = threading.Thread(
             target=ft.app, args=(create_app,), daemon=True, name="FletApp"
         )
