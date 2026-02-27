@@ -365,7 +365,9 @@ class _DicomGeometryCache:
         self.mosaic_params = mosaic_params
 
 
-def _unpack_mosaic(pixel_array_2d: NDArray, n_slices: int, matrix_rows: int, matrix_cols: int, n_grid_cols: int) -> NDArray:
+def _unpack_mosaic(
+    pixel_array_2d: NDArray, n_slices: int, matrix_rows: int, matrix_cols: int, n_grid_cols: int
+) -> NDArray:
     """Unpack a Siemens mosaic 2D image into a 3D volume.
 
     In mosaic format, all slices are tiled into a single 2D image in
@@ -447,11 +449,7 @@ def _read_dicom_volume(
     dcm = pydicom.dcmread(dicom_path)
 
     # Detect Siemens mosaic DICOM (all slices tiled in one 2D image)
-    is_mosaic = (
-        hasattr(dcm, "ImageType")
-        and "MOSAIC" in dcm.ImageType
-        and (0x0019, 0x100A) in dcm
-    )
+    is_mosaic = hasattr(dcm, "ImageType") and "MOSAIC" in dcm.ImageType and (0x0019, 0x100A) in dcm
     mosaic_cache_params: tuple[int, int, int, int] | None = None
 
     if is_mosaic:
@@ -544,8 +542,7 @@ def _read_dicom_volume(
         origin = np.array(ipp_first)
     else:
         raise ValueError(
-            f"Unsupported DICOM format: {dicom_path.name}. "
-            "Expected enhanced multiframe or Siemens mosaic DICOM."
+            f"Unsupported DICOM format: {dicom_path.name}. Expected enhanced multiframe or Siemens mosaic DICOM."
         )
 
     # pydicom pixel_array is (n_frames, rows, cols)
