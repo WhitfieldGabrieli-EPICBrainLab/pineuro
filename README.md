@@ -1,263 +1,68 @@
 # pineuro
 
-**Python Real-Time fMRI Neurofeedback**
+**Python for Individualized Neurofeedback**
 
-A Python library for real-time fMRI neurofeedback research. pineuro provides a complete pipeline from DICOM acquisition through preprocessing, network mask extraction, and moment-to-moment BOLD activation estimation.
+A Python library for real-time fMRI neurofeedback research. pineuro provides a complete pipeline from DICOM acquisition through preprocessing, network mask extraction, and moment-to-moment BOLD activation estimation, with a desktop GUI for study management and participant workflows.
 
 ## Features
 
-- **Real-time DICOM processing** - Watch for incoming scanner DICOMs and process them as they arrive
-- **Robust preprocessing** - Motion correction, brain extraction, and multi-run coregistration using ANTsPy
-- **Network-based neurofeedback** - ICA-based mask extraction with Yeo atlas integration
-- **Incremental GLM estimation** - Online activation computation using Gentleman's algorithm for numerical stability
-- **Task framework** - Thread-safe PsychoPy integration for custom neurofeedback tasks
-- **Simulation mode** - Offline testing with DICOM replay at realistic timing intervals
+**Core pipeline**
+- **DICOM processing** — Watch for incoming scanner DICOMs and process volumes as they arrive
+- **Preprocessing** — Motion correction, brain extraction, and multi-run coregistration (ANTsPy)
+- **ICA mask extraction** — Participant-specific network masks via ICA and Yeo atlas
+- **GLM mask extraction** — Network masks from task localizer contrasts
+- **MNI atlas masks** — Atlas-based ROIs without a localizer run
+- **Incremental GLM** — Online activation estimation using Gentleman's algorithm
+- **Connectivity feedback** — Real-time functional connectivity between network pairs
+
+**Study management**
+- **Desktop GUI** — Study configuration and participant workflows (`pineuro-gui`)
+- **Session orchestration** — Multi-run and multi-visit protocols
+- **Sham / control conditions** — Sham feedback, replay providers, and randomization
+- **QC reports** — HTML quality reports for each pipeline stage
+
+**Task framework**
+- **Built-in tasks** — Ball (dual-network) and thermometer (single-network) feedback displays
+- **Task plugin system** — `@pineuro_task` decorator and entry-point registration
+- **Simulation mode** — Offline DICOM replay at configurable speed
 
 ## Installation
 
-All dependencies are pure pip — no external tools required.
+**Requires Python 3.10 or 3.11** (`>=3.10,<3.12`). All dependencies are pure pip — no external tools required.
 
 ```bash
-# Clone the repository
 git clone https://github.com/marlvan/pineuro.git
 cd pineuro
-
-# Install (all dependencies included: dcm2niix, ANTsPy, PsychoPy, etc.)
 pip install -e .
 ```
 
-**Note:** PsychoPy requires wxPython, which may need to be installed separately on some platforms. See [PsychoPy installation docs](https://www.psychopy.org/download.html) if you encounter issues.
+See the [Installation Guide](docs/getting-started/installation.md) for platform-specific notes and troubleshooting.
 
-## Quick Start
-
-### 1. Collect and Preprocess Resting-State Data
-
-```python
-from pineuro import collect_dicoms, preprocessing
-
-# Collect DICOMs from scanner (or use simulation mode for testing)
-dicom_folder = collect_dicoms(
-    watch_dir='/scanner/export/incoming',  # Scanner DICOM export directory
-    output_dir='/data/sub-01/raw/rest',
-    n_volumes=200,
-    clear_watch_dir=True,  # Clean up after collection
-)
-
-# Run preprocessing pipeline
-preproc_file, mask_file, ref_file = preprocessing(
-    participant_id='sub-01',
-    task='rest',
-    root_dir='/data/sub-01/preproc',
-    input_dicoms=dicom_folder,
-)
-```
-
-### 2. Extract Network Masks
-
-```python
-from pineuro import mask_extraction_rest
-
-# Extract network masks using ICA and Yeo atlas
-mask_extraction_rest(
-    root_dir='/data/sub-01/masks',
-    preproc_runs=['/data/sub-01/preproc/sub-01_rest_preproc.nii.gz'],
-    n_components=30,  # ICA components
-    yeo_networks=[7],  # Default Mode Network (DMN)
-    n_atlas=7,  # Use Yeo 7-network atlas
-)
-```
-
-### 3. Run a Neurofeedback Session
-
-```python
-from pineuro import run_feedback_session
-
-# Run real-time feedback with scanner acquisition
-results = run_feedback_session(
-    mask_paths=['/data/sub-01/masks/03_masks/network_7.nii.gz'],
-    subject='sub-01',
-    task='nback',
-    run=1,
-    output_dir='/data/sub-01/feedback',
-    incoming_dir='/scanner/export/dicoms',  # Scanner DICOM directory
-    n_baseline=25,  # Baseline volumes for normalization
-    n_volumes=200,  # Total volumes to process
-)
-
-# Results contain per-volume activation estimates
-print(results['activations'])
-print(results['timing'])
-```
-
-### 4. Offline Testing with Simulation Mode
-
-```python
-from pineuro import run_feedback_session
-
-# Test feedback pipeline offline using DICOM replay
-results = run_feedback_session(
-    mask_paths=['/data/sub-01/masks/03_masks/network_7.nii.gz'],
-    subject='sub-01',
-    task='nback',
-    run=1,
-    output_dir='/data/sub-01/feedback_test',
-    n_baseline=25,
-    n_volumes=150,
-    # Enable simulation mode
-    simulator_source_dir='/path/to/source_dicoms',  # Pre-collected DICOMs
-    simulator_speed=10.0,  # 10x speed for rapid testing
-)
-```
-
-## Architecture
-
-### Processing Pipeline
-
-pineuro implements a sequential pipeline with numbered output directories for easy tracing:
-
-1. **DICOM Collection** - Watch for and collect incoming DICOMs from scanner
-   - Real-time mode: monitors scanner export directory
-   - Simulation mode: replays pre-collected DICOMs at TR intervals
-
-2. **Preprocessing** - Convert and prepare fMRI data
-   - DICOM → NIfTI conversion (`dcm2niix`)
-   - Motion correction (ANTsPy rigid registration)
-   - Brain extraction (ANTsPy)
-   - Multi-run coregistration (ANTs)
-   - Outputs: `01_nifti/`, `02_motion_correction/`, `03_brain_extraction/`, `04_coregistered/`
-
-3. **Mask Extraction** - Identify network regions of interest
-   - ICA decomposition (nilearn CanICA)
-   - Registration to MNI space (ANTs)
-   - Yeo atlas integration (7 or 17 networks)
-   - Network identification via spatial correlation
-   - Outputs: `01_ica/`, `02_mnireg/`, `03_masks/`
-
-4. **Real-time Feedback** - Compute moment-to-moment activation
-   - `IncrementalGLM`: Online least-squares using Gentleman's algorithm
-   - `FeedbackEstimator`: Per-volume activation computation with nuisance regression
-   - `NeurofeedbackCoordinator`: Orchestrates DICOM watching, conversion, and processing
-   - Streams activation values to PsychoPy tasks via thread-safe callbacks
-
-5. **Task Framework** - Present neurofeedback to participants
-   - `BaseTask`: Abstract base class for custom tasks
-   - `BallTask`: Dual-network ball game with adaptive difficulty
-   - Thread-safe activation polling and callback mechanisms
-
-### Key Components
-
-- **`preprocessing.py`** - DICOM collection and preprocessing pipeline
-- **`mask_extraction.py`** - Network mask extraction with ICA and atlases
-- **`feedback.py`** - Real-time activation estimation with incremental GLM
-- **`simulator.py`** - DICOM replay for offline testing
-- **`session.py`** - High-level session orchestration and configuration
-- **`tasks/`** - PsychoPy task framework with example implementations
-- **`utils.py`** - Command wrappers and DICOM utilities
-
-## Usage Patterns
-
-### Overwrite Control
-
-All major functions support `overwrite=False` (default) to skip computation if outputs already exist, enabling efficient pipeline re-runs:
-
-```python
-# First run: performs full preprocessing
-preprocessing(participant_id='sub-01', task='rest', root_dir='/data',
-              input_dicoms='/data/raw')
-
-# Second run: skips existing outputs
-preprocessing(participant_id='sub-01', task='rest', root_dir='/data',
-              input_dicoms='/data/raw', overwrite=False)  # Fast!
-
-# Force recomputation
-preprocessing(participant_id='sub-01', task='rest', root_dir='/data',
-              input_dicoms='/data/raw', overwrite=True)
-```
-
-### Command Wrapper
-
-All external commands go through `run_command()` for consistent validation, logging, and error handling:
-
-```python
-from pineuro.utils import run_command
-
-run_command(
-    cmd_name='dcm2niix',
-    cmd=['dcm2niix', '-z', 'y', '-o', str(output_dir), str(input_dir)],
-    description='DICOM to NIfTI conversion',
-    inputs=input_dir,  # Validated before execution
-    outputs=output_dir,  # Checked for existence/overwrite
-    overwrite=False,
-)
-```
-
-### Real-time vs Simulation Mode
-
-Most functions support both real-time scanner acquisition and offline simulation:
-
-```python
-# Real-time mode: watches incoming_dir for new DICOMs
-collect_dicoms(watch_dir='/scanner/export', ...)
-
-# Simulation mode: replays DICOMs from simulator_source_dir
-collect_dicoms(
-    watch_dir='/tmp/incoming',
-    simulator_source_dir='/path/to/source_dicoms',
-    simulator_speed=10.0,  # Speed multiplier
-)
-```
-
-## Creating Custom Tasks
-
-See [src/pineuro/tasks/README.md](src/pineuro/tasks/README.md) for detailed instructions on creating custom neurofeedback tasks.
-
-Quick example:
-
-```python
-from pineuro.tasks import BaseTask
-from psychopy import visual
-
-class MyTask(BaseTask):
-    def setup(self):
-        """Initialize PsychoPy stimuli."""
-        self.text = visual.TextStim(self.win, text='')
-
-    def update(self, frame_num):
-        """Update display each frame (~60 Hz)."""
-        # Get latest activation (thread-safe)
-        activation = self.get_latest_activation('network_1')
-
-        # Update display
-        self.text.text = f'Activation: {activation:.2f}'
-        self.text.draw()
-```
-
-## Testing
+## GUI
 
 ```bash
-# Run integration tests
-python tests/test.py
-
-# Run DICOM simulator manually for testing other components
-python -m pineuro.simulator \
-    --source /path/to/source_dicoms \
-    --target /tmp/incoming \
-    --tr 1.5 \
-    --speed 2.0  # 2x real-time speed
+pineuro-gui
 ```
+
+The desktop GUI provides study configuration, participant workflows, live activation plots, and QC reports. See the [First Session Tutorial](docs/getting-started/first-session.md) for a complete walkthrough.
 
 ## Documentation
 
-- **[CLAUDE.md](CLAUDE.md)** - Comprehensive architecture guide and development patterns
-- **[tasks/README.md](src/pineuro/tasks/README.md)** - Task framework integration guide
-- **[docs/references.md](docs/references.md)** - Academic references and citations
+**Getting started**
+- [Installation](docs/getting-started/installation.md) — Setup and dependencies
+- [Quick Start](docs/getting-started/quickstart.md) — Python API quick start
+- [First Session](docs/getting-started/first-session.md) — End-to-end GUI walkthrough
+
+**User guide** — [Full index](docs/index.md)
+
+[Pipeline Overview](docs/user-guide/pipeline-overview.md) · [Study Configuration](docs/user-guide/study-configuration.md) · [Preprocessing](docs/user-guide/preprocessing.md) · [Mask Extraction](docs/user-guide/mask-extraction.md) · [Feedback Sessions](docs/user-guide/feedback-sessions.md) · [Tasks](docs/user-guide/tasks.md) · [Sham & Blinding](docs/user-guide/sham-and-blinding.md) · [Multi-Visit](docs/user-guide/multi-visit.md) · [Simulation Mode](docs/user-guide/simulation-mode.md) · [QC Reports](docs/user-guide/qc-reports.md)
 
 ## Citation
 
 If you use pineuro in your research, please cite:
 
 ```
-Vandewouw, M. M. (2026). pineuro: Python Real-Time fMRI Neurofeedback.
+Vandewouw, M. M. (2026). pineuro: Python for Individualized Neurofeedback.
 https://github.com/marlvan/pineuro
 ```
 
@@ -268,8 +73,8 @@ Key references:
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE) file for details.
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
 
 ## Contact
 
-Marlee M Vandewouw - marlee.vandewouw@outlook.com
+Marlee M Vandewouw — marlee.vandewouw@outlook.com
