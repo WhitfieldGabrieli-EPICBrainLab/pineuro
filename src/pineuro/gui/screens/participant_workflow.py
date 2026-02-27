@@ -159,13 +159,9 @@ class ParticipantWorkflowScreen:
         self._config_differences = []
         saved_snapshot = load_config_snapshot(participant_base_dir)
         if saved_snapshot is None:
-            save_config_snapshot(
-                self.study_config, participant_base_dir, participant_id, visit_id
-            )
+            save_config_snapshot(self.study_config, participant_base_dir, participant_id, visit_id)
         else:
-            self._config_differences = compare_protocol_configs(
-                saved_snapshot, self.study_config.to_dict()
-            )
+            self._config_differences = compare_protocol_configs(saved_snapshot, self.study_config.to_dict())
             if self._config_differences:
                 logger.warning(
                     "Study config changed since last run for %s%s:\n%s",

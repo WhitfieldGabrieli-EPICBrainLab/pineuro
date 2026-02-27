@@ -1,7 +1,5 @@
 """Tests for pineuro.gui.config_snapshot — snapshot save/load/compare/archive."""
 
-import pytest
-
 from pineuro.gui.config_snapshot import (
     SNAPSHOT_FILENAME,
     ConfigDifference,
@@ -114,9 +112,7 @@ class TestCompare:
 
     def test_detects_changed_value(self):
         saved = _make_study_config().to_dict()
-        current = _make_study_config(
-            feedback={"n_baseline": 30, "fd_threshold": 0.5, "smooth_fwhm": 6.0}
-        ).to_dict()
+        current = _make_study_config(feedback={"n_baseline": 30, "fd_threshold": 0.5, "smooth_fwhm": 6.0}).to_dict()
 
         diffs = compare_protocol_configs(saved, current)
         paths = [d.field_path for d in diffs]

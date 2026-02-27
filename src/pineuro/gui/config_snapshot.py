@@ -25,9 +25,7 @@ logger = logging.getLogger(__name__)
 SNAPSHOT_FILENAME = "study_config.yaml"
 
 # Top-level config keys that define the experimental protocol.
-PROTOCOL_KEYS = frozenset(
-    {"scan", "mask", "feedback", "task", "sham", "display", "localizer_task", "study"}
-)
+PROTOCOL_KEYS = frozenset({"scan", "mask", "feedback", "task", "sham", "display", "localizer_task", "study"})
 
 # Scan sub-keys that are source/simulator related, not protocol-defining.
 SCAN_EXCLUDED_KEYS = frozenset(
@@ -107,7 +105,7 @@ def load_config_snapshot(participant_dir: Path) -> dict | None:
         return None
 
     with open(snapshot_path) as f:
-        data = yaml.safe_load(f)
+        data: dict = yaml.safe_load(f)
 
     return data
 
@@ -162,14 +160,8 @@ def compare_protocol_configs(
             current_section = {}
 
         if key == "scan":
-            saved_section = {
-                k: v for k, v in saved_section.items() if k not in SCAN_EXCLUDED_KEYS
-            }
-            current_section = {
-                k: v
-                for k, v in current_section.items()
-                if k not in SCAN_EXCLUDED_KEYS
-            }
+            saved_section = {k: v for k, v in saved_section.items() if k not in SCAN_EXCLUDED_KEYS}
+            current_section = {k: v for k, v in current_section.items() if k not in SCAN_EXCLUDED_KEYS}
 
         differences.extend(_deep_diff(saved_section, current_section, prefix=key))
 
@@ -202,17 +194,11 @@ def _deep_diff(
         for k in all_keys:
             child_prefix = f"{prefix}.{k}" if prefix else k
             if k not in saved:
-                differences.append(
-                    ConfigDifference(child_prefix, "<not set>", current[k])
-                )
+                differences.append(ConfigDifference(child_prefix, "<not set>", current[k]))
             elif k not in current:
-                differences.append(
-                    ConfigDifference(child_prefix, saved[k], "<not set>")
-                )
+                differences.append(ConfigDifference(child_prefix, saved[k], "<not set>"))
             else:
-                differences.extend(
-                    _deep_diff(saved[k], current[k], prefix=child_prefix)
-                )
+                differences.extend(_deep_diff(saved[k], current[k], prefix=child_prefix))
     elif saved != current:
         differences.append(ConfigDifference(prefix, saved, current))
 
