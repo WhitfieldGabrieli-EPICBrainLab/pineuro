@@ -43,6 +43,13 @@ from ..components.qc_viewer import QCReportManager
 from ..components.run_selection_dialog import RunInfo, RunSelectionDialog
 from ..components.task_mirror import TaskMirror
 from ..config_manager import ConfigManager
+from ..config_snapshot import (
+    archive_config_snapshot,
+    compare_protocol_configs,
+    format_differences,
+    load_config_snapshot,
+    save_config_snapshot,
+)
 from ..models import StudyConfig
 from ..utils import truncate_text
 
@@ -147,6 +154,26 @@ class ParticipantWorkflowScreen:
             with open(visit_config_file) as f:
                 visit_config_dict = json.load(f)
             self.study_config.session_config["visit"] = visit_config_dict
+
+        # Study config snapshot: save on first run, compare on re-run
+        self._config_differences = []
+        saved_snapshot = load_config_snapshot(participant_base_dir)
+        if saved_snapshot is None:
+            save_config_snapshot(
+                self.study_config, participant_base_dir, participant_id, visit_id
+            )
+        else:
+            self._config_differences = compare_protocol_configs(
+                saved_snapshot, self.study_config.to_dict()
+            )
+            if self._config_differences:
+                logger.warning(
+                    "Study config changed since last run for %s%s:\n%s",
+                    participant_id,
+                    f" ({visit_id})" if visit_id else "",
+                    format_differences(self._config_differences),
+                )
+        self._participant_base_dir = participant_base_dir
 
         _visit_str = f" ({visit_id})" if visit_id else ""
 
@@ -3646,6 +3673,131 @@ class ParticipantWorkflowScreen:
             self._resumption_banner.visible = False
             self.page.update()
 
+    # ------------------------------------------------------------------
+    # Config change banner / dialog
+    # ------------------------------------------------------------------
+
+    def _build_config_change_banner(self) -> ft.Container | None:
+        """Build a warning banner when the study config has changed since last run.
+
+        Returns:
+            A styled container with a summary and action buttons, or None
+            if there are no config differences.
+        """
+        if not self._config_differences:
+            return None
+
+        n = len(self._config_differences)
+
+        banner = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=ft.Colors.ORANGE_700, size=20),
+                    ft.Text(
+                        f"Study configuration has {n} change{'s' if n != 1 else ''} since last run",
+                        size=13,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.ORANGE_900,
+                        expand=True,
+                    ),
+                    ft.TextButton(
+                        "Review",
+                        on_click=lambda e: self._show_config_change_dialog(),
+                    ),
+                    ft.FilledButton(
+                        "Update",
+                        on_click=lambda e: self._accept_config_changes(),
+                    ),
+                ],
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=20, vertical=8),
+            bgcolor=ft.Colors.ORANGE_50,
+            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.ORANGE_200)),
+        )
+        self._config_change_banner = banner
+        return banner
+
+    def _show_config_change_dialog(self):
+        """Show a dialog listing all config differences."""
+        rows = []
+        for diff in self._config_differences:
+            rows.append(
+                ft.DataRow(
+                    cells=[
+                        ft.DataCell(ft.Text(diff.field_path, size=12)),
+                        ft.DataCell(ft.Text(str(diff.saved_value), size=12)),
+                        ft.DataCell(ft.Text(str(diff.current_value), size=12)),
+                    ]
+                )
+            )
+
+        table = ft.DataTable(
+            columns=[
+                ft.DataColumn(ft.Text("Field", weight=ft.FontWeight.BOLD, size=12)),
+                ft.DataColumn(ft.Text("Previous", weight=ft.FontWeight.BOLD, size=12)),
+                ft.DataColumn(ft.Text("Current", weight=ft.FontWeight.BOLD, size=12)),
+            ],
+            rows=rows,
+            column_spacing=20,
+        )
+
+        def _close(e):
+            dialog.open = False
+            self.page.update()
+
+        def _update(e):
+            dialog.open = False
+            self.page.update()
+            self._accept_config_changes()
+
+        dialog = ft.AlertDialog(
+            modal=False,
+            title=ft.Text("Study Configuration Changed"),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "The following protocol settings differ from the "
+                            "snapshot saved when this participant was first run:",
+                            size=13,
+                        ),
+                        ft.Container(height=8),
+                        table,
+                    ],
+                    scroll=ft.ScrollMode.AUTO,
+                    tight=True,
+                ),
+                width=600,
+                height=400,
+            ),
+            actions=[
+                ft.TextButton("Close", on_click=_close),
+                ft.FilledButton("Update Snapshot", on_click=_update),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
+    def _accept_config_changes(self):
+        """Archive the old snapshot and save the current config."""
+        archive_config_snapshot(self._participant_base_dir)
+        save_config_snapshot(
+            self.study_config,
+            self._participant_base_dir,
+            self.participant_id,
+            self.visit_id,
+        )
+        self._config_differences = []
+        if hasattr(self, "_config_change_banner") and self._config_change_banner:
+            self._config_change_banner.visible = False
+            self.page.update()
+        logger.info("Config snapshot updated for %s", self.participant_id)
+
     def _build_preview_panel(self) -> ft.Container:
         """Build the empty parameter preview panel.
 
@@ -6085,7 +6237,12 @@ class ParticipantWorkflowScreen:
         # Resumption banner (shown only when re-opening a partially-completed session)
         resumption_banner = self._build_resumption_banner()
 
+        # Config change banner (shown when study config differs from saved snapshot)
+        config_change_banner = self._build_config_change_banner()
+
         main_controls: list[ft.Control] = [self.header_container]
+        if config_change_banner is not None:
+            main_controls.append(config_change_banner)
         if resumption_banner is not None:
             main_controls.append(resumption_banner)
         main_controls.extend(
