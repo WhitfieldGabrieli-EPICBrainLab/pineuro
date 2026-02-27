@@ -1116,8 +1116,7 @@ class BallTask(BaseTask):
                 )
             else:
                 logger.info(
-                    f"  Signal: activation | "
-                    f"Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)"
+                    f"  Signal: activation | Networks: {self.mask_names[0]} (top) vs {self.mask_names[1]} (bottom)"
                 )
             logger.info(
                 f"  Scale: {self.scale_factor} | "

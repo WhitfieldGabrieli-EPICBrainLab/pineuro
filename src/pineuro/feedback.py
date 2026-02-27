@@ -2193,8 +2193,7 @@ def parse_step_run_number(step_id: str) -> int:
         except ValueError:
             pass
     raise ValueError(
-        f"Invalid step_id: {step_id!r}. "
-        "Expected format 'feedback_N' or 'transfer_N' (e.g., 'feedback_3')."
+        f"Invalid step_id: {step_id!r}. Expected format 'feedback_N' or 'transfer_N' (e.g., 'feedback_3')."
     )
 
 

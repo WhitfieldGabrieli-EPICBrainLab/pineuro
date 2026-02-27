@@ -36,9 +36,7 @@ class MainThreadDispatcher:
     """Execute callables on the main thread from any background thread."""
 
     def __init__(self) -> None:
-        self._queue: queue.Queue[
-            tuple[Any, tuple, dict, Future] | None
-        ] = queue.Queue()
+        self._queue: queue.Queue[tuple[Any, tuple, dict, Future] | None] = queue.Queue()
 
     def submit(self, fn: Any, *args: Any, **kwargs: Any) -> Future:
         """Submit *fn* to run on the main thread.  Returns a ``Future``."""
@@ -91,12 +89,8 @@ def _flush_cocoa_events() -> None:
         import ctypes
         import ctypes.util
 
-        cf = ctypes.cdll.LoadLibrary(
-            ctypes.util.find_library("CoreFoundation")
-        )
-        kCFRunLoopDefaultMode = ctypes.c_void_p.in_dll(
-            cf, "kCFRunLoopDefaultMode"
-        )
+        cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+        kCFRunLoopDefaultMode = ctypes.c_void_p.in_dll(cf, "kCFRunLoopDefaultMode")
         cf.CFRunLoopRunInMode.restype = ctypes.c_int32
         cf.CFRunLoopRunInMode.argtypes = [
             ctypes.c_void_p,

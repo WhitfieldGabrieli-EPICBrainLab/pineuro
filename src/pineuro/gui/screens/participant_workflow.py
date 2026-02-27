@@ -2057,7 +2057,10 @@ class ParticipantWorkflowScreen:
         # If preprocessing is complete, any uncollected localizer-session steps
         # were intentionally bypassed (user proceeded with fewer runs).
         if not is_mask_reuse and self.step_statuses.get("preprocessing") == StepStatus.COMPLETE:
-            if reference_initial_enabled and self.step_statuses.get("reference_initial") in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+            if reference_initial_enabled and self.step_statuses.get("reference_initial") in (
+                StepStatus.PENDING,
+                StepStatus.INTERRUPTED,
+            ):
                 self.step_statuses["reference_initial"] = StepStatus.SKIPPED
 
             for run_num in range(1, n_localizer_runs + 1):
@@ -2066,7 +2069,11 @@ class ParticipantWorkflowScreen:
                     self.step_statuses[step_id] = StepStatus.SKIPPED
 
             # Coregistration requires the initial reference — skip if reference was skipped
-            if reference_initial_enabled and self.step_statuses.get("reference_initial") == StepStatus.SKIPPED and self.step_statuses.get("coregistration") in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+            if (
+                reference_initial_enabled
+                and self.step_statuses.get("reference_initial") == StepStatus.SKIPPED
+                and self.step_statuses.get("coregistration") in (StepStatus.PENDING, StepStatus.INTERRUPTED)
+            ):
                 self.step_statuses["coregistration"] = StepStatus.SKIPPED
 
     def _get_session_for_next_step(self) -> str | None:
@@ -4641,7 +4648,12 @@ class ParticipantWorkflowScreen:
             # Update UI lock state (re-enables navigation controls)
             self._update_ui_lock_state()
 
-            if not success and not stopped_by_user and completed_step_id is not None and self.right_panel_container is not None:
+            if (
+                not success
+                and not stopped_by_user
+                and completed_step_id is not None
+                and self.right_panel_container is not None
+            ):
                 # Show interactive error recovery panel only for actual failures
                 self._last_failed_step = completed_step_id
                 error = RuntimeError(result_message or "Unknown error")

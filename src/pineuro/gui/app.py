@@ -738,9 +738,7 @@ def main():
 
     signal.signal = _safe_signal
 
-    flet_thread = threading.Thread(
-        target=ft.app, args=(create_app,), daemon=True, name="FletApp"
-    )
+    flet_thread = threading.Thread(target=ft.app, args=(create_app,), daemon=True, name="FletApp")
     flet_thread.start()
 
     # When the user closes the Flet window, ft.app() returns and the
@@ -750,9 +748,7 @@ def main():
         flet_thread.join()
         dispatcher.shutdown()
 
-    threading.Thread(
-        target=_watch_flet_exit, daemon=True, name="FletExitWatcher"
-    ).start()
+    threading.Thread(target=_watch_flet_exit, daemon=True, name="FletExitWatcher").start()
 
     dispatcher.run_forever()
 
