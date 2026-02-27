@@ -345,19 +345,43 @@ class _DicomGeometryCache:
 
     After the first volume, stores the affine, spacing, and orientation
     transform so that subsequent volumes only need to read pixel_array.
+    For Siemens mosaic DICOMs, also caches the mosaic grid parameters
+    needed to unpack the 2D mosaic into a 3D volume on each read.
     """
 
-    __slots__ = ("affine", "spacing", "ornt_transform")
+    __slots__ = ("affine", "spacing", "ornt_transform", "mosaic_params")
 
     def __init__(
         self,
         affine: NDArray[np.float64],
         spacing: list[float],
         ornt_transform: NDArray[np.float64] | None,
+        mosaic_params: tuple[int, int, int, int] | None = None,
     ):
         self.affine = affine
         self.spacing = spacing
         self.ornt_transform = ornt_transform
+        # (n_slices, matrix_rows, matrix_cols, n_grid_cols) or None
+        self.mosaic_params = mosaic_params
+
+
+def _unpack_mosaic(pixel_array_2d: NDArray, n_slices: int, matrix_rows: int, matrix_cols: int, n_grid_cols: int) -> NDArray:
+    """Unpack a Siemens mosaic 2D image into a 3D volume.
+
+    In mosaic format, all slices are tiled into a single 2D image in
+    row-major order (left-to-right, top-to-bottom).
+
+    Returns data in (n_slices, matrix_rows, matrix_cols) axis order,
+    matching the enhanced multiframe (n_frames, rows, cols) convention.
+    """
+    data = np.zeros((n_slices, matrix_rows, matrix_cols), dtype=pixel_array_2d.dtype)
+    for s in range(n_slices):
+        grid_row = s // n_grid_cols
+        grid_col = s % n_grid_cols
+        r0 = grid_row * matrix_rows
+        c0 = grid_col * matrix_cols
+        data[s] = pixel_array_2d[r0 : r0 + matrix_rows, c0 : c0 + matrix_cols]
+    return data
 
 
 def _read_dicom_volume(
@@ -412,6 +436,9 @@ def _read_dicom_volume(
     if geometry_cache is not None:
         dcm = pydicom.dcmread(dicom_path)
         data = dcm.pixel_array.astype(np.float64)
+        if geometry_cache.mosaic_params is not None:
+            n_sl, m_rows, m_cols, n_gc = geometry_cache.mosaic_params
+            data = _unpack_mosaic(data, n_sl, m_rows, m_cols, n_gc)
         if geometry_cache.ornt_transform is not None:
             data = apply_orientation(data, geometry_cache.ornt_transform)
         return data, geometry_cache.affine, geometry_cache.spacing, geometry_cache
@@ -419,79 +446,114 @@ def _read_dicom_volume(
     # --- First volume: full header parse ---
     dcm = pydicom.dcmread(dicom_path)
 
-    # Require enhanced (multiframe) DICOM
-    if not hasattr(dcm, "NumberOfFrames"):
-        raise ValueError(
-            f"Not an enhanced multiframe DICOM: {dicom_path.name}. "
-            "Single-slice DICOMs are not supported for direct reading."
+    # Detect Siemens mosaic DICOM (all slices tiled in one 2D image)
+    is_mosaic = (
+        hasattr(dcm, "ImageType")
+        and "MOSAIC" in dcm.ImageType
+        and (0x0019, 0x100A) in dcm
+    )
+    mosaic_cache_params: tuple[int, int, int, int] | None = None
+
+    if is_mosaic:
+        # --- Siemens mosaic path ---
+        n_slices = int(dcm[0x0019, 0x100A].value)
+        acq = getattr(dcm, "AcquisitionMatrix", None)
+        if acq is None:
+            raise ValueError(f"Missing AcquisitionMatrix in mosaic DICOM: {dicom_path.name}")
+        matrix_rows = max(int(acq[0]), int(acq[2]))
+        matrix_cols = max(int(acq[1]), int(acq[3]))
+        n_grid_cols = int(dcm.Columns) // matrix_cols
+
+        mosaic_cache_params = (n_slices, matrix_rows, matrix_cols, n_grid_cols)
+        data = _unpack_mosaic(dcm.pixel_array.astype(np.float64), n_slices, matrix_rows, matrix_cols, n_grid_cols)
+
+        # Geometry from top-level tags (mosaic uses classic DICOM tags)
+        pixel_spacing = [float(x) for x in dcm.PixelSpacing]
+        iop = [float(x) for x in dcm.ImageOrientationPatient]
+        ipp_raw = [float(x) for x in dcm.ImagePositionPatient]
+
+        row_cosine = np.array(iop[:3])
+        col_cosine = np.array(iop[3:])
+
+        # Correct origin: mosaic IPP refers to the full mosaic grid corner,
+        # not the actual first slice. Shift inward by the mosaic padding.
+        origin = np.array(ipp_raw) + (
+            row_cosine * pixel_spacing[1] * (int(dcm.Columns) - matrix_cols) / 2.0
+            + col_cosine * pixel_spacing[0] * (int(dcm.Rows) - matrix_rows) / 2.0
         )
 
-    data = dcm.pixel_array.astype(np.float64)
-    n_slices = int(dcm.NumberOfFrames)
-
-    # --- Extract geometry from functional group sequences ---
-    pixel_spacing = None
-    iop = None
-    ipp_first = None
-    ipp_last = None
-
-    for seq_attr in ("PerFrameFunctionalGroupsSequence", "SharedFunctionalGroupsSequence"):
-        seq = getattr(dcm, seq_attr, None)
-        if not seq:
-            continue
-        f0 = seq[0]
-
-        # Pixel spacing
-        if pixel_spacing is None and hasattr(f0, "PixelMeasuresSequence"):
-            pm = f0.PixelMeasuresSequence[0]
-            pixel_spacing = [float(x) for x in pm.PixelSpacing]
-
-        # Orientation
-        if iop is None and hasattr(f0, "PlaneOrientationSequence"):
-            iop = [float(x) for x in f0.PlaneOrientationSequence[0].ImageOrientationPatient]
-
-        # Position (first frame)
-        if ipp_first is None and hasattr(f0, "PlanePositionSequence"):
-            ipp_first = [float(x) for x in f0.PlanePositionSequence[0].ImagePositionPatient]
-
-    # Position of last frame (for slice direction) — always from PerFrame
-    pffgs = getattr(dcm, "PerFrameFunctionalGroupsSequence", None)
-    if pffgs and hasattr(pffgs[-1], "PlanePositionSequence"):
-        ipp_last = [float(x) for x in pffgs[-1].PlanePositionSequence[0].ImagePositionPatient]
-
-    # Fallbacks for spacing
-    if pixel_spacing is None:
-        if hasattr(dcm, "PixelSpacing"):
-            pixel_spacing = [float(x) for x in dcm.PixelSpacing]
-        else:
-            raise ValueError(f"Cannot extract PixelSpacing from {dicom_path.name}")
-
-    if iop is None:
-        raise ValueError(f"Cannot extract ImageOrientationPatient from {dicom_path.name}")
-    if ipp_first is None:
-        raise ValueError(f"Cannot extract ImagePositionPatient from {dicom_path.name}")
-
-    # --- Build affine from DICOM geometry ---
-    # DICOM IOP: row_cosine (direction of increasing col) and col_cosine (direction of increasing row)
-    row_cosine = np.array(iop[:3])
-    col_cosine = np.array(iop[3:])
-
-    # Slice direction from actual frame positions (handles oblique acquisitions)
-    if ipp_last is not None and n_slices > 1:
-        slice_vec = (np.array(ipp_last) - np.array(ipp_first)) / (n_slices - 1)
-    else:
-        # Fallback: cross product for single-frame or missing last position
+        # Slice direction from cross product + SpacingBetweenSlices
         slice_vec = np.cross(row_cosine, col_cosine)
         sbs = float(getattr(dcm, "SpacingBetweenSlices", None) or getattr(dcm, "SliceThickness", 1.0))  # type: ignore[arg-type]
         slice_vec = slice_vec / np.linalg.norm(slice_vec) * sbs
 
-    origin = np.array(ipp_first)
+    elif hasattr(dcm, "NumberOfFrames"):
+        # --- Enhanced multiframe path ---
+        data = dcm.pixel_array.astype(np.float64)
+        n_slices = int(dcm.NumberOfFrames)
+
+        # Extract geometry from functional group sequences
+        pixel_spacing = None
+        iop = None
+        ipp_first = None
+        ipp_last = None
+
+        for seq_attr in ("PerFrameFunctionalGroupsSequence", "SharedFunctionalGroupsSequence"):
+            seq = getattr(dcm, seq_attr, None)
+            if not seq:
+                continue
+            f0 = seq[0]
+
+            if pixel_spacing is None and hasattr(f0, "PixelMeasuresSequence"):
+                pm = f0.PixelMeasuresSequence[0]
+                pixel_spacing = [float(x) for x in pm.PixelSpacing]
+
+            if iop is None and hasattr(f0, "PlaneOrientationSequence"):
+                iop = [float(x) for x in f0.PlaneOrientationSequence[0].ImageOrientationPatient]
+
+            if ipp_first is None and hasattr(f0, "PlanePositionSequence"):
+                ipp_first = [float(x) for x in f0.PlanePositionSequence[0].ImagePositionPatient]
+
+        # Position of last frame (for slice direction) — always from PerFrame
+        pffgs = getattr(dcm, "PerFrameFunctionalGroupsSequence", None)
+        if pffgs and hasattr(pffgs[-1], "PlanePositionSequence"):
+            ipp_last = [float(x) for x in pffgs[-1].PlanePositionSequence[0].ImagePositionPatient]
+
+        if pixel_spacing is None:
+            if hasattr(dcm, "PixelSpacing"):
+                pixel_spacing = [float(x) for x in dcm.PixelSpacing]
+            else:
+                raise ValueError(f"Cannot extract PixelSpacing from {dicom_path.name}")
+
+        if iop is None:
+            raise ValueError(f"Cannot extract ImageOrientationPatient from {dicom_path.name}")
+        if ipp_first is None:
+            raise ValueError(f"Cannot extract ImagePositionPatient from {dicom_path.name}")
+
+        row_cosine = np.array(iop[:3])
+        col_cosine = np.array(iop[3:])
+
+        # Slice direction from actual frame positions (handles oblique acquisitions)
+        if ipp_last is not None and n_slices > 1:
+            slice_vec = (np.array(ipp_last) - np.array(ipp_first)) / (n_slices - 1)
+        else:
+            slice_vec = np.cross(row_cosine, col_cosine)
+            sbs = float(getattr(dcm, "SpacingBetweenSlices", None) or getattr(dcm, "SliceThickness", 1.0))  # type: ignore[arg-type]
+            slice_vec = slice_vec / np.linalg.norm(slice_vec) * sbs
+
+        origin = np.array(ipp_first)
+    else:
+        raise ValueError(
+            f"Unsupported DICOM format: {dicom_path.name}. "
+            "Expected enhanced multiframe or Siemens mosaic DICOM."
+        )
 
     # pydicom pixel_array is (n_frames, rows, cols)
     # Affine maps (frame_idx, row_idx, col_idx) -> (x, y, z) in LPS
     # axis 0 = frame/slice: slice direction
     # axis 1 = row: col_cosine direction, step = pixel_spacing[0]
     # axis 2 = col: row_cosine direction, step = pixel_spacing[1]
+    assert pixel_spacing is not None  # guaranteed by branches above
     affine_lps = np.eye(4)
     affine_lps[:3, 0] = slice_vec
     affine_lps[:3, 1] = col_cosine * pixel_spacing[0]
@@ -514,7 +576,7 @@ def _read_dicom_volume(
     # Compute spacing in output axis order
     spacing = np.sqrt(np.sum(affine[:3, :3] ** 2, axis=0)).tolist()
 
-    cache = _DicomGeometryCache(affine, spacing, cached_ornt_transform)
+    cache = _DicomGeometryCache(affine, spacing, cached_ornt_transform, mosaic_cache_params)
     return data, affine, spacing, cache
 
 
