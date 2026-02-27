@@ -100,7 +100,11 @@ class ScannerConnectionDialog:
 
         try:
             self._update_results(result)
-            self.page.update()
+
+            async def _apply():
+                self.page.update()
+
+            self.page.run_task(_apply)
         except Exception as e:
             logger.error(f"Failed to update connection test UI: {e}")
 

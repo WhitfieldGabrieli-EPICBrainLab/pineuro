@@ -463,16 +463,22 @@ class PyrtnfApp:
             self.page.update()
             return
 
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        dest = filedialog.asksaveasfilename(
-            title=f"Export '{study_name}'",
-            defaultextension=".yaml",
-            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
-            initialfile=f"{study_name.replace(' ', '_')}.yaml",
-        )
-        root.destroy()
+        from pineuro.gui.dispatch import get_dispatcher
+
+        def _show_dialog():
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            result = filedialog.asksaveasfilename(
+                title=f"Export '{study_name}'",
+                defaultextension=".yaml",
+                filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+                initialfile=f"{study_name.replace(' ', '_')}.yaml",
+            )
+            root.destroy()
+            return result
+
+        dest = get_dispatcher().submit(_show_dialog).result()
 
         if not dest:
             return
@@ -501,14 +507,20 @@ class PyrtnfApp:
             self.page.update()
             return
 
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        src = filedialog.askopenfilename(
-            title="Import Study",
-            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
-        )
-        root.destroy()
+        from pineuro.gui.dispatch import get_dispatcher
+
+        def _show_dialog():
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            result = filedialog.askopenfilename(
+                title="Import Study",
+                filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+            )
+            root.destroy()
+            return result
+
+        src = get_dispatcher().submit(_show_dialog).result()
 
         if not src:
             return

@@ -1237,8 +1237,13 @@ class StudyEditorScreen:
                 logger.warning(f"Failed to load atlas labels for {atlas_source}: {ex}")
                 self.atlas_region_dropdown.options = []
                 self.atlas_region_dropdown.value = None
+
+            async def _apply():
+                with contextlib.suppress(Exception):
+                    self.page.update()
+
             with contextlib.suppress(Exception):
-                self.page.update()
+                self.page.run_task(_apply)
 
         # Fetch labels in background thread to avoid blocking UI
         threading.Thread(target=_fetch_and_update, daemon=True).start()
@@ -1527,15 +1532,21 @@ class StudyEditorScreen:
                 logger.error("tkinter is not available for file dialog")
                 return
 
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            save_path = filedialog.asksaveasfilename(
-                title="Save randomization file",
-                defaultextension=".tsv",
-                filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv")],
-            )
-            root.destroy()
+            from pineuro.gui.dispatch import get_dispatcher
+
+            def _show_save_dialog():
+                root = tk.Tk()
+                root.withdraw()
+                root.attributes("-topmost", True)
+                result = filedialog.asksaveasfilename(
+                    title="Save randomization file",
+                    defaultextension=".tsv",
+                    filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv")],
+                )
+                root.destroy()
+                return result
+
+            save_path = get_dispatcher().submit(_show_save_dialog).result()
 
             if not save_path:
                 return  # User cancelled
