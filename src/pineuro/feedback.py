@@ -165,6 +165,7 @@ from watchdog.observers import Observer
 from .utils import (
     get_json_sidecar_path,  # Get path to JSON sidecar
     get_tr_from_volume,  # Extract TR from volume metadata
+    is_moco_series,  # Detect Siemens MoCo-derived DICOM series
     is_nifti_file,  # Check if file is NIfTI format
     is_valid_volume,  # Validate DICOM/NIfTI files
 )
@@ -1935,15 +1936,17 @@ class _DicomEventHandler(FileSystemEventHandler):
         self._callback = callback
 
     @staticmethod
-    def _wait_for_stable_file(path: Path, interval: float = 0.05, stable_count: int = 3) -> None:
+    def _wait_for_stable_file(path: Path, interval: float = 0.1, stable_count: int = 5) -> None:
         """Poll file size until stable, indicating the writer has finished.
 
         Needed for non-atomic writers (e.g., real scanners pushing over SMB)
         where the file creation event fires before writing is complete.
+        Uses conservative defaults (500ms stability window) to handle
+        brief network write pauses on SMB shares.
         """
         prev_size = -1
         count = 0
-        for _ in range(60):  # Max ~3 seconds of polling
+        for _ in range(100):  # Max ~10 seconds of polling
             try:
                 size = path.stat().st_size
             except OSError:
@@ -2509,6 +2512,10 @@ class NeurofeedbackCoordinator:
 
         # Motion correction mode
         self._motion_correction = motion_correction
+        # When MoCo is enabled on the scanner, both original and MoCo series
+        # land in the watched folder. Keep MoCo series only in siemens_moco mode
+        # (we need the embedded motion params); otherwise keep originals.
+        self._keep_moco = motion_correction == "siemens_moco"
         self._moco_reference_vol: NDArray[np.float64] | None = None
         self._moco_reference_affine: NDArray[np.float64] | None = None
         self._moco_reference_ants: Any | None = None  # Cached ANTs image of vol 0
@@ -2644,6 +2651,8 @@ class NeurofeedbackCoordinator:
         self._processed_files: set[str] = set()
         self._pending_files: list[Path] = []
         self._pending_heap: list[tuple[str, Path]] = []  # Priority queue: (filename, path)
+        self._retry_counts: dict[str, int] = {}  # Track validation retries per file
+        self._MAX_RETRIES = 5
         self._next_expected_filename: str | None = None  # Filename we're waiting for
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -3007,7 +3016,11 @@ class NeurofeedbackCoordinator:
                     existing_keys.add(key)
 
     def _get_next_file_to_process(self) -> Path | None:
-        """Get the next file to process in strict order, skipping invalid files."""
+        """Get the next file to process in strict order, with retry for truncated files.
+
+        Also filters MoCo vs original DICOM series when scanner MoCo is enabled.
+        In siemens_moco mode, keeps only MoCo series; otherwise keeps originals.
+        """
         with self._lock:
             while self._pending_heap:
                 key, file_path = self._pending_heap[0]
@@ -3016,13 +3029,40 @@ class NeurofeedbackCoordinator:
                     heapq.heappop(self._pending_heap)
                     continue
 
-                if is_valid_volume(file_path):
+                if is_valid_volume(file_path, validate_pixels=True):
+                    # Filter MoCo vs original series
+                    moco = is_moco_series(file_path)
+                    if moco is not None:
+                        if self._keep_moco and not moco:
+                            heapq.heappop(self._pending_heap)
+                            self._processed_files.add(key)
+                            logger.debug(f"Skipping original volume (using MoCo): {file_path.name}")
+                            continue
+                        if not self._keep_moco and moco:
+                            heapq.heappop(self._pending_heap)
+                            self._processed_files.add(key)
+                            logger.debug(f"Skipping MoCo-derived volume: {file_path.name}")
+                            continue
+
                     heapq.heappop(self._pending_heap)
                     self._processed_files.add(key)
+                    self._retry_counts.pop(key, None)
                     return file_path
                 else:
                     heapq.heappop(self._pending_heap)
-                    logger.debug(f"Skipping invalid volume: {file_path.name}")
+                    retries = self._retry_counts.get(key, 0) + 1
+                    self._retry_counts[key] = retries
+                    if retries >= self._MAX_RETRIES:
+                        self._processed_files.add(key)
+                        logger.warning(
+                            f"Skipping volume after {retries} failed validations: "
+                            f"{file_path.name}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Validation failed for {file_path.name} "
+                            f"(attempt {retries}/{self._MAX_RETRIES}), will retry"
+                        )
 
             return None
 

@@ -104,7 +104,7 @@ import threading  # Multi-threading for volume collection with watchdog
 import time  # Timing for collection timeout and progress tracking
 from collections.abc import Callable
 from pathlib import Path
-from typing import Union, cast
+from typing import TYPE_CHECKING, Union, cast
 
 import nibabel as nib
 
@@ -137,11 +137,15 @@ from pineuro.utils import (
     dicom_to_nifti,  # dcm2niix wrapper
     erode_mask,  # Erode mask to reduce edge effects
     get_json_sidecar_path,  # Get path to JSON sidecar for NIfTI
+    is_moco_series,  # Detect Siemens MoCo-derived DICOM series
     is_nifti_file,  # Check if file is NIfTI format
     is_valid_volume,  # Validate DICOM/NIfTI files
     # Command execution
     parallel_run_command,  # Parallel execution for multi-run dcm2niix
 )
+
+if TYPE_CHECKING:
+    from pineuro.collection_qc import CollectionQCMonitor
 
 # --- Module Logger ---
 # Use __name__ to create a logger hierarchy (pineuro.preprocessing)
@@ -1118,11 +1122,15 @@ class _CollectorEventHandler(FileSystemEventHandler):
         self._callback = callback
 
     @staticmethod
-    def _wait_for_stable_file(path: Path, interval: float = 0.05, stable_count: int = 3) -> None:
-        """Poll file size until stable, indicating the writer has finished."""
+    def _wait_for_stable_file(path: Path, interval: float = 0.1, stable_count: int = 5) -> None:
+        """Poll file size until stable, indicating the writer has finished.
+
+        Uses conservative defaults for network filesystems (SMB) where
+        brief write pauses can make files appear stable prematurely.
+        """
         prev_size = -1
         count = 0
-        for _ in range(60):  # Max ~3 seconds of polling
+        for _ in range(100):  # Max ~10 seconds of polling
             try:
                 size = path.stat().st_size
             except OSError:
@@ -1171,6 +1179,7 @@ def collect_volumes(
     stop_event: threading.Event | None = None,
     trigger_event: threading.Event | None = None,
     task_done_event: threading.Event | None = None,
+    qc_monitor: "CollectionQCMonitor | None" = None,
 ) -> Path:
     """
     Watch for incoming volumes (DICOM or NIfTI) during scanner acquisition and collect them.
@@ -1298,8 +1307,10 @@ def collect_volumes(
 
     pending_heap: list[tuple[str, Path]] = []  # (key, path) tuples sorted by full path
     processed_files: set[str] = set()  # Track processed files by full path to avoid duplicates
+    retry_counts: dict[str, int] = {}  # Track validation retries per file
     collected_count = 0
     lock = threading.Lock()
+    MAX_RETRIES = 5  # Give up after this many failed pixel validations
 
     def on_new_file(file_path: Path) -> None:
         """
@@ -1341,8 +1352,12 @@ def collect_volumes(
         Get the next valid volume file to process, in sorted order.
 
         Returns None if no valid files are pending. Files are validated
-        (DICOM header check or NIfTI format check) before being returned.
-        Invalid files are logged and skipped.
+        with pixel data check (catches truncated files from incomplete
+        network transfers). Files that fail validation are retried on
+        subsequent scan cycles up to MAX_RETRIES times.
+
+        Siemens MoCo-derived series (SeriesDescription="MoCoSeries") are
+        automatically skipped — collection keeps original volumes only.
         """
         with lock:
             while pending_heap:
@@ -1353,15 +1368,38 @@ def collect_volumes(
                     heapq.heappop(pending_heap)
                     continue
 
-                # Validate the file (check DICOM header or NIfTI format)
-                if is_valid_volume(file_path):
+                # Validate the file with pixel data check
+                if is_valid_volume(file_path, validate_pixels=True):
+                    # Skip MoCo-derived series — collection keeps originals
+                    moco = is_moco_series(file_path)
+                    if moco is True:
+                        heapq.heappop(pending_heap)
+                        processed_files.add(key)
+                        logger.debug(f"Skipping MoCo-derived volume: {file_path.name}")
+                        continue
+
                     heapq.heappop(pending_heap)
                     processed_files.add(key)
+                    retry_counts.pop(key, None)
                     return file_path
                 else:
-                    # Invalid file (corrupt, incomplete, or not a volume)
                     heapq.heappop(pending_heap)
-                    logger.debug(f"Skipping invalid volume: {file_path.name}")
+                    retries = retry_counts.get(key, 0) + 1
+                    retry_counts[key] = retries
+                    if retries >= MAX_RETRIES:
+                        # Give up — file is truly corrupt or not a volume
+                        processed_files.add(key)
+                        logger.warning(
+                            f"Skipping volume after {retries} failed validations: "
+                            f"{file_path.name}"
+                        )
+                    else:
+                        # Leave out of processed_files so scan_for_existing_files
+                        # will re-queue it for another attempt
+                        logger.debug(
+                            f"Validation failed for {file_path.name} "
+                            f"(attempt {retries}/{MAX_RETRIES}), will retry"
+                        )
 
             return None
 
@@ -1516,6 +1554,14 @@ def collect_volumes(
                 if start_time is None:
                     start_time = time.time()
 
+                # --- QC Monitor ---
+                # Compute real-time QC metrics (FD, DVARS, tSNR) if monitor provided
+                if qc_monitor is not None:
+                    try:
+                        qc_monitor.process_volume(dest_path, collected_count)
+                    except Exception as e:
+                        logger.warning(f"QC monitor error on volume {collected_count}: {e}")
+
                 # --- Progress Callback ---
                 # Notify external code (GUI) of progress
                 if progress_callback is not None:
@@ -1539,6 +1585,10 @@ def collect_volumes(
         # Cleanup
         # -------------------------------------------------------------------------
         # Always clean up resources, even if collection was interrupted
+
+        # Close QC monitor log file
+        if qc_monitor is not None:
+            qc_monitor.close()
 
         # Stop filesystem watcher
         observer.stop()

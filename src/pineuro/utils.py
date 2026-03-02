@@ -614,7 +614,7 @@ def get_dicom_files(directory: Path) -> list[Path]:
     return dicom_files
 
 
-def is_valid_dicom(file_path: Path) -> bool:
+def is_valid_dicom(file_path: Path, validate_pixels: bool = False) -> bool:
     """
     Check if a file is a valid DICOM by attempting to read its header.
 
@@ -622,6 +622,9 @@ def is_valid_dicom(file_path: Path) -> bool:
     ----------
     file_path : Path
         Path to file to check
+    validate_pixels : bool
+        If True, also verify that pixel data can be read (catches truncated
+        files from incomplete network transfers). Adds ~10-50ms per file.
 
     Returns
     -------
@@ -630,7 +633,12 @@ def is_valid_dicom(file_path: Path) -> bool:
 
     """
     try:
-        pydicom.dcmread(file_path, stop_before_pixels=True)
+        dcm = pydicom.dcmread(file_path, stop_before_pixels=not validate_pixels)
+        if validate_pixels:
+            # Force pixel data read — raises if file is truncated
+            arr = dcm.pixel_array
+            if arr.size == 0:
+                return False
         return True
     except Exception:  # pydicom raises many exception types for corrupt/non-DICOM files
         return False
@@ -773,7 +781,7 @@ def is_valid_nifti(file_path: Path) -> bool:
         return False
 
 
-def is_valid_volume(file_path: Path) -> bool:
+def is_valid_volume(file_path: Path, validate_pixels: bool = False) -> bool:
     """
     Check if a file is a valid volume (DICOM or NIfTI).
 
@@ -784,6 +792,9 @@ def is_valid_volume(file_path: Path) -> bool:
     ----------
     file_path : Path
         Path to file to check
+    validate_pixels : bool
+        If True, verify that pixel/voxel data can be read (DICOM only).
+        Catches truncated files from incomplete network transfers.
 
     Returns
     -------
@@ -798,7 +809,37 @@ def is_valid_volume(file_path: Path) -> bool:
     if is_nifti_file(file_path):
         return is_valid_nifti(file_path)
     else:
-        return is_valid_dicom(file_path)
+        return is_valid_dicom(file_path, validate_pixels=validate_pixels)
+
+
+def is_moco_series(file_path: Path) -> bool | None:
+    """Check if a DICOM file belongs to a Siemens MoCo-derived series.
+
+    Siemens scanners with motion correction (MoCo) enabled produce two
+    series per acquisition: the original and a corrected "MoCoSeries".
+    This function distinguishes them by checking SeriesDescription.
+
+    Parameters
+    ----------
+    file_path : Path
+        Path to a DICOM file.
+
+    Returns
+    -------
+    bool or None
+        True if from a MoCo series, False if from the original series,
+        None if the file is not a DICOM or SeriesDescription is missing.
+    """
+    if is_nifti_file(file_path):
+        return None
+    try:
+        dcm = pydicom.dcmread(file_path, stop_before_pixels=True)
+        desc = getattr(dcm, "SeriesDescription", None)
+        if desc is None:
+            return None
+        return bool(desc == "MoCoSeries")
+    except Exception:
+        return None
 
 
 def get_json_sidecar_path(nifti_path: Path) -> Path:

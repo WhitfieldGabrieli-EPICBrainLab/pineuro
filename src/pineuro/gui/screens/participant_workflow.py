@@ -4715,6 +4715,7 @@ class ParticipantWorkflowScreen:
                 on_complete=self._on_pipeline_complete,
                 on_error=self._on_pipeline_error,
                 on_collection_progress=self._on_collection_progress,
+                on_qc_data=self._on_collection_qc_data,
             )
 
         # Pass overwrite choice to runner
@@ -4731,16 +4732,13 @@ class ParticipantWorkflowScreen:
         # Show monitoring panel (creates task_mirror for feedback steps)
         self._show_monitoring_panel(step_id)
 
-        # Connect task mirror callback for feedback/transfer steps AND task-based localizers
+        # Connect task mirror callback for steps that show a TaskMirror:
+        # - feedback/transfer steps
+        # - all rest_run_ steps (fixation or task localizer — all launch a PsychoPy task)
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-        is_task_localizer = False
-        if step_id.startswith("rest_run_"):
-            config = self.study_config.session_config
-            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-            is_task_localizer = localizer_type == "task" and localizer_task_type != "rest"
+        is_rest_run = step_id.startswith("rest_run_")
 
-        if is_feedback_transfer or is_task_localizer:
+        if is_feedback_transfer or is_rest_run:
             self.pipeline_runner.set_task_mirror_callback(self._on_task_mirror_update)
         else:
             self.pipeline_runner.set_task_mirror_callback(None)
@@ -5483,8 +5481,171 @@ class ParticipantWorkflowScreen:
                     expand=True,
                 )
 
-            elif step_id in ["reference_initial", "reference_realtime"] or is_rest_run_step:
-                # Collection progress panel with DICOM preview
+            elif is_rest_run_step:
+                # Full QC monitoring layout for localizer/rest collection
+                # Same layout as feedback: brain slice + task mirror + FD/DVARS/tSNR
+                n_volumes = self._get_collection_n_volumes(step_id)
+
+                fd_threshold = config.get("feedback", {}).get("fd_threshold", 0.5)
+                dvars_threshold = config.get("feedback", {}).get("dvars_threshold", 1.5)
+                tsnr_threshold = config.get("feedback", {}).get("tsnr_threshold", 20)
+
+                self.fd_plot = FDPlot(n_volumes=n_volumes, height=220, threshold=fd_threshold)
+                self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=220, threshold=dvars_threshold)
+                self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=220, threshold=tsnr_threshold)
+
+                # Brain slice image (replaces activation plot)
+                self._slice_image = ft.Image(
+                    src="",
+                    width=480,
+                    height=270,
+                    fit=ft.BoxFit.CONTAIN,
+                    visible=False,
+                )
+                self._slice_placeholder = ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Icon(ft.Icons.IMAGE_OUTLINED, size=48, color=ft.Colors.GREY_400),
+                            ft.Text("Waiting for first volume...", size=12, color=ft.Colors.GREY_500),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=8,
+                    ),
+                    width=480,
+                    height=270,
+                    alignment=ft.Alignment(0, 0),
+                    border=ft.border.all(1, ft.Colors.GREY_300),
+                    border_radius=5,
+                    bgcolor=ft.Colors.BLACK,
+                )
+
+                # Task mirror for localizer task preview
+                self.task_mirror = TaskMirror(width=480, height=270)
+
+                # Progress UI
+                self._progress_bar = ft.ProgressBar(value=0, width=300)
+                self._progress_text = ft.Text("0 / 0 volumes", size=12)
+                self._status_text = ft.Text("Waiting...", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
+
+                monitoring_panel = ft.Container(
+                    content=ft.Column(
+                        [
+                            # Header + stop button
+                            ft.Row(
+                                [
+                                    ft.Text(
+                                        self._get_step_label(step_id),
+                                        size=18,
+                                        weight=ft.FontWeight.BOLD,
+                                    ),
+                                    ft.FilledButton(
+                                        "Stop",
+                                        icon=ft.Icons.STOP,
+                                        on_click=lambda e: self._on_stop_clicked(),
+                                        bgcolor=ft.Colors.RED,
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Divider(),
+                            # Status strip
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        self._status_text,
+                                        ft.Row(
+                                            [self._progress_bar, self._progress_text],
+                                            spacing=8,
+                                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                ),
+                                bgcolor=ft.Colors.GREY_50,
+                                border_radius=8,
+                                padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                            ),
+                            # Row 1: Brain slice + Task mirror
+                            ft.Row(
+                                [
+                                    ft.Container(
+                                        content=ft.Column(
+                                            [
+                                                ft.Text("Brain Slice", size=14, weight=ft.FontWeight.W_500),
+                                                ft.Stack([self._slice_placeholder, self._slice_image]),
+                                            ],
+                                            spacing=5,
+                                        ),
+                                        expand=True,
+                                        height=300,
+                                    ),
+                                    ft.Container(
+                                        content=ft.Column(
+                                            [
+                                                ft.Text("Task Display", size=14, weight=ft.FontWeight.W_500),
+                                                self.task_mirror.build(),
+                                            ],
+                                            spacing=5,
+                                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                        ),
+                                        width=500,
+                                        height=300,
+                                    ),
+                                ],
+                                spacing=20,
+                                vertical_alignment=ft.CrossAxisAlignment.START,
+                            ),
+                            # Row 2: QC plots
+                            ft.Row(
+                                [
+                                    ft.Container(
+                                        content=ft.Column(
+                                            [
+                                                ft.Text("Framewise Displacement", size=12, weight=ft.FontWeight.W_500),
+                                                self.fd_plot.build(),
+                                            ],
+                                            spacing=3,
+                                        ),
+                                        expand=True,
+                                        height=300,
+                                    ),
+                                    ft.Container(
+                                        content=ft.Column(
+                                            [
+                                                ft.Text("DVARS", size=12, weight=ft.FontWeight.W_500),
+                                                self.dvars_plot.build(),
+                                            ],
+                                            spacing=3,
+                                        ),
+                                        expand=True,
+                                        height=300,
+                                    ),
+                                    ft.Container(
+                                        content=ft.Column(
+                                            [
+                                                ft.Text("tSNR", size=12, weight=ft.FontWeight.W_500),
+                                                self.tsnr_plot.build(),
+                                            ],
+                                            spacing=3,
+                                        ),
+                                        expand=True,
+                                        height=300,
+                                    ),
+                                ],
+                                spacing=10,
+                            ),
+                        ],
+                        spacing=8,
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                    padding=20,
+                    expand=True,
+                )
+
+            elif step_id in ["reference_initial", "reference_realtime"]:
+                # Simple collection progress for short reference scans
                 n_volumes = self._get_collection_n_volumes(step_id)
                 tr = config["scan"].get("tr")
 
@@ -5678,6 +5839,53 @@ class ParticipantWorkflowScreen:
             self.page.run_task(update_ui)
         except Exception as e:
             logger.error(f"Failed to schedule collection progress update: {e}")
+
+    def _on_collection_qc_data(
+        self,
+        volume: int,
+        fd: float,
+        dvars: float,
+        tsnr: float,
+        slice_b64: str | None,
+    ):
+        """Handle real-time QC data from CollectionQCMonitor during collection.
+
+        Args:
+            volume: Volume number (1-based)
+            fd: Framewise displacement in mm
+            dvars: DVARS value
+            tsnr: Running tSNR estimate
+            slice_b64: Base64 PNG data URI for brain slice (or None)
+        """
+
+        async def update_ui():
+            try:
+                # Update FD plot
+                if hasattr(self, "fd_plot") and self.fd_plot and fd == fd:  # skip NaN
+                    self.fd_plot.add_data(volume, fd)
+
+                # Update DVARS plot
+                if hasattr(self, "dvars_plot") and self.dvars_plot and dvars is not None:
+                    self.dvars_plot.add_data(volume, dvars)
+
+                # Update tSNR plot
+                if hasattr(self, "tsnr_plot") and self.tsnr_plot and tsnr is not None and tsnr > 0:
+                    self.tsnr_plot.add_data(volume, tsnr)
+
+                # Update brain slice image
+                if slice_b64 and hasattr(self, "_slice_image") and self._slice_image is not None:
+                    self._slice_image.src = slice_b64
+                    self._slice_image.visible = True
+                    self._slice_image.update()
+                    if hasattr(self, "_slice_placeholder") and self._slice_placeholder is not None:
+                        self._slice_placeholder.visible = False
+                        self._slice_placeholder.update()
+
+            except Exception as e:
+                logger.error(f"Error updating collection QC UI: {e}")
+
+        with contextlib.suppress(Exception):
+            self.page.run_task(update_ui)
 
     def _start_feedback_monitoring(self, step_id: str):
         """Start monitoring feedback log file for real-time updates.

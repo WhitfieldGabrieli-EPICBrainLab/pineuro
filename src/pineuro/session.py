@@ -86,6 +86,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .tasks.session import SessionState
 
 logger = logging.getLogger(__name__)
@@ -1484,6 +1486,8 @@ def run_dicom_collection(
     n_volumes_list: list[int] | None = None,
     start_run: int | None = None,
     max_runs: int | None = None,
+    qc_log_dir: Path | None = None,
+    qc_callback: Callable | None = None,
 ) -> list[Path]:
     """Collect DICOMs for a task (rest, reference, etc.) using scanner or simulator.
 
@@ -1504,6 +1508,12 @@ def run_dicom_collection(
         Explicit starting run number. If None, uses next available
     max_runs : int, optional
         Maximum run number to collect (inclusive)
+    qc_log_dir : Path, optional
+        Directory for QC log files. If provided, real-time QC metrics
+        (FD, DVARS, tSNR) are computed during collection.
+    qc_callback : callable, optional
+        ``(volume, fd, dvars, tsnr, slice_b64) -> None``
+        Called after each volume with QC data for GUI display.
 
     Returns
     -------
@@ -1563,6 +1573,19 @@ def run_dicom_collection(
                 collected_folders.append(output_dir)
                 continue
 
+        # Create QC monitor if log dir provided
+        qc_mon = None
+        if qc_log_dir is not None:
+            from .collection_qc import CollectionQCMonitor
+
+            qc_log_path = qc_log_dir / f"{task_name}_acq-{acq:02d}_run-{run_num:02d}_collectionlog.tsv"
+            motion_mode = getattr(config.scan, "motion_correction", "siemens_moco")
+            qc_mon = CollectionQCMonitor(
+                log_path=qc_log_path,
+                motion_correction=motion_mode,
+                on_qc_data=qc_callback,
+            )
+
         if use_simulator:
             watch_dir = collection_dir / "incoming"
             volume_folder = collect_volumes(
@@ -1574,6 +1597,7 @@ def run_dicom_collection(
                 clear_output_dir=True,
                 simulator_source_dir=source_dir,
                 simulator_speed=config.scan.collection_speed,
+                qc_monitor=qc_mon,
             )
         else:
             watch_dir = collection_dir / "incoming"
@@ -1584,6 +1608,7 @@ def run_dicom_collection(
                 timeout=600.0,
                 clear_watch_dir=True,
                 clear_output_dir=True,
+                qc_monitor=qc_mon,
             )
 
         collected_folders.append(volume_folder)

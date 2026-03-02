@@ -47,6 +47,7 @@ class PipelineRunner:
         on_complete: Callable[[bool, str | None], None] | None = None,
         on_error: Callable[[Exception], None] | None = None,
         on_collection_progress: Callable[[int, int, float, Path], None] | None = None,
+        on_qc_data: Callable[[int, float, float, float, str | None], None] | None = None,
     ):
         """Initialize pipeline runner.
 
@@ -58,6 +59,8 @@ class PipelineRunner:
             on_error: Callback when step fails (exception)
             on_collection_progress: Callback for DICOM collection progress
                 (volumes_collected, n_volumes, elapsed_time, dicom_path)
+            on_qc_data: Callback for real-time QC data during collection
+                (volume, fd, dvars, tsnr, slice_b64)
         """
         self.config = config
         self.participant_id = participant_id
@@ -65,6 +68,7 @@ class PipelineRunner:
         self.on_complete = on_complete
         self.on_error = on_error
         self.on_collection_progress = on_collection_progress
+        self.on_qc_data = on_qc_data
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -498,6 +502,19 @@ class PipelineRunner:
             task_done_event=task_done_event,
         )
 
+        # Create QC monitor for real-time FD/DVARS/tSNR during collection
+        qc_mon = None
+        if self.on_qc_data is not None:
+            from pineuro.collection_qc import CollectionQCMonitor
+
+            qc_log_path = output_dir / "collectionlog.tsv"
+            motion_mode = config["scan"].get("motion_correction", "siemens_moco")
+            qc_mon = CollectionQCMonitor(
+                log_path=qc_log_path,
+                motion_correction=motion_mode,
+                on_qc_data=self.on_qc_data,
+            )
+
         # collect_dicoms just watches the directory - no simulator
         # (simulator is controlled by the task for synchronization)
         # Timeout must exceed the expected run duration (n_volumes * TR) plus buffer
@@ -517,6 +534,7 @@ class PipelineRunner:
             trigger_event=trigger_event,
             task_done_event=task_done_event,
             timeout=collection_timeout,
+            qc_monitor=qc_mon,
         )
 
         # Report actual collected count (may be less than n_volumes for
