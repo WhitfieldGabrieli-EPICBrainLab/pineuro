@@ -29,9 +29,7 @@ logger = logging.getLogger(__name__)
 HEAD_RADIUS_MM = 50.0
 
 # Regex for Siemens MoCo motion parameters in DICOM ImageComments
-_MOTION_PATTERN = re.compile(
-    r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)"
-)
+_MOTION_PATTERN = re.compile(r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)")
 
 
 def _compute_fd(
@@ -256,9 +254,7 @@ class CollectionQCMonitor:
                         else:
                             match = _MOTION_PATTERN.search(comments)
                             if match:
-                                motion_params = np.array(
-                                    [float(m) for m in match.groups()], dtype=np.float64
-                                )
+                                motion_params = np.array([float(m) for m in match.groups()], dtype=np.float64)
 
                 # Slice image from 3D data
                 if data.ndim >= 3:
@@ -294,7 +290,9 @@ class CollectionQCMonitor:
         # Write to log
         elapsed = time.monotonic() - self._start_time if self._start_time else 0.0
         if self._csv_writer is not None and self._csv_file is not None:
-            self._csv_writer.writerow([volume_num, f"{elapsed:.3f}", f"{fd:.4f}", f"{dvars_val:.4f}", f"{tsnr_val:.2f}"])
+            self._csv_writer.writerow(
+                [volume_num, f"{elapsed:.3f}", f"{fd:.4f}", f"{dvars_val:.4f}", f"{tsnr_val:.2f}"]
+            )
             self._csv_file.flush()
 
         # Deliver via callback

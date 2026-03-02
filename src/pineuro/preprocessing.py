@@ -1389,16 +1389,12 @@ def collect_volumes(
                     if retries >= MAX_RETRIES:
                         # Give up — file is truly corrupt or not a volume
                         processed_files.add(key)
-                        logger.warning(
-                            f"Skipping volume after {retries} failed validations: "
-                            f"{file_path.name}"
-                        )
+                        logger.warning(f"Skipping volume after {retries} failed validations: {file_path.name}")
                     else:
                         # Leave out of processed_files so scan_for_existing_files
                         # will re-queue it for another attempt
                         logger.debug(
-                            f"Validation failed for {file_path.name} "
-                            f"(attempt {retries}/{MAX_RETRIES}), will retry"
+                            f"Validation failed for {file_path.name} (attempt {retries}/{MAX_RETRIES}), will retry"
                         )
 
             return None

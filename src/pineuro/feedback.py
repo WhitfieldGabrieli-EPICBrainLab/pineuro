@@ -3054,10 +3054,7 @@ class NeurofeedbackCoordinator:
                     self._retry_counts[key] = retries
                     if retries >= self._MAX_RETRIES:
                         self._processed_files.add(key)
-                        logger.warning(
-                            f"Skipping volume after {retries} failed validations: "
-                            f"{file_path.name}"
-                        )
+                        logger.warning(f"Skipping volume after {retries} failed validations: {file_path.name}")
                     else:
                         logger.debug(
                             f"Validation failed for {file_path.name} "
