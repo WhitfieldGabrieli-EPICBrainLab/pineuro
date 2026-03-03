@@ -1979,7 +1979,10 @@ class ParticipantWorkflowScreen:
                     for run_num in range(1, loc_n_runs + 1):
                         step_id = f"localizer_{loc_idx}_run_{run_num}"
                         status = self._check_acq_collection_status(
-                            collection_dir, f"task-{loc_task_name}", run_num, loc_n_vols,
+                            collection_dir,
+                            f"task-{loc_task_name}",
+                            run_num,
+                            loc_n_vols,
                         )
                         self.step_statuses[step_id] = status
 
@@ -2010,7 +2013,10 @@ class ParticipantWorkflowScreen:
                 for run_num in range(1, n_localizer_runs + 1):
                     step_id = f"rest_run_{run_num}"
                     status = self._check_acq_collection_status(
-                        collection_dir, f"task-{loc_task_name}", run_num, expected_vols,
+                        collection_dir,
+                        f"task-{loc_task_name}",
+                        run_num,
+                        expected_vols,
                     )
                     self.step_statuses[step_id] = status
 
@@ -5789,6 +5795,7 @@ class ParticipantWorkflowScreen:
                 else:
                     try:
                         from pineuro.tasks import get_task_metadata
+
                         task_meta = get_task_metadata(loc_type)
                         task_name = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
                     except (ValueError, ImportError):

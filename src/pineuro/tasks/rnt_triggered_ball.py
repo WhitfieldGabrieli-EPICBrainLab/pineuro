@@ -168,8 +168,7 @@ class RNTTriggeredBallTask(BaseTask):
             mask_names = coordinator.mask_names[:3]
         if len(mask_names) < 3:
             raise ValueError(
-                f"RNTTriggeredBallTask requires 3 mask names "
-                f"[trigger, top_ball, bottom_ball], got {len(mask_names)}"
+                f"RNTTriggeredBallTask requires 3 mask names [trigger, top_ball, bottom_ball], got {len(mask_names)}"
             )
 
         super().__init__(
@@ -398,11 +397,7 @@ class RNTTriggeredBallTask(BaseTask):
         if not self.feedback_mode:
             return
 
-        movement_per_second = (
-            self._current_activity
-            * (self.scale_factor / self.internal_scaler)
-            / self.coordinator.tr
-        )
+        movement_per_second = self._current_activity * (self.scale_factor / self.internal_scaler) / self.coordinator.tr
         dy = self._current_direction * movement_per_second * dt
         self._ball_pos[1] += dy
         self._ball.pos = self._ball_pos
@@ -424,10 +419,7 @@ class RNTTriggeredBallTask(BaseTask):
                 self._total_hits[i] += 1
 
                 label = self._ball_mask_names[i]
-                logger.info(
-                    f"Hit! {label} target (episode: {self._episode_hits[i]}, "
-                    f"total: {self._total_hits[i]})"
-                )
+                logger.info(f"Hit! {label} target (episode: {self._episode_hits[i]}, total: {self._total_hits[i]})")
 
                 # Flash circle white
                 self._circles[i].fillColor = "white"
@@ -675,9 +667,7 @@ class RNTTriggeredBallTask(BaseTask):
         if not data.get("is_baseline", True):
             baseline_dur = self._task_clock.getTime() - self._baseline_onset
             self._record_event(self._baseline_onset, baseline_dur, "baseline")
-            self._trigger_state.last_prompt_time = (
-                self._task_clock.getTime() - self.min_prompt_interval
-            )
+            self._trigger_state.last_prompt_time = self._task_clock.getTime() - self.min_prompt_interval
             self._trigger_state.monitoring_start_time = self._task_clock.getTime()
             self._phase = _PHASE_MONITORING
             logger.debug("Baseline complete, entering monitoring phase")
@@ -797,8 +787,7 @@ class RNTTriggeredBallTask(BaseTask):
         self._trigger_state.volume_history.clear()
 
         logger.info(
-            f"Episode #{self._episode_number} complete: "
-            f"hits=[{self._episode_hits[0]}, {self._episode_hits[1]}]"
+            f"Episode #{self._episode_number} complete: hits=[{self._episode_hits[0]}, {self._episode_hits[1]}]"
         )
 
         self._phase = _PHASE_MONITORING
@@ -833,9 +822,7 @@ class RNTTriggeredBallTask(BaseTask):
 
             # Ball
             ball_y = 0.5 - self._ball_pos[1]
-            shapes.append(
-                {"type": "circle", "x": 0.5, "y": ball_y, "radius": 0.03, "fill": "white"}
-            )
+            shapes.append({"type": "circle", "x": 0.5, "y": ball_y, "radius": 0.03, "fill": "white"})
 
             # Hit counter
             hit_text = (

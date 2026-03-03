@@ -988,7 +988,8 @@ class PipelineRunner:
         """
         localizers = self.config.get("localizers")
         if localizers and loc_idx < len(localizers):
-            return localizers[loc_idx]
+            result: dict = localizers[loc_idx]
+            return result
 
         # Legacy fallback: synthesise from mask/scan
         mask_cfg = self.config.get("mask", {})
@@ -1101,7 +1102,9 @@ class PipelineRunner:
         # Select acquisitions
         rest_volumes = [n_volumes] * n_runs
         input_dicoms = self._resolve_acq_paths(
-            task_name=task_name, runs_to_process=runs_to_process, rest_volumes=rest_volumes,
+            task_name=task_name,
+            runs_to_process=runs_to_process,
+            rest_volumes=rest_volumes,
         )
 
         if not input_dicoms:

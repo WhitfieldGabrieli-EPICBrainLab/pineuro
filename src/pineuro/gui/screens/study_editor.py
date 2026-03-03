@@ -1928,12 +1928,14 @@ class StudyEditorScreen:
 
     def _on_add_localizer(self, e):
         """Add a new additional localizer entry."""
-        self._additional_localizers.append({
-            "type": "rest",
-            "tr": 1.2,
-            "n_volumes": 200,
-            "n_runs": 2,
-        })
+        self._additional_localizers.append(
+            {
+                "type": "rest",
+                "tr": 1.2,
+                "n_volumes": 200,
+                "n_runs": 2,
+            }
+        )
         self._rebuild_additional_localizers_ui()
         if hasattr(self, "_additional_localizers_column"):
             self._additional_localizers_column.update()
@@ -1973,34 +1975,47 @@ class StudyEditorScreen:
                 on_select=lambda e, idx=i: self._on_additional_localizer_type_changed(idx, e),
             )
             tr_field = ft.TextField(
-                width=100, label="TR", value=str(loc.get("tr", 1.2)),
+                width=100,
+                label="TR",
+                value=str(loc.get("tr", 1.2)),
                 keyboard_type=ft.KeyboardType.NUMBER,
                 on_change=lambda e, idx=i: self._on_additional_localizer_field_changed(idx, "tr", e),
             )
             vol_field = ft.TextField(
-                width=100, label="Volumes", value=str(loc.get("n_volumes", 200)),
+                width=100,
+                label="Volumes",
+                value=str(loc.get("n_volumes", 200)),
                 keyboard_type=ft.KeyboardType.NUMBER,
                 on_change=lambda e, idx=i: self._on_additional_localizer_field_changed(idx, "n_volumes", e),
             )
             runs_field = ft.TextField(
-                width=100, label="Runs", value=str(loc.get("n_runs", 2)),
+                width=100,
+                label="Runs",
+                value=str(loc.get("n_runs", 2)),
                 keyboard_type=ft.KeyboardType.NUMBER,
                 on_change=lambda e, idx=i: self._on_additional_localizer_field_changed(idx, "n_runs", e),
             )
             remove_btn = ft.IconButton(
-                icon=ft.Icons.DELETE, icon_color=ft.Colors.RED_400, tooltip="Remove",
+                icon=ft.Icons.DELETE,
+                icon_color=ft.Colors.RED_400,
+                tooltip="Remove",
                 on_click=lambda e, idx=i: self._on_remove_localizer(idx),
             )
 
             card = ft.Card(
                 content=ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Text(f"Localizer {display_idx + 1}", size=14, weight=ft.FontWeight.BOLD),
-                            remove_btn,
-                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                        ft.Row([type_dropdown, tr_field, vol_field, runs_field]),
-                    ]),
+                    content=ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Text(f"Localizer {display_idx + 1}", size=14, weight=ft.FontWeight.BOLD),
+                                    remove_btn,
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            ),
+                            ft.Row([type_dropdown, tr_field, vol_field, runs_field]),
+                        ]
+                    ),
                     padding=10,
                 ),
             )

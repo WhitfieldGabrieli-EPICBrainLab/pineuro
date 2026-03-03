@@ -1180,8 +1180,14 @@ class SessionConfig:
             localizers = _convert_legacy_localizer_config(scan, mask)
 
         config = cls(
-            paths=paths, scan=scan, mask=mask, feedback=feedback,
-            task=task, visit=visit, sham=sham, localizers=localizers,
+            paths=paths,
+            scan=scan,
+            mask=mask,
+            feedback=feedback,
+            task=task,
+            visit=visit,
+            sham=sham,
+            localizers=localizers,
         )
         config.derive_combined_mask_names()
         return config
@@ -2412,13 +2418,22 @@ def setup_session(
 
             # Preprocessing (shared preprocessing_dir, files differentiated by task_name)
             preproc_file, mask_file, ref_file = run_preprocessing(
-                config, rest_dicoms=loc_dicoms, overwrite=overwrite, task_name=localizer.task_name,
+                config,
+                rest_dicoms=loc_dicoms,
+                overwrite=overwrite,
+                task_name=localizer.task_name,
             )
             last_ref_file = ref_file
 
             # Mask extraction (each localizer gets its own subdirectory)
             network_files = run_localizer_extraction(
-                config, localizer, i, preproc_file, mask_file, ref_file, overwrite,
+                config,
+                localizer,
+                i,
+                preproc_file,
+                mask_file,
+                ref_file,
+                overwrite,
             )
             all_network_files.extend(network_files)
 
@@ -2436,9 +2451,7 @@ def setup_session(
             # Try to find MNI inverse transforms from any localizer's extraction
             for j in range(len(config.localizers)):
                 loc_mnireg = (
-                    config.paths.mask_extraction_dir
-                    / f"loc_{j}_{config.localizers[j].task_name}"
-                    / "02_mnireg"
+                    config.paths.mask_extraction_dir / f"loc_{j}_{config.localizers[j].task_name}" / "02_mnireg"
                 )
                 if loc_mnireg.exists():
                     inv_files = sorted(loc_mnireg.glob("*_inv_*"))
@@ -2457,8 +2470,11 @@ def setup_session(
 
         # Coregistration (all masks together)
         coreg_mask_files = run_coregistration(
-            config, all_network_files, last_ref_file,
-            reference_dicom_dir=initial_reference[0], overwrite=overwrite,
+            config,
+            all_network_files,
+            last_ref_file,
+            reference_dicom_dir=initial_reference[0],
+            overwrite=overwrite,
         )
     else:
         # Legacy single-localizer path (no localizers list configured)
@@ -2478,13 +2494,18 @@ def setup_session(
             )
 
         preproc_file, mask_file, ref_file = run_preprocessing(
-            config, rest_dicoms=rest_dicoms, overwrite=overwrite,
+            config,
+            rest_dicoms=rest_dicoms,
+            overwrite=overwrite,
         )
         network_files = run_mask_extraction(config, preproc_file, mask_file, ref_file, overwrite)
 
         coreg_mask_files = run_coregistration(
-            config, network_files, ref_file,
-            reference_dicom_dir=initial_reference[0], overwrite=overwrite,
+            config,
+            network_files,
+            ref_file,
+            reference_dicom_dir=initial_reference[0],
+            overwrite=overwrite,
         )
 
     logger.info("")
