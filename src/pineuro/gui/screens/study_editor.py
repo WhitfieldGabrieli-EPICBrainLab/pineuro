@@ -77,6 +77,13 @@ class StudyEditorScreen:
         # Dynamic localizer task parameter fields
         self.localizer_task_param_fields: dict[str, ft.Control] = {}
 
+        # Multi-localizer support: additional localizer configs (beyond primary)
+        self._additional_localizers: list[dict] = []
+        # Restore additional localizers from existing config
+        existing_localizers = self.study_config.session_config.get("localizers", [])
+        if len(existing_localizers) > 1:
+            self._additional_localizers = list(existing_localizers[1:])
+
         # Create form fields
         self._create_form_fields()
 
@@ -1915,6 +1922,117 @@ class StudyEditorScreen:
                 row.visible = i < n_runs
                 row.update()
 
+    # ------------------------------------------------------------------
+    # Additional localizers UI
+    # ------------------------------------------------------------------
+
+    def _on_add_localizer(self, e):
+        """Add a new additional localizer entry."""
+        self._additional_localizers.append({
+            "type": "rest",
+            "tr": 1.2,
+            "n_volumes": 200,
+            "n_runs": 2,
+        })
+        self._rebuild_additional_localizers_ui()
+        if hasattr(self, "_additional_localizers_column"):
+            self._additional_localizers_column.update()
+
+    def _on_remove_localizer(self, idx: int):
+        """Remove an additional localizer by index."""
+        if 0 <= idx < len(self._additional_localizers):
+            self._additional_localizers.pop(idx)
+            self._rebuild_additional_localizers_ui()
+            if hasattr(self, "_additional_localizers_column"):
+                self._additional_localizers_column.update()
+
+    def _rebuild_additional_localizers_ui(self):
+        """Rebuild the additional localizers column from current state."""
+        if not hasattr(self, "_additional_localizers_column"):
+            return
+
+        controls = []
+        for i, loc in enumerate(self._additional_localizers):
+            loc_type = loc.get("type", "rest")
+            display_idx = i + 1  # 1-indexed for display (primary is "0")
+
+            # Build task type options
+            available_tasks = list_available_tasks(role="localizer")
+            type_options = [ft.dropdown.Option(key="rest", text="Rest (ICA)")]
+            type_options.extend(
+                ft.dropdown.Option(key=tid, text=f"{m.display_name} (GLM)")
+                for tid, m in available_tasks.items()
+                if m.default_contrasts
+            )
+
+            type_dropdown = ft.Dropdown(
+                width=300,
+                label="Type",
+                options=type_options,
+                value=loc_type,
+                on_select=lambda e, idx=i: self._on_additional_localizer_type_changed(idx, e),
+            )
+            tr_field = ft.TextField(
+                width=100, label="TR", value=str(loc.get("tr", 1.2)),
+                keyboard_type=ft.KeyboardType.NUMBER,
+                on_change=lambda e, idx=i: self._on_additional_localizer_field_changed(idx, "tr", e),
+            )
+            vol_field = ft.TextField(
+                width=100, label="Volumes", value=str(loc.get("n_volumes", 200)),
+                keyboard_type=ft.KeyboardType.NUMBER,
+                on_change=lambda e, idx=i: self._on_additional_localizer_field_changed(idx, "n_volumes", e),
+            )
+            runs_field = ft.TextField(
+                width=100, label="Runs", value=str(loc.get("n_runs", 2)),
+                keyboard_type=ft.KeyboardType.NUMBER,
+                on_change=lambda e, idx=i: self._on_additional_localizer_field_changed(idx, "n_runs", e),
+            )
+            remove_btn = ft.IconButton(
+                icon=ft.Icons.DELETE, icon_color=ft.Colors.RED_400, tooltip="Remove",
+                on_click=lambda e, idx=i: self._on_remove_localizer(idx),
+            )
+
+            card = ft.Card(
+                content=ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Text(f"Localizer {display_idx + 1}", size=14, weight=ft.FontWeight.BOLD),
+                            remove_btn,
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([type_dropdown, tr_field, vol_field, runs_field]),
+                    ]),
+                    padding=10,
+                ),
+            )
+            controls.append(card)
+
+        self._additional_localizers_column.controls = controls
+
+    def _on_additional_localizer_type_changed(self, idx: int, e):
+        """Handle type change for an additional localizer."""
+        if 0 <= idx < len(self._additional_localizers):
+            new_type = e.control.value
+            self._additional_localizers[idx]["type"] = new_type
+            # Set default contrasts for task localizers
+            if new_type != "rest":
+                try:
+                    metadata = get_task_metadata(new_type)
+                    if metadata.default_contrasts:
+                        self._additional_localizers[idx]["contrasts"] = dict(metadata.default_contrasts)
+                except (ValueError, KeyError):
+                    pass
+
+    def _on_additional_localizer_field_changed(self, idx: int, field: str, e):
+        """Handle field change for an additional localizer."""
+        if 0 <= idx < len(self._additional_localizers):
+            try:
+                if field == "tr":
+                    self._additional_localizers[idx][field] = float(e.control.value or 1.2)
+                elif field in ("n_volumes", "n_runs"):
+                    self._additional_localizers[idx][field] = int(e.control.value or 200)
+            except (ValueError, TypeError):
+                pass
+
     def _on_reference_initial_enabled_changed(self, e):
         """Handle reference initial enable checkbox change - update paths tab."""
         enabled = self.reference_initial_enabled_checkbox.value
@@ -2439,6 +2557,33 @@ class StudyEditorScreen:
             localizer_task_params,
         )
 
+        # Additional localizers section
+        self._additional_localizers_column = ft.Column([])
+        self._rebuild_additional_localizers_ui()
+
+        additional_localizers_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Divider(),
+                    ft.Text("Additional Localizers", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Add extra localizers to extract masks from multiple sources "
+                        "(e.g., rest ICA + task GLM). Each localizer has its own scan and extraction settings.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self._additional_localizers_column,
+                    ft.ElevatedButton(
+                        "Add Localizer",
+                        icon=ft.Icons.ADD,
+                        on_click=self._on_add_localizer,
+                    ),
+                    ft.Divider(),
+                ]
+            ),
+        )
+
         return ft.Container(
             content=ft.Column(
                 [
@@ -2457,6 +2602,7 @@ class StudyEditorScreen:
                     self.networks_section,
                     self.localizer_task_params_section,
                     self.include_reverse_contrasts_checkbox,
+                    additional_localizers_section,
                     ft.Text("Mask Extraction", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text(
                         "Configure how network masks are extracted from the stat maps.",
@@ -3405,6 +3551,51 @@ class StudyEditorScreen:
                 selected_networks.append(self.second_network_dropdown.value)
         config["mask"]["yeo_targets"] = selected_networks
         config["mask"]["mask_names"] = selected_networks
+
+        # Build localizers list if additional localizers are configured
+        if self._additional_localizers:
+            # Primary localizer from existing fields
+            primary_loc: dict = {
+                "type": config["scan"].get("localizer_task_type", "rest"),
+                "tr": config["scan"].get("localizer_tr", 1.2),
+                "n_volumes": config["scan"].get("localizer_n_volumes", 200),
+                "n_runs": config["scan"].get("localizer_n_runs", 2),
+                "source_dicoms": config["scan"].get("localizer_source_dicoms", []),
+                "threshold": config["mask"].get("threshold", 2000),
+                "threshold_method": config["mask"].get("threshold_method", "top_n"),
+                "smooth_fwhm": config["mask"].get("smooth_fwhm", 5.0),
+                "highpass": config["mask"].get("highpass", 0.01),
+            }
+            prim_type = primary_loc["type"]
+            if prim_type == "rest":
+                primary_loc["n_yeo"] = config["mask"].get("n_yeo", 17)
+                primary_loc["yeo_targets"] = list(config["mask"].get("yeo_targets", ["DefaultA", "ContA"]))
+                primary_loc["network_atlas"] = config["mask"].get("network_atlas", "yeo_17")
+                primary_loc["lowpass"] = config["mask"].get("lowpass")
+            else:
+                primary_loc["contrasts"] = config["mask"].get("contrasts", {})
+                primary_loc["include_reverse_contrasts"] = config["mask"].get("include_reverse_contrasts", False)
+                primary_loc["stat_type"] = config["mask"].get("stat_type", "t")
+                primary_loc["hrf_model"] = config["mask"].get("hrf_model", "spm")
+                primary_loc["drift_model"] = config["mask"].get("drift_model", "cosine")
+
+            config["localizers"] = [primary_loc] + list(self._additional_localizers)
+
+            # Update mask_names to include all localizer masks
+            all_mask_names = list(selected_networks)
+            for loc in self._additional_localizers:
+                loc_type = loc.get("type", "rest")
+                if loc_type == "rest":
+                    all_mask_names.extend(loc.get("yeo_targets", ["DefaultA", "ContA"]))
+                else:
+                    loc_contrasts = loc.get("contrasts", {})
+                    all_mask_names.extend(loc_contrasts.keys())
+                    if loc.get("include_reverse_contrasts", False):
+                        all_mask_names.extend(f"{k}_reverse" for k in loc_contrasts)
+            config["mask"]["mask_names"] = all_mask_names
+        else:
+            # No additional localizers - remove localizers list if present
+            config.pop("localizers", None)
 
         # Update task config with validation
         task_type = self.task_type_dropdown.value

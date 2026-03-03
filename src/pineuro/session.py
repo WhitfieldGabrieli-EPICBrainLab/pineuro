@@ -480,6 +480,131 @@ class PathConfig:
 
 
 @dataclass
+class LocalizerConfig:
+    """Configuration for a single localizer run.
+
+    Each localizer defines its type (rest or a registered task ID), scan
+    parameters, and extraction settings. A session can have multiple
+    localizers (e.g., one rest + one task), each producing its own masks.
+
+    Parameters
+    ----------
+    type : str
+        ``"rest"`` for ICA-based extraction, or a registered task ID
+        (e.g. ``"rnt"``) for GLM-based extraction.
+    tr : float
+        Repetition time in seconds for this localizer.
+    n_volumes : int
+        Number of volumes per run.
+    n_runs : int
+        Number of runs for this localizer.
+    source_dicoms : list[Path]
+        DICOM source folders (for simulator).
+    n_yeo : int
+        Number of Yeo networks (7 or 17). Rest only.
+    yeo_targets : list[str]
+        Target network names to extract. Rest only.
+    network_atlas : str
+        Network atlas for ICA component identification. Rest only.
+    smooth_fwhm : float
+        Spatial smoothing FWHM in mm.
+    highpass : float
+        High-pass filter cutoff in Hz.
+    lowpass : float or None
+        Low-pass filter cutoff in Hz. Rest only.
+    contrasts : dict[str, str]
+        Contrast expressions for task extraction. Task only.
+    include_reverse_contrasts : bool
+        Generate reverse (negated) masks for each contrast. Task only.
+    events_file : Path or None
+        BIDS events file for task extraction. Task only.
+    stat_type : str
+        Statistical map type (``"t"`` or ``"z"``). Task only.
+    hrf_model : str
+        HRF model for task extraction. Task only.
+    drift_model : str
+        Drift model for task extraction. Task only.
+    threshold : int
+        Number of voxels per mask.
+    threshold_method : str
+        ``"top_n"`` or ``"cluster"``.
+    atlas_mask : str or None
+        Binary atlas NIfTI path for cluster thresholding.
+    atlas_name : str or None
+        Curated atlas entry name for cluster thresholding.
+    atlas_source : str or None
+        Atlas source key for cluster thresholding.
+    atlas_regions : list[str] or None
+        Region labels for cluster mask.
+    cluster_start_threshold : float
+        Starting stat threshold for cluster search.
+    cluster_step : float
+        Threshold increment per iteration.
+    """
+
+    type: str = "rest"
+
+    # Scan parameters
+    tr: float = 1.2
+    n_volumes: int = 200
+    n_runs: int = 2
+    source_dicoms: list[Path] = field(default_factory=list)
+
+    # Rest-specific (ICA)
+    n_yeo: int = 17
+    yeo_targets: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
+    network_atlas: str = "yeo_17"
+    smooth_fwhm: float = 5.0
+    highpass: float = 0.01
+    lowpass: float | None = None
+
+    # Task-specific (GLM)
+    contrasts: dict[str, str] = field(default_factory=dict)
+    include_reverse_contrasts: bool = False
+    events_file: Path | None = None
+    stat_type: str = "t"
+    hrf_model: str = "spm"
+    drift_model: str = "cosine"
+
+    # Mask extraction (shared)
+    threshold: int = 2000
+    threshold_method: str = "top_n"
+    atlas_mask: str | None = None
+    atlas_name: str | None = None
+    atlas_source: str | None = None
+    atlas_regions: list[str] | None = None
+    cluster_start_threshold: float = 2.0
+    cluster_step: float = 0.1
+
+    @property
+    def is_rest(self) -> bool:
+        """Whether this is a resting-state localizer."""
+        return self.type == "rest"
+
+    @property
+    def task_name(self) -> str:
+        """Name used for file naming and directory structure."""
+        return "rest" if self.is_rest else self.type
+
+    @property
+    def mask_names(self) -> list[str]:
+        """Mask names this localizer produces."""
+        if self.is_rest:
+            return list(self.yeo_targets)
+        names = list(self.contrasts.keys())
+        if self.include_reverse_contrasts:
+            names += [f"{k}_reverse" for k in self.contrasts]
+        return names
+
+    def __post_init__(self) -> None:
+        self.source_dicoms = [Path(p) for p in self.source_dicoms]
+        if self.events_file is not None:
+            self.events_file = Path(self.events_file)
+        if self.type != "rest" and not self.contrasts:
+            raise ValueError(f"contrasts must be provided for task localizer type='{self.type}'")
+
+
+@dataclass
 class ScanConfig:
     """Scanner/acquisition parameters.
 
@@ -906,6 +1031,51 @@ class SelectedAcquisitions:
             self.feedback = {}
 
 
+def _convert_legacy_localizer_config(scan: ScanConfig, mask: MaskConfig) -> list[LocalizerConfig]:
+    """Convert old-style single-localizer config to a ``localizers`` list.
+
+    Called when loading configs that lack a ``localizers`` key. Builds a
+    single-element list from the existing ``MaskConfig`` and ``ScanConfig``
+    fields. Returns an empty list for manual-import configs (no localizer).
+    """
+    if mask.localizer_type == "manual":
+        return []
+
+    loc_type = "rest" if mask.localizer_type == "rest" else scan.localizer_task_type
+
+    loc = LocalizerConfig(
+        type=loc_type,
+        tr=scan.localizer_tr,
+        n_volumes=scan.localizer_n_volumes,
+        n_runs=scan.localizer_n_runs,
+        source_dicoms=list(scan.localizer_source_dicoms),
+        # Rest-specific
+        n_yeo=mask.n_yeo,
+        yeo_targets=list(mask.yeo_targets),
+        network_atlas=mask.network_atlas,
+        smooth_fwhm=mask.smooth_fwhm,
+        highpass=mask.highpass,
+        lowpass=mask.lowpass,
+        # Task-specific
+        contrasts=dict(mask.contrasts),
+        include_reverse_contrasts=mask.include_reverse_contrasts,
+        events_file=mask.events_file,
+        stat_type=mask.stat_type,
+        hrf_model=mask.hrf_model,
+        drift_model=mask.drift_model,
+        # Shared
+        threshold=mask.threshold,
+        threshold_method=mask.threshold_method,
+        atlas_mask=mask.atlas_mask,
+        atlas_name=mask.atlas_name,
+        atlas_source=mask.atlas_source,
+        atlas_regions=mask.atlas_regions,
+        cluster_start_threshold=mask.cluster_start_threshold,
+        cluster_step=mask.cluster_step,
+    )
+    return [loc]
+
+
 @dataclass
 class SessionConfig:
     """Top-level configuration combining all session settings.
@@ -957,6 +1127,7 @@ class SessionConfig:
     task: TaskConfig = field(default_factory=TaskConfig)
     visit: VisitConfig | None = None
     sham: ShamConfig | None = None
+    localizers: list[LocalizerConfig] = field(default_factory=list)
 
     @classmethod
     def from_yaml(cls, path: Path) -> SessionConfig:
@@ -1001,7 +1172,19 @@ class SessionConfig:
         sham_data = data.get("sham")
         sham = ShamConfig(**sham_data) if sham_data else None
 
-        return cls(paths=paths, scan=scan, mask=mask, feedback=feedback, task=task, visit=visit, sham=sham)
+        # Parse localizers list, or convert from legacy single-localizer config
+        localizers_data = data.get("localizers")
+        if localizers_data is not None:
+            localizers = [LocalizerConfig(**loc_data) for loc_data in localizers_data]
+        else:
+            localizers = _convert_legacy_localizer_config(scan, mask)
+
+        config = cls(
+            paths=paths, scan=scan, mask=mask, feedback=feedback,
+            task=task, visit=visit, sham=sham, localizers=localizers,
+        )
+        config.derive_combined_mask_names()
+        return config
 
     def to_yaml(self, path: Path) -> None:
         """Save configuration to YAML file."""
@@ -1033,7 +1216,23 @@ class SessionConfig:
             result["visit"] = asdict(self.visit)
         if self.sham is not None:
             result["sham"] = _path_to_str(asdict(self.sham))
+        if self.localizers:
+            result["localizers"] = [_path_to_str(asdict(loc)) for loc in self.localizers]
         return result
+
+    def derive_combined_mask_names(self) -> None:
+        """Set ``mask.mask_names`` from the union of all localizer mask names.
+
+        Called automatically when loading from dict/YAML/JSON. When building
+        configs programmatically with a ``localizers`` list, call this after
+        construction to keep ``mask.mask_names`` in sync.
+        """
+        if not self.localizers:
+            return  # keep existing mask.mask_names (manual import or legacy)
+        combined: list[str] = []
+        for loc in self.localizers:
+            combined.extend(loc.mask_names)
+        self.mask.mask_names = combined
 
     def validate(self) -> list[str]:
         """Validate configuration, returning list of error messages.
@@ -1619,9 +1818,12 @@ def run_dicom_collection(
 
 
 def run_preprocessing(
-    config: SessionConfig, rest_dicoms: list[Path] | None = None, overwrite: bool = False
+    config: SessionConfig,
+    rest_dicoms: list[Path] | None = None,
+    overwrite: bool = False,
+    task_name: str | None = None,
 ) -> tuple[Path, Path, Path]:
-    """Run preprocessing on rest scan.
+    """Run preprocessing on localizer scan.
 
     Parameters
     ----------
@@ -1631,6 +1833,9 @@ def run_preprocessing(
         Paths to DICOM folders. If None, resolved from config
     overwrite : bool
         If True, rerun preprocessing even if outputs exist
+    task_name : str, optional
+        Explicit task name for output file naming (e.g. ``"rest"``,
+        ``"rnt"``). If None, inferred from ``config.scan.localizer_task_type``.
 
     Returns
     -------
@@ -1647,8 +1852,9 @@ def run_preprocessing(
     if rest_dicoms is None:
         rest_dicoms = config.resolve_localizer_sources()
 
-    task_type = config.scan.localizer_task_type
-    task_name = task_type if task_type != "rest" else "rest"
+    if task_name is None:
+        task_type = config.scan.localizer_task_type
+        task_name = task_type if task_type != "rest" else "rest"
 
     return preprocessing(
         participant_id=config.paths.participant_id,
@@ -1736,6 +1942,7 @@ def run_mask_extraction(
             high_pass=config.mask.highpass,
             drift_model=config.mask.drift_model,
             hrf_model=config.mask.hrf_model,
+            include_reverse=config.mask.include_reverse_contrasts,
             overwrite=overwrite,
         )
     else:
@@ -1786,6 +1993,111 @@ def run_mask_extraction(
         )
 
     return network_files
+
+
+def run_localizer_extraction(
+    config: SessionConfig,
+    localizer: LocalizerConfig,
+    loc_index: int,
+    preproc_file: Path,
+    mask_file: Path,
+    ref_file: Path,
+    overwrite: bool = False,
+) -> list[Path]:
+    """Run mask extraction for a single localizer.
+
+    Each localizer gets its own subdirectory under ``mask_extraction/`` to
+    avoid file collisions. The resulting thresholded masks are also copied
+    into the shared ``03_masks/`` directory so that :func:`resolve_mask_source`
+    can find them.
+
+    Parameters
+    ----------
+    config : SessionConfig
+        Session configuration
+    localizer : LocalizerConfig
+        Configuration for this localizer
+    loc_index : int
+        Index of this localizer (for directory naming)
+    preproc_file : Path
+        Preprocessed 4D NIfTI file
+    mask_file : Path
+        Brain mask file
+    ref_file : Path
+        BOLD reference file
+    overwrite : bool
+        If True, rerun even if outputs exist
+
+    Returns
+    -------
+    list[Path]
+        Paths to thresholded network mask files (in the shared 03_masks dir)
+    """
+    assert config.paths.mask_extraction_dir is not None
+    loc_dir = config.paths.mask_extraction_dir / f"loc_{loc_index}_{localizer.task_name}"
+
+    logger.info("")
+    logger.info(f"--- Localizer {loc_index}: {localizer.task_name} ({localizer.type}) ---")
+
+    if localizer.is_rest:
+        from .mask_extraction import mask_extraction_rest
+
+        logger.info("Using ICA-based (resting-state) mask extraction")
+        network_files = mask_extraction_rest(
+            participant_id=config.paths.participant_id,
+            root_dir=str(loc_dir),
+            input_file=preproc_file,
+            mask_file=mask_file,
+            ref_file=ref_file,
+            n_yeo=localizer.n_yeo,
+            yeo_targets=localizer.yeo_targets,
+            network_atlas=localizer.network_atlas,
+            smooth_fwhm=localizer.smooth_fwhm,
+            highpass=localizer.highpass,
+            lowpass=localizer.lowpass,
+            overwrite=overwrite,
+        )
+    else:
+        from .mask_extraction import mask_extraction_task
+
+        logger.info("Using task-based (GLM) mask extraction")
+        network_files = mask_extraction_task(
+            participant_id=config.paths.participant_id,
+            root_dir=str(loc_dir),
+            input_file=preproc_file,
+            mask_file=mask_file,
+            events=localizer.events_file,
+            contrasts=localizer.contrasts,
+            tr=localizer.tr,
+            threshold=localizer.threshold,
+            threshold_method=localizer.threshold_method,
+            atlas_mask=localizer.atlas_mask,
+            atlas_name=localizer.atlas_name,
+            atlas_source=localizer.atlas_source,
+            atlas_regions=localizer.atlas_regions,
+            ref_file=ref_file,
+            cluster_start_threshold=localizer.cluster_start_threshold,
+            cluster_step=localizer.cluster_step,
+            stat_type=localizer.stat_type,
+            smoothing_fwhm=localizer.smooth_fwhm,
+            high_pass=localizer.highpass,
+            drift_model=localizer.drift_model,
+            hrf_model=localizer.hrf_model,
+            include_reverse=localizer.include_reverse_contrasts,
+            overwrite=overwrite,
+        )
+
+    # Copy masks to shared 03_masks/ so resolve_mask_source() finds them
+    shared_mask_dir = config.paths.mask_extraction_dir / "03_masks"
+    shared_mask_dir.mkdir(parents=True, exist_ok=True)
+    shared_files = []
+    for f in network_files:
+        dest = shared_mask_dir / f.name
+        shutil.copy2(f, dest)
+        shared_files.append(dest)
+        logger.info(f"  Copied {f.name} -> 03_masks/")
+
+    return shared_files
 
 
 def run_coregistration(
@@ -2070,32 +2382,110 @@ def setup_session(
             max_runs=config.scan.reference_max_runs,
         )
 
-    # Step 1: Resting-state collection
-    localizer_sources = config.resolve_localizer_sources()
-    if skip_collection:
-        logger.info("Skipping resting-state collection (using source DICOMs directly)")
-        rest_dicoms = localizer_sources
-    else:
-        rest_dicoms = run_dicom_collection(
-            config,
-            use_simulator=use_simulator,
-            task_name="rest",
-            source_dirs=localizer_sources,
-            n_volumes_list=config.scan.rest_n_volumes,
-            start_run=1,
-            max_runs=config.scan.rest_max_runs,
+    # Multi-localizer pipeline: collect, preprocess, extract for each localizer
+    if config.localizers:
+        all_network_files: list[Path] = []
+        last_ref_file: Path | None = None
+
+        for i, localizer in enumerate(config.localizers):
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info(f"LOCALIZER {i}: {localizer.task_name} ({localizer.type})")
+            logger.info("=" * 60)
+
+            # Collection
+            loc_sources = list(localizer.source_dicoms)
+            n_volumes_list = [localizer.n_volumes] * localizer.n_runs
+            if skip_collection:
+                logger.info(f"Skipping {localizer.task_name} collection (using source DICOMs directly)")
+                loc_dicoms = loc_sources
+            else:
+                loc_dicoms = run_dicom_collection(
+                    config,
+                    use_simulator=use_simulator,
+                    task_name=localizer.task_name,
+                    source_dirs=loc_sources,
+                    n_volumes_list=n_volumes_list,
+                    start_run=1,
+                    max_runs=localizer.n_runs,
+                )
+
+            # Preprocessing (shared preprocessing_dir, files differentiated by task_name)
+            preproc_file, mask_file, ref_file = run_preprocessing(
+                config, rest_dicoms=loc_dicoms, overwrite=overwrite, task_name=localizer.task_name,
+            )
+            last_ref_file = ref_file
+
+            # Mask extraction (each localizer gets its own subdirectory)
+            network_files = run_localizer_extraction(
+                config, localizer, i, preproc_file, mask_file, ref_file, overwrite,
+            )
+            all_network_files.extend(network_files)
+
+        # Create WM/CSF tissue masks (shared, using last ref_file)
+        assert last_ref_file is not None
+        if config.feedback.include_wm_regressor or config.feedback.include_csf_regressor:
+            from .mask_extraction import create_tissue_masks
+
+            assert config.paths.mask_extraction_dir is not None
+            logger.info("")
+            logger.info("Creating WM/CSF tissue masks for nuisance regression...")
+            tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
+
+            inv_xfm = None
+            # Try to find MNI inverse transforms from any localizer's extraction
+            for j in range(len(config.localizers)):
+                loc_mnireg = (
+                    config.paths.mask_extraction_dir
+                    / f"loc_{j}_{config.localizers[j].task_name}"
+                    / "02_mnireg"
+                )
+                if loc_mnireg.exists():
+                    inv_files = sorted(loc_mnireg.glob("*_inv_*"))
+                    if inv_files:
+                        inv_xfm = [str(f) for f in inv_files]
+                        logger.info(f"Reusing MNI inverse transforms from {loc_mnireg}")
+                        break
+
+            create_tissue_masks(
+                ref_file=last_ref_file,
+                output_dir=tissue_dir,
+                participant_id=config.paths.participant_id,
+                inv_transform_files=inv_xfm,
+                overwrite=overwrite,
+            )
+
+        # Coregistration (all masks together)
+        coreg_mask_files = run_coregistration(
+            config, all_network_files, last_ref_file,
+            reference_dicom_dir=initial_reference[0], overwrite=overwrite,
         )
+    else:
+        # Legacy single-localizer path (no localizers list configured)
+        localizer_sources = config.resolve_localizer_sources()
+        if skip_collection:
+            logger.info("Skipping localizer collection (using source DICOMs directly)")
+            rest_dicoms = localizer_sources
+        else:
+            rest_dicoms = run_dicom_collection(
+                config,
+                use_simulator=use_simulator,
+                task_name="rest",
+                source_dirs=localizer_sources,
+                n_volumes_list=config.scan.rest_n_volumes,
+                start_run=1,
+                max_runs=config.scan.rest_max_runs,
+            )
 
-    # Step 2: Preprocessing
-    preproc_file, mask_file, ref_file = run_preprocessing(config, rest_dicoms=rest_dicoms, overwrite=overwrite)
+        preproc_file, mask_file, ref_file = run_preprocessing(
+            config, rest_dicoms=rest_dicoms, overwrite=overwrite,
+        )
+        network_files = run_mask_extraction(config, preproc_file, mask_file, ref_file, overwrite)
 
-    # Step 3: Mask extraction
-    network_files = run_mask_extraction(config, preproc_file, mask_file, ref_file, overwrite)
-
-    # Step 4: Coregistration to initial reference
-    coreg_mask_files = run_coregistration(
-        config, network_files, ref_file, reference_dicom_dir=initial_reference[0], overwrite=overwrite
-    )
+        coreg_mask_files = run_coregistration(
+            config, network_files, ref_file,
+            reference_dicom_dir=initial_reference[0], overwrite=overwrite,
+        )
 
     logger.info("")
     logger.info("Setup complete! Masks ready for feedback:")

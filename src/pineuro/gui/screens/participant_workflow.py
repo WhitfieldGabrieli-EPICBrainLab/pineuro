@@ -1918,17 +1918,25 @@ class ParticipantWorkflowScreen:
                 steps.append("transfer_2")
         else:
             # Standard mode: full pipeline
+            localizers = config.get("localizers", [])
             if reference_initial_enabled:
                 steps.append("reference_initial")
-            # Add rest runs dynamically
-            for i in range(1, n_localizer_runs + 1):
-                steps.append(f"rest_run_{i}")
-            steps.extend(
-                [
-                    "preprocessing",
-                    "mask_extraction",
-                ]
-            )
+
+            if localizers and len(localizers) > 1:
+                # Multi-localizer: per-localizer collection + preprocessing + extraction
+                for loc_idx, loc in enumerate(localizers):
+                    loc_type = loc.get("type", "rest")
+                    loc_n_runs = loc.get("n_runs", 2)
+                    for run in range(1, loc_n_runs + 1):
+                        steps.append(f"localizer_{loc_idx}_run_{run}")
+                    steps.append(f"localizer_{loc_idx}_preprocessing")
+                    steps.append(f"localizer_{loc_idx}_extraction")
+            else:
+                # Single localizer (legacy or 1-element list)
+                for i in range(1, n_localizer_runs + 1):
+                    steps.append(f"rest_run_{i}")
+                steps.extend(["preprocessing", "mask_extraction"])
+
             # Add coregistration only if initial reference is enabled
             if reference_initial_enabled:
                 steps.append("coregistration")
@@ -1954,38 +1962,66 @@ class ParticipantWorkflowScreen:
                 status = self._check_acq_collection_status(collection_dir, "task-reference", 1, n_vols)
                 self.step_statuses["reference_initial"] = status
 
-            # Check localizer run collections dynamically
-            expected_vols = config["scan"].get("localizer_n_volumes")
-            if expected_vols is None:
-                rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
-                expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
-
-            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-            loc_task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
-
-            for run_num in range(1, n_localizer_runs + 1):
-                step_id = f"rest_run_{run_num}"
-                status = self._check_acq_collection_status(
-                    collection_dir, f"task-{loc_task_name}", run_num, expected_vols
-                )
-                self.step_statuses[step_id] = status
-
-            # Check preprocessing outputs
             preprocessing_dir = base_dir / "preprocessing"
-            preproc_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz"
-            mask_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc_mask.nii.gz"
-            ref_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_boldref.nii.gz"
-
-            if preproc_file.exists() and mask_file.exists() and ref_file.exists():
-                self.step_statuses["preprocessing"] = StepStatus.COMPLETE
-
-            # Check mask extraction outputs
             mask_extraction_dir = base_dir / "mask_extraction"
             masks_dir = mask_extraction_dir / "03_masks"
+            localizers = config.get("localizers", [])
 
-            # Check for any network mask files
-            if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
-                self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
+            if localizers and len(localizers) > 1:
+                # Multi-localizer: check per-localizer steps
+                for loc_idx, loc in enumerate(localizers):
+                    loc_type = loc.get("type", "rest")
+                    loc_task_name = "rest" if loc_type == "rest" else loc_type
+                    loc_n_runs = loc.get("n_runs", 2)
+                    loc_n_vols = loc.get("n_volumes", 200)
+
+                    # Check collection steps
+                    for run_num in range(1, loc_n_runs + 1):
+                        step_id = f"localizer_{loc_idx}_run_{run_num}"
+                        status = self._check_acq_collection_status(
+                            collection_dir, f"task-{loc_task_name}", run_num, loc_n_vols,
+                        )
+                        self.step_statuses[step_id] = status
+
+                    # Check preprocessing
+                    step_id = f"localizer_{loc_idx}_preprocessing"
+                    preproc_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz"
+                    mask_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc_mask.nii.gz"
+                    ref_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_boldref.nii.gz"
+                    if preproc_f.exists() and mask_f.exists() and ref_f.exists():
+                        self.step_statuses[step_id] = StepStatus.COMPLETE
+
+                    # Check extraction (per-localizer subdirectory)
+                    step_id = f"localizer_{loc_idx}_extraction"
+                    loc_dir = mask_extraction_dir / f"loc_{loc_idx}_{loc_task_name}"
+                    loc_masks = loc_dir / "03_masks"
+                    if loc_masks.exists() and len(list(loc_masks.glob(f"{participant_id}_*.nii.gz"))) > 0:
+                        self.step_statuses[step_id] = StepStatus.COMPLETE
+            else:
+                # Single localizer (legacy)
+                expected_vols = config["scan"].get("localizer_n_volumes")
+                if expected_vols is None:
+                    rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
+                    expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
+
+                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+                loc_task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+
+                for run_num in range(1, n_localizer_runs + 1):
+                    step_id = f"rest_run_{run_num}"
+                    status = self._check_acq_collection_status(
+                        collection_dir, f"task-{loc_task_name}", run_num, expected_vols,
+                    )
+                    self.step_statuses[step_id] = status
+
+                preproc_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz"
+                mask_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc_mask.nii.gz"
+                ref_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_boldref.nii.gz"
+                if preproc_file.exists() and mask_file.exists() and ref_file.exists():
+                    self.step_statuses["preprocessing"] = StepStatus.COMPLETE
+
+                if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
+                    self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
 
             # Check if masks were created via MNI atlas fallback
             selections_file = masks_dir / "mask_selections.json"
@@ -5737,7 +5773,44 @@ class ParticipantWorkflowScreen:
         Returns:
             Human-readable label
         """
-        # Handle dynamic rest_run_* steps
+        # Handle multi-localizer step IDs: localizer_{idx}_run_{num},
+        # localizer_{idx}_preprocessing, localizer_{idx}_extraction
+        if step_id.startswith("localizer_") and "_run_" in step_id:
+            parts = step_id.split("_")
+            loc_idx = int(parts[1])
+            run_num = parts[-1]
+            config = self.study_config.session_config
+            localizers = config.get("localizers", [])
+            if loc_idx < len(localizers):
+                loc = localizers[loc_idx]
+                loc_type = loc.get("type", "rest")
+                if loc_type == "rest":
+                    return f"Collect Rest Run {run_num} (Loc {loc_idx})"
+                else:
+                    try:
+                        from pineuro.tasks import get_task_metadata
+                        task_meta = get_task_metadata(loc_type)
+                        task_name = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
+                    except (ValueError, ImportError):
+                        task_name = loc_type.title()
+                    return f"Collect {task_name} Run {run_num} (Loc {loc_idx})"
+            return f"Localizer {loc_idx} Run {run_num}"
+        if step_id.startswith("localizer_") and step_id.endswith("_preprocessing"):
+            loc_idx = int(step_id.split("_")[1])
+            config = self.study_config.session_config
+            localizers = config.get("localizers", [])
+            loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
+            label = "Rest" if loc_type == "rest" else loc_type.upper()
+            return f"Preprocess {label} (Loc {loc_idx})"
+        if step_id.startswith("localizer_") and step_id.endswith("_extraction"):
+            loc_idx = int(step_id.split("_")[1])
+            config = self.study_config.session_config
+            localizers = config.get("localizers", [])
+            loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
+            label = "Rest" if loc_type == "rest" else loc_type.upper()
+            return f"Extract {label} Masks (Loc {loc_idx})"
+
+        # Handle dynamic rest_run_* steps (single-localizer / legacy)
         if step_id.startswith("rest_run_"):
             run_num = step_id.split("_")[-1]
             # Dynamic label based on localizer type

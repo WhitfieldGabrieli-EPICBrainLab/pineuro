@@ -253,6 +253,20 @@ class PipelineRunner:
                 self._run_coregistration(run_id=2)
             elif step_id.startswith("transfer_") or step_id.startswith("feedback_"):
                 self._run_feedback_task(step_id)
+            elif step_id.startswith("localizer_") and "_run_" in step_id:
+                # Multi-localizer collection: localizer_{idx}_run_{run_num}
+                parts = step_id.split("_")
+                loc_idx = int(parts[1])
+                run_num = int(parts[-1])
+                self._run_localizer_collection(loc_idx, run_num)
+            elif step_id.startswith("localizer_") and step_id.endswith("_preprocessing"):
+                # Multi-localizer preprocessing: localizer_{idx}_preprocessing
+                loc_idx = int(step_id.split("_")[1])
+                self._run_localizer_preprocessing(loc_idx)
+            elif step_id.startswith("localizer_") and step_id.endswith("_extraction"):
+                # Multi-localizer extraction: localizer_{idx}_extraction
+                loc_idx = int(step_id.split("_")[1])
+                self._run_localizer_extraction(loc_idx)
             else:
                 raise ValueError(f"Unknown step ID: {step_id}")
 
@@ -961,6 +975,292 @@ class PipelineRunner:
                 progress_callback=progress_callback,
             )
             self._emit_progress("WM/CSF tissue masks created")
+
+    # ------------------------------------------------------------------
+    # Multi-localizer pipeline methods
+    # ------------------------------------------------------------------
+
+    def _get_localizer_config(self, loc_idx: int) -> dict:
+        """Return the localizer config dict at the given index.
+
+        Falls back to building a single-element list from legacy config if
+        the ``localizers`` key does not exist.
+        """
+        localizers = self.config.get("localizers")
+        if localizers and loc_idx < len(localizers):
+            return localizers[loc_idx]
+
+        # Legacy fallback: synthesise from mask/scan
+        mask_cfg = self.config.get("mask", {})
+        scan_cfg = self.config.get("scan", {})
+        loc_type = scan_cfg.get("localizer_task_type", "rest")
+        return {
+            "type": "rest" if mask_cfg.get("localizer_type", "rest") == "rest" else loc_type,
+            "tr": scan_cfg.get("localizer_tr", 1.2),
+            "n_volumes": scan_cfg.get("localizer_n_volumes", 200),
+            "n_runs": scan_cfg.get("localizer_n_runs", 2),
+            "source_dicoms": scan_cfg.get("localizer_source_dicoms", []),
+            "n_yeo": mask_cfg.get("n_yeo", 17),
+            "yeo_targets": mask_cfg.get("yeo_targets", ["DefaultA", "ContA"]),
+            "network_atlas": mask_cfg.get("network_atlas", "yeo_17"),
+            "smooth_fwhm": mask_cfg.get("smooth_fwhm", 5.0),
+            "highpass": mask_cfg.get("highpass", 0.01),
+            "lowpass": mask_cfg.get("lowpass"),
+            "contrasts": mask_cfg.get("contrasts", {}),
+            "include_reverse_contrasts": mask_cfg.get("include_reverse_contrasts", False),
+            "events_file": mask_cfg.get("events_file"),
+            "stat_type": mask_cfg.get("stat_type", "t"),
+            "hrf_model": mask_cfg.get("hrf_model", "spm"),
+            "drift_model": mask_cfg.get("drift_model", "cosine"),
+            "threshold": mask_cfg.get("threshold", 2000),
+            "threshold_method": mask_cfg.get("threshold_method", "top_n"),
+            "atlas_mask": mask_cfg.get("atlas_mask"),
+            "atlas_name": mask_cfg.get("atlas_name"),
+            "atlas_source": mask_cfg.get("atlas_source"),
+            "atlas_regions": mask_cfg.get("atlas_regions"),
+            "cluster_start_threshold": mask_cfg.get("cluster_start_threshold", 2.0),
+            "cluster_step": mask_cfg.get("cluster_step", 0.1),
+        }
+
+    def _run_localizer_collection(self, loc_idx: int, run_num: int) -> None:
+        """Collect DICOMs for a specific localizer run.
+
+        Delegates to :meth:`_run_rest_run` after temporarily overriding the
+        relevant config fields so the existing collection logic uses the
+        correct parameters for this localizer.
+        """
+        loc = self._get_localizer_config(loc_idx)
+        loc_type = loc.get("type", "rest")
+        task_name = "rest" if loc_type == "rest" else loc_type
+
+        # Temporarily patch config so _run_rest_run reads the right values
+        config = self.config
+        orig_scan = config.get("scan", {})
+        orig_mask = config.get("mask", {})
+
+        saved = {
+            "localizer_task_type": orig_scan.get("localizer_task_type"),
+            "localizer_tr": orig_scan.get("localizer_tr"),
+            "localizer_n_volumes": orig_scan.get("localizer_n_volumes"),
+            "localizer_n_runs": orig_scan.get("localizer_n_runs"),
+            "localizer_source_dicoms": orig_scan.get("localizer_source_dicoms"),
+            "localizer_type": orig_mask.get("localizer_type"),
+        }
+        try:
+            orig_scan["localizer_task_type"] = task_name
+            orig_scan["localizer_tr"] = loc.get("tr", 1.2)
+            orig_scan["localizer_n_volumes"] = loc.get("n_volumes", 200)
+            orig_scan["localizer_n_runs"] = loc.get("n_runs", 2)
+            orig_scan["localizer_source_dicoms"] = loc.get("source_dicoms", [])
+            orig_mask["localizer_type"] = "rest" if loc_type == "rest" else "task"
+
+            self._run_rest_run(run_num)
+        finally:
+            for k, v in saved.items():
+                if k in ("localizer_type",):
+                    if v is not None:
+                        orig_mask[k] = v
+                    elif k in orig_mask:
+                        del orig_mask[k]
+                else:
+                    if v is not None:
+                        orig_scan[k] = v
+                    elif k in orig_scan:
+                        del orig_scan[k]
+
+    def _run_localizer_preprocessing(self, loc_idx: int) -> None:
+        """Run preprocessing for a specific localizer."""
+        from pineuro.preprocessing import preprocessing
+
+        loc = self._get_localizer_config(loc_idx)
+        loc_type = loc.get("type", "rest")
+        task_name = "rest" if loc_type == "rest" else loc_type
+
+        config = self.config
+        base_dir = Path(config["paths"]["base_dir"])
+        collection_dir = base_dir / "collection"
+        preprocessing_dir = base_dir / "preprocessing"
+
+        n_runs = loc.get("n_runs", 2)
+        n_volumes = loc.get("n_volumes", 200)
+
+        self._emit_progress(f"Preprocessing localizer {loc_idx}: {task_name}")
+
+        # Find available collection directories for this localizer
+        runs_to_process = []
+        for run_num in range(1, n_runs + 1):
+            collections = self.find_available_collections(
+                collection_dir=collection_dir,
+                task=f"task-{task_name}",
+                run=run_num,
+                expected_volumes=n_volumes,
+            )
+            if collections:
+                runs_to_process.append(run_num)
+
+        # Select acquisitions
+        rest_volumes = [n_volumes] * n_runs
+        input_dicoms = self._resolve_acq_paths(
+            task_name=task_name, runs_to_process=runs_to_process, rest_volumes=rest_volumes,
+        )
+
+        if not input_dicoms:
+            raise ValueError(f"No {task_name} collection directories found for preprocessing")
+
+        for path in input_dicoms:
+            self._emit_progress(f"Using: {path.name}")
+
+        def progress_callback(step: str, detail: str = ""):
+            if detail:
+                self._emit_progress(f"{step}: {detail}")
+            else:
+                self._emit_progress(step)
+
+        preprocessing(
+            participant_id=self.participant_id,
+            task=task_name,
+            root_dir=preprocessing_dir,
+            input_dicoms=[str(d) for d in input_dicoms],
+            overwrite=self.overwrite,
+            qc_enabled=True,
+            progress_callback=progress_callback,
+        )
+
+    def _run_localizer_extraction(self, loc_idx: int) -> None:
+        """Run mask extraction for a specific localizer.
+
+        Output goes to ``mask_extraction/loc_{idx}_{task_name}/`` and
+        results are copied to the shared ``mask_extraction/03_masks/``.
+        """
+        import shutil
+
+        loc = self._get_localizer_config(loc_idx)
+        loc_type = loc.get("type", "rest")
+        task_name = "rest" if loc_type == "rest" else loc_type
+
+        config = self.config
+        base_dir = Path(config["paths"]["base_dir"])
+        preprocessing_dir = base_dir / "preprocessing"
+        mask_extraction_dir = base_dir / "mask_extraction"
+        loc_dir = mask_extraction_dir / f"loc_{loc_idx}_{task_name}"
+
+        preproc_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc.nii.gz"
+        mask_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc_mask.nii.gz"
+        ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+
+        def progress_callback(step: str, detail: str = ""):
+            if detail:
+                self._emit_progress(f"{step}: {detail}")
+            else:
+                self._emit_progress(step)
+
+        self._emit_progress(f"Extracting masks for localizer {loc_idx}: {task_name}")
+
+        if loc_type == "rest":
+            from pineuro.mask_extraction import mask_extraction_rest
+
+            n_yeo = loc.get("n_yeo", 17)
+            network_atlas = loc.get("network_atlas", f"yeo_{n_yeo}")
+            yeo_targets = list(loc.get("yeo_targets", ["DefaultA", "ContA"]))
+            threshold = loc.get("threshold", 2000)
+            smooth_fwhm = loc.get("smooth_fwhm", 5.0)
+            highpass = loc.get("highpass", 0.01)
+            lowpass = loc.get("lowpass")
+
+            # Include sham networks for rest localizers
+            sham_config = config.get("sham", {})
+            sham_hemisphere_network = None
+            if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
+                mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+                if mask_mode == "hemisphere_split":
+                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                    if hemisphere_network and hemisphere_network not in yeo_targets:
+                        yeo_targets.append(hemisphere_network)
+                    sham_hemisphere_network = hemisphere_network
+                else:
+                    for target in sham_config.get("alternative_mask_targets", []):
+                        if target and target not in yeo_targets:
+                            yeo_targets.append(target)
+
+            mask_files = mask_extraction_rest(
+                participant_id=self.participant_id,
+                root_dir=loc_dir,
+                input_file=preproc_file,
+                mask_file=mask_file,
+                ref_file=ref_file,
+                n_yeo=n_yeo,
+                yeo_targets=yeo_targets,
+                network_atlas=network_atlas,
+                threshold=threshold,
+                smooth_fwhm=smooth_fwhm,
+                highpass=highpass,
+                lowpass=lowpass,
+                overwrite=self.overwrite,
+                qc_enabled=True,
+                progress_callback=progress_callback,
+                sham_hemisphere_network=sham_hemisphere_network,
+            )
+        else:
+            from pineuro.mask_extraction import mask_extraction_task
+
+            contrasts = loc.get("contrasts", {})
+            if not contrasts:
+                from pineuro.tasks.task_registry import get_task_metadata
+
+                try:
+                    metadata = get_task_metadata(loc_type)
+                    contrasts = metadata.default_contrasts or {}
+                    if contrasts:
+                        self._emit_progress(f"Using default contrasts from {metadata.display_name}: {contrasts}")
+                except KeyError:
+                    pass
+
+            # Auto-resolve events file
+            events_dir = base_dir / "preprocessing"
+            events_glob = sorted(events_dir.glob(f"*_task-{loc_type}_*_events.tsv"))
+            if events_glob:
+                events_file = str(events_glob[-1])
+                self._emit_progress(f"Found events file: {Path(events_file).name}")
+            else:
+                raise FileNotFoundError(
+                    f"No events file found in {events_dir} for task '{loc_type}'. "
+                    f"Run the localizer task first to generate the events TSV."
+                )
+
+            mask_files = mask_extraction_task(
+                participant_id=self.participant_id,
+                root_dir=loc_dir,
+                input_file=preproc_file,
+                mask_file=mask_file,
+                events=events_file,
+                contrasts=contrasts,
+                tr=loc.get("tr", 1.2),
+                threshold=loc.get("threshold", 2000),
+                threshold_method=loc.get("threshold_method", "top_n"),
+                atlas_mask=loc.get("atlas_mask"),
+                atlas_name=loc.get("atlas_name"),
+                atlas_source=loc.get("atlas_source"),
+                atlas_regions=loc.get("atlas_regions"),
+                ref_file=str(ref_file),
+                cluster_start_threshold=loc.get("cluster_start_threshold", 2.0),
+                cluster_step=loc.get("cluster_step", 0.1),
+                include_reverse=loc.get("include_reverse_contrasts", False),
+                overwrite=self.overwrite,
+                smoothing_fwhm=loc.get("smooth_fwhm", 5.0),
+                high_pass=loc.get("highpass", 0.01),
+                drift_model=loc.get("drift_model", "cosine"),
+                hrf_model=loc.get("hrf_model", "spm"),
+                qc_enabled=True,
+                progress_callback=progress_callback,
+            )
+
+        # Copy masks to shared 03_masks/
+        shared_mask_dir = mask_extraction_dir / "03_masks"
+        shared_mask_dir.mkdir(parents=True, exist_ok=True)
+        for f in mask_files:
+            dest = shared_mask_dir / f.name
+            shutil.copy2(f, dest)
+            self._emit_progress(f"Copied {f.name} -> 03_masks/")
 
     def _find_best_reference(self) -> Path:
         """Find the best available reference image for MNI registration.

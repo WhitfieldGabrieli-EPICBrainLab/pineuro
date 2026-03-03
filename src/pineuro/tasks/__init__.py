@@ -177,7 +177,16 @@ def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
 # Lazy-load built-in task modules to avoid pulling in numpy/PsychoPy at import
 # time.  Tasks register themselves via @pineuro_task when first imported.
 def _load_builtin_tasks():
-    from . import ball, fixation, gauge, rnt, rnt_experience_sampling, self_other, thermometer  # noqa: F401
+    from . import (  # noqa: F401
+        ball,
+        fixation,
+        gauge,
+        rnt,
+        rnt_experience_sampling,
+        rnt_triggered_ball,
+        self_other,
+        thermometer,
+    )
 
 
 from .task_registry import add_lazy_loader  # noqa: E402
@@ -195,6 +204,7 @@ _LAZY_TASK_CLASS_NAMES = {
     "FixationTask",
     "RNTTask",
     "RNTExperienceSamplingTask",
+    "RNTTriggeredBallTask",
 }
 
 
@@ -224,6 +234,7 @@ __all__ = [
     "FixationTask",
     "RNTTask",
     "RNTExperienceSamplingTask",
+    "RNTTriggeredBallTask",
     "SessionState",
     "ActivationSmoother",
     "ActivationNormalizer",
