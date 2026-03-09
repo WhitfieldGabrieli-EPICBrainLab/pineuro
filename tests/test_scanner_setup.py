@@ -211,25 +211,43 @@ class TestGetSetupInstructions:
         assert "smbpasswd" in result["linux"]
         assert "smbclient" in result["linux"]
         assert "smbd nmbd" in result["linux"]
+        assert "valid users" in result["linux"]
 
-    def test_windows_has_powershell(self):
+    def test_windows_has_sharing(self):
         result = get_setup_instructions("/BOLD_DICOM")
-        assert "New-SmbShare" in result["windows"]
+        assert "Share this folder" in result["windows"]
+        assert "Advanced Sharing" in result["windows"]
 
     def test_macos_has_sharing(self):
         result = get_setup_instructions("/BOLD_DICOM")
         assert "File Sharing" in result["macos"]
         assert "SMB" in result["macos"]
+        assert "smbutil" in result["macos"]
+        assert "Firewall" in result["macos"]
+
+    def test_scanner_notes_has_dot_addin_fields(self):
+        result = get_setup_instructions("/BOLD_DICOM")
+        assert "Auto Export" in result["scanner_notes"]
+        assert "Target Host" in result["scanner_notes"]
+        assert "Target Directory" in result["scanner_notes"]
+
+    def test_scanner_notes_has_mac_net_use(self):
+        result = get_setup_instructions("/BOLD_DICOM")
+        assert "net use" in result["scanner_notes"]
 
     def test_scanner_notes_mentions_ge_unsupported(self):
         result = get_setup_instructions("/BOLD_DICOM")
         assert "GE" in result["scanner_notes"]
         assert "not supported" in result["scanner_notes"].lower()
 
-    def test_scanner_notes_mentions_siemens_and_philips(self):
+    def test_scanner_notes_mentions_philips(self):
         result = get_setup_instructions("/BOLD_DICOM")
-        assert "Siemens" in result["scanner_notes"]
         assert "Philips" in result["scanner_notes"]
+
+    def test_platforms_have_local_user_step(self):
+        result = get_setup_instructions("/BOLD_DICOM")
+        assert "local user" in result["windows"].lower()
+        assert "local user" in result["macos"].lower()
 
     def test_custom_watch_dir(self):
         result = get_setup_instructions("/custom/dicom/path")

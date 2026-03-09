@@ -38,74 +38,79 @@ ping 192.168.2.5
 
 ## Step 2: Set Up the SMB Share on the Analysis Machine
 
-Create a shared directory where the simulator will push files — the same directory pineuro will watch.
+Create a shared directory where the simulator will push files — the same directory pineuro will watch. The scanner cannot authenticate against Microsoft/Azure AD/domain accounts on the isolated scanner network, so each platform needs a dedicated local user account.
 
-### Windows (PowerShell as Admin)
+### Windows
 
-```powershell
-# Create the directory
-New-Item -ItemType Directory -Force -Path "C:\BOLD_DICOM"
-
-# Share it
-New-SmbShare -Name "BOLD_DICOM" -Path "C:\BOLD_DICOM" -FullAccess "Everyone"
-
-# Verify
-Get-SmbShare | Where-Object Name -eq 'BOLD_DICOM'
-```
-
-Ensure Windows Firewall allows SMB (port 445):
-- Settings > search "Firewall & network protection" > Allow an app through firewall
-- Check "Private" for "File and Printer Sharing"
-
-**Important:** Your Windows user account must have a password set. Accounts with blank passwords cannot authenticate over SMB.
+1. **Create a dedicated local user**: Settings > Accounts > Other users > Add account > "I don't have this person's sign-in information" > "Add a user without a Microsoft account" > set username and password
+2. **Create the folder**: e.g., `C:\BOLD_DICOM`
+3. **Share the folder**: Right-click the folder > Properties > Sharing tab > Advanced Sharing... > check "Share this folder" > share name: `BOLD_DICOM` > Permissions > Add > Everyone > Full Control > OK
+4. **Firewall**: Settings > search "Windows Defender Firewall" > Allow an app through firewall > check "File and Printer Sharing" for both Private and Public
+5. **Static IP**: Settings > Network & Internet > Ethernet > Edit > Manual > IPv4 on > IP: `192.168.2.5`, Subnet: `255.255.255.0`
 
 ### macOS
 
+1. **Create a dedicated local user**: System Settings > Users & Groups > Add User... > Standard account (not Admin) > set username and password. You do not need to log into this account.
+2. **Enable SMB sharing**: System Settings > General > Sharing > File Sharing ON > click (i) > Options... > ensure "Share files and folders using SMB" is checked > check the box next to the dedicated user (enter their password when prompted) > Done
+3. **Create and share the folder**:
+
 ```bash
-sudo mkdir -p /BOLD_DICOM
-sudo chown $USER /BOLD_DICOM
-sudo chmod -R 773 /BOLD_DICOM
+mkdir -p /BOLD_DICOM
+chmod 777 /BOLD_DICOM
 ```
 
-Then enable SMB sharing:
-1. System Settings > General > Sharing
-2. Turn on File Sharing
-3. Click (i) next to File Sharing
-4. Click + under Shared Folders, add `/BOLD_DICOM`
-5. Set permissions for your user: Read & Write
-6. Click Options... > ensure "Share files using SMB" is checked
-7. Check the box next to your username in the SMB user list
+In the File Sharing info panel: click + under Shared Folders and add `/BOLD_DICOM`, then click + under Users and add the dedicated user with Read & Write permissions.
+
+4. **Firewall**: System Settings > Network > Firewall > turn OFF, or ensure file sharing is allowed
+5. **Static IP**: System Settings > Network > Ethernet > Details > TCP/IP > Configure IPv4: Manually > IP: `192.168.2.5`, Subnet: `255.255.255.0`
+6. **Verify**: `smbutil view //<username>@127.0.0.1` — should show `BOLD_DICOM` in the share list
 
 ### Linux
 
 ```bash
-# 1. Install Samba (if not already installed)
-sudo apt-get install samba
+# 1. Install Samba
+sudo apt-get install --upgrade samba
 
-# 2. Create the DICOM watch directory
+# 2. Create a Samba password for the user
+sudo smbpasswd -a <username>
+
+# 3. Create the DICOM watch directory
 sudo mkdir -p /BOLD_DICOM
-sudo chmod 777 /BOLD_DICOM
-
-# 3. Create a Samba user (must also exist as a Linux system user)
-sudo useradd -M -s /usr/sbin/nologin <samba-username>
-sudo smbpasswd -a <samba-username>
+sudo chown <username> /BOLD_DICOM
+sudo chmod -R 773 /BOLD_DICOM
 
 # 4. Add the share to /etc/samba/smb.conf:
 #    [BOLD_DICOM]
-#      path = /BOLD_DICOM
-#      read only = no
-#      browseable = yes
-#      create mask = 0777
+#       path = /BOLD_DICOM
+#       browsable = yes
+#       writable = yes
+#       valid users = <username>
+#       comment = Samba Share for BOLD dot-addin dicoms
 
 # 5. Restart Samba
-sudo systemctl restart smbd
+sudo systemctl restart smbd nmbd
+
+# 6. Verify the share
+smbclient -L localhost -U <username>
 ```
 
-**If a Samba share already exists** (e.g., from a previous MURFI setup): you may need to ensure the directory has read permission for the connecting user. Check with `ls -ld /BOLD_DICOM` — if the "others" column is missing `r` (e.g., `-wx` instead of `rwx`), fix with:
+### Scanner-Side Configuration (Siemens BOLD Dot Add-In)
 
-```bash
-sudo chmod o+r /BOLD_DICOM
+After setting up the SMB share, configure the scanner to export DICOMs. Open the Dot Add-In Configurator via Dot Cockpit > protocol program and set:
+
+- **Enable Auto Export**: checked
+- **Target Host**: `\\192.168.2.5` (the analysis computer's IP)
+- **Target Directory**: `BOLD_DICOM`
+- **User Name**: `WORKGROUP\<username>`
+- **Password**: the dedicated user's password
+
+**macOS only**: Before running BOLD sequences, open a Command Prompt on the scanner console (Ctrl+Esc > Advanced User > Command Prompt) and run:
+
 ```
+net use Z: \\192.168.2.5\BOLD_DICOM /user:<username> <password>
+```
+
+Run this once per scanner session. This step is not needed for Windows or Linux. To disconnect when done: `net use Z: /delete`
 
 ## Step 3: Mount the Share on the Sender Machine
 
