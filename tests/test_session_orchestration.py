@@ -83,8 +83,12 @@ class TestBuildRunSequence:
         frc_indices = [idx for _, idx in seq]
 
         assert run_types == [
-            "feedback", "feedback",  # es (no transfers)
-            "transfer", "feedback", "feedback", "transfer",  # ball (with transfers)
+            "feedback",
+            "feedback",  # es (no transfers)
+            "transfer",
+            "feedback",
+            "feedback",
+            "transfer",  # ball (with transfers)
         ]
         assert frc_indices == [0, 0, 1, 1, 1, 1]
 
@@ -123,6 +127,7 @@ class TestFeedbackRunConfig:
 
     def test_invalid_motion_correction(self):
         import pytest
+
         with pytest.raises(ValueError, match="motion_correction"):
             FeedbackRunConfig(motion_correction="invalid")
 

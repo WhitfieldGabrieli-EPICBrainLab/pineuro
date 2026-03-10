@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import flet as ft
 
@@ -74,7 +75,7 @@ class LocalizerTabBuilder:
         self._create_file_browse_button = create_file_browse_button
 
         self.validation_errors: dict[str, str] = {}
-        self.task_param_fields: dict[str, ft.Control] = {}
+        self.task_param_fields: dict[str, Any] = {}
 
         self._create_fields()
 
@@ -98,7 +99,10 @@ class LocalizerTabBuilder:
             except (KeyError, ValueError):
                 type_label = loc_type
         self.type_display_text = ft.Text(
-            type_label, size=14, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_700,
+            type_label,
+            size=14,
+            weight=ft.FontWeight.W_500,
+            color=ft.Colors.BLUE_700,
         )
 
         # Contrast info text
@@ -301,7 +305,7 @@ class LocalizerTabBuilder:
         is_rest = self._loc_type == "rest"
 
         # Network dropdowns row (shows only visible ones)
-        visible_dropdowns = [dd for dd in self._network_dropdowns if dd.visible]
+        visible_dropdowns: list[ft.Control] = [dd for dd in self._network_dropdowns if dd.visible]
         self.network_dropdowns_row = ft.Row(visible_dropdowns, wrap=True)
 
         # Target Networks section (rest-only for ICA)
@@ -515,9 +519,7 @@ class LocalizerTabBuilder:
         # Rebuild the row
         if hasattr(self, "network_dropdowns_row"):
             self.network_dropdowns_row.controls.clear()
-            self.network_dropdowns_row.controls.extend(
-                dd for dd in self._network_dropdowns if dd.visible
-            )
+            self.network_dropdowns_row.controls.extend(dd for dd in self._network_dropdowns if dd.visible)
 
         if self._on_change:
             self._on_change()
@@ -580,7 +582,7 @@ class LocalizerTabBuilder:
                 from pineuro.mask_extraction import get_atlas_labels
 
                 labels = get_atlas_labels(atlas_source)
-                self.atlas_region_dropdown.options = [ft.dropdown.Option(key=l, text=l) for l in labels]
+                self.atlas_region_dropdown.options = [ft.dropdown.Option(key=label, text=label) for label in labels]
                 self.atlas_region_dropdown.value = labels[0] if labels else None
             except Exception as ex:
                 logger.warning(f"Failed to load atlas labels for {atlas_source}: {ex}")
@@ -610,10 +612,10 @@ class LocalizerTabBuilder:
         """Validate a form field."""
         try:
             validator(field.value, name)
-            field.error_text = None
+            field.error = None
             self.validation_errors.pop(name, None)
         except ValidationError as e:
-            field.error_text = str(e)
+            field.error = str(e)
             self.validation_errors[name] = str(e)
         with contextlib.suppress(Exception):
             field.update()
@@ -656,7 +658,7 @@ class LocalizerTabBuilder:
             field = self._create_field_for_parameter(param, task_config)
             self.task_param_fields[param.key] = field
 
-    def _create_field_for_parameter(self, param: TaskParameter, task_config: dict) -> ft.Control:
+    def _create_field_for_parameter(self, param: TaskParameter, task_config: dict) -> Any:
         """Create appropriate Flet control for a parameter."""
         current_value = task_config.get(param.key, param.default)
 
@@ -724,9 +726,7 @@ class LocalizerTabBuilder:
             if field is not None:
                 controls.append(field)
                 if param.hint and param.type != "bool":
-                    controls.append(
-                        ft.Text(param.hint, size=11, color=ft.Colors.GREY_600, italic=True)
-                    )
+                    controls.append(ft.Text(param.hint, size=11, color=ft.Colors.GREY_600, italic=True))
 
         controls.append(ft.Divider())
         return controls
@@ -748,7 +748,7 @@ class LocalizerTabBuilder:
             if field is None:
                 continue
             if param.type == "dir":
-                text_field = field.controls[0] if isinstance(field, ft.Row) else field
+                text_field: Any = field.controls[0] if isinstance(field, ft.Row) else field
                 params[param.key] = text_field.value
             elif param.type == "bool":
                 params[param.key] = field.value

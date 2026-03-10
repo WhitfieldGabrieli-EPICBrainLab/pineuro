@@ -71,9 +71,7 @@ class QCReportManager:
         self.participant_id = participant_id
         self.network_order: list[str] | None = None
 
-    def _sort_overlays(
-        self, plots: list[tuple[str, Path]]
-    ) -> list[tuple[str, Path]]:
+    def _sort_overlays(self, plots: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
         """Sort overlay plots by network_order if set, otherwise keep as-is."""
         if not self.network_order:
             return plots

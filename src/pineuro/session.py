@@ -1092,9 +1092,7 @@ class FeedbackRunConfig:
     def __post_init__(self) -> None:
         valid_moco = {"siemens_moco", "software", "none"}
         if self.motion_correction not in valid_moco:
-            raise ValueError(
-                f"motion_correction must be one of {valid_moco}, got '{self.motion_correction}'"
-            )
+            raise ValueError(f"motion_correction must be one of {valid_moco}, got '{self.motion_correction}'")
 
 
 @dataclass
@@ -2565,7 +2563,7 @@ def setup_session(
         # so the boldref→reference transform is correct for each set of masks.
         # Tissue masks (WM/CSF) are included only with the last group since
         # they are created using last_ref_file.
-        coreg_mask_files: list[Path] = []
+        coreg_mask_files = []
         for group_idx, (group_ref, group_masks) in enumerate(localizer_groups):
             is_last = group_idx == len(localizer_groups) - 1
             coreg = run_coregistration(
@@ -2727,9 +2725,7 @@ def run_single_task(
         }
 
     # Resolve mask names from network assignment
-    task_mask_names = _resolve_mask_names_for_run(
-        config, metadata, eff_network_assignment
-    )
+    task_mask_names = _resolve_mask_names_for_run(config, metadata, eff_network_assignment)
 
     assert config.paths.feedback_output_dir is not None
     assert config.paths.collection_dir is not None
@@ -2843,9 +2839,7 @@ def _compute_regressors_for_task(
             n_volumes=n_volumes,
             tr=tr,
         )
-        logger.info(
-            f"Computed boxcar task regressor (baseline={n_baseline}, volumes={n_volumes})"
-        )
+        logger.info(f"Computed boxcar task regressor (baseline={n_baseline}, volumes={n_volumes})")
         return regressors
     else:
         logger.warning(f"Unknown design_type '{metadata.design_type}', using no task regressors")
@@ -2991,9 +2985,7 @@ def coregister_before_first_transfer(
 # =============================================================================
 
 
-def _build_run_sequence(
-    config: SessionConfig, n_feedback_runs: int
-) -> list[tuple[str, int]]:
+def _build_run_sequence(config: SessionConfig, n_feedback_runs: int) -> list[tuple[str, int]]:
     """Build the run sequence from ``feedback_runs`` or legacy flat config.
 
     Each entry is ``(run_type, frc_index)`` where *frc_index* is the index

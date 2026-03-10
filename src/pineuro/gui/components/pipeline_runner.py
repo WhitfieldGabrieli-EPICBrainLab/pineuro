@@ -1533,7 +1533,7 @@ class PipelineRunner:
             for mask_file in all_mask_files:
                 name = mask_file.name
                 if name.startswith(prefix) and name.endswith(suffix):
-                    mask_name = name[len(prefix):-len(suffix)]
+                    mask_name = name[len(prefix) : -len(suffix)]
                 else:
                     mask_name = name
                 matched_loc_idx = mask_name_to_loc.get(mask_name)
@@ -1797,7 +1797,9 @@ class PipelineRunner:
         # Get mask files - use reference-coregistered masks if realtime reference is enabled,
         # otherwise use boldref space masks from mask extraction
         task_config = config.get("task", {})
-        feedback_task_type = frc.get("task_type", task_config.get("task_type", "ball")) if frc else task_config.get("task_type", "ball")
+        feedback_task_type = (
+            frc.get("task_type", task_config.get("task_type", "ball")) if frc else task_config.get("task_type", "ball")
+        )
 
         # Determine mask names based on localizer type.
         # For task-based (GLM) extraction, mask names come from contrast keys.
@@ -1852,7 +1854,7 @@ class PipelineRunner:
                             assigned_names.append(name)
                 elif len(diff_pair) >= 2:
                     # Map differential_pair to network roles by position
-                    assigned_names = list(diff_pair[:len(metadata.network_roles)])
+                    assigned_names = list(diff_pair[: len(metadata.network_roles)])
             else:
                 # Legacy: use global task config
                 for role in metadata.network_roles:
@@ -2219,9 +2221,7 @@ class PipelineRunner:
             # Get task configuration — per-run config overrides flat task config
             task_config = config.get("task", {})
             # feedback_task_type already resolved at top of method (uses frc if available)
-            task_specific_config = (
-                frc.get("task_params", {}) if frc else task_config.get(feedback_task_type, {})
-            )
+            task_specific_config = frc.get("task_params", {}) if frc else task_config.get(feedback_task_type, {})
 
             # Get display configuration
             display_config = config.get("display", {})

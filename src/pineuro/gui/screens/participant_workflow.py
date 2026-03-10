@@ -326,8 +326,7 @@ class ParticipantWorkflowScreen:
 
             # Update _initial_qc_approved based on whether ALL localizers are approved
             self._initial_qc_approved = all(
-                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE
-                for i in range(len(localizers))
+                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE for i in range(len(localizers))
             )
         else:
             # Single-localizer approval
@@ -2523,15 +2522,13 @@ class ParticipantWorkflowScreen:
                 # Masks not mapped to any localizer — fall back to all approved
                 return self._initial_qc_approved
             return all(
-                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE
-                for i in required_loc_indices
+                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE for i in required_loc_indices
             )
         else:
             # Reference realtime, coregistration, coregistration_realtime:
             # ANY localizer approved unlocks these
             return any(
-                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE
-                for i in range(len(localizers))
+                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE for i in range(len(localizers))
             )
 
     def _create_step_button(
@@ -2652,6 +2649,7 @@ class ParticipantWorkflowScreen:
                 else:
                     try:
                         from pineuro.tasks import get_task_metadata
+
                         task_meta = get_task_metadata(loc_type)
                         loc_label = task_meta.display_name
                     except (ValueError, ImportError):
@@ -2659,9 +2657,7 @@ class ParticipantWorkflowScreen:
 
                 if loc_idx > 0:
                     controls.append(ft.Divider())
-                controls.append(
-                    ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500)
-                )
+                controls.append(ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500))
 
                 for run_num in range(1, loc_n_runs + 1):
                     step_id = f"localizer_{loc_idx}_run_{run_num}"
@@ -2680,6 +2676,7 @@ class ParticipantWorkflowScreen:
                 localizer_task_type = config.get("scan", {}).get("localizer_task_type", "unknown")
                 try:
                     from pineuro.tasks import get_task_metadata
+
                     task_meta = get_task_metadata(localizer_task_type)
                     localizer_label = task_meta.display_name
                 except (ValueError, ImportError):
@@ -2852,6 +2849,7 @@ class ParticipantWorkflowScreen:
                 else:
                     try:
                         from pineuro.tasks import get_task_metadata
+
                         task_meta = get_task_metadata(loc_type)
                         loc_label = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
                     except (ValueError, ImportError):
@@ -2863,19 +2861,21 @@ class ParticipantWorkflowScreen:
                 preproc_id = f"localizer_{loc_idx}_preprocessing"
                 extract_id = f"localizer_{loc_idx}_extraction"
                 approval_id = f"localizer_{loc_idx}_approval"
-                controls.extend([
-                    ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500),
-                    self._create_step_button(
-                        preproc_id,
-                        "Preprocess",
-                        lambda e, sid=preproc_id: self._on_step_clicked(sid),
-                    ),
-                    self._create_step_button(
-                        extract_id,
-                        "Extract Masks",
-                        lambda e, sid=extract_id: self._on_step_clicked(sid),
-                    ),
-                ])
+                controls.extend(
+                    [
+                        ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500),
+                        self._create_step_button(
+                            preproc_id,
+                            "Preprocess",
+                            lambda e, sid=preproc_id: self._on_step_clicked(sid),
+                        ),
+                        self._create_step_button(
+                            extract_id,
+                            "Extract Masks",
+                            lambda e, sid=extract_id: self._on_step_clicked(sid),
+                        ),
+                    ]
+                )
 
                 # Per-localizer approval button (shown after extraction completes)
                 extraction_complete = self.step_statuses.get(extract_id) == StepStatus.COMPLETE
@@ -2912,21 +2912,23 @@ class ParticipantWorkflowScreen:
                         )
         else:
             # Single localizer
-            controls.extend([
-                ft.Text("Preprocessing", size=14, weight=ft.FontWeight.W_500),
-                self._create_step_button(
-                    "preprocessing",
-                    "Run Preprocessing",
-                    lambda e: self._on_step_clicked("preprocessing"),
-                ),
-                ft.Divider(),
-                ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
-                self._create_step_button(
-                    "mask_extraction",
-                    "Extract Masks",
-                    lambda e: self._on_step_clicked("mask_extraction"),
-                ),
-            ])
+            controls.extend(
+                [
+                    ft.Text("Preprocessing", size=14, weight=ft.FontWeight.W_500),
+                    self._create_step_button(
+                        "preprocessing",
+                        "Run Preprocessing",
+                        lambda e: self._on_step_clicked("preprocessing"),
+                    ),
+                    ft.Divider(),
+                    ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
+                    self._create_step_button(
+                        "mask_extraction",
+                        "Extract Masks",
+                        lambda e: self._on_step_clicked("mask_extraction"),
+                    ),
+                ]
+            )
 
             # Single-localizer approval
             all_extraction_complete = self.step_statuses.get("mask_extraction") == StepStatus.COMPLETE
@@ -3845,6 +3847,7 @@ class ParticipantWorkflowScreen:
         frc_idx = self._get_feedback_step_frc_index(step_id)
         feedback_runs = config.get("feedback_runs", [])
         frc = feedback_runs[frc_idx] if frc_idx is not None and frc_idx < len(feedback_runs) else None
+
         def _fv(key, default=None):
             if frc and key in frc:
                 return frc[key]
@@ -4393,7 +4396,11 @@ class ParticipantWorkflowScreen:
         outputs_exist = step_info.get("outputs_exist", False)
         overwrite_warning = None
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-        is_collection = step_id.startswith("rest_run_") or (step_id.startswith("localizer_") and "_run_" in step_id) or step_id in ("reference_initial", "reference_realtime")
+        is_collection = (
+            step_id.startswith("rest_run_")
+            or (step_id.startswith("localizer_") and "_run_" in step_id)
+            or step_id in ("reference_initial", "reference_realtime")
+        )
         if outputs_exist:
             if is_collection or is_feedback_transfer:
                 # Collection and feedback steps use acq numbering - previous data is archived
@@ -4776,9 +4783,7 @@ class ParticipantWorkflowScreen:
 
         return info
 
-    def _get_transfer_step_info(
-        self, config: dict, base_dir: Path, participant_id: str, transfer_num: int
-    ) -> dict:
+    def _get_transfer_step_info(self, config: dict, base_dir: Path, participant_id: str, transfer_num: int) -> dict:
         """Build step info for a transfer run, using per-FRC values when available."""
         step_id = f"transfer_{transfer_num}"
         frc_idx = self._get_feedback_step_frc_index(step_id)
@@ -4940,6 +4945,7 @@ class ParticipantWorkflowScreen:
             else:
                 try:
                     from pineuro.tasks import get_task_metadata
+
                     task_meta = get_task_metadata(loc_type)
                     loc_display = task_meta.display_name
                 except (ValueError, ImportError):
@@ -5007,6 +5013,7 @@ class ParticipantWorkflowScreen:
             else:
                 try:
                     from pineuro.tasks import get_task_metadata
+
                     task_meta = get_task_metadata(loc_type)
                     loc_display = task_meta.display_name
                 except (ValueError, ImportError):
@@ -5048,6 +5055,7 @@ class ParticipantWorkflowScreen:
             else:
                 try:
                     from pineuro.tasks import get_task_metadata
+
                     task_meta = get_task_metadata(loc_type)
                     loc_display = task_meta.display_name
                 except (ValueError, ImportError):
@@ -5134,6 +5142,7 @@ class ParticipantWorkflowScreen:
                 networks_str = ", ".join(self._resolve_mask_names(config))
 
             _frc = frc if (frc_idx is not None and frc_idx < len(feedback_runs)) else None
+
             def _fb_get(k: str, d: Any = None) -> Any:
                 return _frc.get(k, config["feedback"].get(k, d)) if _frc else config["feedback"].get(k, d)
 
@@ -5238,7 +5247,11 @@ class ParticipantWorkflowScreen:
         """
         # Check if outputs exist for processing steps (not collection/feedback)
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-        is_collection = step_id.startswith("rest_run_") or (step_id.startswith("localizer_") and "_run_" in step_id) or step_id in ("reference_initial", "reference_realtime")
+        is_collection = (
+            step_id.startswith("rest_run_")
+            or (step_id.startswith("localizer_") and "_run_" in step_id)
+            or step_id in ("reference_initial", "reference_realtime")
+        )
 
         if not is_feedback_transfer and not is_collection:
             config = self.study_config.session_config
@@ -5741,9 +5754,7 @@ class ParticipantWorkflowScreen:
         frc_idx = self._get_feedback_step_frc_index(step_id)
         feedback_runs = config.get("feedback_runs", [])
         self._active_frc: dict | None = (
-            feedback_runs[frc_idx]
-            if frc_idx is not None and frc_idx < len(feedback_runs)
-            else None
+            feedback_runs[frc_idx] if frc_idx is not None and frc_idx < len(feedback_runs) else None
         )
 
         # Check if this is a feedback/transfer step
@@ -6873,28 +6884,36 @@ class ParticipantWorkflowScreen:
                 for loc_idx, loc in enumerate(localizers):
                     loc_type = loc.get("type", "rest")
                     loc_label = loc_type.upper() if loc_type != "rest" else "Rest"
-                    workflow.append((
-                        f"localizer_{loc_idx}_preprocessing",
-                        self._get_step_label(f"localizer_{loc_idx}_preprocessing"),
-                    ))
-                    workflow.append((
-                        f"localizer_{loc_idx}_extraction",
-                        self._get_step_label(f"localizer_{loc_idx}_extraction"),
-                    ))
-                    workflow.append((
-                        f"localizer_{loc_idx}_approval",
-                        f"Review & Approve Masks (Loc {loc_idx + 1}: {loc_label})",
-                    ))
+                    workflow.append(
+                        (
+                            f"localizer_{loc_idx}_preprocessing",
+                            self._get_step_label(f"localizer_{loc_idx}_preprocessing"),
+                        )
+                    )
+                    workflow.append(
+                        (
+                            f"localizer_{loc_idx}_extraction",
+                            self._get_step_label(f"localizer_{loc_idx}_extraction"),
+                        )
+                    )
+                    workflow.append(
+                        (
+                            f"localizer_{loc_idx}_approval",
+                            f"Review & Approve Masks (Loc {loc_idx + 1}: {loc_label})",
+                        )
+                    )
             else:
                 # Single localizer
                 n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
                 for run_num in range(1, n_localizer_runs + 1):
                     step_id = f"rest_run_{run_num}"
                     workflow.append((step_id, self._get_step_label(step_id)))
-                workflow.extend([
-                    ("preprocessing", "Run Preprocessing"),
-                    ("mask_extraction", "Extract Masks"),
-                ])
+                workflow.extend(
+                    [
+                        ("preprocessing", "Run Preprocessing"),
+                        ("mask_extraction", "Extract Masks"),
+                    ]
+                )
                 workflow.append(("mask_approval", "Review & Approve Masks"))
 
             # Add coregistration only if initial reference is enabled

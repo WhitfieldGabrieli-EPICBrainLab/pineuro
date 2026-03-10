@@ -313,8 +313,7 @@ class StudyEditorScreen:
         if self._feedback_type_options_cache is None:
             feedback_tasks = list_available_tasks(role="feedback")
             self._feedback_type_options_cache = [
-                ft.dropdown.Option(key=task_id, text=meta.display_name)
-                for task_id, meta in feedback_tasks.items()
+                ft.dropdown.Option(key=task_id, text=meta.display_name) for task_id, meta in feedback_tasks.items()
             ]
         return self._feedback_type_options_cache
 
@@ -434,21 +433,23 @@ class StudyEditorScreen:
     def _on_add_localizer(self, e):
         """Add a new localizer tab."""
         self._collect_all_configs()
-        self._localizer_configs.append({
-            "type": "rest",
-            "tr": 1.2,
-            "n_volumes": 200,
-            "n_runs": 2,
-            "network_atlas": "yeo_17",
-            "n_yeo": 17,
-            "yeo_targets": ["DefaultA", "ContA"],
-            "n_components": 20,
-            "smooth_fwhm": 5.0,
-            "highpass": 0.01,
-            "threshold": 2000,
-            "threshold_method": "top_n",
-            "source_dicoms": [],
-        })
+        self._localizer_configs.append(
+            {
+                "type": "rest",
+                "tr": 1.2,
+                "n_volumes": 200,
+                "n_runs": 2,
+                "network_atlas": "yeo_17",
+                "n_yeo": 17,
+                "yeo_targets": ["DefaultA", "ContA"],
+                "n_components": 20,
+                "smooth_fwhm": 5.0,
+                "highpass": 0.01,
+                "threshold": 2000,
+                "threshold_method": "top_n",
+                "source_dicoms": [],
+            }
+        )
         self._rebuild_tabs()
 
     def _on_remove_localizer_at(self, index: int):
@@ -817,14 +818,18 @@ class StudyEditorScreen:
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
-                    ft.Row([
-                        ft.Container(self.reference_initial_enabled_checkbox, width=420),
-                        self.reference_initial_n_volumes_field,
-                    ]),
-                    ft.Row([
-                        ft.Container(self.reference_realtime_enabled_checkbox, width=420),
-                        self.reference_realtime_n_volumes_field,
-                    ]),
+                    ft.Row(
+                        [
+                            ft.Container(self.reference_initial_enabled_checkbox, width=420),
+                            self.reference_initial_n_volumes_field,
+                        ]
+                    ),
+                    ft.Row(
+                        [
+                            ft.Container(self.reference_realtime_enabled_checkbox, width=420),
+                            self.reference_realtime_n_volumes_field,
+                        ]
+                    ),
                     ft.Divider(),
                     ft.Text("Acquisition Mode", size=16, weight=ft.FontWeight.BOLD),
                     self.simulator_enabled_checkbox,
@@ -1022,9 +1027,7 @@ class StudyEditorScreen:
         # Initial reference
         init_enabled = self.reference_initial_enabled_checkbox.value
         init_val = scan_config.get("reference_initial_dicoms", "")
-        self._sim_loc_ref_label = ft.Text(
-            "Initial Reference Scan", size=14, weight=ft.FontWeight.W_500
-        )
+        self._sim_loc_ref_label = ft.Text("Initial Reference Scan", size=14, weight=ft.FontWeight.W_500)
         self._sim_loc_ref_label.visible = init_enabled
         controls.append(self._sim_loc_ref_label)
         self._sim_loc_ref_field = ft.TextField(
@@ -1043,9 +1046,7 @@ class StudyEditorScreen:
         # Real-time reference
         rt_enabled = self.reference_realtime_enabled_checkbox.value
         rt_val = scan_config.get("reference_realtime_dicoms", "")
-        self._sim_fb_ref_label = ft.Text(
-            "Real-Time Reference Scan", size=14, weight=ft.FontWeight.W_500
-        )
+        self._sim_fb_ref_label = ft.Text("Real-Time Reference Scan", size=14, weight=ft.FontWeight.W_500)
         self._sim_fb_ref_label.visible = rt_enabled
         controls.append(self._sim_fb_ref_label)
         self._sim_fb_ref_field = ft.TextField(
@@ -1072,9 +1073,7 @@ class StudyEditorScreen:
         # Localizer sources
         for loc_idx, loc_fields in enumerate(getattr(self, "_sim_loc_source_fields", [])):
             if loc_idx < len(self._localizer_configs):
-                self._localizer_configs[loc_idx]["source_dicoms"] = [
-                    f.value.strip() for f in loc_fields
-                ]
+                self._localizer_configs[loc_idx]["source_dicoms"] = [f.value.strip() for f in loc_fields]
 
         # Feedback sources
         for fb_idx, fb_field in enumerate(getattr(self, "_sim_fb_source_fields", [])):
@@ -1649,9 +1648,7 @@ class StudyEditorScreen:
             task_type = first_fb.get("task_type", "ball")
             config["task"]["task_type"] = task_type
             # Total runs = sum of max_runs across all feedback tasks
-            config["task"]["max_feedback_runs"] = sum(
-                fb_cfg.get("max_runs", 1) for fb_cfg in feedback_configs
-            )
+            config["task"]["max_feedback_runs"] = sum(fb_cfg.get("max_runs", 1) for fb_cfg in feedback_configs)
             task_params = first_fb.get("task_params", {})
             if task_type not in config["task"]:
                 config["task"][task_type] = {}
@@ -1666,9 +1663,7 @@ class StudyEditorScreen:
             config["sham"].pop("replay_source_dir", None)
 
             # Flat DICOM sources
-            config["scan"]["feedback_source_dicoms"] = [
-                fb_cfg.get("source_dicoms", "") for fb_cfg in feedback_configs
-            ]
+            config["scan"]["feedback_source_dicoms"] = [fb_cfg.get("source_dicoms", "") for fb_cfg in feedback_configs]
             config["scan"]["transfer_source_dicoms"] = [
                 fb_cfg.get("transfer_source_dicoms", "") for fb_cfg in feedback_configs[:2]
             ]

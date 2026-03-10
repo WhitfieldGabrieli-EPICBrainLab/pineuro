@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import flet as ft
 
@@ -76,7 +77,7 @@ class FeedbackTabBuilder:
         self._create_file_browse_button = create_file_browse_button
 
         self.validation_errors: dict[str, str] = {}
-        self.task_param_fields: dict[str, ft.Control] = {}
+        self.task_param_fields: dict[str, Any] = {}
 
         self._create_fields()
 
@@ -101,7 +102,10 @@ class FeedbackTabBuilder:
             self._task_n_networks = 2  # assume multi-network if unknown
             self._task_network_roles = []
         self.type_display_text = ft.Text(
-            type_label, size=14, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_700,
+            type_label,
+            size=14,
+            weight=ft.FontWeight.W_500,
+            color=ft.Colors.BLUE_700,
         )
 
         # Number of runs for this feedback task
@@ -134,7 +138,6 @@ class FeedbackTabBuilder:
         )
 
         # Session structure
-        task_type = c.get("task_type", "ball")
         n_baseline_default = c.get("n_baseline", fb.get("n_baseline", 25))
 
         self.n_baseline_field = ft.TextField(
@@ -433,7 +436,7 @@ class FeedbackTabBuilder:
         # Sham network dropdowns
         from ..utils import YEO_17_LABELS
 
-        yeo_options = [ft.dropdown.Option(key=l, text=l) for l in YEO_17_LABELS]
+        yeo_options = [ft.dropdown.Option(key=label, text=label) for label in YEO_17_LABELS]
 
         self.sham_hemisphere_network_dropdown = ft.Dropdown(
             width=600,
@@ -622,7 +625,7 @@ class FeedbackTabBuilder:
                 if dd.value:
                     assignment[role_key] = dd.value
             # Also include the differential pair roles
-            diff_roles = self._task_network_roles[len(self._extra_role_dropdowns):]
+            diff_roles = self._task_network_roles[len(self._extra_role_dropdowns) :]
             if len(diff_roles) >= 2 and pos and neg:
                 assignment[diff_roles[0].key] = pos
                 assignment[diff_roles[1].key] = neg
@@ -967,7 +970,7 @@ class FeedbackTabBuilder:
             field = self._create_field_for_parameter(param, task_config)
             self.task_param_fields[param.key] = field
 
-    def _create_field_for_parameter(self, param: TaskParameter, task_config: dict) -> ft.Control:
+    def _create_field_for_parameter(self, param: TaskParameter, task_config: dict) -> Any:
         """Create appropriate Flet control for a parameter."""
         current_value = task_config.get(param.key, param.default)
 
@@ -1050,7 +1053,7 @@ class FeedbackTabBuilder:
             if field is None:
                 continue
             if param.type == "dir":
-                text_field = field.controls[0] if isinstance(field, ft.Row) else field
+                text_field: Any = field.controls[0] if isinstance(field, ft.Row) else field
                 params[param.key] = text_field.value
             elif param.type == "bool":
                 params[param.key] = field.value
@@ -1072,10 +1075,10 @@ class FeedbackTabBuilder:
         """Validate a form field."""
         try:
             validator(field.value, name)
-            field.error_text = None
+            field.error = None
             self.validation_errors.pop(name, None)
         except ValidationError as e:
-            field.error_text = str(e)
+            field.error = str(e)
             self.validation_errors[name] = str(e)
         with contextlib.suppress(Exception):
             field.update()
