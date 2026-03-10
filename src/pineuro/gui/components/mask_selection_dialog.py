@@ -5,21 +5,18 @@ Provides a two-stage dialog flow:
 2. Select alternative (different ICA component or Yeo atlas fallback) for rejected masks
 """
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import flet as ft
 
-from pineuro.mask_extraction import (
-    MaskSelection,
-    compute_mask_network_correlation,
-    get_alternative_components,
-    load_mask_selections,
-    regenerate_mask_from_selection,
-    save_mask_selections,
-)
+if TYPE_CHECKING:
+    from pineuro.mask_extraction import MaskSelection
 
 from .qc_viewer import open_qc_report
 
@@ -163,6 +160,8 @@ class MaskSelectionDialog:
         self._combine_preview_container: ft.Container | None = None
 
         # Load existing selections
+        from pineuro.mask_extraction import MaskSelection, load_mask_selections
+
         existing = load_mask_selections(masks_dir)
         for name, info in self.masks_info.items():
             if name in existing:
@@ -614,6 +613,7 @@ class MaskSelectionDialog:
                 n_alternatives=self.n_components,  # Generate for all components
                 output_dir=qc_dir,
                 n_yeo=self.n_yeo,
+                ref_file=self.ref_file,
             )
 
             # Update info with newly generated overlay paths
@@ -634,6 +634,7 @@ class MaskSelectionDialog:
                 network_name=network_name,
                 output_dir=qc_dir,
                 n_yeo=self.n_yeo,
+                ref_file=self.ref_file,
             )
 
             if yeo_overlay:
@@ -997,7 +998,7 @@ class MaskSelectionDialog:
 
         try:
             from pineuro import qc
-            from pineuro.mask_extraction import combine_ica_components
+            from pineuro.mask_extraction import combine_ica_components, compute_mask_network_correlation
 
             # Generate temporary combined mask
             temp_dir = self.mask_extraction_dir / "qc" / "temp"
@@ -1108,6 +1109,8 @@ class MaskSelectionDialog:
 
     def _on_accept_clicked(self, network_name: str):
         """Handle accept button click for a mask."""
+        from pineuro.mask_extraction import MaskSelection
+
         info = self.masks_info[network_name]
         info.accepted = True
 
@@ -1148,6 +1151,8 @@ class MaskSelectionDialog:
 
     def _on_select_alternative_clicked(self, e):
         """Handle Select button in Stage 2 - apply alternative selection."""
+        from pineuro.mask_extraction import MaskSelection
+
         network_name = self._current_reject_network
         if not network_name:
             return
@@ -1176,7 +1181,7 @@ class MaskSelectionDialog:
             # Generate the combined mask and compute its actual correlation with the Yeo network
             combined_corr = corr_1  # Fallback to component 1's correlation
             try:
-                from pineuro.mask_extraction import combine_ica_components
+                from pineuro.mask_extraction import combine_ica_components, compute_mask_network_correlation
 
                 # Generate combined mask (or use existing temp one from preview)
                 temp_dir = self.mask_extraction_dir / "qc" / "temp"
@@ -1398,6 +1403,8 @@ class MaskSelectionDialog:
         try:
             import pandas as pd  # type: ignore[import-untyped]
 
+            from pineuro.mask_extraction import get_alternative_components, load_mask_selections
+
             # Check if approval marker was removed (e.g., by running reproduce_masks.py)
             approval_marker = self.mask_extraction_dir / ".masks_approved"
             approval_removed = not approval_marker.exists()
@@ -1568,6 +1575,12 @@ class MaskSelectionDialog:
 
     def _apply_and_close(self):
         """Save selections, regenerate modified masks, and close."""
+        from pineuro.mask_extraction import (
+            load_mask_selections,
+            regenerate_mask_from_selection,
+            save_mask_selections,
+        )
+
         # Check which masks need regeneration
         existing = load_mask_selections(self.masks_dir)
         modified_networks = []

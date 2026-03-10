@@ -972,6 +972,132 @@ class FeedbackConfig:
 
 
 @dataclass
+class FeedbackRunConfig:
+    """Configuration for a single feedback task type in a session.
+
+    A session can have multiple feedback task types (e.g., triggered experience
+    sampling + ball task), each with independent scan parameters, GLM settings,
+    and feedback mode. Each ``FeedbackRunConfig`` is repeated for ``max_runs``
+    iterations during the session.
+
+    Parameters
+    ----------
+    task_type : str
+        Registered task identifier (e.g., ``"ball"``, ``"thermometer"``).
+    max_runs : int
+        Number of feedback runs for this task type.
+    tr : float
+        Repetition time in seconds.
+    n_volumes : int
+        Total volumes per run.
+    n_baseline : int
+        Number of baseline volumes before task onset.
+    motion_correction : str
+        Real-time motion correction mode (``"siemens_moco"``, ``"software"``, ``"none"``).
+    include_drift : bool
+        Include linear drift regressor in GLM.
+    include_motion_regressors : bool
+        Include 6 motion parameters as GLM nuisance regressors.
+    include_wm_regressor : bool
+        Include white matter mean signal regressor.
+    include_csf_regressor : bool
+        Include CSF mean signal regressor.
+    smooth_fwhm : float or None
+        Gaussian spatial smoothing FWHM in mm. None disables.
+    feedback_mode : str
+        ``"activation"`` or ``"connectivity"``.
+    target_mask : str or None
+        Target mask name for single-network tasks.
+    differential_pair : list of str or None
+        [positive, negative] mask names for differential activation.
+    connectivity_pairs : list of list of str or None
+        Mask pairs for sliding-window correlation.
+    connectivity_window : int
+        Sliding window size in volumes.
+    connectivity_target : str
+        ``"increase"`` or ``"decrease"``.
+    feedback_interval : int or None
+        Volumes between feedback deliveries. None = continuous.
+    fd_threshold : float
+        Framewise displacement threshold.
+    dvars_threshold : float
+        DVARS threshold.
+    tsnr_threshold : float
+        tSNR threshold.
+    use_transfer_runs : bool
+        Whether to include transfer runs for this task.
+    task_params : dict
+        Task-specific parameters passed to ``create_task()``.
+    network_assignment : dict
+        Maps network role keys to mask names.
+    sham : dict
+        Sham configuration for this feedback task.
+    source_dicoms : str
+        Simulator DICOM source for feedback runs.
+    transfer_source_dicoms : str
+        Simulator DICOM source for transfer runs.
+    reference_realtime_dicoms : str
+        Simulator DICOM source for realtime reference.
+    reference_realtime_enabled : bool
+        Whether to collect realtime reference scan.
+    reference_realtime_n_volumes : int
+        Volumes for realtime reference acquisition.
+    """
+
+    task_type: str = "ball"
+    max_runs: int = 1
+    tr: float = 1.2
+    n_volumes: int = 150
+    n_baseline: int = 25
+
+    # GLM settings
+    motion_correction: str = "siemens_moco"
+    include_drift: bool = True
+    include_motion_regressors: bool = True
+    include_wm_regressor: bool = False
+    include_csf_regressor: bool = False
+    smooth_fwhm: float | None = None
+
+    # Feedback signal
+    feedback_mode: str = "activation"
+    target_mask: str | None = None
+    differential_pair: list[str] | None = None
+    connectivity_pairs: list[list[str]] | None = None
+    connectivity_window: int = 15
+    connectivity_target: str = "increase"
+    feedback_interval: int | None = None
+
+    # QC thresholds
+    fd_threshold: float = 0.5
+    dvars_threshold: float = 1.5
+    tsnr_threshold: float = 20.0
+
+    # Transfer runs
+    use_transfer_runs: bool = True
+
+    # Task-specific
+    task_params: dict[str, Any] = field(default_factory=dict)
+    network_assignment: dict[str, str] = field(default_factory=dict)
+
+    # Sham
+    sham: dict[str, Any] = field(default_factory=dict)
+
+    # Simulator sources
+    source_dicoms: str = ""
+    transfer_source_dicoms: str = ""
+    reference_realtime_dicoms: str = ""
+    reference_realtime_enabled: bool = True
+    reference_realtime_n_volumes: int = 2
+
+    def __post_init__(self) -> None:
+        valid_moco = {"siemens_moco", "software", "none"}
+        if self.motion_correction not in valid_moco:
+            raise ValueError(
+                f"motion_correction must be one of {valid_moco}, got '{self.motion_correction}'"
+            )
+
+
+@dataclass
 class TaskConfig:
     """Generic task configuration.
 
@@ -1031,51 +1157,6 @@ class SelectedAcquisitions:
             self.feedback = {}
 
 
-def _convert_legacy_localizer_config(scan: ScanConfig, mask: MaskConfig) -> list[LocalizerConfig]:
-    """Convert old-style single-localizer config to a ``localizers`` list.
-
-    Called when loading configs that lack a ``localizers`` key. Builds a
-    single-element list from the existing ``MaskConfig`` and ``ScanConfig``
-    fields. Returns an empty list for manual-import configs (no localizer).
-    """
-    if mask.localizer_type == "manual":
-        return []
-
-    loc_type = "rest" if mask.localizer_type == "rest" else scan.localizer_task_type
-
-    loc = LocalizerConfig(
-        type=loc_type,
-        tr=scan.localizer_tr,
-        n_volumes=scan.localizer_n_volumes,
-        n_runs=scan.localizer_n_runs,
-        source_dicoms=list(scan.localizer_source_dicoms),
-        # Rest-specific
-        n_yeo=mask.n_yeo,
-        yeo_targets=list(mask.yeo_targets),
-        network_atlas=mask.network_atlas,
-        smooth_fwhm=mask.smooth_fwhm,
-        highpass=mask.highpass,
-        lowpass=mask.lowpass,
-        # Task-specific
-        contrasts=dict(mask.contrasts),
-        include_reverse_contrasts=mask.include_reverse_contrasts,
-        events_file=mask.events_file,
-        stat_type=mask.stat_type,
-        hrf_model=mask.hrf_model,
-        drift_model=mask.drift_model,
-        # Shared
-        threshold=mask.threshold,
-        threshold_method=mask.threshold_method,
-        atlas_mask=mask.atlas_mask,
-        atlas_name=mask.atlas_name,
-        atlas_source=mask.atlas_source,
-        atlas_regions=mask.atlas_regions,
-        cluster_start_threshold=mask.cluster_start_threshold,
-        cluster_step=mask.cluster_step,
-    )
-    return [loc]
-
-
 @dataclass
 class SessionConfig:
     """Top-level configuration combining all session settings.
@@ -1128,6 +1209,7 @@ class SessionConfig:
     visit: VisitConfig | None = None
     sham: ShamConfig | None = None
     localizers: list[LocalizerConfig] = field(default_factory=list)
+    feedback_runs: list[FeedbackRunConfig] = field(default_factory=list)
 
     @classmethod
     def from_yaml(cls, path: Path) -> SessionConfig:
@@ -1172,12 +1254,13 @@ class SessionConfig:
         sham_data = data.get("sham")
         sham = ShamConfig(**sham_data) if sham_data else None
 
-        # Parse localizers list, or convert from legacy single-localizer config
-        localizers_data = data.get("localizers")
-        if localizers_data is not None:
-            localizers = [LocalizerConfig(**loc_data) for loc_data in localizers_data]
-        else:
-            localizers = _convert_legacy_localizer_config(scan, mask)
+        # Parse localizers list
+        localizers_data = data.get("localizers", [])
+        localizers = [LocalizerConfig(**loc_data) for loc_data in localizers_data]
+
+        # Parse feedback_runs list
+        feedback_runs_data = data.get("feedback_runs", [])
+        feedback_runs = [FeedbackRunConfig(**frc) for frc in feedback_runs_data]
 
         config = cls(
             paths=paths,
@@ -1188,6 +1271,7 @@ class SessionConfig:
             visit=visit,
             sham=sham,
             localizers=localizers,
+            feedback_runs=feedback_runs,
         )
         config.derive_combined_mask_names()
         return config
@@ -1224,6 +1308,8 @@ class SessionConfig:
             result["sham"] = _path_to_str(asdict(self.sham))
         if self.localizers:
             result["localizers"] = [_path_to_str(asdict(loc)) for loc in self.localizers]
+        if self.feedback_runs:
+            result["feedback_runs"] = [_path_to_str(asdict(frc)) for frc in self.feedback_runs]
         return result
 
     def derive_combined_mask_names(self) -> None:
@@ -2527,11 +2613,13 @@ def run_single_task(
     session_state: SessionState,
     run_type: str,
     use_simulator: bool = True,
+    run_config: FeedbackRunConfig | None = None,
 ) -> dict[str, Any]:
     """Run a single task (transfer or feedback).
 
     Uses the task registry and factory to create the appropriate task based
-    on config.task.task_type. Task-specific parameters come from config.task.task_params.
+    on the task type. When *run_config* is provided, its per-run settings
+    override the flat ``config.feedback`` / ``config.task`` values.
 
     Parameters
     ----------
@@ -2545,6 +2633,9 @@ def run_single_task(
         'transfer' or 'feedback'
     use_simulator : bool
         If True, use DICOM simulator for testing
+    run_config : FeedbackRunConfig, optional
+        Per-feedback-run configuration. When provided, takes priority over
+        the flat ``config.feedback`` and ``config.task`` fields.
 
     Returns
     -------
@@ -2556,6 +2647,42 @@ def run_single_task(
     from .tasks.factory import create_task
     from .tasks.task_registry import get_task_metadata
 
+    # Resolve effective task type and parameters from run_config or flat config
+    if run_config is not None:
+        eff_task_type = run_config.task_type
+        eff_task_params = run_config.task_params
+        eff_network_assignment = run_config.network_assignment
+        eff_n_baseline = run_config.n_baseline
+        eff_n_volumes = run_config.n_volumes
+        eff_tr = run_config.tr
+        eff_motion_correction = run_config.motion_correction
+        eff_include_drift = run_config.include_drift
+        eff_include_motion_regressors = run_config.include_motion_regressors
+        eff_include_wm_regressor = run_config.include_wm_regressor
+        eff_include_csf_regressor = run_config.include_csf_regressor
+        eff_smooth_fwhm = run_config.smooth_fwhm
+        eff_differential_pair = run_config.differential_pair
+        eff_feedback_interval = run_config.feedback_interval
+        eff_connectivity_pairs = run_config.connectivity_pairs
+        eff_connectivity_window = run_config.connectivity_window
+    else:
+        eff_task_type = config.task.task_type
+        eff_task_params = config.task.task_params
+        eff_network_assignment = config.task.network_assignment
+        eff_n_baseline = config.feedback.n_baseline
+        eff_n_volumes = config.feedback.n_volumes
+        eff_tr = config.scan.feedback_tr
+        eff_motion_correction = config.feedback.motion_correction
+        eff_include_drift = config.feedback.include_drift
+        eff_include_motion_regressors = config.feedback.include_motion_regressors
+        eff_include_wm_regressor = config.feedback.include_wm_regressor
+        eff_include_csf_regressor = config.feedback.include_csf_regressor
+        eff_smooth_fwhm = config.feedback.smooth_fwhm
+        eff_differential_pair = config.feedback.differential_pair
+        eff_feedback_interval = config.feedback.feedback_interval
+        eff_connectivity_pairs = config.feedback.connectivity_pairs
+        eff_connectivity_window = config.feedback.connectivity_window
+
     run_number = session_state.next_run_number
     task_run_number = session_state.next_run_number_for_type(run_type)
     feedback_mode = run_type == "feedback"
@@ -2564,12 +2691,13 @@ def run_single_task(
     logger.info("=" * 60)
     logger.info(f"RUN {run_number}: {run_type.upper()} (task run {task_run_number})")
     logger.info("=" * 60)
+    logger.info(f"Task: {eff_task_type}")
     logger.info(f"Mode: {'FEEDBACK' if feedback_mode else 'TRANSFER (no feedback)'}")
     logger.info(f"Task state: {session_state.task_state}")
 
     # Compute task regressors based on task metadata design_type
-    metadata = get_task_metadata(config.task.task_type)
-    task_regressors = _compute_regressors_for_task(metadata, config)
+    metadata = get_task_metadata(eff_task_type)
+    task_regressors = _compute_regressors_for_task(metadata, config, run_config)
 
     # Set up simulator parameters if using simulator
     simulator_kwargs: dict[str, Any] = {}
@@ -2584,7 +2712,9 @@ def run_single_task(
         }
 
     # Resolve mask names from network assignment
-    task_mask_names = _resolve_mask_names(config, metadata)
+    task_mask_names = _resolve_mask_names_for_run(
+        config, metadata, eff_network_assignment
+    )
 
     assert config.paths.feedback_output_dir is not None
     assert config.paths.collection_dir is not None
@@ -2596,22 +2726,24 @@ def run_single_task(
         run=task_run_number,
         output_dir=config.paths.feedback_output_dir,
         collection_dir=config.paths.collection_dir,
-        n_baseline=config.feedback.n_baseline,
-        n_volumes=config.feedback.n_volumes,
-        tr=config.scan.tr,
+        n_baseline=eff_n_baseline,
+        n_volumes=eff_n_volumes,
+        tr=eff_tr,
         task_regressors=task_regressors,
         mask_names=config.mask.mask_names,
         use_efficiency_weights=config.feedback.use_efficiency_weights,
-        motion_correction=config.feedback.motion_correction,
-        include_drift=config.feedback.include_drift,
-        include_motion_regressors=config.feedback.include_motion_regressors,
-        include_wm_regressor=config.feedback.include_wm_regressor,
-        include_csf_regressor=config.feedback.include_csf_regressor,
-        smooth_fwhm=config.feedback.smooth_fwhm,
-        differential_pair=config.feedback.differential_pair,
-        feedback_interval=config.feedback.feedback_interval,
+        motion_correction=eff_motion_correction,
+        include_drift=eff_include_drift,
+        include_motion_regressors=eff_include_motion_regressors,
+        include_wm_regressor=eff_include_wm_regressor,
+        include_csf_regressor=eff_include_csf_regressor,
+        smooth_fwhm=eff_smooth_fwhm,
+        differential_pair=eff_differential_pair,
+        feedback_interval=eff_feedback_interval,
         wm_mask_path=config.feedback.wm_mask_path,
         csf_mask_path=config.feedback.csf_mask_path,
+        connectivity_pairs=eff_connectivity_pairs,
+        connectivity_window=eff_connectivity_window,
         **simulator_kwargs,
     )
 
@@ -2623,14 +2755,14 @@ def run_single_task(
 
     # Build config for task factory
     factory_config = {
-        **config.task.task_params,
+        **eff_task_params,
         "mask_names": task_mask_names,
         "feedback_mode": feedback_mode,
     }
 
     # Create task via factory
     task = create_task(
-        task_id=config.task.task_type,
+        task_id=eff_task_type,
         coordinator=coordinator,
         config=factory_config,
         session_state=session_state,
@@ -2661,7 +2793,11 @@ def run_single_task(
     return results
 
 
-def _compute_regressors_for_task(metadata: Any, config: SessionConfig) -> Any:
+def _compute_regressors_for_task(
+    metadata: Any,
+    config: SessionConfig,
+    run_config: FeedbackRunConfig | None = None,
+) -> Any:
     """Compute task regressors based on metadata.design_type.
 
     Parameters
@@ -2669,7 +2805,9 @@ def _compute_regressors_for_task(metadata: Any, config: SessionConfig) -> Any:
     metadata : TaskMetadata
         Task metadata with design_type field
     config : SessionConfig
-        Session configuration with feedback params
+        Session configuration (fallback values)
+    run_config : FeedbackRunConfig, optional
+        Per-run overrides for n_baseline, n_volumes, tr.
 
     Returns
     -------
@@ -2678,17 +2816,20 @@ def _compute_regressors_for_task(metadata: Any, config: SessionConfig) -> Any:
     """
     from .utils import compute_boxcar_task_regressor
 
+    n_baseline = run_config.n_baseline if run_config else config.feedback.n_baseline
+    n_volumes = run_config.n_volumes if run_config else config.feedback.n_volumes
+    tr = run_config.tr if run_config else config.scan.feedback_tr
+
     if metadata.design_type == "nuisance_only":
         return None
     elif metadata.design_type == "block":
         regressors = compute_boxcar_task_regressor(
-            n_baseline=config.feedback.n_baseline,
-            n_volumes=config.feedback.n_volumes,
-            tr=config.scan.tr,
+            n_baseline=n_baseline,
+            n_volumes=n_volumes,
+            tr=tr,
         )
         logger.info(
-            f"Computed boxcar task regressor (baseline={config.feedback.n_baseline}, "
-            f"volumes={config.feedback.n_volumes})"
+            f"Computed boxcar task regressor (baseline={n_baseline}, volumes={n_volumes})"
         )
         return regressors
     else:
@@ -2715,6 +2856,30 @@ def _resolve_mask_names(config: SessionConfig, metadata: Any) -> list[str]:
         mask_names = []
         for i, role in enumerate(metadata.network_roles):
             name = config.task.network_assignment.get(role.key)
+            if name:
+                mask_names.append(name)
+            elif i < len(config.mask.mask_names):
+                mask_names.append(config.mask.mask_names[i])
+        if len(mask_names) == metadata.n_networks:
+            return mask_names
+    # Fall back to first N mask names from config
+    return config.mask.mask_names[: metadata.n_networks]
+
+
+def _resolve_mask_names_for_run(
+    config: SessionConfig,
+    metadata: Any,
+    network_assignment: dict[str, str],
+) -> list[str]:
+    """Resolve ordered mask names using an explicit network assignment.
+
+    Like :func:`_resolve_mask_names` but uses *network_assignment* directly
+    instead of ``config.task.network_assignment``, so per-run overrides work.
+    """
+    if network_assignment and metadata.network_roles:
+        mask_names = []
+        for i, role in enumerate(metadata.network_roles):
+            name = network_assignment.get(role.key)
             if name:
                 mask_names.append(name)
             elif i < len(config.mask.mask_names):
@@ -2811,29 +2976,39 @@ def coregister_before_first_transfer(
 # =============================================================================
 
 
-def _build_run_sequence(config: SessionConfig, n_feedback_runs: int) -> list[str]:
-    """Build the run sequence based on task configuration.
+def _build_run_sequence(
+    config: SessionConfig, n_feedback_runs: int
+) -> list[tuple[str, int]]:
+    """Build the run sequence from ``feedback_runs`` or legacy flat config.
 
-    Uses the task's use_transfer_runs parameter to determine whether
-    transfer runs are included.
+    Each entry is ``(run_type, frc_index)`` where *frc_index* is the index
+    into ``config.feedback_runs`` that owns this step.  For legacy configs
+    with a single implicit feedback task, *frc_index* is always ``0``.
 
     Parameters
     ----------
     config : SessionConfig
-        Session configuration
+        Session configuration (``feedback_runs`` is used when populated)
     n_feedback_runs : int
-        Number of feedback runs
+        Fallback number of feedback runs (used only when ``feedback_runs``
+        is empty or has a single entry without ``max_runs`` override).
 
     Returns
     -------
-    list[str]
-        Ordered list of run types (e.g., ['transfer', 'feedback', 'feedback', 'transfer'])
+    list[tuple[str, int]]
+        Ordered ``(run_type, frc_index)`` pairs.
     """
-    use_transfers = config.task.task_params.get("use_transfer_runs", True)
-    if use_transfers:
-        return ["transfer"] + ["feedback"] * n_feedback_runs + ["transfer"]
-    else:
-        return ["feedback"] * n_feedback_runs
+    sequence: list[tuple[str, int]] = []
+    for idx, frc in enumerate(config.feedback_runs):
+        n_runs = frc.max_runs
+        use_transfers = frc.use_transfer_runs
+        if use_transfers:
+            sequence.append(("transfer", idx))
+        for _ in range(n_runs):
+            sequence.append(("feedback", idx))
+        if use_transfers:
+            sequence.append(("transfer", idx))
+    return sequence
 
 
 def run_full_session(
@@ -2869,24 +3044,31 @@ def run_full_session(
     from .tasks.session import SessionState
 
     run_sequence = _build_run_sequence(config, n_feedback_runs)
+    # Derive total feedback run count from sequence
+    total_feedback = sum(1 for rt, _ in run_sequence if rt == "feedback")
 
     logger.info("")
     logger.info("=" * 60)
     logger.info("STARTING MULTI-RUN SESSION")
     logger.info("=" * 60)
-    logger.info(f"Task: {config.task.task_type}")
-    logger.info(f"Workflow: {' -> '.join(r.capitalize() for r in run_sequence)}")
+    if config.feedback_runs:
+        task_types = [frc.task_type for frc in config.feedback_runs]
+        logger.info(f"Tasks: {', '.join(task_types)}")
+    else:
+        logger.info(f"Task: {config.task.task_type}")
+    workflow_labels = [rt.capitalize() for rt, _ in run_sequence]
+    logger.info(f"Workflow: {' -> '.join(workflow_labels)}")
 
     assert config.paths.session_dir is not None
     session_dir = config.paths.session_dir
     if reset_session:
         session_state = SessionState.reset(session_dir, task_id=config.task.task_type)
-        session_state.max_feedback_runs = n_feedback_runs
+        session_state.max_feedback_runs = total_feedback
         session_state.save()
     else:
         session_state = SessionState.load(session_dir, task_id=config.task.task_type)
-        if session_state.max_feedback_runs != n_feedback_runs:
-            session_state.max_feedback_runs = n_feedback_runs
+        if session_state.max_feedback_runs != total_feedback:
+            session_state.max_feedback_runs = total_feedback
             session_state.save()
 
     mask_files = [Path(f) for f in mask_files]
@@ -2897,9 +3079,10 @@ def run_full_session(
     total_runs = len(run_sequence)
 
     logger.info(f"Completed runs: {completed_count}")
-    logger.info(f"Remaining runs: {run_sequence[completed_count:]}")
+    remaining_labels = [rt for rt, _ in run_sequence[completed_count:]]
+    logger.info(f"Remaining runs: {remaining_labels}")
 
-    for i, run_type in enumerate(run_sequence[completed_count:], start=completed_count):
+    for i, (run_type, frc_idx) in enumerate(run_sequence[completed_count:], start=completed_count):
         logger.info("")
         logger.info(f">>> Starting run {i + 1}/{total_runs} ({run_type})")
 
@@ -2908,12 +3091,14 @@ def run_full_session(
                 config, session_state, mask_files, use_simulator=use_simulator
             )
 
+        frc = config.feedback_runs[frc_idx] if config.feedback_runs else None
         results = run_single_task(
             config=config,
             mask_files=mask_files,
             session_state=session_state,
             run_type=run_type,
             use_simulator=use_simulator,
+            run_config=frc,
         )
         all_results.append(results)
 
@@ -2964,11 +3149,13 @@ def run_next_task(
 
     mask_files = [Path(f) for f in mask_files]
 
-    if session_state.max_feedback_runs != n_feedback_runs:
-        session_state.max_feedback_runs = n_feedback_runs
+    run_sequence = _build_run_sequence(config, n_feedback_runs)
+    total_feedback = sum(1 for rt, _ in run_sequence if rt == "feedback")
+
+    if session_state.max_feedback_runs != total_feedback:
+        session_state.max_feedback_runs = total_feedback
         session_state.save()
 
-    run_sequence = _build_run_sequence(config, n_feedback_runs)
     total_runs = len(run_sequence)
     completed_count = len(session_state.completed_runs)
 
@@ -2982,24 +3169,27 @@ def run_next_task(
         logger.info("Use reset_session_state() to start a new session.")
         return None
 
-    run_type = run_sequence[completed_count]
+    run_type, frc_idx = run_sequence[completed_count]
 
     logger.info("")
     logger.info("=" * 60)
     logger.info(f"NEXT RUN: {completed_count + 1}/{total_runs} ({run_type.upper()})")
     logger.info("=" * 60)
     logger.info(f"Completed: {[r.run_type for r in session_state.completed_runs]}")
-    logger.info(f"Remaining: {run_sequence[completed_count:]}")
+    remaining_labels = [rt for rt, _ in run_sequence[completed_count:]]
+    logger.info(f"Remaining: {remaining_labels}")
 
     if run_type == "transfer" and not session_state.completed_runs:
         mask_files = coregister_before_first_transfer(config, session_state, mask_files, use_simulator=use_simulator)
 
+    frc = config.feedback_runs[frc_idx] if config.feedback_runs else None
     results = run_single_task(
         config=config,
         mask_files=mask_files,
         session_state=session_state,
         run_type=run_type,
         use_simulator=use_simulator,
+        run_config=frc,
     )
 
     return results

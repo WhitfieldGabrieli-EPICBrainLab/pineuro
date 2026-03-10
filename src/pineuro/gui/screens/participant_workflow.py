@@ -67,6 +67,36 @@ class StepStatus(Enum):
     SKIPPED = "skipped"  # Bypassed: downstream step already complete
 
 
+def _build_feedback_step_ids(config: dict[str, Any]) -> list[tuple[str, str]]:
+    """Build ``(step_id, label)`` pairs for feedback/transfer pipeline steps.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        E.g. ``[("transfer_1", "Transfer Run 1 (Ball)"), ("feedback_1", "Feedback Run 1 (Ball)"), ...]``
+    """
+    feedback_runs = config.get("feedback_runs", [])
+    steps: list[tuple[str, str]] = []
+    fb_counter = 0
+    tf_counter = 0
+    for frc in feedback_runs:
+        task_type = frc.get("task_type", "?")
+        label_suffix = task_type.replace("_", " ").title()
+        use_transfers = frc.get("use_transfer_runs", False)
+        max_runs = frc.get("max_runs", 1)
+
+        if use_transfers:
+            tf_counter += 1
+            steps.append((f"transfer_{tf_counter}", f"Transfer Run {tf_counter} ({label_suffix})"))
+        for _ in range(max_runs):
+            fb_counter += 1
+            steps.append((f"feedback_{fb_counter}", f"Feedback Run {fb_counter} ({label_suffix})"))
+        if use_transfers:
+            tf_counter += 1
+            steps.append((f"transfer_{tf_counter}", f"Transfer Run {tf_counter} ({label_suffix})"))
+    return steps
+
+
 class ParticipantWorkflowScreen:
     """Participant workflow dashboard for pipeline execution."""
 
@@ -238,36 +268,79 @@ class ParticipantWorkflowScreen:
     def _check_qc_approval(self, approval_type: str) -> bool:
         """Check if masks have been approved.
 
+        For multi-localizer, checks all per-localizer approval markers.
+        For single-localizer, checks the single mask_extraction marker.
+
         Args:
             approval_type: Currently only "initial" is used (after mask extraction)
 
         Returns:
-            True if the approval marker file exists
+            True if the approval marker file(s) exist
         """
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
-        marker_path = base_dir / "mask_extraction" / ".masks_approved"
-        return marker_path.exists()
+        config = self.study_config.session_config
+        localizers = config.get("localizers", [])
 
-    def _set_qc_approved(self, approval_type: str, approved: bool):
+        if localizers and len(localizers) > 1:
+            # Multi-localizer: all per-localizer markers must exist
+            for loc_idx, loc in enumerate(localizers):
+                loc_type = loc.get("type", "rest")
+                loc_task_name = "rest" if loc_type == "rest" else loc_type
+                loc_dir = base_dir / "mask_extraction" / f"loc_{loc_idx}_{loc_task_name}"
+                if not (loc_dir / ".masks_approved").exists():
+                    return False
+            return True
+        else:
+            marker_path = base_dir / "mask_extraction" / ".masks_approved"
+            return marker_path.exists()
+
+    def _set_qc_approved(self, approval_type: str, approved: bool, loc_idx: int | None = None):
         """Set mask approval state.
 
         Args:
             approval_type: Currently only "initial" is used
             approved: True to approve, False to revoke
+            loc_idx: For multi-localizer, the localizer index to approve
         """
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
-        marker_path = base_dir / "mask_extraction" / ".masks_approved"
+        config = self.study_config.session_config
+        localizers = config.get("localizers", [])
+        is_multi = localizers and len(localizers) > 1
 
-        if approved:
-            marker_path.parent.mkdir(parents=True, exist_ok=True)
-            marker_path.touch()
-        elif marker_path.exists():
-            marker_path.unlink()
+        if loc_idx is not None and is_multi:
+            # Per-localizer approval
+            loc_type = localizers[loc_idx].get("type", "rest")
+            loc_task_name = "rest" if loc_type == "rest" else loc_type
+            loc_dir = base_dir / "mask_extraction" / f"loc_{loc_idx}_{loc_task_name}"
+            marker_path = loc_dir / ".masks_approved"
 
-        self._initial_qc_approved = approved
+            if approved:
+                marker_path.parent.mkdir(parents=True, exist_ok=True)
+                marker_path.touch()
+            elif marker_path.exists():
+                marker_path.unlink()
 
-        # Update mask_approval step status
-        self.step_statuses["mask_approval"] = StepStatus.COMPLETE if approved else StepStatus.PENDING
+            self.step_statuses[f"localizer_{loc_idx}_approval"] = (
+                StepStatus.COMPLETE if approved else StepStatus.PENDING
+            )
+
+            # Update _initial_qc_approved based on whether ALL localizers are approved
+            self._initial_qc_approved = all(
+                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE
+                for i in range(len(localizers))
+            )
+        else:
+            # Single-localizer approval
+            marker_path = base_dir / "mask_extraction" / ".masks_approved"
+
+            if approved:
+                marker_path.parent.mkdir(parents=True, exist_ok=True)
+                marker_path.touch()
+            elif marker_path.exists():
+                marker_path.unlink()
+
+            self._initial_qc_approved = approved
+            self.step_statuses["mask_approval"] = StepStatus.COMPLETE if approved else StepStatus.PENDING
 
     def _has_custom_mask_selections(self) -> bool:
         """Check if user has customized mask selections.
@@ -402,20 +475,35 @@ class ParticipantWorkflowScreen:
 
         # Mark skipped steps as complete
         config = self.study_config.session_config
-        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        localizers = config.get("localizers", [])
 
         if from_stage == "localizer":
             # Skipping from localizer: mark all localizer runs as complete
-            for run_num in range(1, n_localizer_runs + 1):
-                step_id = f"rest_run_{run_num}"
-                if self.step_statuses.get(step_id) != StepStatus.COMPLETE:
-                    self.step_statuses[step_id] = StepStatus.COMPLETE
+            if localizers and len(localizers) > 1:
+                for loc_idx, loc in enumerate(localizers):
+                    for run_num in range(1, loc.get("n_runs", 2) + 1):
+                        step_id = f"localizer_{loc_idx}_run_{run_num}"
+                        if self.step_statuses.get(step_id) != StepStatus.COMPLETE:
+                            self.step_statuses[step_id] = StepStatus.COMPLETE
+            else:
+                n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+                for run_num in range(1, n_localizer_runs + 1):
+                    step_id = f"rest_run_{run_num}"
+                    if self.step_statuses.get(step_id) != StepStatus.COMPLETE:
+                        self.step_statuses[step_id] = StepStatus.COMPLETE
 
         # Mark preprocessing and standard mask extraction as complete (skipped)
-        if self.step_statuses.get("preprocessing") != StepStatus.COMPLETE:
-            self.step_statuses["preprocessing"] = StepStatus.COMPLETE
-        if self.step_statuses.get("mask_extraction") != StepStatus.COMPLETE:
-            self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
+        if localizers and len(localizers) > 1:
+            for loc_idx in range(len(localizers)):
+                for suffix in ("_preprocessing", "_extraction"):
+                    step_id = f"localizer_{loc_idx}{suffix}"
+                    if self.step_statuses.get(step_id) != StepStatus.COMPLETE:
+                        self.step_statuses[step_id] = StepStatus.COMPLETE
+        else:
+            if self.step_statuses.get("preprocessing") != StepStatus.COMPLETE:
+                self.step_statuses["preprocessing"] = StepStatus.COMPLETE
+            if self.step_statuses.get("mask_extraction") != StepStatus.COMPLETE:
+                self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
 
         # Revoke any prior mask approval (new masks need fresh review)
         self._set_qc_approved("initial", False)
@@ -477,8 +565,13 @@ class ParticipantWorkflowScreen:
         self._pending_overwrite = True
         self._start_step("mask_extraction")
 
-    def _show_mask_review_dialog(self):
-        """Show the mask review/selection dialog."""
+    def _show_mask_review_dialog(self, loc_idx: int | None = None):
+        """Show the mask review/selection dialog.
+
+        Args:
+            loc_idx: For multi-localizer, the localizer index to review.
+                     None for single-localizer mode.
+        """
         from glob import glob
 
         import pandas as pd  # type: ignore[import-untyped]
@@ -490,6 +583,15 @@ class ParticipantWorkflowScreen:
         mask_extraction_dir = base_dir / "mask_extraction"
         qc_dir = base_dir / "qc"
         config = self.study_config.session_config
+
+        # For multi-localizer, use per-localizer subdirectory
+        localizers = config.get("localizers", [])
+        if loc_idx is not None and localizers and len(localizers) > 1:
+            loc = localizers[loc_idx]
+            loc_type = loc.get("type", "rest")
+            loc_task_name = "rest" if loc_type == "rest" else loc_type
+            mask_extraction_dir = base_dir / "mask_extraction" / f"loc_{loc_idx}_{loc_task_name}"
+            qc_dir = base_dir / "qc" / f"loc_{loc_idx}_{loc_task_name}"
 
         # Detect mask source from mask_selections.json (authoritative, not just instance var)
         masks_dir = mask_extraction_dir / "03_masks"
@@ -509,22 +611,34 @@ class ParticipantWorkflowScreen:
 
         # MNI atlas mode flag (set during this session before selections exist on disk)
         if self._is_mni_atlas_mode:
-            self._show_mni_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir)
+            self._show_mni_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir, loc_idx=loc_idx)
             return
 
         # Task-based localizers use a simpler review flow (no ICA component selection)
-        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        if localizer_type == "task":
-            self._show_task_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir)
+        # For multi-localizer, determine type from the specific localizer
+        if loc_idx is not None and localizers and len(localizers) > 1:
+            localizer_type = localizers[loc_idx].get("type", "rest")
+            is_task_localizer = localizer_type != "rest"
+        else:
+            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+            is_task_localizer = localizer_type == "task"
+        if is_task_localizer:
+            self._show_task_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir, loc_idx=loc_idx)
             return
 
         masks_dir = mask_extraction_dir / "03_masks"
         ica_dir = mask_extraction_dir / "01_ica"
 
-        # Get network names from config (include sham alternatives if enabled)
-        network_names = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
-        n_yeo = config["mask"]["n_yeo"]
-        threshold = config["mask"].get("threshold", 2000)
+        # Get network names — for multi-localizer, use the specific localizer's targets
+        if loc_idx is not None and localizers and len(localizers) > 1:
+            loc = localizers[loc_idx]
+            network_names = list(loc.get("yeo_targets", []))
+            n_yeo = loc.get("n_yeo", config["mask"].get("n_yeo", 17))
+            threshold = loc.get("threshold", config["mask"].get("threshold", 2000))
+        else:
+            network_names = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
+            n_yeo = config["mask"]["n_yeo"]
+            threshold = config["mask"].get("threshold", 2000)
 
         # Include sham alternative networks if sham is enabled with alternative masks
         sham_config = config.get("sham", {})
@@ -585,6 +699,16 @@ class ParticipantWorkflowScreen:
             return
         yeo_subject_space = Path(yeo2sub_files[0])
 
+        # Resolve ref_file early (needed for overlay generation and script context)
+        preprocessing_dir = base_dir / "preprocessing"
+        if loc_idx is not None and localizers and len(localizers) > 1:
+            _loc_type = localizers[loc_idx].get("type", "rest")
+            loc_task = "rest" if _loc_type == "rest" else _loc_type
+        else:
+            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+            loc_task = localizer_task_type if localizer_task_type != "rest" else "rest"
+        ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
+
         # Generate overlays only for RECOMMENDED (best) components initially
         # Alternative overlays will be generated on-demand when user rejects a mask
         n_components = config["mask"].get("n_components", 30)
@@ -598,6 +722,7 @@ class ParticipantWorkflowScreen:
             n_alternatives=1,  # Only generate overlay for top component per network
             output_dir=qc_dir,
             n_yeo=n_yeo,
+            ref_file=ref_file if ref_file.exists() else None,
         )
 
         # Yeo overlays will be generated on-demand when user rejects a mask
@@ -614,6 +739,7 @@ class ParticipantWorkflowScreen:
                 hemisphere_network=sham_hemisphere_network,
                 output_dir=qc_dir,
                 n_yeo=n_yeo,
+                ref_file=ref_file if ref_file.exists() else None,
             )
 
         # Build MaskReviewInfo for each network
@@ -650,24 +776,22 @@ class ParticipantWorkflowScreen:
             )
             masks_info.append(info)
 
-        def on_complete(new_selections):
+        def on_complete(new_selections, _loc_idx=loc_idx):
             # Set mask approval when user completes review
-            self._set_qc_approved("initial", True)
-            self._add_log("[SUCCESS] Masks reviewed and approved")
+            self._set_qc_approved("initial", True, loc_idx=_loc_idx)
+            loc_label = f" (Localizer {_loc_idx + 1})" if _loc_idx is not None else ""
+            self._add_log(f"[SUCCESS] Masks reviewed and approved{loc_label}")
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(ft.Text("Masks approved! You can now run coregistration."), bgcolor=ft.Colors.GREEN)
+            _snack = ft.SnackBar(ft.Text(f"Masks approved{loc_label}!"), bgcolor=ft.Colors.GREEN)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
 
         # Find preprocessing outputs for script generation
-        preprocessing_dir = base_dir / "preprocessing"
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-        loc_task = localizer_task_type if localizer_task_type != "rest" else "rest"
+        # (preprocessing_dir, loc_task, ref_file already resolved above)
         input_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_preproc.nii.gz"
         brain_mask_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_preproc_mask.nii.gz"
-        ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
 
         # Get ICA parameters from config
         n_components = config["mask"].get("n_components", 30)
@@ -745,7 +869,9 @@ class ParticipantWorkflowScreen:
         )
         dialog.show()
 
-    def _show_task_mask_review_dialog(self, config: dict, base_dir: Path, mask_extraction_dir: Path, qc_dir: Path):
+    def _show_task_mask_review_dialog(
+        self, config: dict, base_dir: Path, mask_extraction_dir: Path, qc_dir: Path, loc_idx: int | None = None
+    ):
         """Show mask review dialog for task-based (GLM) mask extraction.
 
         Task-based masks don't have ICA components to select — the user just
@@ -777,8 +903,13 @@ class ParticipantWorkflowScreen:
             return
 
         # Get reference file for mask viewer
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-        loc_task = localizer_task_type if localizer_task_type != "rest" else "rest"
+        localizers = config.get("localizers", [])
+        if loc_idx is not None and localizers and len(localizers) > 1:
+            loc_type = localizers[loc_idx].get("type", "rest")
+            loc_task = "rest" if loc_type == "rest" else loc_type
+        else:
+            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+            loc_task = localizer_task_type if localizer_task_type != "rest" else "rest"
         preprocessing_dir = base_dir / "preprocessing"
         ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
 
@@ -1084,16 +1215,17 @@ class ParticipantWorkflowScreen:
             dlg.open = False
             self.page.update()
 
-        def on_approve(e):
-            self._set_qc_approved("initial", True)
-            self._add_log("[SUCCESS] Task masks reviewed and approved")
+        def on_approve(e, _loc_idx=loc_idx):
+            self._set_qc_approved("initial", True, loc_idx=_loc_idx)
+            loc_label = f" (Localizer {_loc_idx + 1})" if _loc_idx is not None else ""
+            self._add_log(f"[SUCCESS] Task masks reviewed and approved{loc_label}")
             # Close dialog using the same pattern as ICA's _close_dialog:
             # set open=False then page.update() immediately — do NOT remove from overlay
             dialog.open = False
             self.page.update()
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(ft.Text("Masks approved! You can now run coregistration."), bgcolor=ft.Colors.GREEN)
+            _snack = ft.SnackBar(ft.Text(f"Masks approved{loc_label}!"), bgcolor=ft.Colors.GREEN)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1135,7 +1267,7 @@ class ParticipantWorkflowScreen:
             # Build Stage 2 dialog: show atlas overlay, offer to use it
             b64_atlas = base64.b64encode(atlas_overlay_png.read_bytes()).decode("utf-8")
 
-            def on_use_atlas(e):
+            def on_use_atlas(e, _loc_idx=loc_idx):
                 """Replace cluster mask with the full atlas region mask."""
                 import shutil as _shutil
 
@@ -1145,7 +1277,7 @@ class ParticipantWorkflowScreen:
                     _shutil.copy2(atlas_subject_file, mask_file)
                     self._add_log(f"[INFO] Replaced {mask_file.name} with atlas region mask")
 
-                self._set_qc_approved("initial", True)
+                self._set_qc_approved("initial", True, loc_idx=_loc_idx)
                 self._add_log("[SUCCESS] Using atlas region mask — approved")
                 self._refresh_step_list()
                 self._update_run_next_button()
@@ -1315,7 +1447,9 @@ class ParticipantWorkflowScreen:
         dialog.open = True
         self.page.update()
 
-    def _show_mni_mask_review_dialog(self, config: dict, base_dir: Path, mask_extraction_dir: Path, qc_dir: Path):
+    def _show_mni_mask_review_dialog(
+        self, config: dict, base_dir: Path, mask_extraction_dir: Path, qc_dir: Path, loc_idx: int | None = None
+    ):
         """Show mask review dialog for MNI atlas masks.
 
         MNI atlas masks don't have ICA components or GLM contrasts — the user
@@ -1462,8 +1596,8 @@ class ParticipantWorkflowScreen:
             dlg.open = False
             self.page.update()
 
-        def on_approve(e):
-            self._set_qc_approved("initial", True)
+        def on_approve(e, _loc_idx=loc_idx):
+            self._set_qc_approved("initial", True, loc_idx=_loc_idx)
             self._add_log("[SUCCESS] MNI atlas masks reviewed and approved")
             dialog.open = False
             self.page.update()
@@ -1898,24 +2032,16 @@ class ParticipantWorkflowScreen:
         # Build dynamic steps list
         steps = []
 
-        # Get number of feedback runs and transfer run settings from task config
-        task_config = config.get("task", {})
-        max_feedback_runs = task_config.get("max_feedback_runs", 2)
-        task_type = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", False)
+        # Build feedback/transfer steps from feedback_runs or legacy config
+        fb_steps = _build_feedback_step_ids(config)
 
         if is_mask_reuse:
             # Mask reuse mode: only need reference + coregistration + feedback
             # Skip localizer, preprocessing, mask extraction
             if reference_realtime_enabled:
                 steps.extend(["reference_realtime", "coregistration_realtime"])
-            # Add transfer and feedback steps dynamically
-            if use_transfer_runs:
-                steps.append("transfer_1")
-            for i in range(1, max_feedback_runs + 1):
-                steps.append(f"feedback_{i}")
-            if use_transfer_runs:
-                steps.append("transfer_2")
+            # Add transfer and feedback steps
+            steps.extend(sid for sid, _label in fb_steps)
         else:
             # Standard mode: full pipeline
             localizers = config.get("localizers", [])
@@ -1923,14 +2049,15 @@ class ParticipantWorkflowScreen:
                 steps.append("reference_initial")
 
             if localizers and len(localizers) > 1:
-                # Multi-localizer: per-localizer collection + preprocessing + extraction
+                # Multi-localizer: collect ALL runs first, then per-localizer preprocess→extract→approve
                 for loc_idx, loc in enumerate(localizers):
-                    loc_type = loc.get("type", "rest")
                     loc_n_runs = loc.get("n_runs", 2)
                     for run in range(1, loc_n_runs + 1):
                         steps.append(f"localizer_{loc_idx}_run_{run}")
+                for loc_idx, loc in enumerate(localizers):
                     steps.append(f"localizer_{loc_idx}_preprocessing")
                     steps.append(f"localizer_{loc_idx}_extraction")
+                    steps.append(f"localizer_{loc_idx}_approval")
             else:
                 # Single localizer (legacy or 1-element list)
                 for i in range(1, n_localizer_runs + 1):
@@ -1942,13 +2069,8 @@ class ParticipantWorkflowScreen:
                 steps.append("coregistration")
             if reference_realtime_enabled:
                 steps.extend(["reference_realtime", "coregistration_realtime"])
-            # Add transfer and feedback steps dynamically
-            if use_transfer_runs:
-                steps.append("transfer_1")
-            for i in range(1, max_feedback_runs + 1):
-                steps.append(f"feedback_{i}")
-            if use_transfer_runs:
-                steps.append("transfer_2")
+            # Add transfer and feedback steps
+            steps.extend(sid for sid, _label in fb_steps)
 
         for step in steps:
             self.step_statuses[step] = StepStatus.PENDING
@@ -2000,6 +2122,11 @@ class ParticipantWorkflowScreen:
                     loc_masks = loc_dir / "03_masks"
                     if loc_masks.exists() and len(list(loc_masks.glob(f"{participant_id}_*.nii.gz"))) > 0:
                         self.step_statuses[step_id] = StepStatus.COMPLETE
+
+                    # Check per-localizer approval marker
+                    approval_marker = loc_dir / ".masks_approved"
+                    if approval_marker.exists():
+                        self.step_statuses[f"localizer_{loc_idx}_approval"] = StepStatus.COMPLETE
             else:
                 # Single localizer (legacy)
                 expected_vols = config["scan"].get("localizer_n_volumes")
@@ -2043,11 +2170,12 @@ class ParticipantWorkflowScreen:
                 except (json.JSONDecodeError, AttributeError):
                     pass
 
-            # Check mask approval status (based on approval marker file)
-            if self._initial_qc_approved:
-                self.step_statuses["mask_approval"] = StepStatus.COMPLETE
-            else:
-                self.step_statuses["mask_approval"] = StepStatus.PENDING
+            # Check mask approval status (single-localizer only; multi-localizer uses per-localizer approval)
+            if not (localizers and len(localizers) > 1):
+                if self._initial_qc_approved:
+                    self.step_statuses["mask_approval"] = StepStatus.COMPLETE
+                else:
+                    self.step_statuses["mask_approval"] = StepStatus.PENDING
 
             # Check coregistration (reference) outputs - initial (run-01) is in mask_extraction/04_reference
             initial_reference_masks_dir = mask_extraction_dir / "04_reference" / "masks"
@@ -2092,46 +2220,58 @@ class ParticipantWorkflowScreen:
 
         # Check feedback runs (transfer and feedback) using slot-based naming
         feedback_output_dir = feedback_dir / "02_feedback_output"
-        expected_feedback_vols = config["feedback"]["n_volumes"]
+        feedback_runs = config.get("feedback_runs", [])
+        default_feedback_vols = config.get("feedback", {}).get("n_volumes", 150)
 
-        # Check each feedback/transfer step using slot-based detection
-        # Build dynamic list based on max_feedback_runs and use_transfer_runs
-        task_config = config.get("task", {})
-        max_feedback_runs = task_config.get("max_feedback_runs", 2)
-        task_type = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", False)
+        # Check each feedback/transfer step using the shared step builder
+        for step_id, _label in fb_steps:
+            # Resolve per-FRC n_volumes for this step
+            frc_idx = self._get_feedback_step_frc_index(step_id)
+            if frc_idx is not None and frc_idx < len(feedback_runs):
+                expected_vols = feedback_runs[frc_idx].get("n_volumes", default_feedback_vols)
+            else:
+                expected_vols = default_feedback_vols
 
-        feedback_transfer_steps = []
-        if use_transfer_runs:
-            feedback_transfer_steps.append("transfer_1")
-        for i in range(1, max_feedback_runs + 1):
-            feedback_transfer_steps.append(f"feedback_{i}")
-        if use_transfer_runs:
-            feedback_transfer_steps.append("transfer_2")
-
-        for step_id in feedback_transfer_steps:
             status = self._check_feedback_slot_status(
                 step_id=step_id,
                 output_dir=feedback_output_dir,
                 participant_id=participant_id,
-                expected_volumes=expected_feedback_vols,
+                expected_volumes=expected_vols,
             )
             self.step_statuses[step_id] = status
 
         # --- Skip detection ---
         # If preprocessing is complete, any uncollected localizer-session steps
         # were intentionally bypassed (user proceeded with fewer runs).
-        if not is_mask_reuse and self.step_statuses.get("preprocessing") == StepStatus.COMPLETE:
+        localizers = config.get("localizers", [])
+        any_preproc_complete = False
+        if localizers and len(localizers) > 1:
+            any_preproc_complete = any(
+                self.step_statuses.get(f"localizer_{i}_preprocessing") == StepStatus.COMPLETE
+                for i in range(len(localizers))
+            )
+        else:
+            any_preproc_complete = self.step_statuses.get("preprocessing") == StepStatus.COMPLETE
+
+        if not is_mask_reuse and any_preproc_complete:
             if reference_initial_enabled and self.step_statuses.get("reference_initial") in (
                 StepStatus.PENDING,
                 StepStatus.INTERRUPTED,
             ):
                 self.step_statuses["reference_initial"] = StepStatus.SKIPPED
 
-            for run_num in range(1, n_localizer_runs + 1):
-                step_id = f"rest_run_{run_num}"
-                if self.step_statuses.get(step_id) in (StepStatus.PENDING, StepStatus.INTERRUPTED):
-                    self.step_statuses[step_id] = StepStatus.SKIPPED
+            if localizers and len(localizers) > 1:
+                for loc_idx, loc in enumerate(localizers):
+                    loc_n_runs = loc.get("n_runs", 2)
+                    for run_num in range(1, loc_n_runs + 1):
+                        step_id = f"localizer_{loc_idx}_run_{run_num}"
+                        if self.step_statuses.get(step_id) in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+                            self.step_statuses[step_id] = StepStatus.SKIPPED
+            else:
+                for run_num in range(1, n_localizer_runs + 1):
+                    step_id = f"rest_run_{run_num}"
+                    if self.step_statuses.get(step_id) in (StepStatus.PENDING, StepStatus.INTERRUPTED):
+                        self.step_statuses[step_id] = StepStatus.SKIPPED
 
             # Coregistration requires the initial reference — skip if reference was skipped
             if (
@@ -2163,9 +2303,15 @@ class ParticipantWorkflowScreen:
         Returns:
             Session name ("localizer", "mask_extraction", "feedback")
         """
-        # Handle dynamic rest_run_* steps
+        # Handle dynamic step IDs
         if step_id.startswith("rest_run_"):
             return "localizer"
+        if step_id.startswith("localizer_") and "_run_" in step_id:
+            return "localizer"
+        if step_id.startswith("localizer_") and (
+            step_id.endswith("_preprocessing") or step_id.endswith("_extraction") or step_id.endswith("_approval")
+        ):
+            return "mask_extraction"
 
         step_to_session = {
             "reference_initial": "localizer",
@@ -2176,10 +2322,6 @@ class ParticipantWorkflowScreen:
             "coregistration": "mask_extraction",
             "reference_realtime": "feedback",
             "coregistration_realtime": "feedback",
-            "transfer_1": "feedback",
-            "feedback_1": "feedback",
-            "feedback_2": "feedback",
-            "transfer_2": "feedback",
         }
 
         return step_to_session.get(step_id, "feedback")
@@ -2217,6 +2359,165 @@ class ParticipantWorkflowScreen:
             size=20,
         )
 
+    def _build_mask_to_localizer_map(self) -> dict[str, int]:
+        """Build a mapping from mask name to the localizer index that produces it.
+
+        For task localizers, mask names come from the ``contrasts`` dict keys.
+        For rest localizers, mask names come from the ``yeo_targets`` list.
+
+        Returns:
+            Dict mapping mask name to localizer index.
+        """
+        config = self.study_config.session_config
+        localizers = config.get("localizers", [])
+        mask_to_loc: dict[str, int] = {}
+        for loc_idx, loc in enumerate(localizers):
+            loc_type = loc.get("type", "rest")
+            if loc_type == "rest":
+                for target in loc.get("yeo_targets", []):
+                    mask_to_loc[target] = loc_idx
+            else:
+                # Task localizer — contrasts dict keys are the mask names
+                for mask_name in loc.get("contrasts", {}):
+                    mask_to_loc[mask_name] = loc_idx
+        return mask_to_loc
+
+    def _get_feedback_step_frc_index(self, step_id: str) -> int | None:
+        """Map a feedback/transfer step ID to its ``feedback_runs`` list index.
+
+        Returns:
+            Index into ``feedback_runs``, or None if not a feedback/transfer step.
+        """
+        config = self.study_config.session_config
+        feedback_runs = config.get("feedback_runs", [])
+        fb_counter = 0
+        tf_counter = 0
+        for frc_idx, frc in enumerate(feedback_runs):
+            use_transfers = frc.get("use_transfer_runs", False)
+            max_runs = frc.get("max_runs", 1)
+            if use_transfers:
+                tf_counter += 1
+                if step_id == f"transfer_{tf_counter}":
+                    return frc_idx
+            for _ in range(max_runs):
+                fb_counter += 1
+                if step_id == f"feedback_{fb_counter}":
+                    return frc_idx
+            if use_transfers:
+                tf_counter += 1
+                if step_id == f"transfer_{tf_counter}":
+                    return frc_idx
+        return None
+
+    def _get_masks_for_frc(self, frc: dict) -> set[str]:
+        """Extract the set of mask names a feedback run config actually uses.
+
+        Only considers the masks relevant to the feedback mode:
+        - activation: ``target_mask``, or ``differential_pair`` for dual-network tasks
+        - differential: ``differential_pair``
+        - connectivity: ``connectivity_pairs``
+        """
+        masks: set[str] = set()
+        mode = frc.get("feedback_mode", "activation")
+
+        if mode == "activation":
+            target = frc.get("target_mask")
+            if target:
+                masks.add(target)
+            else:
+                # Dual-network task (e.g. Ball) — uses differential_pair even in activation mode
+                for name in frc.get("differential_pair", []) or []:
+                    if name:
+                        masks.add(name)
+        elif mode == "differential":
+            for name in frc.get("differential_pair", []) or []:
+                if name:
+                    masks.add(name)
+        elif mode == "connectivity":
+            for pair in frc.get("connectivity_pairs", []) or []:
+                for name in pair or []:
+                    if name:
+                        masks.add(name)
+
+        return masks
+
+    def _fb(self, key: str, default=None):
+        """Read a feedback parameter from the active FRC, falling back to global config."""
+        frc = getattr(self, "_active_frc", None)
+        if frc and key in frc:
+            return frc[key]
+        return self.study_config.session_config.get("feedback", {}).get(key, default)
+
+    def _resolve_frc_mask_names(self, frc: dict) -> list[str]:
+        """Return an ordered list of mask names for a feedback run config.
+
+        Similar to ``_get_masks_for_frc`` but returns a stable list suitable
+        for the activation plot and feedback monitoring.
+        """
+        mode = frc.get("feedback_mode", "activation")
+        if mode == "activation":
+            target = frc.get("target_mask")
+            if target:
+                return [target]
+            # Dual-network: use differential_pair order
+            pair = frc.get("differential_pair") or []
+            return [n for n in pair if n]
+        elif mode == "differential":
+            pair = frc.get("differential_pair") or []
+            return [n for n in pair if n]
+        elif mode == "connectivity":
+            names: list[str] = []
+            for pair in frc.get("connectivity_pairs") or []:
+                for name in pair or []:
+                    if name and name not in names:
+                        names.append(name)
+            return names
+        return []
+
+    def _is_step_approval_unlocked(self, step_id: str) -> bool:
+        """Check whether a step's mask-approval prerequisite is satisfied.
+
+        For single-localizer, this is equivalent to ``_initial_qc_approved``.
+        For multi-localizer:
+        - Reference realtime / coregistration: ANY localizer approved
+        - Feedback/transfer steps: all localizers that produce the needed masks are approved
+        """
+        config = self.study_config.session_config
+        localizers = config.get("localizers", [])
+
+        if not (localizers and len(localizers) > 1):
+            # Single-localizer: use blanket approval flag
+            return self._initial_qc_approved
+
+        # Multi-localizer: per-step gating
+        is_feedback_transfer = step_id.startswith("feedback_") or step_id.startswith("transfer_")
+
+        if is_feedback_transfer:
+            # Feedback/transfer: need all localizers that produce required masks to be approved
+            frc_idx = self._get_feedback_step_frc_index(step_id)
+            if frc_idx is None:
+                return self._initial_qc_approved
+            frc = config["feedback_runs"][frc_idx]
+            needed_masks = self._get_masks_for_frc(frc)
+            if not needed_masks:
+                return self._initial_qc_approved
+            mask_to_loc = self._build_mask_to_localizer_map()
+            required_loc_indices = {mask_to_loc[m] for m in needed_masks if m in mask_to_loc}
+            if not required_loc_indices:
+                # Masks not mapped to any localizer — fall back to all approved
+                return self._initial_qc_approved
+            return all(
+                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE
+                for i in required_loc_indices
+            )
+        else:
+            # Reference realtime, coregistration, coregistration_realtime:
+            # ANY localizer approved unlocks these
+            return any(
+                self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE
+                for i in range(len(localizers))
+            )
+
     def _create_step_button(
         self,
         step_id: str,
@@ -2242,7 +2543,15 @@ class ParticipantWorkflowScreen:
             requires_approval = False
         else:
             # Gate 1: Preprocessing must be complete before mask extraction and subsequent steps
-            preprocessing_complete = self.step_statuses.get("preprocessing") == StepStatus.COMPLETE
+            config = self.study_config.session_config
+            localizers = config.get("localizers", [])
+            if localizers and len(localizers) > 1:
+                preprocessing_complete = any(
+                    self.step_statuses.get(f"localizer_{i}_preprocessing") == StepStatus.COMPLETE
+                    for i in range(len(localizers))
+                )
+            else:
+                preprocessing_complete = self.step_statuses.get("preprocessing") == StepStatus.COMPLETE
             steps_requiring_preprocessing = [
                 "mask_extraction",
                 "coregistration",
@@ -2256,13 +2565,14 @@ class ParticipantWorkflowScreen:
             ) and not preprocessing_complete
 
             # Gate 2: Mask approval required for coregistration and all subsequent steps
+            # Uses per-feedback gating for multi-localizer studies
             gated_steps = [
                 "coregistration",
                 "reference_realtime",
                 "coregistration_realtime",
             ]
-            # Also check for feedback/transfer steps (dynamic)
-            requires_approval = (step_id in gated_steps or is_feedback_transfer) and not self._initial_qc_approved
+            needs_approval = step_id in gated_steps or is_feedback_transfer
+            requires_approval = needs_approval and not self._is_step_approval_unlocked(step_id)
 
         button = ft.ElevatedButton(
             label,
@@ -2311,35 +2621,67 @@ class ParticipantWorkflowScreen:
                 ]
             )
 
-        # Add localizer/rest runs dynamically based on localizer_n_runs
-        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        # Add localizer runs dynamically
+        localizers = config.get("localizers", [])
 
-        # Dynamic label based on localizer type
-        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        if localizer_type == "task":
-            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "unknown")
-            # Try to get display name from task metadata
-            try:
-                from pineuro.tasks import get_task_metadata
+        if localizers and len(localizers) > 1:
+            # Multi-localizer: show each localizer with its runs
+            for loc_idx, loc in enumerate(localizers):
+                loc_type = loc.get("type", "rest")
+                loc_n_runs = loc.get("n_runs", 2)
 
-                task_meta = get_task_metadata(localizer_task_type)
-                localizer_label = task_meta.display_name
-            except (ValueError, ImportError):
-                localizer_label = f"Localizer Task ({localizer_task_type})"
-        else:
-            localizer_label = "Resting State"
+                # Get display name for this localizer
+                if loc_type == "rest":
+                    loc_label = "Resting State"
+                else:
+                    try:
+                        from pineuro.tasks import get_task_metadata
+                        task_meta = get_task_metadata(loc_type)
+                        loc_label = task_meta.display_name
+                    except (ValueError, ImportError):
+                        loc_label = loc_type.replace("_", " ").title()
 
-        controls.append(ft.Text(localizer_label, size=14, weight=ft.FontWeight.W_500))
-
-        for run_num in range(1, n_localizer_runs + 1):
-            step_id = f"rest_run_{run_num}"
-            controls.append(
-                self._create_step_button(
-                    step_id,
-                    f"Collect Run {run_num}",
-                    lambda e, sid=step_id: self._on_step_clicked(sid),
+                if loc_idx > 0:
+                    controls.append(ft.Divider())
+                controls.append(
+                    ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500)
                 )
-            )
+
+                for run_num in range(1, loc_n_runs + 1):
+                    step_id = f"localizer_{loc_idx}_run_{run_num}"
+                    controls.append(
+                        self._create_step_button(
+                            step_id,
+                            f"Collect Run {run_num}",
+                            lambda e, sid=step_id: self._on_step_clicked(sid),
+                        )
+                    )
+        else:
+            # Single localizer
+            n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+            if localizer_type == "task":
+                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "unknown")
+                try:
+                    from pineuro.tasks import get_task_metadata
+                    task_meta = get_task_metadata(localizer_task_type)
+                    localizer_label = task_meta.display_name
+                except (ValueError, ImportError):
+                    localizer_label = f"Localizer Task ({localizer_task_type})"
+            else:
+                localizer_label = "Resting State"
+
+            controls.append(ft.Text(localizer_label, size=14, weight=ft.FontWeight.W_500))
+
+            for run_num in range(1, n_localizer_runs + 1):
+                step_id = f"rest_run_{run_num}"
+                controls.append(
+                    self._create_step_button(
+                        step_id,
+                        f"Collect Run {run_num}",
+                        lambda e, sid=step_id: self._on_step_clicked(sid),
+                    )
+                )
 
         # MNI atlas fallback button (skip localizer entirely)
         if not self._is_mask_reuse_mode and not self._is_mni_atlas_mode:
@@ -2482,63 +2824,136 @@ class ParticipantWorkflowScreen:
             )
 
         # Standard mode: preprocessing + ICA/GLM extraction
-        controls = [  # type: ignore[no-redef]
-            ft.Text("Preprocessing", size=14, weight=ft.FontWeight.W_500),
-            self._create_step_button(
-                "preprocessing",
-                "Run Preprocessing",
-                lambda e: self._on_step_clicked("preprocessing"),
-            ),
-            ft.Divider(),
-            ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
-            self._create_step_button(
-                "mask_extraction",
-                "Extract Masks",
-                lambda e: self._on_step_clicked("mask_extraction"),
-            ),
-        ]
+        localizers = config.get("localizers", [])
+        controls: list[ft.Control] = []  # type: ignore[no-redef]
 
-        # Add mask review/approval gate after mask extraction completes
-        if self.step_statuses.get("mask_extraction") == StepStatus.COMPLETE:
-            if self._initial_qc_approved:
-                # Approved - show "Review Masks" button with checkmark
-                masks_customized = self._has_custom_mask_selections()
-                _cfg = self.study_config.session_config
-                localizer_type = _cfg.get("mask", {}).get("localizer_type", "rest")
-                method_label = "GLM" if localizer_type == "task" else "ICA"
-                status_text = "Customized" if masks_customized else method_label
-                status_color = ft.Colors.BLUE if masks_customized else ft.Colors.GREY_600
+        if localizers and len(localizers) > 1:
+            # Multi-localizer: per-localizer preprocessing + extraction + approval
+            for loc_idx, loc in enumerate(localizers):
+                loc_type = loc.get("type", "rest")
+                if loc_type == "rest":
+                    loc_label = "Rest"
+                else:
+                    try:
+                        from pineuro.tasks import get_task_metadata
+                        task_meta = get_task_metadata(loc_type)
+                        loc_label = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
+                    except (ValueError, ImportError):
+                        loc_label = loc_type.replace("_", " ").title()
 
-                controls.append(
-                    ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.TextButton(
-                                    "Review Masks",
-                                    icon=ft.Icons.TUNE,
-                                    on_click=lambda e: self._show_mask_review_dialog(),
+                if loc_idx > 0:
+                    controls.append(ft.Divider())
+
+                preproc_id = f"localizer_{loc_idx}_preprocessing"
+                extract_id = f"localizer_{loc_idx}_extraction"
+                approval_id = f"localizer_{loc_idx}_approval"
+                controls.extend([
+                    ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500),
+                    self._create_step_button(
+                        preproc_id,
+                        "Preprocess",
+                        lambda e, sid=preproc_id: self._on_step_clicked(sid),
+                    ),
+                    self._create_step_button(
+                        extract_id,
+                        "Extract Masks",
+                        lambda e, sid=extract_id: self._on_step_clicked(sid),
+                    ),
+                ])
+
+                # Per-localizer approval button (shown after extraction completes)
+                extraction_complete = self.step_statuses.get(extract_id) == StepStatus.COMPLETE
+                if extraction_complete:
+                    approval_complete = self.step_statuses.get(approval_id) == StepStatus.COMPLETE
+                    if approval_complete:
+                        controls.append(
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.TextButton(
+                                            "Review Masks",
+                                            icon=ft.Icons.TUNE,
+                                            on_click=lambda e, idx=loc_idx: self._show_mask_review_dialog(loc_idx=idx),
+                                        ),
+                                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                    ],
+                                    spacing=5,
                                 ),
-                                ft.Text(f"({status_text})", size=12, color=status_color),
-                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
-                            ],
-                            spacing=5,
-                        ),
-                        padding=ft.padding.only(left=10),
+                                padding=ft.padding.only(left=10),
+                            )
+                        )
+                    else:
+                        controls.append(
+                            ft.Container(
+                                content=ft.FilledButton(
+                                    f"Review & Approve Masks",
+                                    icon=ft.Icons.APPROVAL,
+                                    bgcolor=ft.Colors.ORANGE,
+                                    on_click=lambda e, idx=loc_idx: self._show_mask_review_dialog(loc_idx=idx),
+                                ),
+                                padding=ft.padding.only(left=10, top=5),
+                            )
+                        )
+        else:
+            # Single localizer
+            controls.extend([
+                ft.Text("Preprocessing", size=14, weight=ft.FontWeight.W_500),
+                self._create_step_button(
+                    "preprocessing",
+                    "Run Preprocessing",
+                    lambda e: self._on_step_clicked("preprocessing"),
+                ),
+                ft.Divider(),
+                ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
+                self._create_step_button(
+                    "mask_extraction",
+                    "Extract Masks",
+                    lambda e: self._on_step_clicked("mask_extraction"),
+                ),
+            ])
+
+            # Single-localizer approval
+            all_extraction_complete = self.step_statuses.get("mask_extraction") == StepStatus.COMPLETE
+            if all_extraction_complete:
+                if self._initial_qc_approved:
+                    # Approved - show "Review Masks" button with checkmark
+                    masks_customized = self._has_custom_mask_selections()
+                    _cfg = self.study_config.session_config
+                    localizer_type = _cfg.get("mask", {}).get("localizer_type", "rest")
+                    method_label = "GLM" if localizer_type == "task" else "ICA"
+                    status_text = "Customized" if masks_customized else method_label
+                    status_color = ft.Colors.BLUE if masks_customized else ft.Colors.GREY_600
+
+                    controls.append(
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    ft.TextButton(
+                                        "Review Masks",
+                                        icon=ft.Icons.TUNE,
+                                        on_click=lambda e: self._show_mask_review_dialog(),
+                                    ),
+                                    ft.Text(f"({status_text})", size=12, color=status_color),
+                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                ],
+                                spacing=5,
+                            ),
+                            padding=ft.padding.only(left=10),
+                        )
                     )
-                )
-            else:
-                # Not approved - show prominent approval button
-                controls.append(
-                    ft.Container(
-                        content=ft.FilledButton(
-                            "Review & Approve Masks",
-                            icon=ft.Icons.APPROVAL,
-                            bgcolor=ft.Colors.ORANGE,
-                            on_click=lambda e: self._show_mask_review_dialog(),
-                        ),
-                        padding=ft.padding.only(left=10, top=5),
+                else:
+                    # Not approved - show prominent approval button
+                    controls.append(
+                        ft.Container(
+                            content=ft.FilledButton(
+                                "Review & Approve Masks",
+                                icon=ft.Icons.APPROVAL,
+                                bgcolor=ft.Colors.ORANGE,
+                                on_click=lambda e: self._show_mask_review_dialog(),
+                            ),
+                            padding=ft.padding.only(left=10, top=5),
+                        )
                     )
-                )
 
         # MNI fallback button (always available unless in mask-reuse or already MNI mode)
         if not self._is_mask_reuse_mode and not self._is_mni_atlas_mode:
@@ -2648,19 +3063,7 @@ class ParticipantWorkflowScreen:
         )
 
         # Add each feedback/transfer step with optional "View Summary" button
-        # Build dynamic list based on max_feedback_runs and use_transfer_runs
-        task_config = config.get("task", {})
-        max_feedback_runs = task_config.get("max_feedback_runs", 2)
-        task_type = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", False)
-
-        feedback_steps = []
-        if use_transfer_runs:
-            feedback_steps.append(("transfer_1", "Transfer Run 1"))
-        for i in range(1, max_feedback_runs + 1):
-            feedback_steps.append((f"feedback_{i}", f"Feedback Run {i}"))
-        if use_transfer_runs:
-            feedback_steps.append(("transfer_2", "Transfer Run 2"))
+        feedback_steps = _build_feedback_step_ids(config)
         for step_id, step_label in feedback_steps:
             controls.append(
                 self._create_step_button(
@@ -3422,11 +3825,19 @@ class ParticipantWorkflowScreen:
         task = "transfer" if "transfer" in step_id else "feedback"
         run = 1 if "_1" in step_id else 2
 
-        # Get config values
-        n_baseline = config.get("feedback", {}).get("n_baseline", 25)
-        n_volumes = config.get("feedback", {}).get("n_volumes", 150)
-        fd_threshold = config.get("feedback", {}).get("fd_threshold", 0.5)
-        dvars_threshold = config.get("feedback", {}).get("dvars_threshold", 1.5)
+        # Get config values — prefer per-FRC values
+        frc_idx = self._get_feedback_step_frc_index(step_id)
+        feedback_runs = config.get("feedback_runs", [])
+        frc = feedback_runs[frc_idx] if frc_idx is not None and frc_idx < len(feedback_runs) else None
+        def _fv(key, default=None):
+            if frc and key in frc:
+                return frc[key]
+            return config.get("feedback", {}).get(key, default)
+
+        n_baseline = _fv("n_baseline", 25)
+        n_volumes = _fv("n_volumes", 150)
+        fd_threshold = _fv("fd_threshold", 0.5)
+        dvars_threshold = _fv("dvars_threshold", 1.5)
 
         # Find the feedbacklog and psychopylog files
         output_dir = base_dir / "feedback" / "02_feedback_output"
@@ -3481,7 +3892,12 @@ class ParticipantWorkflowScreen:
 
         # Get blind display names if blind mode is enabled
         # Include all masks (real + sham alternatives) for proper blinding
-        mask_names = self._resolve_mask_names(config)
+        frc_idx = self._get_feedback_step_frc_index(step_id)
+        feedback_runs = config.get("feedback_runs", [])
+        if frc_idx is not None and frc_idx < len(feedback_runs):
+            mask_names = self._resolve_frc_mask_names(feedback_runs[frc_idx])
+        else:
+            mask_names = self._resolve_mask_names(config)
         sham_config = config.get("sham", {})
         if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
             sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
@@ -3647,6 +4063,15 @@ class ParticipantWorkflowScreen:
                 return labels[step_id]
             if step_id.startswith("rest_run_"):
                 return f"Rest Run {step_id.split('_')[-1]}"
+            if step_id.startswith("localizer_") and "_run_" in step_id:
+                parts = step_id.split("_")
+                return f"Loc {int(parts[1]) + 1} Run {parts[-1]}"
+            if step_id.startswith("localizer_") and step_id.endswith("_preprocessing"):
+                return f"Loc {int(step_id.split('_')[1]) + 1} Preproc"
+            if step_id.startswith("localizer_") and step_id.endswith("_extraction"):
+                return f"Loc {int(step_id.split('_')[1]) + 1} Extraction"
+            if step_id.startswith("localizer_") and step_id.endswith("_approval"):
+                return f"Loc {int(step_id.split('_')[1]) + 1} Approval"
             if step_id.startswith("feedback_"):
                 return f"Feedback {step_id.split('_')[-1]}"
             if step_id.startswith("transfer_"):
@@ -3952,7 +4377,7 @@ class ParticipantWorkflowScreen:
         outputs_exist = step_info.get("outputs_exist", False)
         overwrite_warning = None
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-        is_collection = step_id.startswith("rest_run_") or step_id in ("reference_initial", "reference_realtime")
+        is_collection = step_id.startswith("rest_run_") or (step_id.startswith("localizer_") and "_run_" in step_id) or step_id in ("reference_initial", "reference_realtime")
         if outputs_exist:
             if is_collection or is_feedback_transfer:
                 # Collection and feedback steps use acq numbering - previous data is archived
@@ -4335,6 +4760,49 @@ class ParticipantWorkflowScreen:
 
         return info
 
+    def _get_transfer_step_info(
+        self, config: dict, base_dir: Path, participant_id: str, transfer_num: int
+    ) -> dict:
+        """Build step info for a transfer run, using per-FRC values when available."""
+        step_id = f"transfer_{transfer_num}"
+        frc_idx = self._get_feedback_step_frc_index(step_id)
+        feedback_runs = config.get("feedback_runs", [])
+        frc = feedback_runs[frc_idx] if frc_idx is not None and frc_idx < len(feedback_runs) else None
+
+        def _val(key, default=None):
+            if frc and key in frc:
+                return frc[key]
+            return config.get("feedback", {}).get(key, default)
+
+        ordinal = "First" if transfer_num == 1 else "Final"
+        description = (
+            "Practice run without neurofeedback to establish baseline performance."
+            if transfer_num == 1
+            else "Final practice run without feedback to assess learning transfer."
+        )
+
+        return {
+            "label": f"Transfer Run {transfer_num}",
+            "description": description,
+            "parameters": {
+                "Task": f"transfer (run-{transfer_num:02d})",
+                "Volumes": _val("n_volumes", 150),
+                "Baseline": _val("n_baseline", 25),
+                "Feedback": "OFF",
+                "MoCo": {
+                    "siemens_moco": "Siemens (scanner)",
+                    "software": "ANTsPy (software)",
+                    "none": "Disabled",
+                }.get(_val("motion_correction", "siemens_moco"), "Unknown"),
+                "Output": base_dir / "feedback" / "02_feedback_output",
+                "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
+            },
+            "output_path": base_dir
+            / "feedback"
+            / "02_feedback_output"
+            / f"{participant_id}_task-transfer_run-{transfer_num:02d}_feedbacklog.tsv",
+        }
+
     def _get_step_info(self, step_id: str, config: dict, base_dir: Path, participant_id: str) -> dict:
         """Get information about a pipeline step for preview.
 
@@ -4353,23 +4821,34 @@ class ParticipantWorkflowScreen:
 
         # Load session state for adaptive state display
         feedback_dir = base_dir / "feedback" / "02_feedback_output"
-        task_type = config.get("task", {}).get("task_type", "ball")
-        try:
-            session_state = SessionState.load(feedback_dir, task_id=task_type)
-            completed_runs = session_state.completed_runs
-        except Exception:
-            session_state = None
-            completed_runs = []
+        # Cache session states per task type for multi-FRC support
+        feedback_runs = config.get("feedback_runs", [])
+        _session_states: dict[str, SessionState | None] = {}
+        default_task_type = config.get("task", {}).get("task_type", "ball")
+
+        def _get_session_state(task_id: str) -> SessionState | None:
+            if task_id not in _session_states:
+                try:
+                    _session_states[task_id] = SessionState.load(feedback_dir, task_id=task_id)
+                except Exception:
+                    _session_states[task_id] = None
+            return _session_states[task_id]
 
         def get_task_state_summary(step_id: str) -> str:
             """Get task state summary string for a specific step."""
+            frc_idx = self._get_feedback_step_frc_index(step_id)
+            if frc_idx is not None and frc_idx < len(feedback_runs):
+                task_id = feedback_runs[frc_idx].get("task_type", default_task_type)
+            else:
+                task_id = default_task_type
+            session_state = _get_session_state(task_id)
             if not session_state or not session_state.task_state:
                 return "initial"
 
             if step_id in ["transfer_1", "feedback_1"]:
                 return "initial"
 
-            if not completed_runs:
+            if not session_state.completed_runs:
                 return "initial"
 
             # Show key task state values
@@ -4421,53 +4900,166 @@ class ParticipantWorkflowScreen:
             },
             "reference_realtime": self._get_reference_realtime_step_info(config, base_dir),
             "coregistration_realtime": self._get_coregistration_realtime_step_info(config, base_dir),
-            "transfer_1": {
-                "label": "Transfer Run 1",
-                "description": "Practice run without neurofeedback to establish baseline performance.",
-                "parameters": {
-                    "Task": "transfer (run-01)",
-                    "Volumes": config["feedback"]["n_volumes"],
-                    "Baseline": config["feedback"]["n_baseline"],
-                    "Feedback": "OFF",
-                    "MoCo": {
-                        "siemens_moco": "Siemens (scanner)",
-                        "software": "ANTsPy (software)",
-                        "none": "Disabled",
-                    }.get(config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"),
-                    "Output": base_dir / "feedback" / "02_feedback_output",
-                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
-                },
-                "output_path": base_dir
-                / "feedback"
-                / "02_feedback_output"
-                / f"{participant_id}_task-transfer_run-01_feedbacklog.tsv",
-            },
+            "transfer_1": self._get_transfer_step_info(config, base_dir, participant_id, transfer_num=1),
             # Note: feedback_N entries are generated dynamically below
-            "transfer_2": {
-                "label": "Transfer Run 2",
-                "description": "Final practice run without feedback to assess learning transfer.",
-                "parameters": {
-                    "Task": "transfer (run-02)",
-                    "Volumes": config["feedback"]["n_volumes"],
-                    "Baseline": config["feedback"]["n_baseline"],
-                    "Feedback": "OFF",
-                    "MoCo": {
-                        "siemens_moco": "Siemens (scanner)",
-                        "software": "ANTsPy (software)",
-                        "none": "Disabled",
-                    }.get(config["feedback"].get("motion_correction", "siemens_moco"), "Unknown"),
-                    "Output": base_dir / "feedback" / "02_feedback_output",
-                    "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
-                },
-                "output_path": base_dir
-                / "feedback"
-                / "02_feedback_output"
-                / f"{participant_id}_task-transfer_run-02_feedbacklog.tsv",
-            },
+            "transfer_2": self._get_transfer_step_info(config, base_dir, participant_id, transfer_num=2),
         }
 
-        # Handle dynamic rest_run_* steps
-        if step_id.startswith("rest_run_"):
+        # Handle multi-localizer step IDs
+        if step_id.startswith("localizer_") and "_run_" in step_id:
+            parts = step_id.split("_")
+            loc_idx = int(parts[1])
+            run_num = int(parts[-1])
+
+            localizers = config.get("localizers", [])
+            loc = localizers[loc_idx] if loc_idx < len(localizers) else {}
+            loc_type = loc.get("type", "rest")
+            loc_n_vols = loc.get("n_volumes", 200)
+            loc_tr = loc.get("tr", 1.2)
+            loc_source_dicoms = loc.get("source_dicoms", [])
+            source_dicom = loc_source_dicoms[run_num - 1] if run_num <= len(loc_source_dicoms) else ""
+
+            # Get display name
+            if loc_type == "rest":
+                loc_display = "Resting State"
+            else:
+                try:
+                    from pineuro.tasks import get_task_metadata
+                    task_meta = get_task_metadata(loc_type)
+                    loc_display = task_meta.display_name
+                except (ValueError, ImportError):
+                    loc_display = loc_type.replace("_", " ").title()
+
+            loc_task_name = "rest" if loc_type == "rest" else loc_type
+            collection_dir = base_dir / "collection"
+            run_info = get_localizer_run_info(
+                collection_dir=collection_dir,
+                task=f"task-{loc_task_name}",
+                run=run_num,
+                expected_volumes=loc_n_vols,
+            )
+
+            description = f"Collect {loc_display} data (run {run_num}) for network mask extraction."
+            if run_info["existing_acqs"]:
+                attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+                description += f" Previous attempts ({attempts_str}) will be preserved."
+
+            params: dict[str, Any] = {
+                "Task": f"{loc_display} (run-{run_num:02d})",
+                "Attempt": f"acq-{run_info['acq']:02d}",
+                "Volumes": loc_n_vols,
+                "TR": f"{loc_tr}s",
+                "Source": source_dicom or "(not configured)",
+                "Output": base_dir / "collection" / f"task-{loc_task_name}_acq-{run_info['acq']:02d}_run-{run_num:02d}",
+                "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 10.0))}x",
+            }
+
+            # Add task-specific parameters for non-rest localizers
+            if loc_type != "rest":
+                task_params = loc.get("task_params", {})
+                for key, value in task_params.items():
+                    display_key = key.replace("_", " ").title()
+                    params[display_key] = value
+            else:
+                # Rest-specific params
+                if loc.get("n_components"):
+                    params["ICA Components"] = loc["n_components"]
+                if loc.get("yeo_targets"):
+                    params["Target Networks"] = ", ".join(loc["yeo_targets"])
+                if loc.get("network_atlas"):
+                    params["Atlas"] = loc["network_atlas"]
+
+            if run_info["existing_acqs"]:
+                params["Previous Attempts"] = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+
+            info: dict[str, Any] = {
+                "label": f"Collect {loc_display} Run {run_num}",
+                "description": description,
+                "parameters": params,
+                "output_path": base_dir / "collection",
+                "output_pattern": f"task-{loc_task_name}_acq-*_run-{run_num:02d}",
+            }
+
+        elif step_id.startswith("localizer_") and step_id.endswith("_preprocessing"):
+            loc_idx = int(step_id.split("_")[1])
+            localizers = config.get("localizers", [])
+            loc = localizers[loc_idx] if loc_idx < len(localizers) else {}
+            loc_type = loc.get("type", "rest")
+            loc_task_name = "rest" if loc_type == "rest" else loc_type
+
+            if loc_type == "rest":
+                loc_display = "Resting State"
+            else:
+                try:
+                    from pineuro.tasks import get_task_metadata
+                    task_meta = get_task_metadata(loc_type)
+                    loc_display = task_meta.display_name
+                except (ValueError, ImportError):
+                    loc_display = loc_type.replace("_", " ").title()
+
+            info = {
+                "label": f"Preprocess {loc_display}",
+                "description": f"Motion correction, brain extraction, and coregistration of {loc_display.lower()} localizer data.",
+                "parameters": {
+                    "Task": loc_display,
+                    "Runs": loc.get("n_runs", 2),
+                    "Input": base_dir / "collection" / f"task-{loc_task_name}_*",
+                    "Output": base_dir / "preprocessing",
+                    "Expected Outputs": f"{participant_id}_task-{loc_task_name}_preproc.nii.gz, _mask.nii.gz, _boldref.nii.gz",
+                },
+                "output_path": base_dir / "preprocessing",
+                "output_pattern": f"{participant_id}_task-{loc_task_name}_preproc.nii.gz",
+            }
+
+        elif step_id.startswith("localizer_") and step_id.endswith("_extraction"):
+            loc_idx = int(step_id.split("_")[1])
+            localizers = config.get("localizers", [])
+            loc = localizers[loc_idx] if loc_idx < len(localizers) else {}
+            loc_type = loc.get("type", "rest")
+            loc_task_name = "rest" if loc_type == "rest" else loc_type
+
+            if loc_type == "rest":
+                loc_display = "Resting State"
+                method = "ICA"
+                params = {
+                    "Method": "ICA (Independent Component Analysis)",
+                    "Atlas": loc.get("network_atlas", "yeo_17"),
+                    "Components": loc.get("n_components", 20),
+                    "Target Networks": ", ".join(loc.get("yeo_targets", [])),
+                    "Smoothing": f"{loc.get('smooth_fwhm', 5.0)} mm FWHM",
+                    "Highpass": f"{loc.get('highpass', 0.01)} Hz",
+                    "Threshold": f"{loc.get('threshold', 2000)} ({loc.get('threshold_method', 'top_n')})",
+                }
+            else:
+                try:
+                    from pineuro.tasks import get_task_metadata
+                    task_meta = get_task_metadata(loc_type)
+                    loc_display = task_meta.display_name
+                except (ValueError, ImportError):
+                    loc_display = loc_type.replace("_", " ").title()
+                method = "GLM"
+                contrasts = loc.get("contrasts", {})
+                params = {
+                    "Method": "GLM (General Linear Model)",
+                    "Contrasts": ", ".join(f"{k}: {v}" for k, v in contrasts.items()) if contrasts else "(none)",
+                    "Stat Type": loc.get("stat_type", "t"),
+                    "HRF Model": loc.get("hrf_model", "spm"),
+                    "Threshold": f"{loc.get('threshold', 2000)} ({loc.get('threshold_method', 'cluster')})",
+                }
+
+            loc_dir_name = f"loc_{loc_idx}_{loc_task_name}"
+            params["Output"] = base_dir / "mask_extraction" / loc_dir_name / "03_masks"
+
+            info = {
+                "label": f"Extract {loc_display} Masks ({method})",
+                "description": f"Extract network masks from {loc_display.lower()} localizer using {method}.",
+                "parameters": params,
+                "output_path": base_dir / "mask_extraction" / loc_dir_name / "03_masks",
+                "output_pattern": f"{participant_id}_*.nii.gz",
+            }
+
+        # Handle dynamic rest_run_* steps (single-localizer)
+        elif step_id.startswith("rest_run_"):
             run_num = int(step_id.split("_")[-1])
             run_idx = run_num - 1  # 0-indexed for accessing lists
 
@@ -4516,13 +5108,23 @@ class ParticipantWorkflowScreen:
             run_num = int(step_id.split("_")[-1])
             ordinal = {1: "First", 2: "Second", 3: "Third", 4: "Fourth", 5: "Fifth"}.get(run_num, f"{run_num}th")
 
-            _feedback_task_type = config.get("task", {}).get("task_type", "ball")
-            networks_str = ", ".join(self._resolve_mask_names(config))
+            frc_idx = self._get_feedback_step_frc_index(step_id)
+            feedback_runs = config.get("feedback_runs", [])
+            if frc_idx is not None and frc_idx < len(feedback_runs):
+                frc = feedback_runs[frc_idx]
+                _feedback_task_type = frc.get("task_type", "ball")
+                networks_str = ", ".join(self._resolve_frc_mask_names(frc))
+            else:
+                _feedback_task_type = config.get("task", {}).get("task_type", "ball")
+                networks_str = ", ".join(self._resolve_mask_names(config))
+
+            _frc = frc if (frc_idx is not None and frc_idx < len(feedback_runs)) else None
+            _fb_get = lambda k, d=None: _frc.get(k, config["feedback"].get(k, d)) if _frc else config["feedback"].get(k, d)
 
             params = {
                 "Task": f"feedback (run-{run_num:02d})",
-                "Volumes": config["feedback"]["n_volumes"],
-                "Baseline": config["feedback"]["n_baseline"],
+                "Volumes": _fb_get("n_volumes", 150),
+                "Baseline": _fb_get("n_baseline", 25),
                 "Feedback": "ON",
                 "Networks": networks_str,
             }
@@ -4536,7 +5138,7 @@ class ParticipantWorkflowScreen:
                 "siemens_moco": "Siemens (scanner)",
                 "software": "ANTsPy (software)",
                 "none": "Disabled",
-            }.get(config["feedback"].get("motion_correction", "siemens_moco"), "Unknown")
+            }.get(_fb_get("motion_correction", "siemens_moco"), "Unknown")
             params["Output"] = base_dir / "feedback" / "02_feedback_output"
             params["Simulator Speed"] = (
                 f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x"
@@ -4563,21 +5165,9 @@ class ParticipantWorkflowScreen:
             )
 
         # For feedback/transfer steps, show slot-based run info with acq entity
-        # Build dynamic list of feedback/transfer steps
-        task_config = config.get("task", {})
-        max_feedback_runs = task_config.get("max_feedback_runs", 2)
-        task_type_name = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type_name, {}).get("use_transfer_runs", False)
+        feedback_step_ids = [sid for sid, _ in _build_feedback_step_ids(config)]
 
-        feedback_steps = []
-        if use_transfer_runs:
-            feedback_steps.append("transfer_1")
-        for i in range(1, max_feedback_runs + 1):
-            feedback_steps.append(f"feedback_{i}")
-        if use_transfer_runs:
-            feedback_steps.append("transfer_2")
-
-        if step_id in feedback_steps:
+        if step_id in feedback_step_ids:
             task_type = "transfer" if "transfer" in step_id else "feedback"
             output_dir = base_dir / "feedback" / "02_feedback_output"
 
@@ -4632,7 +5222,7 @@ class ParticipantWorkflowScreen:
         """
         # Check if outputs exist for processing steps (not collection/feedback)
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-        is_collection = step_id.startswith("rest_run_") or step_id in ("reference_initial", "reference_realtime")
+        is_collection = step_id.startswith("rest_run_") or (step_id.startswith("localizer_") and "_run_" in step_id) or step_id in ("reference_initial", "reference_realtime")
 
         if not is_feedback_transfer and not is_collection:
             config = self.study_config.session_config
@@ -4778,9 +5368,9 @@ class ParticipantWorkflowScreen:
         # - feedback/transfer steps
         # - all rest_run_ steps (fixation or task localizer — all launch a PsychoPy task)
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
-        is_rest_run = step_id.startswith("rest_run_")
+        is_localizer_run = step_id.startswith("rest_run_") or (step_id.startswith("localizer_") and "_run_" in step_id)
 
-        if is_feedback_transfer or is_rest_run:
+        if is_feedback_transfer or is_localizer_run:
             self.pipeline_runner.set_task_mirror_callback(self._on_task_mirror_update)
         else:
             self.pipeline_runner.set_task_mirror_callback(None)
@@ -5131,6 +5721,15 @@ class ParticipantWorkflowScreen:
         self._current_step_id = step_id
         config = self.study_config.session_config
 
+        # Resolve the active FeedbackRunConfig for this step (if applicable)
+        frc_idx = self._get_feedback_step_frc_index(step_id)
+        feedback_runs = config.get("feedback_runs", [])
+        self._active_frc: dict | None = (
+            feedback_runs[frc_idx]
+            if frc_idx is not None and frc_idx < len(feedback_runs)
+            else None
+        )
+
         # Check if this is a feedback/transfer step
         is_feedback_step = step_id.startswith("transfer_") or step_id.startswith("feedback_")
 
@@ -5159,7 +5758,13 @@ class ParticipantWorkflowScreen:
                         except Exception as e:
                             logger.warning(f"Could not load randomization for blind mode: {e}")
 
-                real_mask_names = self._resolve_mask_names(config)
+                # Resolve masks from FRC if available, else fall back to global config
+                frc_idx = self._get_feedback_step_frc_index(step_id)
+                feedback_runs = config.get("feedback_runs", [])
+                if frc_idx is not None and frc_idx < len(feedback_runs):
+                    real_mask_names = self._resolve_frc_mask_names(feedback_runs[frc_idx])
+                else:
+                    real_mask_names = self._resolve_mask_names(config)
 
                 if condition == "sham" and sham_config.get("delivery_method") == "alternative_masks":
                     # Sham condition: show sham masks
@@ -5185,7 +5790,12 @@ class ParticipantWorkflowScreen:
                 display_names = ["Target", "Non-Target"]
             else:
                 # Non-blind mode: show all masks with real names
-                mask_names = self._resolve_mask_names(config)
+                frc_idx = self._get_feedback_step_frc_index(step_id)
+                feedback_runs = config.get("feedback_runs", [])
+                if frc_idx is not None and frc_idx < len(feedback_runs):
+                    mask_names = self._resolve_frc_mask_names(feedback_runs[frc_idx])
+                else:
+                    mask_names = self._resolve_mask_names(config)
                 if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
                     sham_mask_mode = sham_config.get("sham_mask_mode", "two_networks")
                     if sham_mask_mode == "hemisphere_split":
@@ -5203,7 +5813,7 @@ class ParticipantWorkflowScreen:
                                 mask_names.append(alt_name)
                 display_names = None
 
-            n_volumes = config["feedback"]["n_volumes"]
+            n_volumes = self._fb("n_volumes", 150)
 
             # Store display names mapping for hits counter (blind mode)
             if display_names:
@@ -5214,7 +5824,7 @@ class ParticipantWorkflowScreen:
                 self._feedback_display_names = None
 
             # Determine what to plot: connectivity signal or individual activations
-            feedback_mode = config.get("feedback", {}).get("feedback_mode", "activation")
+            feedback_mode = self._fb("feedback_mode", "activation")
             if feedback_mode == "connectivity" and len(mask_names) >= 2:
                 if blind_mode and sham_config.get("enabled"):
                     # Blind mode: show only the condition's correlation
@@ -5267,7 +5877,7 @@ class ParticipantWorkflowScreen:
             )
 
             # Create FD plot for motion monitoring
-            fd_threshold = config["feedback"].get("fd_threshold", 0.5)
+            fd_threshold = self._fb("fd_threshold", 0.5)
             self.fd_plot = FDPlot(
                 n_volumes=n_volumes,
                 height=220,
@@ -5275,7 +5885,7 @@ class ParticipantWorkflowScreen:
             )
 
             # Create DVARS plot for signal quality monitoring
-            dvars_threshold = config["feedback"].get("dvars_threshold", 1.5)
+            dvars_threshold = self._fb("dvars_threshold", 1.5)
             self.dvars_plot = DVARSPlot(
                 n_volumes=n_volumes,
                 height=220,
@@ -5283,7 +5893,7 @@ class ParticipantWorkflowScreen:
             )
 
             # Create tSNR plot for signal quality monitoring
-            tsnr_threshold = config["feedback"].get("tsnr_threshold", 20)
+            tsnr_threshold = self._fb("tsnr_threshold", 20)
             self.tsnr_plot = TSNRPlot(
                 n_volumes=n_volumes,
                 height=220,
@@ -5433,9 +6043,17 @@ class ParticipantWorkflowScreen:
             self._start_feedback_monitoring(step_id)
 
         else:
-            # Check if this is a rest_run step with a task-based localizer
+            # Check if this is a localizer run step (single or multi-localizer)
             is_rest_run_step = step_id.startswith("rest_run_")
-            if is_rest_run_step:
+            is_multi_loc_run = step_id.startswith("localizer_") and "_run_" in step_id
+            is_localizer_run_step = is_rest_run_step or is_multi_loc_run
+            if is_multi_loc_run:
+                # Multi-localizer: determine type from the localizer config
+                loc_idx = int(step_id.split("_")[1])
+                localizers = config.get("localizers", [])
+                loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
+                is_task_localizer = loc_type != "rest"
+            elif is_localizer_run_step:
                 localizer_type = config.get("mask", {}).get("localizer_type", "rest")
                 localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
                 is_task_localizer = localizer_type == "task" and localizer_task_type != "rest"
@@ -5445,15 +6063,19 @@ class ParticipantWorkflowScreen:
             if is_task_localizer:
                 # Task-based localizer: Show TaskMirror (no activation/FD plots)
                 # Get n_volumes for progress tracking
-                n_volumes = config["scan"].get("localizer_n_volumes")
-                if n_volumes is None:
-                    rest_volumes = config["scan"].get("rest_n_volumes", [200])
-                    if isinstance(rest_volumes, list):
-                        # Extract run number from step_id (e.g., "rest_run_1" -> 1)
-                        run_num = int(step_id.split("_")[-1])
-                        n_volumes = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
-                    else:
-                        n_volumes = rest_volumes
+                if is_multi_loc_run:
+                    loc_idx = int(step_id.split("_")[1])
+                    localizers = config.get("localizers", [])
+                    n_volumes = localizers[loc_idx].get("n_volumes", 200) if loc_idx < len(localizers) else 200
+                else:
+                    n_volumes = config["scan"].get("localizer_n_volumes")
+                    if n_volumes is None:
+                        rest_volumes = config["scan"].get("rest_n_volumes", [200])
+                        if isinstance(rest_volumes, list):
+                            run_num = int(step_id.split("_")[-1])
+                            n_volumes = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
+                        else:
+                            n_volumes = rest_volumes
 
                 # Create task mirror
                 self.task_mirror = TaskMirror(width=640, height=480)
@@ -5523,7 +6145,7 @@ class ParticipantWorkflowScreen:
                     expand=True,
                 )
 
-            elif is_rest_run_step:
+            elif is_localizer_run_step:
                 # Full QC monitoring layout for localizer/rest collection
                 # Same layout as feedback: brain slice + task mirror + FD/DVARS/tSNR
                 n_volumes = self._get_collection_n_volumes(step_id)
@@ -5791,7 +6413,7 @@ class ParticipantWorkflowScreen:
                 loc = localizers[loc_idx]
                 loc_type = loc.get("type", "rest")
                 if loc_type == "rest":
-                    return f"Collect Rest Run {run_num} (Loc {loc_idx})"
+                    return f"Collect Rest Run {run_num} (Loc {loc_idx + 1})"
                 else:
                     try:
                         from pineuro.tasks import get_task_metadata
@@ -5800,22 +6422,29 @@ class ParticipantWorkflowScreen:
                         task_name = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
                     except (ValueError, ImportError):
                         task_name = loc_type.title()
-                    return f"Collect {task_name} Run {run_num} (Loc {loc_idx})"
-            return f"Localizer {loc_idx} Run {run_num}"
+                    return f"Collect {task_name} Run {run_num} (Loc {loc_idx + 1})"
+            return f"Localizer {loc_idx + 1} Run {run_num}"
         if step_id.startswith("localizer_") and step_id.endswith("_preprocessing"):
             loc_idx = int(step_id.split("_")[1])
             config = self.study_config.session_config
             localizers = config.get("localizers", [])
             loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
             label = "Rest" if loc_type == "rest" else loc_type.upper()
-            return f"Preprocess {label} (Loc {loc_idx})"
+            return f"Preprocess {label} (Loc {loc_idx + 1})"
         if step_id.startswith("localizer_") and step_id.endswith("_extraction"):
             loc_idx = int(step_id.split("_")[1])
             config = self.study_config.session_config
             localizers = config.get("localizers", [])
             loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
             label = "Rest" if loc_type == "rest" else loc_type.upper()
-            return f"Extract {label} Masks (Loc {loc_idx})"
+            return f"Extract {label} Masks (Loc {loc_idx + 1})"
+        if step_id.startswith("localizer_") and step_id.endswith("_approval"):
+            loc_idx = int(step_id.split("_")[1])
+            config = self.study_config.session_config
+            localizers = config.get("localizers", [])
+            loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
+            label = "Rest" if loc_type == "rest" else loc_type.upper()
+            return f"Review & Approve {label} Masks (Loc {loc_idx + 1})"
 
         # Handle dynamic rest_run_* steps (single-localizer / legacy)
         if step_id.startswith("rest_run_"):
@@ -5870,12 +6499,19 @@ class ParticipantWorkflowScreen:
         elif step_id == "reference_realtime":
             return int(config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2)))
 
+        elif step_id.startswith("localizer_") and "_run_" in step_id:
+            # Multi-localizer: get n_volumes from the localizer config
+            loc_idx = int(step_id.split("_")[1])
+            localizers = config.get("localizers", [])
+            if loc_idx < len(localizers):
+                return int(localizers[loc_idx].get("n_volumes", 200))
+            return 200
+
         elif step_id.startswith("rest_run_"):
-            # Use new localizer_n_volumes, fall back to legacy
+            # Single localizer
             n_volumes = config["scan"].get("localizer_n_volumes")
             if n_volumes is not None:
                 return int(n_volumes)
-            # Legacy: try to get from rest_n_volumes list
             run_num = int(step_id.split("_")[-1])
             run_idx = run_num - 1
             rest_volumes = config["scan"].get("rest_n_volumes", [200])
@@ -5980,9 +6616,14 @@ class ParticipantWorkflowScreen:
         if hasattr(self, "_feedback_mask_names"):
             mask_names = self._feedback_mask_names
         else:
-            mask_names = self._resolve_mask_names(config)
+            frc_idx = self._get_feedback_step_frc_index(step_id)
+            feedback_runs = config.get("feedback_runs", [])
+            if frc_idx is not None and frc_idx < len(feedback_runs):
+                mask_names = self._resolve_frc_mask_names(feedback_runs[frc_idx])
+            else:
+                mask_names = self._resolve_mask_names(config)
 
-        n_volumes = config["feedback"]["n_volumes"]
+        n_volumes = self._fb("n_volumes", 150)
 
         # Determine task type and get slot-based run info
         task_type = "transfer" if "transfer" in step_id else "feedback"
@@ -6084,7 +6725,7 @@ class ParticipantWorkflowScreen:
                     self.tsnr_plot.add_data(volume, tsnr)
 
                 # Update progress
-                n_volumes = self.study_config.session_config["feedback"]["n_volumes"]
+                n_volumes = self._fb("n_volumes", 150)
                 progress = min(1.0, volume / n_volumes) if n_volumes > 0 else 0
 
                 if self._progress_bar:
@@ -6096,7 +6737,7 @@ class ParticipantWorkflowScreen:
                     self._progress_text.update()
 
                 if self._status_text:
-                    n_baseline = self.study_config.session_config["feedback"]["n_baseline"]
+                    n_baseline = self._fb("n_baseline", 25)
                     if volume < n_baseline:
                         self._status_text.value = f"Baseline ({volume}/{n_baseline})"
                         self._status_text.color = ft.Colors.ORANGE_600
@@ -6234,11 +6875,10 @@ class ParticipantWorkflowScreen:
         """
         # Build dynamic workflow order based on configuration
         config = self.study_config.session_config
-        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
         reference_initial_enabled = config["scan"].get("reference_initial_enabled", True)
         reference_realtime_enabled = config["scan"].get("reference_realtime_enabled", True)
 
-        workflow = []
+        workflow: list[tuple[str, str]] = []
 
         # In mask reuse mode, skip localizer and mask extraction steps
         if self._is_mni_atlas_mode:
@@ -6254,19 +6894,40 @@ class ParticipantWorkflowScreen:
             if reference_initial_enabled:
                 workflow.append(("reference_initial", "Collect Initial Reference"))
 
-            # Add localizer runs dynamically
-            for run_num in range(1, n_localizer_runs + 1):
-                step_id = f"rest_run_{run_num}"
-                workflow.append((step_id, self._get_step_label(step_id)))
-
-            # Add mask extraction steps
-            workflow.extend(
-                [
+            localizers = config.get("localizers", [])
+            if localizers and len(localizers) > 1:
+                # Multi-localizer: collect ALL runs first, then per-localizer preprocess→extract→approve
+                for loc_idx, loc in enumerate(localizers):
+                    loc_n_runs = loc.get("n_runs", 2)
+                    for run_num in range(1, loc_n_runs + 1):
+                        step_id = f"localizer_{loc_idx}_run_{run_num}"
+                        workflow.append((step_id, self._get_step_label(step_id)))
+                for loc_idx, loc in enumerate(localizers):
+                    loc_type = loc.get("type", "rest")
+                    loc_label = loc_type.upper() if loc_type != "rest" else "Rest"
+                    workflow.append((
+                        f"localizer_{loc_idx}_preprocessing",
+                        self._get_step_label(f"localizer_{loc_idx}_preprocessing"),
+                    ))
+                    workflow.append((
+                        f"localizer_{loc_idx}_extraction",
+                        self._get_step_label(f"localizer_{loc_idx}_extraction"),
+                    ))
+                    workflow.append((
+                        f"localizer_{loc_idx}_approval",
+                        f"Review & Approve Masks (Loc {loc_idx + 1}: {loc_label})",
+                    ))
+            else:
+                # Single localizer
+                n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+                for run_num in range(1, n_localizer_runs + 1):
+                    step_id = f"rest_run_{run_num}"
+                    workflow.append((step_id, self._get_step_label(step_id)))
+                workflow.extend([
                     ("preprocessing", "Run Preprocessing"),
                     ("mask_extraction", "Extract Masks"),
-                    ("mask_approval", "Review & Approve Masks"),
-                ]
-            )
+                ])
+                workflow.append(("mask_approval", "Review & Approve Masks"))
 
             # Add coregistration only if initial reference is enabled
             if reference_initial_enabled:
@@ -6281,18 +6942,8 @@ class ParticipantWorkflowScreen:
                 ]
             )
 
-        # Add feedback runs dynamically based on max_feedback_runs and use_transfer_runs
-        task_config = config.get("task", {})
-        max_feedback_runs = task_config.get("max_feedback_runs", 2)
-        task_type = task_config.get("task_type", "ball")
-        use_transfer_runs = task_config.get(task_type, {}).get("use_transfer_runs", False)
-
-        if use_transfer_runs:
-            workflow.append(("transfer_1", "Transfer Run 1"))
-        for i in range(1, max_feedback_runs + 1):
-            workflow.append((f"feedback_{i}", f"Feedback Run {i}"))
-        if use_transfer_runs:
-            workflow.append(("transfer_2", "Transfer Run 2"))
+        # Add feedback/transfer steps
+        workflow.extend(_build_feedback_step_ids(config))
 
         # Find first pending or interrupted step (interrupted takes priority as it needs re-run)
         for step_id, step_label in workflow:
@@ -6322,6 +6973,13 @@ class ParticipantWorkflowScreen:
         # Handle mask_approval step specially - open the review dialog
         if step_id == "mask_approval":
             self._show_mask_review_dialog()
+            return
+
+        # Handle per-localizer approval steps
+        if step_id.startswith("localizer_") and step_id.endswith("_approval"):
+            # Extract localizer index from step_id like "localizer_0_approval"
+            loc_idx = int(step_id.split("_")[1])
+            self._show_mask_review_dialog(loc_idx=loc_idx)
             return
 
         # Trigger the step (same as clicking step button)

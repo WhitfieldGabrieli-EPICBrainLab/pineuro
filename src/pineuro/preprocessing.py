@@ -223,6 +223,8 @@ def motion_correction(input_file: Union[str, Path], output_file: Union[str, Path
         # Load 4D image
         img = cast(Nifti1Image, nib.load(input_file))
         data = np.asarray(img.dataobj, dtype=np.float32)
+        if data.ndim != 4:
+            raise ValueError(f"Expected 4D NIfTI, got {data.ndim}D: {input_file}")
         affine = img.affine
         n_vols = data.shape[3]
 
@@ -271,6 +273,11 @@ def motion_correction(input_file: Union[str, Path], output_file: Union[str, Path
                 translation = offset + fixed_p - matrix @ fixed_p
                 euler = Rotation.from_matrix(matrix).as_euler("xyz")
                 motion_params[i] = [euler[0], euler[1], euler[2], translation[0], translation[1], translation[2]]
+            else:
+                logger.warning(
+                    f"Volume {i}: unexpected ANTs transform with {len(params)} parameters "
+                    f"(expected 6 or 12), motion params will be zeros"
+                )
 
         # Save corrected 4D image
         corrected_img = nib.Nifti1Image(corrected, affine, img.header)

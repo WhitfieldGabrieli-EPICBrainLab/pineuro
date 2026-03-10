@@ -264,6 +264,9 @@ class ConfigManager:
         with open(file_path) as f:
             data = yaml.safe_load(f)
 
+        if data is None:
+            raise ValueError(f"Empty or invalid YAML file: {file_path}")
+
         return StudyConfig.from_dict(data, file_path=file_path)
 
     def save_study(self, study_config: StudyConfig, overwrite: bool = True) -> Path:

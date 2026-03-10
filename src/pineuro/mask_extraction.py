@@ -1658,6 +1658,7 @@ def mask_extraction_rest(
             n_yeo=n_networks,
             overwrite=overwrite,
             open_browser=False,
+            ref_file=ref_file,
         )
         emit_progress("QC report", f"Saved to {report_path.name}")
 
@@ -1869,6 +1870,7 @@ def mask_extraction_mni(
             n_yeo=n_networks,
             overwrite=overwrite,
             open_browser=False,
+            ref_file=ref_file,
         )
         emit_progress("QC report", f"Saved to {report_path.name}")
 
@@ -2456,6 +2458,10 @@ def cluster_threshold_stat_map(
     threshold = start_threshold
     _prev_labeled = None
     _prev_n_clusters = 0
+    labeled = None
+    largest_label = 0
+    largest_size = 0
+    n_clusters = 0
 
     for iteration in range(max_iterations):
         above_threshold = masked_stat >= threshold
@@ -2533,6 +2539,15 @@ def cluster_threshold_stat_map(
         threshold += step
 
     # Max iterations reached — return current cluster(s)
+    if labeled is None:
+        return np.zeros(stat_data.shape, dtype=np.uint8), {
+            "outcome": "no_iterations",
+            "final_threshold": float(threshold),
+            "n_iterations": 0,
+            "n_clusters_at_final": 0,
+            "cluster_size": 0,
+            "atlas_voxel_count": atlas_voxel_count,
+        }
     if return_all_clusters:
         binary_mask = (labeled > 0).astype(np.uint8)
         selected_size = int(binary_mask.sum())
@@ -3419,6 +3434,7 @@ def mask_extraction_task(
             output_dir=qc_output_dir,
             overwrite=overwrite,
             open_browser=False,
+            ref_file=ref_file,
         )
         emit_progress("QC report", f"Saved to {report_path.name}")
 
@@ -3951,6 +3967,7 @@ def generate_reference_qc_overlays(
             n_yeo=n_yeo,
             overwrite=False,  # Skip existing images, just update HTML
             open_browser=False,
+            ref_file=ref_file,
         )
     except Exception as e:
         logger.info(f"Skipping ICA QC report regeneration (task-based workflow): {e}")

@@ -979,6 +979,10 @@ class IncrementalGLM:
             self._steady_state_timepoint = self.n_obs
             logger.info(f"Steady state frozen at observation {self.n_obs}")
 
+    def is_frozen(self) -> bool:
+        """Return True if steady-state has already been frozen."""
+        return self._steady_state_residual_mse is not None
+
     def dump_algo_vars(self, voxel_indices: list[int] | None = None) -> dict:
         """Dump algorithm variables for debugging/comparison with MURFI.
 
@@ -1128,6 +1132,7 @@ class FeedbackEstimator:
         self._smooth_fwhm = smooth_fwhm
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
         self._algo_dump_fh: IO[Any] | None = None
+        self._closed = False
 
         # Motion correction mode (decoupled from GLM regressors)
         self._motion_correction = motion_correction
@@ -1283,6 +1288,15 @@ class FeedbackEstimator:
             f"sham={sham_status}"
         )
 
+    def close(self) -> None:
+        """Close open resources (e.g., algo dump file handle)."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._algo_dump_fh is not None:
+            self._algo_dump_fh.close()
+            self._algo_dump_fh = None
+
     def _load_single_mask(self, path: Path, name: str) -> tuple[NDArray[np.intp], set[tuple[int, int, int]]]:
         """Load a single mask file and extract voxel coordinates.
 
@@ -1389,7 +1403,7 @@ class FeedbackEstimator:
         mask_indices: dict[str, NDArray[np.intp]] = {}
         all_coords: set[tuple[int, int, int]] = set()
 
-        for path, name in zip(mask_paths, self.mask_names, strict=False):
+        for path, name in zip(mask_paths, self.mask_names, strict=True):
             flat_indices, coords = self._load_single_mask(path, name)
             mask_indices[name] = flat_indices
             all_coords.update(coords)
@@ -1812,7 +1826,11 @@ class FeedbackEstimator:
         # Note: Freeze at n_baseline - 1 to match MURFI behavior (off-by-one)
         # MURFI uses `if (timepoint < numDataPointsForErrEst)` so at timepoint=25
         # it uses the saved residual from timepoint=24
-        if self.n_volumes == self.n_baseline - 1:
+        # Use == with a guard for n_baseline <= 1 (where n_baseline - 1 == 0 would
+        # never match after the n_volumes += 1 above)
+        if self.n_volumes == self.n_baseline - 1 or (
+            self.n_baseline <= 1 and self.n_volumes == 1 and not self._glm.is_frozen()
+        ):
             # Freeze RSS, MSE, and timepoint for stable normalization
             self._glm.freeze_steady_state()
 
@@ -1909,7 +1927,7 @@ class ConnectivityEstimator:
             Returns 0.0 for pairs where the window is not yet full.
         """
         results: dict[str, float] = {}
-        for (m0, m1), name in zip(self.pairs, self.names, strict=False):
+        for (m0, m1), name in zip(self.pairs, self.names, strict=True):
             ts0 = timeseries.get(m0, [])
             ts1 = timeseries.get(m1, [])
             n = min(len(ts0), len(ts1))
@@ -3462,7 +3480,7 @@ class NeurofeedbackCoordinator:
             if pruned:
                 logger.info(f"Pruned {pruned} stale entries from processed-files set")
 
-            while not self._stop_event.is_set() and self.n_processed < self.n_volumes and not self._stop_event.is_set():
+            while not self._stop_event.is_set() and self.n_processed < self.n_volumes:
                 # If stop was requested before trigger, skip processing entirely
                 if self._stop_event.is_set():
                     break
@@ -3662,6 +3680,9 @@ class NeurofeedbackCoordinator:
         self._stop_event.set()
         # Also release trigger wait so run() can exit cleanly even if task aborted pre-trigger
         self._trigger_event.set()
+        # Close estimator resources (file handles, etc.)
+        if hasattr(self, "_estimator"):
+            self._estimator.close()
 
     def should_show_questions(self) -> bool:
         """Check if post-run questions should be shown.

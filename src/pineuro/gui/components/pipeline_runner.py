@@ -80,6 +80,34 @@ class PipelineRunner:
         self._selected_rest_runs: list | None = None  # Selected runs for preprocessing
         self._selected_acqs: dict[int, int] | None = None  # {run_id: acq_num} for preprocessing
 
+    def _resolve_feedback_run_config(self, step_id: str) -> dict[str, Any] | None:
+        """Return the ``feedback_runs`` entry for *step_id*, or None.
+
+        The mapping is derived from ``config["feedback_runs"]``.  Each entry
+        contributes transfer + feedback steps in order, so the cumulative
+        step count determines which entry owns a given step_id.
+        """
+        feedback_runs = self.config.get("feedback_runs")
+        if not feedback_runs:
+            return None
+
+        step_to_frc: dict[str, dict[str, Any]] = {}
+        fb_counter = 0
+        tf_counter = 0
+        for frc in feedback_runs:
+            use_transfers = frc.get("use_transfer_runs", False)
+            if use_transfers:
+                tf_counter += 1
+                step_to_frc[f"transfer_{tf_counter}"] = frc
+            for _ in range(frc.get("max_runs", 1)):
+                fb_counter += 1
+                step_to_frc[f"feedback_{fb_counter}"] = frc
+            if use_transfers:
+                tf_counter += 1
+                step_to_frc[f"transfer_{tf_counter}"] = frc
+
+        return step_to_frc.get(step_id)
+
     def set_selected_acqs(self, acqs: dict[int, int] | None) -> None:
         """Set which acquisition to use for each run.
 
@@ -981,47 +1009,12 @@ class PipelineRunner:
     # ------------------------------------------------------------------
 
     def _get_localizer_config(self, loc_idx: int) -> dict:
-        """Return the localizer config dict at the given index.
-
-        Falls back to building a single-element list from legacy config if
-        the ``localizers`` key does not exist.
-        """
-        localizers = self.config.get("localizers")
-        if localizers and loc_idx < len(localizers):
+        """Return the localizer config dict at the given index."""
+        localizers = self.config.get("localizers", [])
+        if loc_idx < len(localizers):
             result: dict = localizers[loc_idx]
             return result
-
-        # Legacy fallback: synthesise from mask/scan
-        mask_cfg = self.config.get("mask", {})
-        scan_cfg = self.config.get("scan", {})
-        loc_type = scan_cfg.get("localizer_task_type", "rest")
-        return {
-            "type": "rest" if mask_cfg.get("localizer_type", "rest") == "rest" else loc_type,
-            "tr": scan_cfg.get("localizer_tr", 1.2),
-            "n_volumes": scan_cfg.get("localizer_n_volumes", 200),
-            "n_runs": scan_cfg.get("localizer_n_runs", 2),
-            "source_dicoms": scan_cfg.get("localizer_source_dicoms", []),
-            "n_yeo": mask_cfg.get("n_yeo", 17),
-            "yeo_targets": mask_cfg.get("yeo_targets", ["DefaultA", "ContA"]),
-            "network_atlas": mask_cfg.get("network_atlas", "yeo_17"),
-            "smooth_fwhm": mask_cfg.get("smooth_fwhm", 5.0),
-            "highpass": mask_cfg.get("highpass", 0.01),
-            "lowpass": mask_cfg.get("lowpass"),
-            "contrasts": mask_cfg.get("contrasts", {}),
-            "include_reverse_contrasts": mask_cfg.get("include_reverse_contrasts", False),
-            "events_file": mask_cfg.get("events_file"),
-            "stat_type": mask_cfg.get("stat_type", "t"),
-            "hrf_model": mask_cfg.get("hrf_model", "spm"),
-            "drift_model": mask_cfg.get("drift_model", "cosine"),
-            "threshold": mask_cfg.get("threshold", 2000),
-            "threshold_method": mask_cfg.get("threshold_method", "top_n"),
-            "atlas_mask": mask_cfg.get("atlas_mask"),
-            "atlas_name": mask_cfg.get("atlas_name"),
-            "atlas_source": mask_cfg.get("atlas_source"),
-            "atlas_regions": mask_cfg.get("atlas_regions"),
-            "cluster_start_threshold": mask_cfg.get("cluster_start_threshold", 2.0),
-            "cluster_step": mask_cfg.get("cluster_step", 0.1),
-        }
+        raise IndexError(f"No localizer config at index {loc_idx}")
 
     def _run_localizer_collection(self, loc_idx: int, run_num: int) -> None:
         """Collect DICOMs for a specific localizer run.
@@ -1506,31 +1499,6 @@ class PipelineRunner:
         if not selected["is_complete"]:
             logger.warning(f"Using incomplete reference collection: {selected['n_volumes']}/{n_volumes} volumes")
 
-        # Get network mask files (thresholded only)
-        network_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
-
-        # Filter out combined hemisphere network mask if using hemisphere_split sham mode
-        # (we only want left/right split masks, not the combined one)
-        sham_config = config.get("sham", {})
-        if sham_config.get("enabled", False):
-            delivery_method = sham_config.get("delivery_method", "alternative_masks")
-            mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
-            if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
-                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                combined_mask_name = f"{self.participant_id}_{hemisphere_network}_thr.nii.gz"
-                network_files = [f for f in network_files if f.name != combined_mask_name]
-
-        # Include tissue masks for nuisance regression (WM/CSF) if they exist
-        tissue_mask_files = []
-        tissue_masks_dir = mask_extraction_dir / "05_tissue"
-        if tissue_masks_dir.exists():
-            tissue_mask_files = list(tissue_masks_dir.glob(f"{self.participant_id}_tissue_*_mask.nii.gz"))
-            if tissue_mask_files:
-                self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
-
-        all_mask_files_for_coreg = [str(f) for f in network_files] + [str(f) for f in tissue_mask_files]
-        self._emit_progress(f"Coregistering {len(all_mask_files_for_coreg)} masks to reference {run_str}...")
-
         # Initial reference (run-01) goes to mask_extraction, realtime (run-02+) goes to feedback
         if run_id == 1:
             root_dir = mask_extraction_dir
@@ -1539,18 +1507,133 @@ class PipelineRunner:
             root_dir = feedback_dir
             output_subdir = "01_reference"
 
-        coreg_masks = coregister_reference(
-            participant_id=self.participant_id,
-            root_dir=root_dir,
-            input_dicom=reference_dicom,
-            network_files=all_mask_files_for_coreg,
-            ref_file=str(ref_file),
-            run_id=actual_reference_run,
-            overwrite=self.overwrite,
-            output_subdir=output_subdir,
-        )
+        # Build mask-to-localizer map for multi-localizer coregistration
+        localizers = config.get("localizers", [])
+        is_multi_localizer = len(localizers) > 1 and not is_mask_reuse
 
-        self._emit_progress(f"Coregistered {len(coreg_masks)} masks to reference {run_str}")
+        if is_multi_localizer:
+            # Multi-localizer: each localizer's masks need its own boldref
+            # Build mask name -> localizer index mapping
+            mask_name_to_loc: dict[str, int] = {}
+            for loc_idx, loc in enumerate(localizers):
+                loc_type = loc.get("type", "rest")
+                if loc_type == "rest":
+                    for target in loc.get("yeo_targets", []):
+                        mask_name_to_loc[target] = loc_idx
+                else:
+                    for mask_name in loc.get("contrasts", {}):
+                        mask_name_to_loc[mask_name] = loc_idx
+
+            # Group masks by localizer, each with its own boldref
+            # Masks live in shared 03_masks/ but originated from different localizer spaces
+            all_mask_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
+
+            # Filter sham hemisphere masks
+            sham_config = config.get("sham", {})
+            if sham_config.get("enabled", False):
+                delivery_method = sham_config.get("delivery_method", "alternative_masks")
+                mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+                if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
+                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                    combined_mask_name = f"{self.participant_id}_{hemisphere_network}_thr.nii.gz"
+                    all_mask_files = [f for f in all_mask_files if f.name != combined_mask_name]
+
+            # Map each mask file to its localizer index by matching mask names
+            loc_groups: dict[int, list[Path]] = {}
+            unmatched: list[Path] = []
+            prefix = f"{self.participant_id}_"
+            suffix = "_thr.nii.gz"
+            for mask_file in all_mask_files:
+                name = mask_file.name
+                if name.startswith(prefix) and name.endswith(suffix):
+                    mask_name = name[len(prefix):-len(suffix)]
+                else:
+                    mask_name = name
+                loc_idx = mask_name_to_loc.get(mask_name)
+                if loc_idx is not None:
+                    loc_groups.setdefault(loc_idx, []).append(mask_file)
+                else:
+                    unmatched.append(mask_file)
+
+            # Tissue masks go with the first localizer (they're in the same space)
+            tissue_mask_files = []
+            tissue_masks_dir = mask_extraction_dir / "05_tissue"
+            if tissue_masks_dir.exists():
+                tissue_mask_files = list(tissue_masks_dir.glob(f"{self.participant_id}_tissue_*_mask.nii.gz"))
+                if tissue_mask_files:
+                    self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
+
+            # Coregister each localizer group with its own boldref
+            all_coreg_masks: list[Path] = []
+            for loc_idx, mask_files in sorted(loc_groups.items()):
+                loc = localizers[loc_idx]
+                loc_type = loc.get("type", "rest")
+                loc_task_name = "rest" if loc_type == "rest" else loc_type
+                loc_ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task_name}_boldref.nii.gz"
+
+                # Add tissue masks to the first group only
+                group_files = [str(f) for f in mask_files]
+                if loc_idx == min(loc_groups.keys()) and tissue_mask_files:
+                    group_files += [str(f) for f in tissue_mask_files]
+                if unmatched and loc_idx == min(loc_groups.keys()):
+                    group_files += [str(f) for f in unmatched]
+                    unmatched = []
+
+                self._emit_progress(
+                    f"Coregistering {len(group_files)} masks from localizer {loc_idx} "
+                    f"({loc_task_name}) with its boldref..."
+                )
+
+                coreg_result = coregister_reference(
+                    participant_id=self.participant_id,
+                    root_dir=root_dir,
+                    input_dicom=reference_dicom,
+                    network_files=group_files,
+                    ref_file=str(loc_ref_file),
+                    run_id=actual_reference_run,
+                    overwrite=self.overwrite,
+                    output_subdir=output_subdir,
+                )
+                all_coreg_masks.extend(coreg_result)
+
+            coreg_masks = all_coreg_masks
+            self._emit_progress(f"Coregistered {len(coreg_masks)} masks across {len(loc_groups)} localizers")
+        else:
+            # Single localizer (or mask reuse): all masks use the same boldref
+            network_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
+
+            # Filter out combined hemisphere network mask if using hemisphere_split sham mode
+            sham_config = config.get("sham", {})
+            if sham_config.get("enabled", False):
+                delivery_method = sham_config.get("delivery_method", "alternative_masks")
+                mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+                if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
+                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
+                    combined_mask_name = f"{self.participant_id}_{hemisphere_network}_thr.nii.gz"
+                    network_files = [f for f in network_files if f.name != combined_mask_name]
+
+            # Include tissue masks for nuisance regression (WM/CSF) if they exist
+            tissue_mask_files = []
+            tissue_masks_dir = mask_extraction_dir / "05_tissue"
+            if tissue_masks_dir.exists():
+                tissue_mask_files = list(tissue_masks_dir.glob(f"{self.participant_id}_tissue_*_mask.nii.gz"))
+                if tissue_mask_files:
+                    self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
+
+            all_mask_files_for_coreg = [str(f) for f in network_files] + [str(f) for f in tissue_mask_files]
+            self._emit_progress(f"Coregistering {len(all_mask_files_for_coreg)} masks to reference {run_str}...")
+
+            coreg_masks = coregister_reference(
+                participant_id=self.participant_id,
+                root_dir=root_dir,
+                input_dicom=reference_dicom,
+                network_files=all_mask_files_for_coreg,
+                ref_file=str(ref_file),
+                run_id=actual_reference_run,
+                overwrite=self.overwrite,
+                output_subdir=output_subdir,
+            )
+            self._emit_progress(f"Coregistered {len(coreg_masks)} masks to reference {run_str}")
 
         # Generate reference QC overlays for visual approval
         self._emit_progress(f"Generating reference QC overlays for {run_str}...")
@@ -1693,6 +1776,17 @@ class PipelineRunner:
 
         feedback_mode = task_type == "feedback"
 
+        # Resolve per-run config from feedback_runs if available
+        frc = self._resolve_feedback_run_config(step_id)
+        # Helper to read per-run config with fallback to flat config
+        fb_cfg_flat = self.config.get("feedback", {})
+
+        def _fb(key: str, default: Any = None) -> Any:
+            """Read from per-run config first, then flat feedback config."""
+            if frc is not None and key in frc:
+                return frc[key]
+            return fb_cfg_flat.get(key, default)
+
         # Get output directory for slot-based run info
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
@@ -1716,13 +1810,13 @@ class PipelineRunner:
         # Get mask files - use reference-coregistered masks if realtime reference is enabled,
         # otherwise use boldref space masks from mask extraction
         task_config = config.get("task", {})
-        feedback_task_type = task_config.get("task_type", "ball")
+        feedback_task_type = frc.get("task_type", task_config.get("task_type", "ball")) if frc else task_config.get("task_type", "ball")
 
         # Determine mask names based on localizer type.
         # For task-based (GLM) extraction, mask names come from contrast keys.
         # For ICA-based (rest) extraction, mask names come from mask_names/yeo_targets.
         localizer_type = config["mask"].get("localizer_type", "rest")
-        signal_mode = config["feedback"].get("feedback_mode", "activation")
+        signal_mode = _fb("feedback_mode", "activation")
         include_reverse = config.get("mask", {}).get("include_reverse_contrasts", False)
         if localizer_type == "task":
             contrasts = config["mask"].get("contrasts", {})
@@ -1743,16 +1837,35 @@ class PipelineRunner:
             real_mask_names = list(config["mask"]["mask_names"])
 
         # Resolve task mask names from network assignment in task config.
+        # Prefer per-run task_params from frc over the legacy global task config.
         metadata = get_task_metadata(feedback_task_type)
         task_specific_config = task_config.get(feedback_task_type, {})
+        if frc and frc.get("task_params"):
+            task_specific_config = {**task_specific_config, **frc["task_params"]}
 
         if metadata.network_roles:
-            # Use explicit network assignment from task config (dual-network modes)
+            # For feedback_runs, derive network roles from differential_pair if task_params
+            # don't explicitly set them (avoids stale values from legacy global task config)
             assigned_names = []
-            for role in metadata.network_roles:
-                name = task_specific_config.get(role.key)
-                if name:
-                    assigned_names.append(name)
+            if frc:
+                diff_pair = frc.get("differential_pair") or []
+                frc_params = frc.get("task_params", {})
+                # Check if frc's task_params explicitly set network role keys
+                has_explicit_roles = any(frc_params.get(role.key) for role in metadata.network_roles)
+                if has_explicit_roles:
+                    for role in metadata.network_roles:
+                        name = frc_params.get(role.key)
+                        if name:
+                            assigned_names.append(name)
+                elif len(diff_pair) >= 2:
+                    # Map differential_pair to network roles by position
+                    assigned_names = list(diff_pair[:len(metadata.network_roles)])
+            else:
+                # Legacy: use global task config
+                for role in metadata.network_roles:
+                    name = task_specific_config.get(role.key)
+                    if name:
+                        assigned_names.append(name)
             if len(assigned_names) >= 2:
                 real_mask_names = assigned_names
 
@@ -1783,8 +1896,7 @@ class PipelineRunner:
         # Find tissue masks for nuisance regression (WM/CSF)
         wm_mask_path = None
         csf_mask_path = None
-        fb_cfg = config.get("feedback", {})
-        if fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False):
+        if _fb("include_wm_regressor", False) or _fb("include_csf_regressor", False):
             if reference_realtime_enabled:
                 wm_matches = list(
                     masks_dir.glob(f"*_tissue_wm_mask_to_task-reference_run-{realtime_reference_run:02d}_*.nii.gz")
@@ -1884,12 +1996,10 @@ class PipelineRunner:
         self._emit_progress(f"Preparing {task_type} run (feedback={'ON' if feedback_mode else 'OFF'})...")
 
         # Compute task regressor from task metadata design type
-        n_baseline = config["feedback"]["n_baseline"]
-        n_volumes = config["feedback"]["n_volumes"]
-        # Use new feedback_tr field, fall back to legacy tr
-        tr = config["scan"].get("feedback_tr") or config["scan"].get("tr", 1.2)
-
-        feedback_task_type = config.get("task", {}).get("task_type", "ball")
+        n_baseline = _fb("n_baseline", 25)
+        n_volumes = _fb("n_volumes", 150)
+        # Use per-run TR, fall back to scan config
+        tr = _fb("tr", config["scan"].get("feedback_tr") or config["scan"].get("tr", 1.2))
         metadata = get_task_metadata(feedback_task_type)
         design: NuisanceOnlyDesign | BlockDesign
         if metadata.design_type == "nuisance_only":
@@ -2049,7 +2159,7 @@ class PipelineRunner:
             task_mask_names = real_mask_names
 
         # Build connectivity_pairs, adding sham pair if needed
-        connectivity_pairs = config["feedback"].get("connectivity_pairs")
+        connectivity_pairs = _fb("connectivity_pairs")
         if (
             signal_mode == "connectivity"
             and connectivity_pairs
@@ -2077,27 +2187,27 @@ class PipelineRunner:
                 tr=tr,
                 task_regressors=task_regressor,
                 mask_names=all_mask_names,  # All masks for logging
-                use_efficiency_weights=config["feedback"].get("use_efficiency_weights", True),
+                use_efficiency_weights=_fb("use_efficiency_weights", True),
                 simulator_source_dir=simulator_source_dir,
                 simulator_speed=simulator_speed,
                 step_id=step_id,  # Use slot-based naming with acq entity
                 qc_enabled=True,
-                fd_threshold=config["feedback"].get("fd_threshold", 0.5),
+                fd_threshold=_fb("fd_threshold", 0.5),
                 condition=condition,  # Log the actual condition
                 sham_provider=sham_provider,  # Replay provider for sham participants
-                motion_correction=config["feedback"].get("motion_correction", "siemens_moco"),
-                include_drift=config["feedback"].get("include_drift", True),
-                include_motion_regressors=config["feedback"].get("include_motion_regressors", True),
-                include_wm_regressor=config["feedback"].get("include_wm_regressor", False),
-                include_csf_regressor=config["feedback"].get("include_csf_regressor", False),
+                motion_correction=_fb("motion_correction", "siemens_moco"),
+                include_drift=_fb("include_drift", True),
+                include_motion_regressors=_fb("include_motion_regressors", True),
+                include_wm_regressor=_fb("include_wm_regressor", False),
+                include_csf_regressor=_fb("include_csf_regressor", False),
                 wm_mask_path=wm_mask_path,
                 csf_mask_path=csf_mask_path,
-                smooth_fwhm=config["feedback"].get("smooth_fwhm"),  # Real-time spatial smoothing
-                differential_pair=config["feedback"].get("differential_pair"),  # Configurable differential signal
-                feedback_interval=config["feedback"].get("feedback_interval"),  # Intermittent feedback mode
+                smooth_fwhm=_fb("smooth_fwhm"),  # Real-time spatial smoothing
+                differential_pair=_fb("differential_pair"),  # Configurable differential signal
+                feedback_interval=_fb("feedback_interval"),  # Intermittent feedback mode
                 connectivity_pairs=connectivity_pairs,  # Sliding-window correlation pairs (may include sham pair)
-                connectivity_window=config["feedback"].get("connectivity_window", 15),  # Correlation window size
-                connectivity_target=config["feedback"].get("connectivity_target", "increase"),  # Target direction
+                connectivity_window=_fb("connectivity_window", 15),  # Correlation window size
+                connectivity_target=_fb("connectivity_target", "increase"),  # Target direction
             )
 
             # Wait for the coordinator thread to complete
@@ -2113,10 +2223,12 @@ class PipelineRunner:
             # Import task factory
             from pineuro.tasks import create_task
 
-            # Get task configuration
+            # Get task configuration — per-run config overrides flat task config
             task_config = config.get("task", {})
-            feedback_task_type = task_config.get("task_type", "ball")
-            task_specific_config = task_config.get(feedback_task_type, {})
+            # feedback_task_type already resolved at top of method (uses frc if available)
+            task_specific_config = (
+                frc.get("task_params", {}) if frc else task_config.get(feedback_task_type, {})
+            )
 
             # Get display configuration
             display_config = config.get("display", {})
@@ -2134,9 +2246,9 @@ class PipelineRunner:
             self._emit_progress(f"Session state: task={feedback_task_type}, runs={len(session_state.completed_runs)}")
 
             # Build factory config with task parameters plus runtime settings
-            signal_mode = config["feedback"].get("feedback_mode", "activation")
+            signal_mode = _fb("feedback_mode", "activation")
 
-            connectivity_target = config["feedback"].get("connectivity_target", "increase")
+            connectivity_target = _fb("connectivity_target", "increase")
 
             factory_config = {
                 **task_specific_config,

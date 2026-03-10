@@ -814,9 +814,11 @@ class ThermometerTask(BaseTask):
         upward = fb >= zero_val
 
         if upward:
-            rec_height = (fb - zero_val) / (n_segments * (act_max - zero_val)) * 0.5
+            denom = n_segments * (act_max - zero_val)
+            rec_height = (fb - zero_val) / denom * 0.5 if denom != 0 else 0.0
         else:
-            rec_height = (fb - zero_val) / (n_segments * (act_min - zero_val)) * 0.5
+            denom = n_segments * (act_min - zero_val)
+            rec_height = (fb - zero_val) / denom * 0.5 if denom != 0 else 0.0
 
         # Green when feedback matches expectation, Red otherwise
         is_good = (block_type == "listen" and upward) or (block_type == "ignore" and not upward)

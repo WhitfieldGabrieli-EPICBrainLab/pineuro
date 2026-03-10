@@ -119,6 +119,7 @@ class CollectionProgressPanel:
         self._volume_text: ft.Text | None = None
         self._progress_bar: ft.ProgressBar | None = None
         self._time_text: ft.Text | None = None
+        self._placeholder: ft.Container | None = None
 
     def build(self) -> ft.Container:
         """Build the progress panel control.

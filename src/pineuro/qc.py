@@ -969,9 +969,11 @@ def plot_registration_overlay(ref_path: Path, moving_path: Path, out_path: Path,
         ax.imshow(ref_slice, cmap="gray", origin="lower", vmin=ref_min, vmax=ref_max)
 
         # Overlay edges from moving image in red
-        edge_thresh = np.percentile(moving_edge_slice[moving_edge_slice > 0], 75)
-        edge_mask = moving_edge_slice > edge_thresh
-        ax.contour(edge_mask, levels=[0.5], colors=["#d62728"], linewidths=1.2, alpha=0.8)
+        positive_edges = moving_edge_slice[moving_edge_slice > 0]
+        if len(positive_edges) > 0:
+            edge_thresh = np.percentile(positive_edges, 75)
+            edge_mask = moving_edge_slice > edge_thresh
+            ax.contour(edge_mask, levels=[0.5], colors=["#d62728"], linewidths=1.2, alpha=0.8)
 
         ax.set_axis_off()
         ax.set_title(f"{plane.capitalize()} (slice {slices_idx[plane]})", fontweight="normal")
@@ -1386,6 +1388,7 @@ def generate_mask_extraction_report(
     n_yeo: int | None = None,
     overwrite: bool = False,
     open_browser: bool = False,
+    ref_file: Path | str | None = None,
 ) -> Path:
     """
     Generate comprehensive QC report for mask extraction outputs.
@@ -1453,14 +1456,19 @@ def generate_mask_extraction_report(
 
     # Find ICA components and reference
     components_file = ica_dir / f"{participant_id}_components.nii.gz"
-    # Search for boldref in preprocessing directory (sibling to mask_extraction)
-    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
-    if preprocessing_dir.exists():
-        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
-    else:
-        # Fallback: search in parent directory
-        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
-    ref_file = Path(ref_files[0]) if ref_files else None
+    # Use explicitly passed ref_file, or auto-discover from preprocessing
+    if ref_file is not None:
+        ref_file = Path(ref_file)
+        if not ref_file.exists():
+            ref_file = None
+    if ref_file is None:
+        preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+        if preprocessing_dir.exists():
+            ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+        else:
+            # Fallback: search in parent directory
+            ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+        ref_file = Path(ref_files[0]) if ref_files else None
 
     # For MNI atlas mode, also check for reference in mni_ref subdirectory
     if ref_file is None and is_mni_atlas:
@@ -1793,6 +1801,7 @@ def generate_task_mask_extraction_report(
     output_dir: Path | None = None,
     overwrite: bool = False,
     open_browser: bool = False,
+    ref_file: Path | str | None = None,
 ) -> Path:
     """
     Generate QC report for task-based (GLM) mask extraction outputs.
@@ -1839,12 +1848,17 @@ def generate_task_mask_extraction_report(
     masks_dir = mask_extraction_dir / "03_masks"
 
     # Find BOLD reference for overlays
-    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
-    if preprocessing_dir.exists():
-        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
-    else:
-        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
-    ref_file = Path(ref_files[0]) if ref_files else None
+    if ref_file is not None:
+        ref_file = Path(ref_file)
+        if not ref_file.exists():
+            ref_file = None
+    if ref_file is None:
+        preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+        if preprocessing_dir.exists():
+            ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+        else:
+            ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+        ref_file = Path(ref_files[0]) if ref_files else None
 
     # Find GLM metadata
     glm_info_file = glm_dir / f"{participant_id}_glm_info.json"
@@ -2106,6 +2120,7 @@ def generate_alternative_overlays(
     output_dir: Path | None = None,
     n_yeo: int | None = None,
     overwrite: bool = False,
+    ref_file: Path | str | None = None,
 ) -> dict[str, dict[int, Path]]:
     """
     Generate overlay images for alternative ICA components.
@@ -2164,16 +2179,21 @@ def generate_alternative_overlays(
     components_file = Path(components_files[0])
 
     # Find BOLD reference
-    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
-    if preprocessing_dir.exists():
-        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
-    else:
-        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+    if ref_file is not None:
+        ref_file = Path(ref_file)
+        if not ref_file.exists():
+            ref_file = None
+    if ref_file is None:
+        preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+        if preprocessing_dir.exists():
+            ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+        else:
+            ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+        ref_file = Path(ref_files[0]) if ref_files else None
 
-    if not ref_files:
+    if not ref_file:
         logger.warning("No BOLD reference found")
         return {}
-    ref_file = Path(ref_files[0])
 
     # Load correlation matrix (new name or legacy Yeo name)
     corr_file = masks_dir / "network_IC_spatial_correlation.csv"
@@ -2280,6 +2300,7 @@ def generate_yeo_network_overlay(
     output_dir: Path | None = None,
     n_yeo: int = 17,
     overwrite: bool = False,
+    ref_file: Path | str | None = None,
 ) -> Path | None:
     """
     Generate overlay image for a Yeo atlas network (fallback option).
@@ -2333,16 +2354,21 @@ def generate_yeo_network_overlay(
     yeo2sub = Path(yeo2sub_files[0])
 
     # Find BOLD reference
-    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
-    if preprocessing_dir.exists():
-        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
-    else:
-        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+    if ref_file is not None:
+        ref_file = Path(ref_file)
+        if not ref_file.exists():
+            ref_file = None
+    if ref_file is None:
+        preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+        if preprocessing_dir.exists():
+            ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+        else:
+            ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+        ref_file = Path(ref_files[0]) if ref_files else None
 
-    if not ref_files:
+    if not ref_file:
         logger.warning("No BOLD reference found")
         return None
-    ref_file = Path(ref_files[0])
 
     logger.info(f"Generating Yeo atlas overlay for {network_name}")
 
@@ -2584,6 +2610,7 @@ def generate_hemisphere_overlays(
     output_dir: Path | None = None,
     n_yeo: int = 17,
     overwrite: bool = False,
+    ref_file: Path | str | None = None,
 ) -> dict[str, Path]:
     """
     Generate overlay images for hemisphere-split masks (for sham verification).
@@ -2637,16 +2664,21 @@ def generate_hemisphere_overlays(
         return {}
 
     # Find BOLD reference
-    preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
-    if preprocessing_dir.exists():
-        ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
-    else:
-        ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+    if ref_file is not None:
+        ref_file = Path(ref_file)
+        if not ref_file.exists():
+            ref_file = None
+    if ref_file is None:
+        preprocessing_dir = mask_extraction_dir.parent / "preprocessing"
+        if preprocessing_dir.exists():
+            ref_files = sorted(glob(str(preprocessing_dir / "*boldref.nii.gz")))
+        else:
+            ref_files = sorted(glob(str(mask_extraction_dir.parent / "**/*boldref.nii.gz"), recursive=True))
+        ref_file = Path(ref_files[0]) if ref_files else None
 
-    if not ref_files:
+    if not ref_file:
         logger.warning("No BOLD reference found for hemisphere overlays")
         return {}
-    ref_file = Path(ref_files[0])
 
     # Find network atlas in subject space for slice selection (Yeo or Schaefer)
     yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
