@@ -544,19 +544,6 @@ class PipelineRunner:
             task_done_event=task_done_event,
         )
 
-        # Create QC monitor for real-time FD/DVARS/tSNR during collection
-        qc_mon = None
-        if self.on_qc_data is not None:
-            from pineuro.collection_qc import CollectionQCMonitor
-
-            qc_log_path = output_dir / "collectionlog.tsv"
-            motion_mode = config["scan"].get("motion_correction", "siemens_moco")
-            qc_mon = CollectionQCMonitor(
-                log_path=qc_log_path,
-                motion_correction=motion_mode,
-                on_qc_data=self.on_qc_data,
-            )
-
         # collect_dicoms just watches the directory - no simulator
         # (simulator is controlled by the task for synchronization)
         # Timeout must exceed the expected run duration (n_volumes * TR) plus buffer
@@ -576,7 +563,7 @@ class PipelineRunner:
             trigger_event=trigger_event,
             task_done_event=task_done_event,
             timeout=collection_timeout,
-            qc_monitor=qc_mon,
+            qc_monitor=None,
         )
 
         # Report actual collected count (may be less than n_volumes for
@@ -1549,9 +1536,9 @@ class PipelineRunner:
                     mask_name = name[len(prefix):-len(suffix)]
                 else:
                     mask_name = name
-                loc_idx = mask_name_to_loc.get(mask_name)
-                if loc_idx is not None:
-                    loc_groups.setdefault(loc_idx, []).append(mask_file)
+                matched_loc_idx = mask_name_to_loc.get(mask_name)
+                if matched_loc_idx is not None:
+                    loc_groups.setdefault(matched_loc_idx, []).append(mask_file)
                 else:
                     unmatched.append(mask_file)
 

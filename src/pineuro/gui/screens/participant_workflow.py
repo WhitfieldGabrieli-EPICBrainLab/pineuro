@@ -764,9 +764,8 @@ class ParticipantWorkflowScreen:
             alternatives = get_alternative_components(corr_df, network, top_n=n_components)
 
             # Find overlay paths
-            overlay_path: Path | None = overlays_dir / f"{self.participant_id}_{network}_overlay.png"
-            if not overlay_path.exists():
-                overlay_path = None
+            overlay_candidate = overlays_dir / f"{self.participant_id}_{network}_overlay.png"
+            overlay_path: Path | None = overlay_candidate if overlay_candidate.exists() else None
 
             info = MaskReviewInfo(
                 network_name=network,
@@ -2903,7 +2902,7 @@ class ParticipantWorkflowScreen:
                         controls.append(
                             ft.Container(
                                 content=ft.FilledButton(
-                                    f"Review & Approve Masks",
+                                    "Review & Approve Masks",
                                     icon=ft.Icons.APPROVAL,
                                     bgcolor=ft.Colors.ORANGE,
                                     on_click=lambda e, idx=loc_idx: self._show_mask_review_dialog(loc_idx=idx),
@@ -4791,7 +4790,6 @@ class ParticipantWorkflowScreen:
                 return frc[key]
             return config.get("feedback", {}).get(key, default)
 
-        ordinal = "First" if transfer_num == 1 else "Final"
         description = (
             "Practice run without neurofeedback to establish baseline performance."
             if transfer_num == 1
@@ -5103,7 +5101,7 @@ class ParticipantWorkflowScreen:
                 attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
                 description += f" Previous attempts ({attempts_str}) will be preserved."
 
-            info: dict[str, Any] = {
+            info = {
                 "label": f"Collect Localizer Run {run_num}",
                 "description": description,
                 "parameters": {
@@ -5136,7 +5134,8 @@ class ParticipantWorkflowScreen:
                 networks_str = ", ".join(self._resolve_mask_names(config))
 
             _frc = frc if (frc_idx is not None and frc_idx < len(feedback_runs)) else None
-            _fb_get = lambda k, d=None: _frc.get(k, config["feedback"].get(k, d)) if _frc else config["feedback"].get(k, d)
+            def _fb_get(k: str, d: Any = None) -> Any:
+                return _frc.get(k, config["feedback"].get(k, d)) if _frc else config["feedback"].get(k, d)
 
             params = {
                 "Task": f"feedback (run-{run_num:02d})",
@@ -6163,19 +6162,10 @@ class ParticipantWorkflowScreen:
                 )
 
             elif is_localizer_run_step:
-                # Full QC monitoring layout for localizer/rest collection
-                # Same layout as feedback: brain slice + task mirror + FD/DVARS/tSNR
+                # Localizer/rest collection: brain slice + task mirror (no QC plots)
                 n_volumes = self._get_collection_n_volumes(step_id)
 
-                fd_threshold = config.get("feedback", {}).get("fd_threshold", 0.5)
-                dvars_threshold = config.get("feedback", {}).get("dvars_threshold", 1.5)
-                tsnr_threshold = config.get("feedback", {}).get("tsnr_threshold", 20)
-
-                self.fd_plot = FDPlot(n_volumes=n_volumes, height=220, threshold=fd_threshold)
-                self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=220, threshold=dvars_threshold)
-                self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=220, threshold=tsnr_threshold)
-
-                # Brain slice image (replaces activation plot)
+                # Brain slice image
                 self._slice_image = ft.Image(
                     src="",
                     width=480,
@@ -6277,45 +6267,6 @@ class ParticipantWorkflowScreen:
                                 ],
                                 spacing=20,
                                 vertical_alignment=ft.CrossAxisAlignment.START,
-                            ),
-                            # Row 2: QC plots
-                            ft.Row(
-                                [
-                                    ft.Container(
-                                        content=ft.Column(
-                                            [
-                                                ft.Text("Framewise Displacement", size=12, weight=ft.FontWeight.W_500),
-                                                self.fd_plot.build(),
-                                            ],
-                                            spacing=3,
-                                        ),
-                                        expand=True,
-                                        height=300,
-                                    ),
-                                    ft.Container(
-                                        content=ft.Column(
-                                            [
-                                                ft.Text("DVARS", size=12, weight=ft.FontWeight.W_500),
-                                                self.dvars_plot.build(),
-                                            ],
-                                            spacing=3,
-                                        ),
-                                        expand=True,
-                                        height=300,
-                                    ),
-                                    ft.Container(
-                                        content=ft.Column(
-                                            [
-                                                ft.Text("tSNR", size=12, weight=ft.FontWeight.W_500),
-                                                self.tsnr_plot.build(),
-                                            ],
-                                            spacing=3,
-                                        ),
-                                        expand=True,
-                                        height=300,
-                                    ),
-                                ],
-                                spacing=10,
                             ),
                         ],
                         spacing=8,
