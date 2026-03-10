@@ -69,6 +69,27 @@ class QCReportManager:
         """
         self.base_dir = Path(base_dir)
         self.participant_id = participant_id
+        self.network_order: list[str] | None = None
+
+    def _sort_overlays(
+        self, plots: list[tuple[str, Path]]
+    ) -> list[tuple[str, Path]]:
+        """Sort overlay plots by network_order if set, otherwise keep as-is."""
+        if not self.network_order:
+            return plots
+
+        order = self.network_order
+
+        def sort_key(item: tuple[str, Path]) -> int:
+            label = item[0]
+            # Extract network name from label like "DefaultA Mask (Subject Space)"
+            network = label.split(" Mask")[0] if " Mask" in label else label
+            try:
+                return order.index(network)
+            except ValueError:
+                return len(order)
+
+        return sorted(plots, key=sort_key)
 
     def get_preprocessing_qc(self) -> Path | None:
         """Get path to preprocessing QC report.
@@ -348,22 +369,27 @@ class QCReportManager:
             plots.append(("ICA Components", ica_grid))
 
         # Subject space overlays (all networks)
+        subject_overlays: list[tuple[str, Path]] = []
         overlay_dir = qc_dir / "overlays" / "subject"
         if overlay_dir.exists():
             for overlay in sorted(overlay_dir.glob("*_overlay.png")):
                 # Extract network name from filename
                 # e.g., "sub-01_DefaultA_overlay.png" -> "DefaultA"
                 network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
-                plots.append((f"{network} Mask (Subject Space)", overlay))
+                subject_overlays.append((f"{network} Mask (Subject Space)", overlay))
+        plots.extend(self._sort_overlays(subject_overlays))
 
         # MNI space overlays (registration quality check)
+        mni_overlays: list[tuple[str, Path]] = []
         mni_dir = qc_dir / "overlays" / "mni"
         if mni_dir.exists():
             for overlay in sorted(mni_dir.glob("*_overlay.png")):
                 network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
-                plots.append((f"{network} Mask (MNI Space)", overlay))
+                mni_overlays.append((f"{network} Mask (MNI Space)", overlay))
+        plots.extend(self._sort_overlays(mni_overlays))
 
         # Reference overlays (coregistration) - only run-01 for initial QC
+        ref_overlays: list[tuple[str, Path]] = []
         reference_dir = qc_dir / "overlays" / "reference"
         if reference_dir.exists():
             for overlay in sorted(reference_dir.glob("*_overlay.png")):
@@ -375,7 +401,8 @@ class QCReportManager:
                 # Clean up the network name to remove the thr_to_task-reference_run-XX_mean suffix
                 if "_thr_to_task-reference" in network:
                     network = network.split("_thr_to_task-reference")[0]
-                plots.append((f"{network} Mask (Reference Space)", overlay))
+                ref_overlays.append((f"{network} Mask (Reference Space)", overlay))
+        plots.extend(self._sort_overlays(ref_overlays))
 
         return plots
 
@@ -415,6 +442,8 @@ class QCReportManager:
                 if "_thr_to_task-reference" in network:
                     network = network.split("_thr_to_task-reference")[0]
                 plots.append((f"{network} Mask (Reference Space)", overlay))
+
+        plots = self._sort_overlays(plots)
 
         if not plots:
             logger.debug(f"No reference overlay plots found in {reference_dir} for {run_pattern}")

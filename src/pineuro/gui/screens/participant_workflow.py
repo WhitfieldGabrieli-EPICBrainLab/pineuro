@@ -660,6 +660,9 @@ class ParticipantWorkflowScreen:
                     if target and target not in network_names:
                         network_names.append(target)
 
+        # Set network order on QC manager so overlay plots match config order
+        self.qc_manager.network_order = network_names
+
         # Load correlation matrix
         corr_file = masks_dir / "network_IC_spatial_correlation.csv"
         if not corr_file.exists():
