@@ -1063,7 +1063,7 @@ class StudyEditorScreen:
 
         return controls
 
-    def _collect_simulator_paths(self, config: dict):
+    def _collect_simulator_paths(self, config: dict | None = None):
         """Collect simulator source paths from Paths tab fields into configs.
 
         Reference scan DICOM paths are written to config["scan"] (session-level).
@@ -1087,12 +1087,13 @@ class StudyEditorScreen:
                 self._feedback_configs[fb_idx]["transfer_source_dicoms"] = tf_field.value.strip()
 
         # Reference scan DICOM paths (session-level)
-        _loc_ref = getattr(self, "_sim_loc_ref_field", None)
-        if _loc_ref is not None:
-            config["scan"]["reference_initial_dicoms"] = _loc_ref.value.strip()
-        _fb_ref = getattr(self, "_sim_fb_ref_field", None)
-        if _fb_ref is not None:
-            config["scan"]["reference_realtime_dicoms"] = _fb_ref.value.strip()
+        if config is not None:
+            _loc_ref = getattr(self, "_sim_loc_ref_field", None)
+            if _loc_ref is not None:
+                config["scan"]["reference_initial_dicoms"] = _loc_ref.value.strip()
+            _fb_ref = getattr(self, "_sim_fb_ref_field", None)
+            if _fb_ref is not None:
+                config["scan"]["reference_realtime_dicoms"] = _fb_ref.value.strip()
 
     # ------------------------------------------------------------------
     # Event handlers (Study tab)
@@ -1693,19 +1694,25 @@ class StudyEditorScreen:
             task_type = feedback_configs[0].get("task_type", "ball")
             try:
                 task_meta = get_task_metadata(task_type)
-                first_loc = localizer_configs[0]
-                is_task_loc = first_loc.get("type") != "rest"
-                if is_task_loc:
-                    diff = feedback_configs[0].get("differential_pair") or []
-                    dropdowns_values = diff
-                else:
-                    targets = first_loc.get("yeo_targets", [])
-                    dropdowns_values = targets
 
                 if task_type not in config["task"]:
                     config["task"][task_type] = {}
-                for i, role in enumerate(task_meta.network_roles):
-                    if i < len(dropdowns_values) and dropdowns_values[i]:
-                        config["task"][task_type][role.key] = dropdowns_values[i]
+
+                # Use explicit network_assignment from feedback tab if available
+                explicit_assignment = feedback_configs[0].get("network_assignment")
+                if explicit_assignment:
+                    config["task"][task_type].update(explicit_assignment)
+                else:
+                    # Fall back to inferring from differential pair / yeo targets
+                    first_loc = localizer_configs[0]
+                    is_task_loc = first_loc.get("type") != "rest"
+                    if is_task_loc:
+                        dropdowns_values = feedback_configs[0].get("differential_pair") or []
+                    else:
+                        dropdowns_values = first_loc.get("yeo_targets", [])
+
+                    for i, role in enumerate(task_meta.network_roles):
+                        if i < len(dropdowns_values) and dropdowns_values[i]:
+                            config["task"][task_type][role.key] = dropdowns_values[i]
             except (ValueError, AttributeError):
                 pass

@@ -95,9 +95,11 @@ class FeedbackTabBuilder:
             task_meta = get_task_metadata(self._task_type)
             type_label = task_meta.display_name
             self._task_n_networks = task_meta.n_networks
+            self._task_network_roles = task_meta.network_roles
         except (KeyError, ValueError):
             type_label = self._task_type
             self._task_n_networks = 2  # assume multi-network if unknown
+            self._task_network_roles = []
         self.type_display_text = ft.Text(
             type_label, size=14, weight=ft.FontWeight.W_500, color=ft.Colors.BLUE_700,
         )
@@ -262,6 +264,31 @@ class FeedbackTabBuilder:
             options=mask_options,
             value=single_mask,
             visible=(self._task_n_networks == 1),
+        )
+
+        # Extra network role dropdowns (for tasks with 3+ networks, e.g. trigger network)
+        # Roles beyond the last 2 (which are handled by the differential pair) get
+        # their own dropdown.
+        self._extra_role_dropdowns: list[tuple[str, ft.Dropdown]] = []
+        n_extra = max(0, self._task_n_networks - 2)
+        network_assignment = c.get("network_assignment", {})
+        for role_idx in range(n_extra):
+            if role_idx < len(self._task_network_roles):
+                role = self._task_network_roles[role_idx]
+                saved = network_assignment.get(role.key)
+                if not saved and self._available_mask_names:
+                    saved = self._available_mask_names[0]
+                dd = ft.Dropdown(
+                    width=600,
+                    label=role.label,
+                    options=mask_options,
+                    value=saved,
+                    tooltip=role.description,
+                )
+                self._extra_role_dropdowns.append((role.key, dd))
+        self._extra_roles_column = ft.Column(
+            [dd for _, dd in self._extra_role_dropdowns],
+            visible=len(self._extra_role_dropdowns) > 0,
         )
 
         # Differential pair
@@ -510,6 +537,7 @@ class FeedbackTabBuilder:
                     self.rt_smooth_enabled_checkbox,
                     self.rt_smooth_fwhm_field,
                     self.single_mask_dropdown,
+                    self._extra_roles_column,
                     self.feedback_mode_dropdown,
                     self.differential_row,
                     self.connectivity_section,
@@ -587,6 +615,19 @@ class FeedbackTabBuilder:
         else:
             cfg["differential_pair"] = None
 
+        # Network assignment (for tasks with 3+ networks)
+        if self._extra_role_dropdowns:
+            assignment: dict[str, str] = {}
+            for role_key, dd in self._extra_role_dropdowns:
+                if dd.value:
+                    assignment[role_key] = dd.value
+            # Also include the differential pair roles
+            diff_roles = self._task_network_roles[len(self._extra_role_dropdowns):]
+            if len(diff_roles) >= 2 and pos and neg:
+                assignment[diff_roles[0].key] = pos
+                assignment[diff_roles[1].key] = neg
+            cfg["network_assignment"] = assignment
+
         # Connectivity
         cfg["connectivity_target"] = self.connectivity_target_dropdown.value or "increase"
         if feedback_mode == "connectivity":
@@ -652,12 +693,14 @@ class FeedbackTabBuilder:
         new_options = [ft.dropdown.Option(key=n, text=n) for n in mask_names]
         has_multi = len(mask_names) >= 2
 
+        extra_dds = [dd for _, dd in self._extra_role_dropdowns]
         for dropdown in [
             self.single_mask_dropdown,
             self.differential_positive_dropdown,
             self.differential_negative_dropdown,
             self.connectivity_pair_a_dropdown,
             self.connectivity_pair_b_dropdown,
+            *extra_dds,
         ]:
             old = dropdown.value
             dropdown.options = new_options

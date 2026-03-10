@@ -2454,6 +2454,20 @@ class ParticipantWorkflowScreen:
         Similar to ``_get_masks_for_frc`` but returns a stable list suitable
         for the activation plot and feedback monitoring.
         """
+        # Use explicit network_assignment if available (covers 3+ network tasks)
+        net_assign = frc.get("network_assignment", {})
+        if net_assign:
+            task_type = frc.get("task_type", "ball")
+            try:
+                from pineuro.tasks.task_registry import get_task_metadata
+
+                meta = get_task_metadata(task_type)
+                names = [net_assign[role.key] for role in meta.network_roles if role.key in net_assign]
+                if names:
+                    return names
+            except (ValueError, KeyError):
+                pass
+
         mode = frc.get("feedback_mode", "activation")
         if mode == "activation":
             target = frc.get("target_mask")
@@ -2466,12 +2480,12 @@ class ParticipantWorkflowScreen:
             pair = frc.get("differential_pair") or []
             return [n for n in pair if n]
         elif mode == "connectivity":
-            names: list[str] = []
+            names_list: list[str] = []
             for pair in frc.get("connectivity_pairs") or []:
                 for name in pair or []:
-                    if name and name not in names:
-                        names.append(name)
-            return names
+                    if name and name not in names_list:
+                        names_list.append(name)
+            return names_list
         return []
 
     def _is_step_approval_unlocked(self, step_id: str) -> bool:

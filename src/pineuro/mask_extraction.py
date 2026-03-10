@@ -3822,7 +3822,8 @@ def coregister_reference(
 
     # Step 4: Compute transformation (ANTs, ~28x faster than FLIRT)
     xfm_dir = reference_dir / "xfm"
-    output_prefix = xfm_dir / Path(f"{participant_id}_boldref_to_task-reference_run-{run_str}_mean")
+    ref_stem = ref_file.stem.replace(".nii", "")
+    output_prefix = xfm_dir / Path(f"{participant_id}_{ref_stem}_to_task-reference_run-{run_str}_mean")
     _, xfm_files = compute_xfm(
         moving=ref_file, fixed=mean_file, output_prefix=output_prefix, type_of_transform="Rigid", overwrite=overwrite
     )
@@ -3893,7 +3894,11 @@ def generate_reference_qc_overlays(
         return
 
     xfm_dir = reference_dir / "xfm"
-    xfm_files = sorted(xfm_dir.glob(f"{participant_id}_boldref_to_task-reference_run-{run_str}_mean_*"))
+    ref_stem = ref_file.stem.replace(".nii", "")
+    xfm_files = sorted(xfm_dir.glob(f"{participant_id}_{ref_stem}_to_task-reference_run-{run_str}_mean_*"))
+    if not xfm_files:
+        # Fall back to legacy naming pattern (boldref instead of ref_stem)
+        xfm_files = sorted(xfm_dir.glob(f"{participant_id}_boldref_to_task-reference_run-{run_str}_mean_*"))
     if not xfm_files:
         logger.info(f"Skipping reference QC overlays; transforms not found in {xfm_dir}")
         return

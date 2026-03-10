@@ -2198,6 +2198,7 @@ def run_coregistration(
     ref_file: Path,
     reference_dicom_dir: Path | None = None,
     overwrite: bool = False,
+    include_tissue: bool = True,
 ) -> list[Path]:
     """Coregister masks to feedback (reference) space.
 
@@ -2213,6 +2214,10 @@ def run_coregistration(
         Collected reference DICOM directory
     overwrite : bool
         Whether to rerun even if outputs exist
+    include_tissue : bool
+        Whether to include WM/CSF tissue masks in coregistration.
+        Set to False when coregistering a localizer group whose
+        ref_file differs from the one used to create tissue masks.
 
     Returns
     -------
@@ -2234,7 +2239,7 @@ def run_coregistration(
     n_network = len(network_files)
     tissue_indices: dict[str, int] = {}
 
-    if config.feedback.include_wm_regressor or config.feedback.include_csf_regressor:
+    if include_tissue and (config.feedback.include_wm_regressor or config.feedback.include_csf_regressor):
         assert config.paths.mask_extraction_dir is not None
         tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
         wm_src = tissue_dir / f"{config.paths.participant_id}_tissue_wm_mask.nii.gz"
@@ -2476,7 +2481,9 @@ def setup_session(
 
     # Multi-localizer pipeline: collect, preprocess, extract for each localizer
     if config.localizers:
-        all_network_files: list[Path] = []
+        # Track per-localizer (ref_file, network_files) so each group is
+        # coregistered with the correct BOLD reference.
+        localizer_groups: list[tuple[Path, list[Path]]] = []
         last_ref_file: Path | None = None
 
         for i, localizer in enumerate(config.localizers):
@@ -2521,7 +2528,7 @@ def setup_session(
                 ref_file,
                 overwrite,
             )
-            all_network_files.extend(network_files)
+            localizer_groups.append((ref_file, network_files))
 
         # Create WM/CSF tissue masks (shared, using last ref_file)
         assert last_ref_file is not None
@@ -2554,14 +2561,22 @@ def setup_session(
                 overwrite=overwrite,
             )
 
-        # Coregistration (all masks together)
-        coreg_mask_files = run_coregistration(
-            config,
-            all_network_files,
-            last_ref_file,
-            reference_dicom_dir=initial_reference[0],
-            overwrite=overwrite,
-        )
+        # Coregistration — each localizer's masks use their own BOLD reference
+        # so the boldref→reference transform is correct for each set of masks.
+        # Tissue masks (WM/CSF) are included only with the last group since
+        # they are created using last_ref_file.
+        coreg_mask_files: list[Path] = []
+        for group_idx, (group_ref, group_masks) in enumerate(localizer_groups):
+            is_last = group_idx == len(localizer_groups) - 1
+            coreg = run_coregistration(
+                config,
+                group_masks,
+                group_ref,
+                reference_dicom_dir=initial_reference[0],
+                overwrite=overwrite,
+                include_tissue=is_last,
+            )
+            coreg_mask_files.extend(coreg)
     else:
         # Legacy single-localizer path (no localizers list configured)
         localizer_sources = config.resolve_localizer_sources()

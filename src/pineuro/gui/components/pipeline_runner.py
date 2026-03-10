@@ -1844,15 +1844,21 @@ class PipelineRunner:
             task_specific_config = {**task_specific_config, **frc["task_params"]}
 
         if metadata.network_roles:
-            # For feedback_runs, derive network roles from differential_pair if task_params
-            # don't explicitly set them (avoids stale values from legacy global task config)
+            # For feedback_runs, derive network roles from network_assignment,
+            # differential_pair, or task_params.
             assigned_names = []
             if frc:
+                net_assign = frc.get("network_assignment", {})
                 diff_pair = frc.get("differential_pair") or []
                 frc_params = frc.get("task_params", {})
-                # Check if frc's task_params explicitly set network role keys
-                has_explicit_roles = any(frc_params.get(role.key) for role in metadata.network_roles)
-                if has_explicit_roles:
+                if net_assign:
+                    # Explicit per-role assignment (e.g. trigger + ball networks)
+                    for role in metadata.network_roles:
+                        name = net_assign.get(role.key)
+                        if name:
+                            assigned_names.append(name)
+                elif any(frc_params.get(role.key) for role in metadata.network_roles):
+                    # Legacy: task_params explicitly set network role keys
                     for role in metadata.network_roles:
                         name = frc_params.get(role.key)
                         if name:
