@@ -124,6 +124,8 @@ class StudyEditorScreen:
                 "cluster_start_threshold": 2.0,
                 "cluster_step": 0.1,
                 "cluster_return_all": False,
+                "min_cluster_size": 50,
+                "max_total_voxels": None,
             },
             "feedback": {
                 "n_baseline": 25,
@@ -1589,6 +1591,12 @@ class StudyEditorScreen:
                 config["mask"]["cluster_start_threshold"] = first.get("cluster_start_threshold", 2.0)
                 config["mask"]["cluster_step"] = first.get("cluster_step", 0.1)
                 config["mask"]["cluster_return_all"] = first.get("cluster_return_all", False)
+            elif first.get("threshold_method") == "cluster_extent":
+                config["mask"]["cluster_start_threshold"] = first.get("cluster_start_threshold", 2.0)
+                config["mask"]["min_cluster_size"] = first.get("min_cluster_size", 50)
+                config["mask"]["max_total_voxels"] = first.get("max_total_voxels")
+                if first.get("atlas_source"):
+                    config["mask"]["atlas_source"] = first.get("atlas_source")
 
             # Localizer source DICOMs (flat)
             config["scan"]["localizer_source_dicoms"] = first.get("source_dicoms", [])

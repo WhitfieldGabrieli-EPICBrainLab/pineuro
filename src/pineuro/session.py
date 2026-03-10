@@ -527,7 +527,7 @@ class LocalizerConfig:
     threshold : int
         Number of voxels per mask.
     threshold_method : str
-        ``"top_n"`` or ``"cluster"``.
+        ``"top_n"``, ``"cluster"``, or ``"cluster_extent"``.
     atlas_mask : str or None
         Binary atlas NIfTI path for cluster thresholding.
     atlas_name : str or None
@@ -575,6 +575,9 @@ class LocalizerConfig:
     atlas_regions: list[str] | None = None
     cluster_start_threshold: float = 2.0
     cluster_step: float = 0.1
+    cluster_return_all: bool = False
+    min_cluster_size: int = 50
+    max_total_voxels: int | None = None
 
     @property
     def is_rest(self) -> bool:
@@ -776,6 +779,8 @@ class MaskConfig:
     threshold_method : str
         ``"top_n"`` (default) selects the top N voxels by stat value.
         ``"cluster"`` uses atlas-guided iterative cluster thresholding.
+        ``"cluster_extent"`` applies a fixed stat threshold and keeps
+        clusters above ``min_cluster_size``.
     atlas_mask : str, optional
         Path to a binary atlas NIfTI in subject space. Used with
         ``threshold_method="cluster"``. Mutually exclusive with ``atlas_name``
@@ -824,6 +829,9 @@ class MaskConfig:
     atlas_regions: list[str] | None = None
     cluster_start_threshold: float = 2.0
     cluster_step: float = 0.1
+    cluster_return_all: bool = False
+    min_cluster_size: int = 50
+    max_total_voxels: int | None = None
 
     # Manual ROI import fields
     manual_mask_paths: list[Path] = field(default_factory=list)
@@ -850,8 +858,10 @@ class MaskConfig:
                 self.manual_ref_file = Path(self.manual_ref_file)
             if self.manual_anat_file is not None:
                 self.manual_anat_file = Path(self.manual_anat_file)
-        if self.threshold_method not in ("top_n", "cluster"):
-            raise ValueError(f"threshold_method must be 'top_n' or 'cluster', got '{self.threshold_method}'")
+        if self.threshold_method not in ("top_n", "cluster", "cluster_extent"):
+            raise ValueError(
+                f"threshold_method must be 'top_n', 'cluster', or 'cluster_extent', got '{self.threshold_method}'"
+            )
         if self.events_file is not None:
             self.events_file = Path(self.events_file)
 
@@ -2027,6 +2037,9 @@ def run_mask_extraction(
             ref_file=ref_file,
             cluster_start_threshold=config.mask.cluster_start_threshold,
             cluster_step=config.mask.cluster_step,
+            cluster_return_all=config.mask.cluster_return_all,
+            min_cluster_size=config.mask.min_cluster_size,
+            max_total_voxels=config.mask.max_total_voxels,
             stat_type=config.mask.stat_type,
             smoothing_fwhm=config.mask.smooth_fwhm,
             high_pass=config.mask.highpass,
@@ -2168,6 +2181,9 @@ def run_localizer_extraction(
             ref_file=ref_file,
             cluster_start_threshold=localizer.cluster_start_threshold,
             cluster_step=localizer.cluster_step,
+            cluster_return_all=localizer.cluster_return_all,
+            min_cluster_size=localizer.min_cluster_size,
+            max_total_voxels=localizer.max_total_voxels,
             stat_type=localizer.stat_type,
             smoothing_fwhm=localizer.smooth_fwhm,
             high_pass=localizer.highpass,

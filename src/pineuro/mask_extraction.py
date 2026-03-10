@@ -2564,6 +2564,146 @@ def cluster_threshold_stat_map(
     }
 
 
+def cluster_extent_threshold(
+    stat_data: np.ndarray,
+    stat_threshold: float = 2.0,
+    min_cluster_size: int = 50,
+    max_total_voxels: int | None = None,
+    atlas_data: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Threshold a stat map and keep clusters above a minimum size.
+
+    Classic fMRI cluster-extent thresholding: apply a fixed stat threshold,
+    identify contiguous clusters, and discard clusters smaller than
+    ``min_cluster_size``. Optionally restrict to a spatial mask (e.g., grey
+    matter) before clustering.
+
+    Parameters
+    ----------
+    stat_data : np.ndarray
+        3D array of statistic values (t or z scores).
+    stat_threshold : float
+        Stat value cutoff. Voxels with values >= this are candidates.
+    min_cluster_size : int
+        Minimum number of contiguous voxels for a cluster to survive.
+    max_total_voxels : int or None
+        Optional safety cap. If the total surviving voxels exceed this,
+        clusters are sorted by size (descending) and accumulated until the
+        cap is reached. ``None`` disables the cap.
+    atlas_data : np.ndarray or None
+        Optional 3D binary mask (same shape as ``stat_data``). When provided,
+        the stat map is intersected with this mask before clustering. Useful
+        for restricting to grey matter.
+
+    Returns
+    -------
+    binary_mask : np.ndarray
+        3D uint8 array with 1 for surviving voxels, 0 elsewhere.
+    info : dict
+        Metadata about the thresholding:
+
+        - ``outcome`` : str — ``"success"``, ``"no_suprathreshold_voxels"``,
+          ``"no_clusters_survive"``, or ``"capped"``
+        - ``stat_threshold`` : float
+        - ``min_cluster_size`` : int
+        - ``n_clusters_input`` : int — clusters before size filtering
+        - ``n_clusters_surviving`` : int — clusters after size filtering
+        - ``cluster_sizes`` : list[int] — sizes of surviving clusters (descending)
+        - ``total_voxels`` : int — total voxels in the output mask
+        - ``atlas_voxel_count`` : int or None — voxels in atlas mask (if used)
+        - ``capped`` : bool — whether ``max_total_voxels`` was applied
+
+    Raises
+    ------
+    ValueError
+        If ``stat_data`` and ``atlas_data`` have different shapes.
+    """
+    if atlas_data is not None and stat_data.shape != atlas_data.shape:
+        raise ValueError(f"Shape mismatch: stat_data {stat_data.shape} vs atlas_data {atlas_data.shape}")
+
+    atlas_voxel_count = int(atlas_data.sum()) if atlas_data is not None else None
+
+    # Apply stat threshold
+    above = stat_data >= stat_threshold
+
+    # Optionally restrict to atlas region
+    if atlas_data is not None:
+        above = above & (atlas_data > 0.5)
+
+    if not above.any():
+        return np.zeros(stat_data.shape, dtype=np.uint8), {
+            "outcome": "no_suprathreshold_voxels",
+            "stat_threshold": stat_threshold,
+            "min_cluster_size": min_cluster_size,
+            "n_clusters_input": 0,
+            "n_clusters_surviving": 0,
+            "cluster_sizes": [],
+            "total_voxels": 0,
+            "atlas_voxel_count": atlas_voxel_count,
+            "capped": False,
+        }
+
+    # Label contiguous clusters
+    labeled, n_clusters = ndimage_label(above.astype(np.int32))
+    sizes = np.bincount(labeled.ravel())[1:]  # skip background (label 0)
+
+    # Filter by minimum cluster size
+    surviving_labels = [i + 1 for i, s in enumerate(sizes) if s >= min_cluster_size]
+    surviving_sizes = sorted([int(sizes[i - 1]) for i in surviving_labels], reverse=True)
+
+    if not surviving_labels:
+        return np.zeros(stat_data.shape, dtype=np.uint8), {
+            "outcome": "no_clusters_survive",
+            "stat_threshold": stat_threshold,
+            "min_cluster_size": min_cluster_size,
+            "n_clusters_input": n_clusters,
+            "n_clusters_surviving": 0,
+            "cluster_sizes": [],
+            "total_voxels": 0,
+            "atlas_voxel_count": atlas_voxel_count,
+            "capped": False,
+        }
+
+    # Apply max_total_voxels cap if needed
+    capped = False
+    if max_total_voxels is not None and sum(surviving_sizes) > max_total_voxels:
+        capped = True
+        # Keep largest clusters until cap
+        kept_sizes = []
+        running = 0
+        for s in surviving_sizes:
+            if running + s > max_total_voxels:
+                break
+            kept_sizes.append(s)
+            running += s
+        surviving_sizes = kept_sizes
+
+    # Build binary mask from surviving clusters (matching sizes after cap)
+    # Re-map: sort labels by size descending, take the top len(surviving_sizes)
+    label_size_pairs = [(i + 1, int(sizes[i])) for i in range(len(sizes)) if sizes[i] >= min_cluster_size]
+    label_size_pairs.sort(key=lambda x: x[1], reverse=True)
+    labels_to_keep = {lbl for lbl, _ in label_size_pairs[: len(surviving_sizes)]}
+
+    binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
+    for lbl in labels_to_keep:
+        binary_mask[labeled == lbl] = 1
+
+    total_voxels = int(binary_mask.sum())
+
+    outcome = "capped" if capped else "success"
+    return binary_mask, {
+        "outcome": outcome,
+        "stat_threshold": stat_threshold,
+        "min_cluster_size": min_cluster_size,
+        "n_clusters_input": n_clusters,
+        "n_clusters_surviving": len(surviving_sizes),
+        "cluster_sizes": surviving_sizes,
+        "total_voxels": total_voxels,
+        "atlas_voxel_count": atlas_voxel_count,
+        "capped": capped,
+    }
+
+
 def compute_cluster_table(
     binary_mask: np.ndarray,
     stat_data: np.ndarray,
@@ -2680,7 +2820,8 @@ class TaskMaskSelection:
     n_voxels_thresholded : int
         Number of voxels in the final mask
     threshold_method : str
-        How the mask was thresholded (``"top_n"`` or ``"cluster"``)
+        How the mask was thresholded (``"top_n"``, ``"cluster"``, or
+        ``"cluster_extent"``)
     selection_reason : str
         Always "auto" for task-based (no manual selection needed)
     atlas_used : str or None
@@ -2693,6 +2834,10 @@ class TaskMaskSelection:
         Outcome of cluster thresholding (cluster method only)
     cluster_table : list of dict or None
         Per-cluster breakdown: size, peak stat, coordinates, anatomical label
+    min_cluster_size : int or None
+        Minimum cluster size used (cluster_extent method only)
+    max_total_voxels : int or None
+        Maximum total voxels cap used (cluster_extent method only)
     """
 
     mask_name: str
@@ -2709,6 +2854,8 @@ class TaskMaskSelection:
     n_clusters_found: int | None = None
     cluster_outcome: str | None = None
     cluster_table: list[dict[str, Any]] | None = None
+    min_cluster_size: int | None = None
+    max_total_voxels: int | None = None
 
 
 def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str, TaskMaskSelection]) -> Path:
@@ -2756,6 +2903,8 @@ def mask_extraction_task(
     cluster_start_threshold: float = 2.0,
     cluster_step: float = 0.1,
     cluster_return_all: bool = False,
+    min_cluster_size: int = 50,
+    max_total_voxels: int | None = None,
     stat_type: str = "t",
     smoothing_fwhm: float | None = 5.0,
     high_pass: float = 0.01,
@@ -2783,6 +2932,12 @@ def mask_extraction_task(
       largest contiguous cluster (suitable for anatomical ROIs like STG). Set
       ``cluster_return_all=True`` to return all clusters combined (suitable for
       whole-brain atlases like gray matter).
+    - **cluster_extent**: Classic cluster-extent thresholding. Applies a fixed stat
+      threshold, identifies contiguous clusters, and discards clusters smaller than
+      ``min_cluster_size``. An optional atlas mask (e.g., grey matter) can restrict
+      the search space. Unlike ``cluster``, this method does not target a specific
+      voxel count — the output size is determined by the stat threshold and the
+      data itself.
 
     Parameters
     ----------
@@ -2811,6 +2966,8 @@ def mask_extraction_task(
     threshold_method : str
         ``"top_n"`` (default) selects the top N voxels by stat value.
         ``"cluster"`` uses atlas-guided iterative cluster thresholding.
+        ``"cluster_extent"`` applies a fixed stat threshold and keeps
+        clusters above ``min_cluster_size``.
     atlas_mask : str, Path, or None
         Path to a binary atlas NIfTI in subject space. Used with
         ``threshold_method="cluster"`` to constrain the search region.
@@ -2841,6 +2998,14 @@ def mask_extraction_task(
         than only the largest single cluster. Use with whole-brain atlases
         (e.g. ``atlas_source="gray_matter"``). Default: False.
         Only used when ``threshold_method="cluster"``.
+    min_cluster_size : int
+        Minimum number of contiguous voxels for a cluster to survive
+        (default: 50). Only used when ``threshold_method="cluster_extent"``.
+    max_total_voxels : int or None
+        Optional safety cap on total mask size. If the total surviving voxels
+        exceed this, only the largest clusters are kept until within the cap.
+        ``None`` (default) disables the cap.
+        Only used when ``threshold_method="cluster_extent"``.
     stat_type : str
         Type of statistical map: "t" or "z" (default: "t")
     smoothing_fwhm : float or None
@@ -3098,9 +3263,10 @@ def mask_extraction_task(
     mnireg_dir = root_dir / "02_mnireg"
     mnireg_dir.mkdir(parents=True, exist_ok=True)
 
-    atlas_subject_space_data = None  # Set below if cluster mode
+    atlas_subject_space_data = None  # Set below if cluster/cluster_extent mode
 
-    if threshold_method == "cluster":
+    _has_atlas = any(x is not None for x in (atlas_mask, atlas_name, atlas_source))
+    if threshold_method == "cluster" or (threshold_method == "cluster_extent" and _has_atlas):
         emit_progress(f"Step 2/{n_steps}: Preparing atlas mask")
 
         if atlas_mask is not None:
@@ -3243,6 +3409,11 @@ def mask_extraction_task(
     step_label = f"Step {n_steps}/{n_steps}"
     if threshold_method == "top_n":
         emit_progress(f"{step_label}: Thresholding masks", f"{threshold} voxels per mask")
+    elif threshold_method == "cluster_extent":
+        emit_progress(
+            f"{step_label}: Cluster-extent thresholding",
+            f"stat>={cluster_start_threshold}, min_cluster={min_cluster_size}",
+        )
     else:
         emit_progress(
             f"{step_label}: Cluster thresholding", f"target={threshold} voxels, start_z={cluster_start_threshold}"
@@ -3322,6 +3493,55 @@ def mask_extraction_task(
                 n_voxels_above_zero=n_positive,
                 n_voxels_thresholded=n_kept,
                 threshold_method="top_n",
+            )
+
+        elif threshold_method == "cluster_extent":
+            # === CLUSTER-EXTENT THRESHOLDING ===
+            binary_mask, extent_info = cluster_extent_threshold(
+                stat_data=stat_data,
+                stat_threshold=cluster_start_threshold,
+                min_cluster_size=min_cluster_size,
+                max_total_voxels=max_total_voxels,
+                atlas_data=atlas_subject_space_data,
+            )
+            n_kept = int(binary_mask.sum())
+            outcome = extent_info["outcome"]
+
+            if outcome == "success":
+                emit_progress(
+                    step_label,
+                    f"{mask_name}: {n_kept} voxels "
+                    f"({extent_info['n_clusters_surviving']} clusters, "
+                    f"stat>={cluster_start_threshold})",
+                )
+            elif outcome == "no_suprathreshold_voxels":
+                logger.warning(f"No voxels above threshold {cluster_start_threshold} for '{mask_name}'")
+            elif outcome == "no_clusters_survive":
+                logger.warning(
+                    f"All {extent_info['n_clusters_input']} clusters below "
+                    f"min_cluster_size={min_cluster_size} for '{mask_name}'"
+                )
+            elif outcome == "capped":
+                emit_progress(
+                    step_label,
+                    f"{mask_name}: {n_kept} voxels ({extent_info['n_clusters_surviving']} clusters, capped)",
+                )
+
+            _atlas_label = atlas_name or atlas_source or atlas_mask
+            selections[mask_name] = TaskMaskSelection(
+                mask_name=mask_name,
+                contrast_definition=contrast_expr,
+                stat_type=stat_type,
+                peak_stat=peak_stat,
+                n_voxels_above_zero=n_positive,
+                n_voxels_thresholded=n_kept,
+                threshold_method="cluster_extent",
+                atlas_used=str(_atlas_label) if _atlas_label else None,
+                final_cluster_threshold=cluster_start_threshold,
+                n_clusters_found=extent_info.get("n_clusters_surviving"),
+                cluster_outcome=outcome,
+                min_cluster_size=min_cluster_size,
+                max_total_voxels=max_total_voxels,
             )
 
         else:

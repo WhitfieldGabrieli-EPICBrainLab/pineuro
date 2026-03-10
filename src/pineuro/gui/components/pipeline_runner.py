@@ -879,6 +879,8 @@ class PipelineRunner:
             cluster_start_threshold = config.get("mask", {}).get("cluster_start_threshold", 2.0)
             cluster_step = config.get("mask", {}).get("cluster_step", 0.1)
             cluster_return_all = config.get("mask", {}).get("cluster_return_all", False)
+            min_cluster_size = config.get("mask", {}).get("min_cluster_size", 50)
+            max_total_voxels = config.get("mask", {}).get("max_total_voxels")
 
             include_reverse = config.get("mask", {}).get("include_reverse_contrasts", False)
 
@@ -900,6 +902,8 @@ class PipelineRunner:
                 cluster_start_threshold=cluster_start_threshold,
                 cluster_step=cluster_step,
                 cluster_return_all=cluster_return_all,
+                min_cluster_size=min_cluster_size,
+                max_total_voxels=max_total_voxels,
                 include_reverse=include_reverse,
                 overwrite=self.overwrite,
                 smoothing_fwhm=smooth_fwhm,
@@ -1227,6 +1231,9 @@ class PipelineRunner:
                 ref_file=str(ref_file),
                 cluster_start_threshold=loc.get("cluster_start_threshold", 2.0),
                 cluster_step=loc.get("cluster_step", 0.1),
+                cluster_return_all=loc.get("cluster_return_all", False),
+                min_cluster_size=loc.get("min_cluster_size", 50),
+                max_total_voxels=loc.get("max_total_voxels"),
                 include_reverse=loc.get("include_reverse_contrasts", False),
                 overwrite=self.overwrite,
                 smoothing_fwhm=loc.get("smooth_fwhm", 5.0),

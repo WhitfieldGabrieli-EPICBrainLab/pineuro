@@ -235,6 +235,7 @@ class LocalizerTabBuilder:
             options=[
                 ft.dropdown.Option(key="top_n", text="Top N voxels"),
                 ft.dropdown.Option(key="cluster", text="Atlas-guided cluster"),
+                ft.dropdown.Option(key="cluster_extent", text="Cluster extent thresholding"),
             ],
             value=c.get("threshold_method", "top_n"),
             on_select=self._on_threshold_method_changed,
@@ -291,6 +292,45 @@ class LocalizerTabBuilder:
                 self.cluster_return_all_checkbox,
             ],
             visible=c.get("threshold_method", "top_n") == "cluster",
+        )
+
+        # Cluster-extent settings
+        self.extent_stat_threshold_field = ft.TextField(
+            width=290,
+            label="Stat threshold",
+            value=str(c.get("cluster_start_threshold", 2.0)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Fixed stat threshold (e.g. 2.0 for t-stat)",
+        )
+
+        self.min_cluster_size_field = ft.TextField(
+            width=290,
+            label="Min cluster size (voxels)",
+            value=str(c.get("min_cluster_size", 50)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Clusters smaller than this are discarded",
+        )
+
+        self.max_total_voxels_field = ft.TextField(
+            width=290,
+            label="Max total voxels (optional)",
+            value=str(c.get("max_total_voxels", "")) if c.get("max_total_voxels") else "",
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Safety cap on total mask size (leave empty for no cap)",
+        )
+
+        self.extent_grey_matter_checkbox = ft.Checkbox(
+            label="Restrict to grey matter",
+            value=c.get("atlas_source") == "gray_matter" and c.get("threshold_method") == "cluster_extent",
+        )
+
+        self.cluster_extent_settings_section = ft.Column(
+            [
+                ft.Row([self.extent_stat_threshold_field, self.min_cluster_size_field]),
+                self.max_total_voxels_field,
+                self.extent_grey_matter_checkbox,
+            ],
+            visible=c.get("threshold_method", "top_n") == "cluster_extent",
         )
 
         # Create localizer task parameter fields
@@ -387,6 +427,7 @@ class LocalizerTabBuilder:
             self.threshold_field,
             self.threshold_method_dropdown,
             self.cluster_settings_section,
+            self.cluster_extent_settings_section,
         ]
 
         return ft.Container(
@@ -422,6 +463,13 @@ class LocalizerTabBuilder:
             cfg["cluster_start_threshold"] = float(self.cluster_start_threshold_field.value or 2.0)
             cfg["cluster_step"] = float(self.cluster_step_field.value or 0.1)
             cfg["cluster_return_all"] = bool(self.cluster_return_all_checkbox.value)
+        elif cfg["threshold_method"] == "cluster_extent":
+            cfg["cluster_start_threshold"] = float(self.extent_stat_threshold_field.value or 2.0)
+            cfg["min_cluster_size"] = int(self.min_cluster_size_field.value or 50)
+            max_val = self.max_total_voxels_field.value
+            cfg["max_total_voxels"] = int(max_val) if max_val else None
+            if self.extent_grey_matter_checkbox.value:
+                cfg["atlas_source"] = "gray_matter"
 
         if is_rest:
             network_atlas = self.network_atlas_dropdown.value or "yeo_17"
@@ -552,6 +600,7 @@ class LocalizerTabBuilder:
         """Handle threshold method change."""
         method = self.threshold_method_dropdown.value
         self.cluster_settings_section.visible = method == "cluster"
+        self.cluster_extent_settings_section.visible = method == "cluster_extent"
         with contextlib.suppress(Exception):
             self.page.update()
 

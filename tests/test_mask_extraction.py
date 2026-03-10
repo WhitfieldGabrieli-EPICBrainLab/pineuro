@@ -203,6 +203,114 @@ class TestClusterThreshold:
 
 
 # =============================================================================
+# cluster_extent_threshold
+# =============================================================================
+
+
+class TestClusterExtentThreshold:
+    def test_basic_two_clusters(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        # Two clusters, both above min_cluster_size
+        stat = np.zeros((20, 20, 20), dtype=np.float64)
+        stat[2:6, 2:6, 2:6] = 4.0  # cluster A: 64 voxels
+        stat[14:18, 14:18, 14:18] = 3.0  # cluster B: 64 voxels
+
+        mask, info = cluster_extent_threshold(stat, stat_threshold=2.0, min_cluster_size=10)
+
+        assert info["outcome"] == "success"
+        assert info["n_clusters_surviving"] == 2
+        assert mask.sum() == 128  # both clusters kept
+
+    def test_filters_small_clusters(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        stat = np.zeros((20, 20, 20), dtype=np.float64)
+        stat[2:6, 2:6, 2:6] = 4.0  # 64 voxels — survives
+        stat[14:16, 14:16, 14:16] = 3.0  # 8 voxels — too small
+
+        mask, info = cluster_extent_threshold(stat, stat_threshold=2.0, min_cluster_size=20)
+
+        assert info["outcome"] == "success"
+        assert info["n_clusters_surviving"] == 1
+        assert mask.sum() == 64
+
+    def test_max_total_voxels_cap(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        stat = np.zeros((30, 10, 10), dtype=np.float64)
+        stat[1:5, 1:5, 1:5] = 5.0  # 64 voxels
+        stat[10:14, 1:5, 1:5] = 4.0  # 64 voxels
+        stat[20:24, 1:5, 1:5] = 3.0  # 64 voxels
+
+        mask, info = cluster_extent_threshold(
+            stat,
+            stat_threshold=2.0,
+            min_cluster_size=10,
+            max_total_voxels=100,
+        )
+
+        assert info["outcome"] == "capped"
+        assert info["capped"] is True
+        # Should keep only the largest cluster (64 voxels fits in 100)
+        assert mask.sum() <= 100
+
+    def test_atlas_intersection(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        stat = np.zeros((20, 20, 20), dtype=np.float64)
+        stat[2:8, 2:8, 2:8] = 4.0  # 216 voxels
+
+        # Atlas covers only part of the cluster
+        atlas = np.zeros((20, 20, 20), dtype=np.float64)
+        atlas[4:8, 4:8, 4:8] = 1.0  # 64 voxels overlap
+
+        mask, info = cluster_extent_threshold(
+            stat,
+            stat_threshold=2.0,
+            min_cluster_size=10,
+            atlas_data=atlas,
+        )
+
+        assert info["outcome"] == "success"
+        assert mask.sum() == 64  # only the intersection
+        assert info["atlas_voxel_count"] == 64
+
+    def test_no_suprathreshold_voxels(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        stat = np.ones((10, 10, 10), dtype=np.float64)  # all values = 1.0
+
+        mask, info = cluster_extent_threshold(stat, stat_threshold=5.0, min_cluster_size=10)
+
+        assert mask.sum() == 0
+        assert info["outcome"] == "no_suprathreshold_voxels"
+
+    def test_no_clusters_survive_filtering(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        # Many small clusters, all below min_cluster_size
+        stat = np.zeros((20, 20, 20), dtype=np.float64)
+        stat[1, 1, 1] = 5.0  # 1-voxel "cluster"
+        stat[10, 10, 10] = 5.0  # another 1-voxel "cluster"
+
+        mask, info = cluster_extent_threshold(stat, stat_threshold=2.0, min_cluster_size=10)
+
+        assert mask.sum() == 0
+        assert info["outcome"] == "no_clusters_survive"
+        assert info["n_clusters_input"] == 2
+
+    def test_shape_mismatch_raises(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        stat = np.zeros((10, 10, 10), dtype=np.float64)
+        atlas = np.zeros((5, 5, 5), dtype=np.float64)
+
+        with pytest.raises(ValueError, match="Shape mismatch"):
+            cluster_extent_threshold(stat, atlas_data=atlas)
+
+
+# =============================================================================
 # run_ica (mocked nilearn)
 # =============================================================================
 
