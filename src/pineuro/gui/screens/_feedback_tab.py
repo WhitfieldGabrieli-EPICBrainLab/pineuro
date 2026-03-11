@@ -512,7 +512,7 @@ class FeedbackTabBuilder:
         self.session_structure_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Session Structure", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text("Real-Time Processing", size=16, weight=ft.FontWeight.BOLD),
                     self.n_baseline_field,
                     _f(self.fd_threshold_field),
                     _f(self.dvars_threshold_field),
@@ -539,6 +539,22 @@ class FeedbackTabBuilder:
                     self.csf_regressor_checkbox,
                     self.rt_smooth_enabled_checkbox,
                     self.rt_smooth_fwhm_field,
+                    ft.Divider(),
+                ]
+            ),
+        )
+
+        # Feedback signal
+        self.feedback_signal_section = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Feedback Signal", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Configure which brain signal drives the feedback display.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
                     self.single_mask_dropdown,
                     self._extra_roles_column,
                     self.feedback_mode_dropdown,
@@ -562,9 +578,12 @@ class FeedbackTabBuilder:
         sham_section = self._build_sham_section()
 
         # Assemble
-        all_controls = scanner_section + [self.session_structure_section]
-        all_controls.append(self.task_specific_section)
-        all_controls.append(sham_section)
+        all_controls = scanner_section + [
+            self.session_structure_section,
+            self.feedback_signal_section,
+            self.task_specific_section,
+            sham_section,
+        ]
 
         return ft.Container(
             content=ft.Column(all_controls, scroll=ft.ScrollMode.AUTO),
@@ -657,8 +676,8 @@ class FeedbackTabBuilder:
         task_params = self._collect_task_params()
         cfg["task_params"] = task_params
 
-        # Promote use_transfer_runs to top level (remove from task_params)
-        cfg["use_transfer_runs"] = task_params.pop("use_transfer_runs", False)
+        # Copy use_transfer_runs to top level (keep in task_params for round-trip)
+        cfg["use_transfer_runs"] = task_params.get("use_transfer_runs", False)
 
         # Sham config
         cfg["sham"] = {
@@ -804,6 +823,143 @@ class FeedbackTabBuilder:
             self.page.update()
 
     # ------------------------------------------------------------------
+    # Generate randomization dialog
+    # ------------------------------------------------------------------
+
+    def _on_generate_randomization(self, e):
+        """Open dialog to generate a randomization file."""
+        prefix_field = ft.TextField(
+            label="Participant ID prefix", value="sub-", width=200,
+            hint_text="e.g. sub- → sub-01, sub-rtchr0 → sub-rtchr001",
+        )
+        n_participants_field = ft.TextField(
+            label="Number of participants", width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        n_sham_field = ft.TextField(
+            label="Number of sham", width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        method_dropdown = ft.Dropdown(
+            label="Method", width=200,
+            options=[
+                ft.dropdown.Option(key="simple", text="Simple"),
+                ft.dropdown.Option(key="replay", text="Replay"),
+            ],
+            value="simple",
+        )
+        seed_field = ft.TextField(
+            label="Seed (optional)", width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Generate Randomization File"),
+            content=ft.Container(
+                content=ft.Column([
+                    prefix_field,
+                    n_participants_field,
+                    n_sham_field,
+                    method_dropdown,
+                    seed_field,
+                ], tight=True, spacing=10),
+                width=300,
+            ),
+        )
+
+        def generate(e):
+            prefix = prefix_field.value.strip()
+            if not prefix:
+                prefix_field.error_text = "Required"
+                prefix_field.update()
+                return
+
+            try:
+                n_total = int(n_participants_field.value)
+                if n_total < 2:
+                    raise ValueError
+            except (TypeError, ValueError):
+                n_participants_field.error_text = "Must be an integer >= 2"
+                n_participants_field.update()
+                return
+            n_participants_field.error_text = None
+
+            try:
+                n_sham = int(n_sham_field.value)
+                if n_sham < 1 or n_sham >= n_total:
+                    raise ValueError
+            except (TypeError, ValueError):
+                n_sham_field.error_text = (
+                    f"Must be between 1 and {n_total - 1}"
+                    if "n_total" in dir()
+                    else "Must be a positive integer"
+                )
+                n_sham_field.update()
+                return
+            n_sham_field.error_text = None
+
+            seed_val = None
+            if seed_field.value and seed_field.value.strip():
+                try:
+                    seed_val = int(seed_field.value)
+                except ValueError:
+                    seed_field.error_text = "Must be an integer"
+                    seed_field.update()
+                    return
+
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+            except ImportError:
+                logger.error("tkinter is not available for file dialog")
+                return
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            save_path = filedialog.asksaveasfilename(
+                title="Save randomization file",
+                defaultextension=".tsv",
+                filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv")],
+            )
+            root.destroy()
+
+            if not save_path:
+                return
+
+            from pineuro.sham import generate_randomization
+
+            participant_ids = [f"{prefix}{i:02d}" for i in range(1, n_total + 1)]
+            method = method_dropdown.value
+
+            generate_randomization(
+                participant_ids=participant_ids,
+                n_sham=n_sham,
+                method=method,
+                output_path=save_path,
+                seed=seed_val,
+            )
+
+            self.sham_randomization_file_field.value = save_path
+            self.sham_randomization_file_field.update()
+            self.page.pop_dialog()
+
+            self.page.snack_bar = ft.SnackBar(
+                ft.Text(f"Randomization file saved: {save_path}"),
+                open=True,
+            )
+            self.page.update()
+
+        def cancel(e):
+            self.page.pop_dialog()
+
+        dialog.actions = [
+            ft.TextButton("Cancel", on_click=cancel),
+            ft.ElevatedButton("Generate", on_click=generate),
+        ]
+        self.page.show_dialog(dialog)
+
+    # ------------------------------------------------------------------
     # Sham section builder
     # ------------------------------------------------------------------
 
@@ -908,6 +1064,13 @@ class FeedbackTabBuilder:
                     filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")],
                 )
             )
+        rand_controls.append(
+            ft.IconButton(
+                icon=ft.Icons.SHUFFLE,
+                tooltip="Generate randomization file",
+                on_click=self._on_generate_randomization,
+            ),
+        )
 
         self.sham_randomization_section = ft.Column(
             [
