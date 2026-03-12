@@ -395,7 +395,7 @@ class ThermometerTask(BaseTask):
 
         path = output_dir / f"{prefix}_events.tsv"
 
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=self._TSV_COLUMNS,

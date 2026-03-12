@@ -339,6 +339,9 @@ def concat(input_files: list[Union[str, Path]], output_file: Union[str, Path], o
         logger.info("Output file exists and overwrite=False. Skipping concatenation.")
         return
 
+    if not input_files:
+        raise ValueError("input_files is empty — nothing to concatenate")
+
     logger.info("Concatenating...")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

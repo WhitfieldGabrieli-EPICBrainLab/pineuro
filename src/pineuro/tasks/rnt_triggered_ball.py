@@ -555,7 +555,7 @@ class RNTTriggeredBallTask(BaseTask):
 
         path = output_dir / f"{subject}_task-{self.task_id}_{run_str}_events.tsv"
 
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=self._TSV_COLUMNS,

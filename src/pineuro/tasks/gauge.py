@@ -192,7 +192,7 @@ class GaugeTask(BaseTask):
         psychopy_logging.console.setLevel(psychopy_logging.ERROR)
 
         # Open per-frame log
-        self._psychopy_log_file = open(self._psychopy_log_path, "w", newline="")  # noqa: SIM115
+        self._psychopy_log_file = open(self._psychopy_log_path, "w", newline="", encoding="utf-8")  # noqa: SIM115
         self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter="\t")
         self._psychopy_log_writer.writerow(
             [
@@ -349,7 +349,7 @@ class GaugeTask(BaseTask):
         if not self._events:
             return
         columns = ["onset", "duration", "trial_type", "response", "response_time", "score", "labels_swapped"]
-        with open(self._events_path, "w", newline="") as f:
+        with open(self._events_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=columns, delimiter="\t", extrasaction="ignore")
             writer.writeheader()
             for event in self._events:

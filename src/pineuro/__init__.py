@@ -168,7 +168,7 @@ def __getattr__(name: str):
     if name in _LAZY_IMPORTS:
         module_path, attr_name = _LAZY_IMPORTS[name]
         module = _importlib.import_module(module_path, __name__)
-        if attr_name is None:
+        if not attr_name:
             # Module-level import (e.g., config)
             val = module
         else:

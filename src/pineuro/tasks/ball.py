@@ -341,7 +341,7 @@ class BallTask(BaseTask):
         psychopy_logging.console.setLevel(psychopy_logging.ERROR)
 
         # Initialize PsychoPy log file
-        self._psychopy_log_file = open(self._psychopy_log_path, "w", newline="")  # noqa: SIM115
+        self._psychopy_log_file = open(self._psychopy_log_path, "w", newline="", encoding="utf-8")  # noqa: SIM115
         self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter="\t")
         header = ["frame", "time", "volume", "ball_y_pos", "scale_factor"]
         for name in self.mask_names:
@@ -436,7 +436,7 @@ class BallTask(BaseTask):
         self._questions_file_path = (
             output_dir / f"{self.coordinator.subject}_task-{self.coordinator.task}_{run_acq_str}_questions.tsv"
         )
-        self._questions_file = open(self._questions_file_path, "w", newline="")  # noqa: SIM115
+        self._questions_file = open(self._questions_file_path, "w", newline="", encoding="utf-8")  # noqa: SIM115
         self._questions_writer = csv.writer(self._questions_file, delimiter="\t")
         self._questions_writer.writerow(["subject", "run", "feedback_mode", "question_text", "response", "rt"])
         self._questions_file.flush()

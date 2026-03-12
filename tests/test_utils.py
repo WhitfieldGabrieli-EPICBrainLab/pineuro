@@ -203,6 +203,14 @@ class TestComputeHrf:
         # HRF peak should be around 4-7 seconds
         assert 3 <= peak_time <= 8
 
+    def test_peak_location_different_tr(self):
+        """HRF peak should be ~5s regardless of TR."""
+        for tr in [0.8, 1.0, 1.2, 1.5, 2.0]:
+            hrf = compute_hrf(tr=tr, duration=32.0)
+            peak_idx = np.argmax(hrf)
+            peak_time = peak_idx * tr
+            assert 3 <= peak_time <= 8, f"TR={tr}: peak at {peak_time}s (expected 4-7s)"
+
     def test_different_tr(self):
         hrf_1s = compute_hrf(tr=1.0, duration=32.0)
         hrf_2s = compute_hrf(tr=2.0, duration=32.0)
@@ -350,8 +358,8 @@ class TestErodeMask:
         erode_mask(input_path, output_path, n_erode=1)
         eroded = nib.load(output_path).get_fdata() > 0
         # Edge voxels should be removed
-        assert eroded[0, 0, 0] == False  # noqa: E712
-        assert eroded[5, 5, 5] == True  # noqa: E712
+        assert not eroded[0, 0, 0]
+        assert eroded[5, 5, 5]
 
 
 # =============================================================================

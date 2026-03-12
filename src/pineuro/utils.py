@@ -423,7 +423,7 @@ def _compute_hrf_highres(tr: float, duration: float = 32.0) -> np.ndarray:
     shape_pos = 6.0
     shape_neg = 16.0
     undershoot_ratio = 6.0
-    rate = tr * hires_dt
+    rate = hires_dt
 
     n_samples = int(duration / hires_dt)
     t = np.arange(n_samples, dtype=np.float64)
@@ -458,7 +458,7 @@ def compute_hrf(tr: float, duration: float = 32.0) -> np.ndarray:
     - Positive gamma: shape=6
     - Negative gamma: shape=16
     - Undershoot ratio: 1/6
-    - Rate parameter: tr * (1/16)
+    - Rate parameter: 1/16
     - Normalized to sum to 1.0 for proper convolution scaling
 
     Examples
@@ -529,11 +529,12 @@ def compute_boxcar_task_regressor(
     >>> print(regressor.shape)  # (150,)
     """
     hrf_hires = _compute_hrf_highres(tr, hrf_duration)
-    hrf_downsample_factor = 16
+    hires_dt = 1.0 / 16.0
+    samples_per_tr = int(tr / hires_dt)
 
     # Create high-resolution boxcar
-    n_hires_samples = n_volumes * hrf_downsample_factor + len(hrf_hires)
-    onset_hires = n_baseline * hrf_downsample_factor
+    n_hires_samples = n_volumes * samples_per_tr + len(hrf_hires)
+    onset_hires = n_baseline * samples_per_tr
 
     boxcar_hires = np.zeros(n_hires_samples, dtype=np.float64)
     boxcar_hires[onset_hires:] = 1.0
@@ -544,7 +545,7 @@ def compute_boxcar_task_regressor(
     # Downsample back to volume resolution
     regressor = np.zeros(n_volumes, dtype=np.float64)
     for i in range(n_volumes):
-        hires_idx = i * hrf_downsample_factor
+        hires_idx = i * samples_per_tr
         if hires_idx < len(convolved_hires):
             regressor[i] = convolved_hires[hires_idx]
 
@@ -838,7 +839,8 @@ def is_moco_series(file_path: Path) -> bool | None:
         if desc is None:
             return None
         return bool(desc == "MoCoSeries")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Could not check MoCo series: {e}")
         return None
 
 

@@ -2,6 +2,6 @@
 
 
 def test_import():
-    import pineuro  # noqa: F811
+    import pineuro
 
     assert pineuro.__name__ == "pineuro"

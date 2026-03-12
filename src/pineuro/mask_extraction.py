@@ -565,19 +565,20 @@ def split_mask_by_hemisphere(
 
     # Threshold each hemisphere separately
     def threshold_hemisphere(data: np.ndarray, n_voxels: int) -> np.ndarray:
-        """Keep top N voxels by absolute value."""
+        """Keep top N positive voxels by value."""
         flat = data.ravel()
-        abs_flat = np.abs(flat)
-        if n_voxels >= np.count_nonzero(abs_flat):
-            # Keep all nonzero voxels if fewer than threshold
-            return np.asarray((abs_flat > 0).astype("uint8").reshape(data.shape))
-        # Find threshold value for top N
-        threshold_indices = np.argpartition(abs_flat, -n_voxels)[-n_voxels:]
+        # Pre-filter to positive voxels only, then select top N
+        positive_indices = np.where(flat > 0)[0]
+        if len(positive_indices) <= n_voxels:
+            # Keep all positive voxels if fewer than threshold
+            result = (flat > 0).astype("uint8")
+            return result.reshape(data.shape)
+        # Select top N positive voxels by value
+        positive_values = flat[positive_indices]
+        top_n_within_positive = np.argpartition(positive_values, -n_voxels)[-n_voxels:]
         result = np.zeros(flat.shape, dtype="uint8")
-        result[threshold_indices] = 1
-        # Only keep where original was nonzero (positive values after thresholding)
-        result_masked: np.ndarray = np.asarray(result & (flat > 0))
-        return result_masked.reshape(data.shape)
+        result[positive_indices[top_n_within_positive]] = 1
+        return result.reshape(data.shape)
 
     left_thresholded = threshold_hemisphere(left_values, threshold)
     right_thresholded = threshold_hemisphere(right_values, threshold)
@@ -694,14 +695,17 @@ def combine_ica_components(
         f"(z-scoring, averaging, then thresholding to {threshold} voxels)"
     )
 
-    # Threshold to keep top N voxels
+    # Threshold to keep top N positive voxels
     flat = combined.ravel()
-    mask = np.zeros(flat.shape, dtype=bool)
-    mask[np.argpartition(flat, -threshold)[-threshold:]] = True
-    mask = mask.reshape(combined.shape)
-
-    # Create binary mask (only keep positive values after thresholding)
-    thresholded = ((combined * mask) > 0).astype("uint8")
+    positive_indices = np.where(flat > 0)[0]
+    if len(positive_indices) <= threshold:
+        thresholded = (flat > 0).astype("uint8").reshape(combined.shape)
+    else:
+        positive_values = flat[positive_indices]
+        top_n = np.argpartition(positive_values, -threshold)[-threshold:]
+        result = np.zeros(flat.shape, dtype="uint8")
+        result[positive_indices[top_n]] = 1
+        thresholded = result.reshape(combined.shape)
     n_voxels = int(thresholded.sum())
 
     # Save
@@ -871,12 +875,17 @@ def regenerate_mask_from_selection(
         ic_img = Nifti1Image(ic_data, components_img.affine, components_img.header)
         save(ic_img, network_file)
 
-        # Threshold and save
+        # Threshold and save (pre-filter to positive voxels, then select top N)
         flat = ic_data.ravel()
-        mask = np.zeros(flat.shape, dtype=bool)
-        mask[np.argpartition(flat, -threshold)[-threshold:]] = True
-        mask_3d: np.ndarray = np.asarray(mask.reshape(ic_data.shape))
-        thresholded = ((ic_data * mask_3d) > 0).astype("uint8")
+        positive_indices = np.where(flat > 0)[0]
+        if len(positive_indices) <= threshold:
+            thresholded = (flat > 0).astype("uint8").reshape(ic_data.shape)
+        else:
+            positive_values = flat[positive_indices]
+            top_n = np.argpartition(positive_values, -threshold)[-threshold:]
+            result = np.zeros(flat.shape, dtype="uint8")
+            result[positive_indices[top_n]] = 1
+            thresholded = result.reshape(ic_data.shape)
         save(Nifti1Image(thresholded, components_img.affine, components_img.header), thr_file)
 
         logger.info(f"Saved regenerated mask ({int(thresholded.sum())} voxels) to {thr_file}")
@@ -1595,11 +1604,16 @@ def mask_extraction_rest(
             img = cast(Nifti1Image, load(network_file))
             data = img.get_fdata()
             flat = data.ravel()
-            # Use argpartition to efficiently find top N voxels without full sort
-            mask = np.zeros(flat.shape, dtype=bool)
-            mask[np.argpartition(flat, -threshold)[-threshold:]] = True
-            mask = mask.reshape(data.shape)
-            thresholded = ((data * mask) > 0).astype("uint8")
+            # Pre-filter to positive voxels, then select top N
+            positive_indices = np.where(flat > 0)[0]
+            if len(positive_indices) <= threshold:
+                thresholded = (flat > 0).astype("uint8").reshape(data.shape)
+            else:
+                positive_values = flat[positive_indices]
+                top_n = np.argpartition(positive_values, -threshold)[-threshold:]
+                result = np.zeros(flat.shape, dtype="uint8")
+                result[positive_indices[top_n]] = 1
+                thresholded = result.reshape(data.shape)
             save(Nifti1Image(thresholded, img.affine, img.header), thr_file)
         else:
             logger.info("Output file exists and overwrite=False. Skipping network thresholding.")
@@ -3089,6 +3103,9 @@ def mask_extraction_task(
     from nilearn.image import resample_to_img
 
     # --- Setup ---
+    if not contrasts:
+        raise ValueError("contrasts dict is empty — at least one contrast is required")
+
     root_dir = Path(root_dir)
     input_file = Path(input_file)
     mask_file = Path(mask_file)
@@ -3476,14 +3493,19 @@ def mask_extraction_task(
                 binary_mask = positive_mask.astype(np.uint8)
                 n_kept = n_positive
             else:
-                # Standard case: threshold to top N voxels
+                # Standard case: threshold to top N positive voxels
                 flat = stat_data.ravel()
-                mask = np.zeros(flat.shape, dtype=bool)
-                mask[np.argpartition(flat, -threshold)[-threshold:]] = True
-                mask = mask.reshape(stat_data.shape)
-                # Intersect with positive voxels only
-                binary_mask = (mask & positive_mask).astype(np.uint8)
-                n_kept = int(binary_mask.sum())
+                positive_indices = np.where(flat > 0)[0]
+                if len(positive_indices) <= threshold:
+                    binary_mask = positive_mask.astype(np.uint8)
+                    n_kept = int(binary_mask.sum())
+                else:
+                    positive_values = flat[positive_indices]
+                    top_n = np.argpartition(positive_values, -threshold)[-threshold:]
+                    result = np.zeros(flat.shape, dtype=bool)
+                    result.ravel()[positive_indices[top_n]] = True
+                    binary_mask = result.astype(np.uint8).reshape(stat_data.shape)
+                    n_kept = int(binary_mask.sum())
 
             selections[mask_name] = TaskMaskSelection(
                 mask_name=mask_name,
@@ -3590,10 +3612,12 @@ def mask_extraction_task(
                     n_kept = n_atlas_positive
                 else:
                     flat = atlas_masked_stat.ravel()
-                    mask = np.zeros(flat.shape, dtype=bool)
-                    mask[np.argpartition(flat, -threshold)[-threshold:]] = True
-                    mask = mask.reshape(stat_data.shape)
-                    binary_mask = (mask & atlas_positive).astype(np.uint8)
+                    positive_indices = np.where(flat > 0)[0]
+                    positive_values = flat[positive_indices]
+                    top_n = np.argpartition(positive_values, -threshold)[-threshold:]
+                    result = np.zeros(flat.shape, dtype=bool)
+                    result[positive_indices[top_n]] = True
+                    binary_mask = result.astype(np.uint8).reshape(stat_data.shape)
                     n_kept = int(binary_mask.sum())
                 outcome = "fallback_top_n"
                 emit_progress(step_label, f"{mask_name}: {outcome} — {n_kept} voxels (fallback)")

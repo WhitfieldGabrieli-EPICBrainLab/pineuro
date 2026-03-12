@@ -164,7 +164,7 @@ class CollectionQCMonitor:
         if self._csv_file is not None:
             return
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._csv_file = open(self.log_path, "w", newline="")  # noqa: SIM115
+        self._csv_file = open(self.log_path, "w", newline="", encoding="utf-8")  # noqa: SIM115
         self._csv_writer = csv.writer(self._csv_file, delimiter="\t")
         self._csv_writer.writerow(["volume", "time", "fd", "dvars", "tsnr"])
         self._start_time = time.monotonic()

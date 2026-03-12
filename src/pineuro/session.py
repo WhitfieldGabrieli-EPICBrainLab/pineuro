@@ -1725,7 +1725,10 @@ def next_visit_id(base_dir: Path, participant_id: str) -> str:
     visits = detect_existing_visits(base_dir, participant_id)
     # Filter to only multi-visit entries (those with actual visit_id)
     multi_visits = [v for v in visits if v["visit_id"] is not None]
-    next_num = len(multi_visits) + 1
+    if multi_visits:
+        next_num = max(int(v["visit_id"].split("-")[1]) for v in multi_visits) + 1
+    else:
+        next_num = 1
     return f"ses-{next_num:02d}"
 
 

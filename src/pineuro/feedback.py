@@ -102,7 +102,7 @@ rank-deficient case that occurs during baseline (when task regressor = 0).
 **Input Formats:**
 The coordinator accepts both DICOM and NIfTI inputs. For NIfTI files,
 motion parameters should be in the JSON sidecar's ImageComments field
-(format: "Motion: rx,ry,rz,tx,ty,tz").
+(format: "Motion: tx,ty,tz,rx,ry,rz").
 
 See Also
 --------
@@ -2058,7 +2058,8 @@ def _detect_interrupted_run(
     try:
         with open(feedbacklog_path) as f:
             row_count = sum(1 for _ in f) - 1  # Subtract header
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Could not read feedbacklog {feedbacklog_path}: {e}")
         return None
 
     # Complete if row count matches expected volumes
@@ -2724,7 +2725,7 @@ class NeurofeedbackCoordinator:
         In sham mode, additional {mask}_real columns are added to log
         the actual computed activations alongside the delivered (sham) values.
         """
-        self._csv_file: IO[Any] | None = open(self._csv_path, "w", newline="")  # noqa: SIM115
+        self._csv_file: IO[Any] | None = open(self._csv_path, "w", newline="", encoding="utf-8")  # noqa: SIM115
         self._csv_writer: Any = csv.writer(self._csv_file, delimiter="\t")
 
         # Simple header: one column per mask (no _delivered/_real suffix)
@@ -2803,7 +2804,7 @@ class NeurofeedbackCoordinator:
 
     def _init_design_matrix(self) -> None:
         """Initialize design matrix TSV file with header for incremental writes."""
-        self._design_file = open(self._design_matrix_path, "w", newline="")  # noqa: SIM115
+        self._design_file = open(self._design_matrix_path, "w", newline="", encoding="utf-8")  # noqa: SIM115
 
         column_names = self._build_design_column_names()
 
