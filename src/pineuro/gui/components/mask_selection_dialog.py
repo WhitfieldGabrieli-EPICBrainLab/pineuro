@@ -779,11 +779,14 @@ class MaskSelectionDialog:
             )
             alternative_items.append(item)
 
-        # Add Yeo atlas option (only in single-select mode)
+        # Add Yeo atlas option inside radio group (only in single-select mode)
         yeo_item = self._build_yeo_atlas_option(info) if not self._combine_mode else None
 
-        # Update radio group content
-        self._alternative_selection.content = ft.Column(alternative_items, spacing=5)
+        # Update radio group content (include yeo_item so its Radio is inside the RadioGroup)
+        radio_items = alternative_items
+        if yeo_item:
+            radio_items = alternative_items + [yeo_item]
+        self._alternative_selection.content = ft.Column(radio_items, spacing=5)
 
         # Combined preview container (shown only in combine mode)
         self._combine_preview_container = ft.Container(
@@ -837,9 +840,6 @@ class MaskSelectionDialog:
             ),
             self._alternative_selection,
         ]
-
-        if yeo_item and not self._combine_mode:
-            content_items.append(yeo_item)
 
         return ft.Container(
             content=ft.Column(
