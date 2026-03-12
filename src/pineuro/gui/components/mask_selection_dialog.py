@@ -559,13 +559,41 @@ class MaskSelectionDialog:
     def _on_view_full_report(self, e):
         """Handle View Full Report button click.
 
-        Regenerates the report with overwrite=True so overlays match
-        the current masks on disk, then opens it in the browser.
+        Regenerates any masks whose selections differ from what's on disk,
+        then regenerates the report with overwrite=True so overlays match
+        the current selections.
         """
         from pineuro import qc
+        from pineuro.mask_extraction import (
+            load_mask_selections,
+            regenerate_mask_from_selection,
+        )
 
         if self.on_log:
             self.on_log("[INFO] Regenerating QC report...")
+
+        # Regenerate any masks modified in the dialog but not yet applied to disk
+        try:
+            existing = load_mask_selections(self.masks_dir)
+            for name, selection in self._selections.items():
+                old = existing.get(name)
+                if old and (
+                    selection.source_type != old.source_type
+                    or selection.component_index != old.component_index
+                    or selection.secondary_component_index != old.secondary_component_index
+                ):
+                    logger.info(f"Regenerating {name} mask for report preview")
+                    regenerate_mask_from_selection(
+                        participant_id=self.participant_id,
+                        masks_dir=self.masks_dir,
+                        selection=selection,
+                        components_file=self.components_file,
+                        yeo_subject_space=self.yeo_subject_space,
+                        n_yeo=self.n_yeo,
+                        threshold=self.threshold,
+                    )
+        except Exception as ex:
+            logger.warning(f"Failed to regenerate modified masks for report: {ex}")
 
         try:
             report_path = qc.generate_mask_extraction_report(
@@ -1576,6 +1604,7 @@ class MaskSelectionDialog:
     def _apply_and_close(self):
         """Save selections, regenerate modified masks, and close."""
         from pineuro.mask_extraction import (
+            get_yeo_labels,
             load_mask_selections,
             regenerate_mask_from_selection,
             save_mask_selections,
@@ -1621,6 +1650,48 @@ class MaskSelectionDialog:
                 self.page.overlay.append(_snack)
                 self.page.update()
                 return
+
+        # Regenerate subject space overlay PNGs for modified masks
+        if modified_networks and self.ref_file and self.ref_file.exists():
+            try:
+                from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
+
+                qc_dir = self.mask_extraction_dir.parent / "qc"
+                subject_overlay_dir = qc_dir / "overlays" / "subject"
+                subject_overlay_dir.mkdir(parents=True, exist_ok=True)
+
+                # Load Yeo atlas for slice selection
+                yeo2sub_files = sorted(
+                    (self.mask_extraction_dir / "02_mnireg").glob("*yeo2sub.nii.gz")
+                ) if (self.mask_extraction_dir / "02_mnireg").exists() else []
+                yeo2sub = yeo2sub_files[0] if yeo2sub_files else None
+                labels = get_yeo_labels(self.n_yeo)
+
+                for name in modified_networks:
+                    thr_file = self.masks_dir / f"{self.participant_id}_{name}_thr.nii.gz"
+                    overlay_png = subject_overlay_dir / f"{self.participant_id}_{name}_overlay.png"
+                    if thr_file.exists():
+                        logger.info(f"Regenerating subject space overlay for {name}")
+                        atlas_slices = select_slices_from_atlas(
+                            atlas_path=yeo2sub if yeo2sub else self.ref_file,
+                            labels=labels,
+                            target_label=name,
+                            top_n_per_plane=1,
+                            mask_path=thr_file,
+                        )
+                        from nibabel import load as nib_load
+
+                        mask_img = nib_load(thr_file)
+                        voxels = int(mask_img.get_fdata().sum())
+                        plot_mask_overlay_tripanel(
+                            mask_path=thr_file,
+                            ref_path=self.ref_file,
+                            out_path=overlay_png,
+                            slices=atlas_slices,
+                            title=f"{name} ({voxels} voxels)",
+                        )
+            except Exception as ex:
+                logger.warning(f"Failed to regenerate subject space overlays: {ex}")
 
         # Regenerate hemisphere-split masks if hemisphere_network was modified
         if self.hemisphere_network and self.hemisphere_network in modified_networks:
