@@ -3907,22 +3907,22 @@ class ParticipantWorkflowScreen:
             logger.warning(f"Failed to generate summary plots: {e}")
 
         def on_view_full_qc():
-            # In blind mode, regenerate the full QC report with display names
-            if display_names_dict:
-                try:
-                    qc.generate_feedback_report(
-                        feedback_dir=output_dir,
-                        subject=self.participant_id,
-                        task=task,
-                        run=run,
-                        acq=acq,
-                        output_dir=qc_dir,
-                        overwrite=True,
-                        display_names=display_names_dict,
-                        fd_threshold=fd_threshold,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to regenerate QC report with display names: {e}")
+            # Regenerate QC report to ensure correct acq, expected_volumes, and display names
+            try:
+                qc.generate_feedback_report(
+                    feedback_dir=output_dir,
+                    subject=self.participant_id,
+                    task=task,
+                    run=run,
+                    acq=acq,
+                    output_dir=qc_dir,
+                    overwrite=True,
+                    expected_volumes=n_volumes,
+                    display_names=display_names_dict,
+                    fd_threshold=fd_threshold,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to regenerate QC report: {e}")
             self.qc_manager.open_report(f"{task}_run_{run}")
 
         dialog = FeedbackSummaryDialog(
@@ -5888,7 +5888,7 @@ class ParticipantWorkflowScreen:
             self.activation_plot = ActivationPlot(
                 mask_names=plot_mask_names,
                 n_volumes=n_volumes,
-                height=160,
+                height=200,
                 y_min=plot_y_min,
                 y_max=plot_y_max,
                 display_names=plot_display_names,
@@ -5898,7 +5898,7 @@ class ParticipantWorkflowScreen:
             fd_threshold = self._fb("fd_threshold", 0.5)
             self.fd_plot = FDPlot(
                 n_volumes=n_volumes,
-                height=220,
+                height=150,
                 threshold=fd_threshold,
             )
 
@@ -5906,7 +5906,7 @@ class ParticipantWorkflowScreen:
             dvars_threshold = self._fb("dvars_threshold", 1.5)
             self.dvars_plot = DVARSPlot(
                 n_volumes=n_volumes,
-                height=220,
+                height=150,
                 threshold=dvars_threshold,
             )
 
@@ -5914,12 +5914,12 @@ class ParticipantWorkflowScreen:
             tsnr_threshold = self._fb("tsnr_threshold", 20)
             self.tsnr_plot = TSNRPlot(
                 n_volumes=n_volumes,
-                height=220,
+                height=150,
                 threshold=tsnr_threshold,
             )
 
             # Create task mirror for visual feedback display
-            self.task_mirror = TaskMirror(width=480, height=270)
+            self.task_mirror = TaskMirror(width=None, height=None)
 
             # Create progress and status UI elements (compact for status strip)
             self._progress_bar = ft.ProgressBar(value=0, width=300)
@@ -5928,8 +5928,8 @@ class ParticipantWorkflowScreen:
             self._hits_text = ft.Text("Hits: --", size=12)
 
             # Build monitoring panel:
-            # Row 1: Activation/Connectivity plot + Task mirror side by side
-            # Row 2: FD, DVARS, tSNR plots side by side (full width)
+            # Row 1: Activation/Connectivity plot + Task mirror (equal halves)
+            # Row 2: FD, DVARS, tSNR plots side by side (compact, secondary)
             monitoring_panel = ft.Container(
                 content=ft.Column(
                     [
@@ -5976,7 +5976,7 @@ class ParticipantWorkflowScreen:
                             border_radius=8,
                             padding=ft.padding.symmetric(horizontal=12, vertical=6),
                         ),
-                        # Row 1: Activation plot + Task mirror side by side
+                        # Row 1: Activation plot + Task mirror (equal halves)
                         ft.Row(
                             [
                                 ft.Container(
@@ -5987,7 +5987,7 @@ class ParticipantWorkflowScreen:
                                         ],
                                         spacing=5,
                                     ),
-                                    expand=True,
+                                    expand=1,
                                     height=300,
                                 ),
                                 ft.Container(
@@ -5998,51 +5998,60 @@ class ParticipantWorkflowScreen:
                                         ],
                                         spacing=5,
                                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                        expand=True,
                                     ),
-                                    width=500,
+                                    expand=1,
                                     height=300,
                                 ),
                             ],
                             spacing=20,
                             vertical_alignment=ft.CrossAxisAlignment.START,
                         ),
-                        # QC plots stacked vertically (capped width)
+                        # Row 2: QC plots side by side (secondary)
                         ft.Container(
-                            content=ft.Column(
+                            content=ft.Row(
                                 [
-                                    ft.Text(
-                                        "Framewise Displacement",
-                                        size=12,
-                                        weight=ft.FontWeight.W_500,
+                                    ft.Container(
+                                        content=ft.Column(
+                                            [
+                                                ft.Text(
+                                                    "Framewise Displacement",
+                                                    size=11,
+                                                    weight=ft.FontWeight.W_500,
+                                                ),
+                                                self.fd_plot.build(),
+                                            ],
+                                            spacing=3,
+                                        ),
+                                        expand=1,
+                                        height=200,
                                     ),
-                                    self.fd_plot.build(),
+                                    ft.Container(
+                                        content=ft.Column(
+                                            [
+                                                ft.Text("DVARS", size=11, weight=ft.FontWeight.W_500),
+                                                self.dvars_plot.build(),
+                                            ],
+                                            spacing=3,
+                                        ),
+                                        expand=1,
+                                        height=200,
+                                    ),
+                                    ft.Container(
+                                        content=ft.Column(
+                                            [
+                                                ft.Text("tSNR", size=11, weight=ft.FontWeight.W_500),
+                                                self.tsnr_plot.build(),
+                                            ],
+                                            spacing=3,
+                                        ),
+                                        expand=1,
+                                        height=200,
+                                    ),
                                 ],
-                                spacing=3,
+                                spacing=12,
                             ),
-                            height=280,
-                            width=800,
-                        ),
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text("DVARS", size=12, weight=ft.FontWeight.W_500),
-                                    self.dvars_plot.build(),
-                                ],
-                                spacing=3,
-                            ),
-                            height=280,
-                            width=800,
-                        ),
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text("tSNR", size=12, weight=ft.FontWeight.W_500),
-                                    self.tsnr_plot.build(),
-                                ],
-                                spacing=3,
-                            ),
-                            height=280,
-                            width=800,
+                            padding=ft.padding.symmetric(horizontal=20),
                         ),
                     ],
                     spacing=8,

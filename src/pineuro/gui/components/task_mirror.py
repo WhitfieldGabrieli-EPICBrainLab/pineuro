@@ -40,15 +40,15 @@ class TaskMirror:
     ... })
     """
 
-    def __init__(self, width: float = 480, height: float = 270):
+    def __init__(self, width: float | None = 480, height: float | None = 270):
         """Initialize the task mirror.
 
         Parameters
         ----------
-        width : float
-            Display width in pixels
-        height : float
-            Display height in pixels
+        width : float or None
+            Display width in pixels, or None for responsive sizing
+        height : float or None
+            Display height in pixels, or None for responsive sizing
         """
         self.width = width
         self.height = height
