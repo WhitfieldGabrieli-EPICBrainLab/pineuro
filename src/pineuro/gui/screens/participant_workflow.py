@@ -6087,6 +6087,10 @@ class ParticipantWorkflowScreen:
             else:
                 is_task_localizer = False
 
+            # Clear stale collection_progress from previous steps (e.g. reference)
+            # so the callback falls through to _progress_bar for localizer runs.
+            self.collection_progress = None
+
             if is_task_localizer:
                 # Task-based localizer: Show TaskMirror (no activation/FD plots)
                 # Get n_volumes for progress tracking
@@ -6517,6 +6521,16 @@ class ParticipantWorkflowScreen:
         """
 
         # This callback runs in the background thread
+        # Render DICOM slice in background thread (heavy I/O) before scheduling UI update
+        slice_b64 = None
+        if dicom_path and hasattr(self, "_slice_image") and self._slice_image is not None:
+            try:
+                from ..components.collection_progress import dicom_to_base64_png
+
+                slice_b64 = dicom_to_base64_png(dicom_path)
+            except Exception:
+                pass
+
         # Schedule UI update on the main thread
         async def update_ui():
             if hasattr(self, "collection_progress") and self.collection_progress is not None:
@@ -6528,6 +6542,12 @@ class ParticipantWorkflowScreen:
                 self._progress_text.value = f"{volumes_collected} / {n_volumes} volumes"
                 if hasattr(self, "_status_text") and self._status_text is not None:
                     self._status_text.value = f"Collecting DICOMs... ({elapsed_time:.1f}s)"
+                # Update brain slice preview
+                if slice_b64 and hasattr(self, "_slice_image") and self._slice_image is not None:
+                    self._slice_image.src = slice_b64
+                    self._slice_image.visible = True
+                    if hasattr(self, "_slice_placeholder") and self._slice_placeholder is not None:
+                        self._slice_placeholder.visible = False
                 self.page.update()
 
         try:
