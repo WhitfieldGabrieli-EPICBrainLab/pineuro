@@ -1741,24 +1741,52 @@ def generate_mask_extraction_report(
                 }
             )
         else:
+            # Load mask selections to get combined mask info
+            mask_selections = {}
+            if selections_file.exists():
+                import json as _json
+
+                _sel_data = _json.loads(selections_file.read_text())
+                mask_selections = {
+                    k: v for k, v in _sel_data.items() if isinstance(v, dict)
+                }
+
             for network, mask_path in network_masks.items():
-                chosen_comp = chosen_components.get(network, -1)
-                correlation = (
-                    float(corr_df.loc[chosen_comp, network])
-                    if corr_df is not None and network in corr_df.columns
-                    else 0.0
-                )
-                summary = summarize_mask(mask_path, name=network, chosen_component=chosen_comp, correlation=correlation)
-                table_rows.append(
-                    [
-                        summary.name,
-                        str(summary.voxels),
-                        f"{summary.volume_ml:.2f}",
-                        str(summary.centroid_ijk),
-                        str(summary.chosen_component),
-                        f"{summary.correlation:.3f}",
-                    ]
-                )
+                sel = mask_selections.get(network, {})
+
+                if sel.get("source_type") == "ica_combined":
+                    # Combined mask: show both components and use stored correlation
+                    comp_label = f"IC {sel['component_index']} + IC {sel['secondary_component_index']}"
+                    correlation = float(sel.get("correlation", 0.0))
+                    summary = summarize_mask(mask_path, name=network, chosen_component=-1, correlation=correlation)
+                    table_rows.append(
+                        [
+                            summary.name,
+                            str(summary.voxels),
+                            f"{summary.volume_ml:.2f}",
+                            str(summary.centroid_ijk),
+                            comp_label,
+                            f"{summary.correlation:.3f}",
+                        ]
+                    )
+                else:
+                    chosen_comp = chosen_components.get(network, -1)
+                    correlation = (
+                        float(corr_df.loc[chosen_comp, network])
+                        if corr_df is not None and network in corr_df.columns
+                        else 0.0
+                    )
+                    summary = summarize_mask(mask_path, name=network, chosen_component=chosen_comp, correlation=correlation)
+                    table_rows.append(
+                        [
+                            summary.name,
+                            str(summary.voxels),
+                            f"{summary.volume_ml:.2f}",
+                            str(summary.centroid_ijk),
+                            str(summary.chosen_component),
+                            f"{summary.correlation:.3f}",
+                        ]
+                    )
             sections.append(
                 {
                     "type": "table",

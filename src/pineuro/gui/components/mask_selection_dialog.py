@@ -567,12 +567,14 @@ class MaskSelectionDialog:
         from pineuro.mask_extraction import (
             load_mask_selections,
             regenerate_mask_from_selection,
+            save_mask_selections,
         )
 
         if self.on_log:
             self.on_log("[INFO] Regenerating QC report...")
 
         # Regenerate any masks modified in the dialog but not yet applied to disk
+        modified = False
         try:
             existing = load_mask_selections(self.masks_dir)
             for name, selection in self._selections.items():
@@ -582,6 +584,7 @@ class MaskSelectionDialog:
                     or selection.component_index != old.component_index
                     or selection.secondary_component_index != old.secondary_component_index
                 ):
+                    modified = True
                     logger.info(f"Regenerating {name} mask for report preview")
                     regenerate_mask_from_selection(
                         participant_id=self.participant_id,
@@ -592,6 +595,9 @@ class MaskSelectionDialog:
                         n_yeo=self.n_yeo,
                         threshold=self.threshold,
                     )
+            # Save selections so the report reads correct component/correlation info
+            if modified:
+                save_mask_selections(self.masks_dir, self._selections)
         except Exception as ex:
             logger.warning(f"Failed to regenerate modified masks for report: {ex}")
 
