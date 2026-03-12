@@ -3735,48 +3735,13 @@ class ParticipantWorkflowScreen:
 
         html_path = self.qc_manager.get_mask_extraction_qc()
 
-        # Initial Reference requires approval (gates subsequent steps)
-        # Realtime reference is view-only (initial approval already unlocked the pipeline)
-        if approval_type == "initial":
-
-            def on_approve():
-                self._set_qc_approved(approval_type, True)
-                self._add_log("[SUCCESS] Initial Reference QC approved")
-                self._refresh_step_list()
-                _snack = ft.SnackBar(
-                    ft.Text("Initial coregistration approved! You can now collect real-time reference."),
-                    bgcolor=ft.Colors.GREEN,
-                )
-                _snack.open = True
-                self.page.overlay.append(_snack)
-                self.page.update()
-
-            def on_reject():
-                self._add_log("[WARNING] Initial Reference QC rejected")
-                _snack = ft.SnackBar(
-                    ft.Text("Masks rejected. Please review and re-run coregistration."), bgcolor=ft.Colors.ORANGE
-                )
-                _snack.open = True
-                self.page.overlay.append(_snack)
-                self.page.update()
-
-            viewer = QCPlotViewer(
-                page=self.page,
-                title=title,
-                plots=plots,
-                html_report_path=html_path,
-                require_approval=True,
-                on_approve=on_approve,
-                on_reject=on_reject,
-            )
-        else:
-            viewer = QCPlotViewer(
-                page=self.page,
-                title=title,
-                plots=plots,
-                html_report_path=html_path,
-                require_approval=False,
-            )
+        viewer = QCPlotViewer(
+            page=self.page,
+            title=title,
+            plots=plots,
+            html_report_path=html_path,
+            require_approval=False,
+        )
         viewer.show()
 
     def _show_coregistration_qc(self, qc_type: str):
@@ -6015,48 +5980,43 @@ class ParticipantWorkflowScreen:
                             spacing=20,
                             vertical_alignment=ft.CrossAxisAlignment.START,
                         ),
-                        # Row 2: QC plots side by side (FD, DVARS, tSNR)
-                        ft.Row(
-                            [
-                                ft.Container(
-                                    content=ft.Column(
-                                        [
-                                            ft.Text(
-                                                "Framewise Displacement",
-                                                size=12,
-                                                weight=ft.FontWeight.W_500,
-                                            ),
-                                            self.fd_plot.build(),
-                                        ],
-                                        spacing=3,
+                        # QC plots stacked vertically (capped width)
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(
+                                        "Framewise Displacement",
+                                        size=12,
+                                        weight=ft.FontWeight.W_500,
                                     ),
-                                    expand=True,
-                                    height=300,
-                                ),
-                                ft.Container(
-                                    content=ft.Column(
-                                        [
-                                            ft.Text("DVARS", size=12, weight=ft.FontWeight.W_500),
-                                            self.dvars_plot.build(),
-                                        ],
-                                        spacing=3,
-                                    ),
-                                    expand=True,
-                                    height=300,
-                                ),
-                                ft.Container(
-                                    content=ft.Column(
-                                        [
-                                            ft.Text("tSNR", size=12, weight=ft.FontWeight.W_500),
-                                            self.tsnr_plot.build(),
-                                        ],
-                                        spacing=3,
-                                    ),
-                                    expand=True,
-                                    height=300,
-                                ),
-                            ],
-                            spacing=10,
+                                    self.fd_plot.build(),
+                                ],
+                                spacing=3,
+                            ),
+                            height=280,
+                            width=800,
+                        ),
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text("DVARS", size=12, weight=ft.FontWeight.W_500),
+                                    self.dvars_plot.build(),
+                                ],
+                                spacing=3,
+                            ),
+                            height=280,
+                            width=800,
+                        ),
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text("tSNR", size=12, weight=ft.FontWeight.W_500),
+                                    self.tsnr_plot.build(),
+                                ],
+                                spacing=3,
+                            ),
+                            height=280,
+                            width=800,
                         ),
                     ],
                     spacing=8,
