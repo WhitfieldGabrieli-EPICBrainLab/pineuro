@@ -3832,6 +3832,12 @@ class ParticipantWorkflowScreen:
             logger.warning(f"No feedbacklog found for {step_id}, skipping summary")
             return
 
+        # Extract acq from the discovered filename (e.g., "..._acq-01_run-01_feedbacklog.tsv")
+        import re
+
+        acq_match = re.search(r"_acq-(\d+)_", feedbacklog_path.name)
+        acq: str | None = acq_match.group(1) if acq_match else None
+
         # Compute summary data
         try:
             summary_data = compute_feedback_summary(
@@ -3845,34 +3851,6 @@ class ParticipantWorkflowScreen:
         except Exception as e:
             logger.error(f"Failed to compute feedback summary: {e}")
             return
-
-        # Generate summary plots
-        qc_dir = output_dir / "qc"
-        qc_dir.mkdir(parents=True, exist_ok=True)
-
-        activation_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_activation.png"
-        connectivity_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_connectivity.png"
-
-        try:
-            if not activation_plot_path.exists():
-                qc.plot_activation_timeseries(
-                    feedback_log_path=feedbacklog_path,
-                    out_path=activation_plot_path,
-                    n_baseline=n_baseline,
-                    title=f"Activation - {self.participant_id} ({task} run {run})",
-                )
-            if not connectivity_plot_path.exists():
-                qc.plot_connectivity_timeseries(
-                    feedback_log_path=feedbacklog_path,
-                    out_path=connectivity_plot_path,
-                    n_baseline=n_baseline,
-                    title=f"Connectivity - {self.participant_id} ({task} run {run})",
-                )
-        except Exception as e:
-            logger.warning(f"Failed to generate summary plots: {e}")
-
-        def on_view_full_qc():
-            self.qc_manager.open_report(f"{task}_run_{run}")
 
         # Get blind display names if blind mode is enabled
         # Include all masks (real + sham alternatives) for proper blinding
@@ -3898,6 +3876,54 @@ class ParticipantWorkflowScreen:
                     if alt_name and alt_name not in mask_names:
                         mask_names.append(alt_name)
         display_names_dict = self._get_blind_display_names_dict(mask_names)
+
+        # Generate summary plots (regenerate if blind mode to apply display names)
+        qc_dir = output_dir / "qc"
+        qc_dir.mkdir(parents=True, exist_ok=True)
+
+        activation_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_activation.png"
+        connectivity_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_connectivity.png"
+
+        try:
+            # In blind mode, always regenerate plots to ensure display names are applied
+            needs_regen = display_names_dict is not None
+            if needs_regen or not activation_plot_path.exists():
+                qc.plot_activation_timeseries(
+                    feedback_log_path=feedbacklog_path,
+                    out_path=activation_plot_path,
+                    n_baseline=n_baseline,
+                    title=f"Activation - {self.participant_id} ({task} run {run})",
+                    display_names=display_names_dict,
+                )
+            if needs_regen or not connectivity_plot_path.exists():
+                qc.plot_connectivity_timeseries(
+                    feedback_log_path=feedbacklog_path,
+                    out_path=connectivity_plot_path,
+                    n_baseline=n_baseline,
+                    title=f"Connectivity - {self.participant_id} ({task} run {run})",
+                    display_names=display_names_dict,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to generate summary plots: {e}")
+
+        def on_view_full_qc():
+            # In blind mode, regenerate the full QC report with display names
+            if display_names_dict:
+                try:
+                    qc.generate_feedback_report(
+                        feedback_dir=output_dir,
+                        subject=self.participant_id,
+                        task=task,
+                        run=run,
+                        acq=acq,
+                        output_dir=qc_dir,
+                        overwrite=True,
+                        display_names=display_names_dict,
+                        fd_threshold=fd_threshold,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to regenerate QC report with display names: {e}")
+            self.qc_manager.open_report(f"{task}_run_{run}")
 
         dialog = FeedbackSummaryDialog(
             page=self.page,

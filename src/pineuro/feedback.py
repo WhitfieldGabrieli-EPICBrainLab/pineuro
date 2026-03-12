@@ -3591,6 +3591,7 @@ class NeurofeedbackCoordinator:
                 output_dir=self.output_dir / "qc",
                 overwrite=True,
                 open_browser=False,
+                expected_volumes=self.n_volumes,
                 fd_threshold=self._fd_threshold,
             )
             logger.info(f"QC report saved to: {report_path}")

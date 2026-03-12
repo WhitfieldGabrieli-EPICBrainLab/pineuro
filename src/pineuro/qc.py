@@ -2802,7 +2802,11 @@ def _classify_feedbacklog_columns(df: pd.DataFrame) -> dict[str, list[str]]:
 
 
 def plot_activation_timeseries(
-    feedback_log_path: Path, out_path: Path, n_baseline: int | None = None, title: str | None = None
+    feedback_log_path: Path,
+    out_path: Path,
+    n_baseline: int | None = None,
+    title: str | None = None,
+    display_names: dict[str, str] | None = None,
 ) -> None:
     """
     Plot per-mask activation timeseries from feedback log.
@@ -2844,7 +2848,8 @@ def plot_activation_timeseries(
     fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
 
     for mask_name in mask_cols:
-        ax.plot(df["volume"], df[mask_name], linewidth=1.5, label=mask_name, alpha=0.8)
+        label = display_names.get(mask_name, mask_name) if display_names else mask_name
+        ax.plot(df["volume"], df[mask_name], linewidth=1.5, label=label, alpha=0.8)
 
     if n_baseline is not None and n_baseline > 0:
         ax.axvspan(-0.5, n_baseline - 0.5, color="gray", alpha=0.1, label="Baseline")
@@ -2863,7 +2868,11 @@ def plot_activation_timeseries(
 
 
 def plot_connectivity_timeseries(
-    feedback_log_path: Path, out_path: Path, n_baseline: int | None = None, title: str | None = None
+    feedback_log_path: Path,
+    out_path: Path,
+    n_baseline: int | None = None,
+    title: str | None = None,
+    display_names: dict[str, str] | None = None,
 ) -> None:
     """
     Plot connectivity correlation timeseries from feedback log.
@@ -2906,7 +2915,13 @@ def plot_connectivity_timeseries(
 
     for col in conn_cols:
         # Clean up label: "corr_ContA_DefaultA" -> "ContA - DefaultA"
-        label = col.replace("corr_", "").replace("_", " - ", 1)
+        raw_label = col.replace("corr_", "")
+        if display_names:
+            parts = raw_label.split("_", 1)
+            parts = [display_names.get(p, p) for p in parts]
+            label = " - ".join(parts)
+        else:
+            label = raw_label.replace("_", " - ", 1)
         ax.plot(df["volume"], df[col], linewidth=1.5, label=label, alpha=0.8)
 
     if n_baseline is not None and n_baseline > 0:
@@ -3153,6 +3168,81 @@ def plot_dvars_timeseries(
     plt.close(fig)
 
 
+def plot_tsnr_timeseries(
+    feedback_log_path: Path,
+    out_path: Path,
+    n_baseline: int | None = None,
+    title: str | None = None,
+) -> None:
+    """
+    Plot tSNR timeseries from feedback log.
+
+    Parameters
+    ----------
+    feedback_log_path : Path
+        Path to feedback log TSV file
+    out_path : Path
+        Path to save the PNG
+    n_baseline : int, optional
+        Number of baseline volumes (will be shaded differently)
+    title : str, optional
+        Figure title
+    """
+    df = pd.read_csv(feedback_log_path, sep="\t")
+
+    if len(df) < 2:
+        logger.warning(f"Feedback log has fewer than 2 rows ({len(df)}); skipping tSNR timeseries plot")
+        return
+
+    if "tsnr" not in df.columns:
+        logger.warning("No 'tsnr' column in feedback log, skipping tSNR plot")
+        return
+
+    df["tsnr"] = pd.to_numeric(df["tsnr"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+
+    tsnr = df["tsnr"].values
+    volumes = df["volume"].values
+    n_volumes = len(tsnr)
+
+    fig, ax = plt.subplots(figsize=(12, 4), constrained_layout=True)
+
+    ax.plot(volumes, tsnr, linewidth=1.5, color="#CC79A7", label="tSNR")
+
+    # Shade baseline period
+    if n_baseline is not None and n_baseline > 0:
+        ax.axvspan(-0.5, n_baseline - 0.5, color="gray", alpha=0.1, label="Baseline")
+        ax.axvline(n_baseline - 0.5, color="gray", linestyle="--", linewidth=1.0, alpha=0.5)
+
+    # Summary statistics
+    valid_tsnr = tsnr[np.isfinite(tsnr) & (tsnr > 0)]
+    if len(valid_tsnr) > 0:
+        final_tsnr = valid_tsnr[-1]
+        ax.text(
+            0.02,
+            0.98,
+            f"Final tSNR: {final_tsnr:.1f}",
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+
+    ax.set_xlabel("Volume Index", fontweight="bold")
+    ax.set_ylabel("tSNR", fontweight="bold")
+    ax.legend(loc="upper right")
+    ax.set_xlim(-0.5, n_volumes - 0.5)
+
+    if title:
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
+    else:
+        ax.set_title("Temporal Signal-to-Noise Ratio (tSNR)", fontsize=12, fontweight="bold", pad=10)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
 def generate_feedback_report(
     feedback_dir: Path,
     subject: str,
@@ -3164,6 +3254,7 @@ def generate_feedback_report(
     expected_volumes: int | None = None,
     acq: str | None = None,
     fd_threshold: float = 0.5,
+    display_names: dict[str, str] | None = None,
 ) -> Path:
     """
     Generate comprehensive QC report for feedback session outputs.
@@ -3197,6 +3288,10 @@ def generate_feedback_report(
     fd_threshold : float, default=0.5
         Framewise displacement threshold in mm for highlighting excessive motion
         in the FD timeseries plot.
+    display_names : dict of str to str, optional
+        Mapping of actual network names to display names (e.g., for blind mode).
+        When provided, network names in the report are replaced with the
+        display names (e.g., "DefaultA" -> "Target").
 
     Returns
     -------
@@ -3332,7 +3427,8 @@ def generate_feedback_report(
                     continue
                 hits = int(max_val)
                 total_hits += hits
-                hit_strs.append(f"{network_name}: {hits}")
+                shown_name = display_names.get(network_name, network_name) if display_names else network_name
+                hit_strs.append(f"{shown_name}: {hits}")
             if hit_strs:
                 summary_data["Network hits"] = ", ".join(hit_strs)
                 summary_data["Total hits"] = str(total_hits)
@@ -3368,6 +3464,7 @@ def generate_feedback_report(
                 out_path=timeseries_out,
                 n_baseline=n_baseline,
                 title=f"Activation Timeseries - {subject} (task: {task}, run: {run})",
+                display_names=display_names,
             )
 
         sections.append(
@@ -3412,6 +3509,7 @@ def generate_feedback_report(
                 out_path=conn_out,
                 n_baseline=n_baseline,
                 title=f"Connectivity - {subject} (task: {task}, run: {run})",
+                display_names=display_names,
             )
 
         if conn_out.exists():
@@ -3444,6 +3542,29 @@ def generate_feedback_report(
                     "type": "single_image",
                     "path": dvars_out.relative_to(output_dir).as_posix(),
                     "alt": "DVARS timeseries",
+                }
+            )
+
+    # tSNR timeseries
+    if feedback_log.exists() and "tsnr" in df.columns:
+        sections.append({"type": "heading", "content": "tSNR"})
+
+        tsnr_out = output_dir / "tsnr_timeseries.png"
+        if overwrite or not tsnr_out.exists():
+            logger.info("Generating tSNR timeseries")
+            plot_tsnr_timeseries(
+                feedback_log_path=feedback_log,
+                out_path=tsnr_out,
+                n_baseline=n_baseline,
+                title=f"tSNR - {subject} (task: {task}, run: {run})",
+            )
+
+        if tsnr_out.exists():
+            sections.append(
+                {
+                    "type": "single_image",
+                    "path": tsnr_out.relative_to(output_dir).as_posix(),
+                    "alt": "tSNR timeseries",
                 }
             )
 
