@@ -1667,9 +1667,11 @@ class MaskSelectionDialog:
                 subject_overlay_dir.mkdir(parents=True, exist_ok=True)
 
                 # Load Yeo atlas for slice selection
-                yeo2sub_files = sorted(
-                    (self.mask_extraction_dir / "02_mnireg").glob("*yeo2sub.nii.gz")
-                ) if (self.mask_extraction_dir / "02_mnireg").exists() else []
+                yeo2sub_files = (
+                    sorted((self.mask_extraction_dir / "02_mnireg").glob("*yeo2sub.nii.gz"))
+                    if (self.mask_extraction_dir / "02_mnireg").exists()
+                    else []
+                )
                 yeo2sub = yeo2sub_files[0] if yeo2sub_files else None
                 labels = get_yeo_labels(self.n_yeo)
 

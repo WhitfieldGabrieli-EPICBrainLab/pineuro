@@ -829,19 +829,24 @@ class FeedbackTabBuilder:
     def _on_generate_randomization(self, e):
         """Open dialog to generate a randomization file."""
         prefix_field = ft.TextField(
-            label="Participant ID prefix", value="sub-", width=200,
+            label="Participant ID prefix",
+            value="sub-",
+            width=200,
             hint_text="e.g. sub- → sub-01, sub-rtchr0 → sub-rtchr001",
         )
         n_participants_field = ft.TextField(
-            label="Number of participants", width=200,
+            label="Number of participants",
+            width=200,
             keyboard_type=ft.KeyboardType.NUMBER,
         )
         n_sham_field = ft.TextField(
-            label="Number of sham", width=200,
+            label="Number of sham",
+            width=200,
             keyboard_type=ft.KeyboardType.NUMBER,
         )
         method_dropdown = ft.Dropdown(
-            label="Method", width=200,
+            label="Method",
+            width=200,
             options=[
                 ft.dropdown.Option(key="simple", text="Simple"),
                 ft.dropdown.Option(key="replay", text="Replay"),
@@ -849,20 +854,25 @@ class FeedbackTabBuilder:
             value="simple",
         )
         seed_field = ft.TextField(
-            label="Seed (optional)", width=200,
+            label="Seed (optional)",
+            width=200,
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
         dialog = ft.AlertDialog(
             title=ft.Text("Generate Randomization File"),
             content=ft.Container(
-                content=ft.Column([
-                    prefix_field,
-                    n_participants_field,
-                    n_sham_field,
-                    method_dropdown,
-                    seed_field,
-                ], tight=True, spacing=10),
+                content=ft.Column(
+                    [
+                        prefix_field,
+                        n_participants_field,
+                        n_sham_field,
+                        method_dropdown,
+                        seed_field,
+                    ],
+                    tight=True,
+                    spacing=10,
+                ),
                 width=300,
             ),
         )
@@ -890,9 +900,7 @@ class FeedbackTabBuilder:
                     raise ValueError
             except (TypeError, ValueError):
                 n_sham_field.error_text = (
-                    f"Must be between 1 and {n_total - 1}"
-                    if "n_total" in dir()
-                    else "Must be a positive integer"
+                    f"Must be between 1 and {n_total - 1}" if "n_total" in dir() else "Must be a positive integer"
                 )
                 n_sham_field.update()
                 return

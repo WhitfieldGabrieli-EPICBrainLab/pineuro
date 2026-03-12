@@ -1747,9 +1747,7 @@ def generate_mask_extraction_report(
                 import json as _json
 
                 _sel_data = _json.loads(selections_file.read_text())
-                mask_selections = {
-                    k: v for k, v in _sel_data.items() if isinstance(v, dict)
-                }
+                mask_selections = {k: v for k, v in _sel_data.items() if isinstance(v, dict)}
 
             for network, mask_path in network_masks.items():
                 sel = mask_selections.get(network, {})
@@ -1776,7 +1774,9 @@ def generate_mask_extraction_report(
                         if corr_df is not None and network in corr_df.columns
                         else 0.0
                     )
-                    summary = summarize_mask(mask_path, name=network, chosen_component=chosen_comp, correlation=correlation)
+                    summary = summarize_mask(
+                        mask_path, name=network, chosen_component=chosen_comp, correlation=correlation
+                    )
                     table_rows.append(
                         [
                             summary.name,
