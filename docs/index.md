@@ -40,6 +40,7 @@ The library is designed for:
 - [Display Setup](user-guide/display-setup.md) — Multi-monitor and projector configuration
 - [Simulation Mode](user-guide/simulation-mode.md) — Offline testing with DICOM replay
 - [QC Reports & Output Files](user-guide/qc-reports.md) — Quality reports, feedbacklog, psychopylog
+- [Network Testing](user-guide/network-testing.md) — Two-machine scanner connectivity testing
 
 ## Support
 

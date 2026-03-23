@@ -199,6 +199,7 @@ results = run_feedback_session(
 - Logs responses and timing
 
 **Built-in tasks:**
+- **GaugeTask**: Dual-network gauge with block design and label swapping
 - **BallTask**: Dual-network ball feedback with adaptive scaling
 - **ThermometerTask**: Single-network thermometer display
 
@@ -207,7 +208,7 @@ results = run_feedback_session(
 - Register with task framework
 - Receive activations via callback
 
-See [Creating Tasks](../task-development/creating-tasks.md) for details.
+See [Tasks](tasks.md) for details.
 
 ## Data Flow Summary
 

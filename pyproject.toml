@@ -9,12 +9,11 @@ description = "Python for Individualized Neurofeedback"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
 authors = [{name = "Marlee M Vandewouw", email = "marlee.vandewouw@outlook.com"}]
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Operating System :: POSIX :: Linux",
@@ -40,6 +39,12 @@ dependencies = [
     "templateflow",
     "watchdog",
 ]
+
+[project.urls]
+Homepage = "https://github.com/marlvan/pineuro"
+Documentation = "https://github.com/marlvan/pineuro/tree/main/docs"
+Issues = "https://github.com/marlvan/pineuro/issues"
+Changelog = "https://github.com/marlvan/pineuro/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["build", "mypy>=1.10", "pytest>=8.0", "ruff>=0.9.0", "types-PyYAML"]

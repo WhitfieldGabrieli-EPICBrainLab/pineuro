@@ -22,7 +22,7 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 - **QC reports** — HTML quality reports for each pipeline stage
 
 **Task framework**
-- **Built-in tasks** — Ball (dual-network) and thermometer (single-network) feedback displays
+- **Built-in tasks** — Gauge (dual-network block design), ball (dual-network adaptive), thermometer (single-network), and RNT variants
 - **Task plugin system** — `@pineuro_task` decorator and entry-point registration
 - **Simulation mode** — Offline DICOM replay at configurable speed
 
@@ -55,7 +55,7 @@ The desktop GUI provides study configuration, participant workflows, live activa
 
 **User guide** — [Full index](docs/index.md)
 
-[Pipeline Overview](docs/user-guide/pipeline-overview.md) · [Study Configuration](docs/user-guide/study-configuration.md) · [Preprocessing](docs/user-guide/preprocessing.md) · [Mask Extraction](docs/user-guide/mask-extraction.md) · [Feedback Sessions](docs/user-guide/feedback-sessions.md) · [Tasks](docs/user-guide/tasks.md) · [Sham & Blinding](docs/user-guide/sham-and-blinding.md) · [Multi-Visit](docs/user-guide/multi-visit.md) · [Simulation Mode](docs/user-guide/simulation-mode.md) · [QC Reports](docs/user-guide/qc-reports.md)
+[Pipeline Overview](docs/user-guide/pipeline-overview.md) · [Study Configuration](docs/user-guide/study-configuration.md) · [Preprocessing](docs/user-guide/preprocessing.md) · [Mask Extraction](docs/user-guide/mask-extraction.md) · [Feedback Sessions](docs/user-guide/feedback-sessions.md) · [Tasks](docs/user-guide/tasks.md) · [Sham & Blinding](docs/user-guide/sham-and-blinding.md) · [Multi-Visit](docs/user-guide/multi-visit.md) · [Display Setup](docs/user-guide/display-setup.md) · [Simulation Mode](docs/user-guide/simulation-mode.md) · [QC Reports](docs/user-guide/qc-reports.md) · [Network Testing](docs/user-guide/network-testing.md)
 
 ## Citation
 
@@ -75,6 +75,3 @@ Key references:
 
 Apache License 2.0 — see [LICENSE](LICENSE) for details.
 
-## Contact
-
-Marlee M Vandewouw — marlee.vandewouw@outlook.com

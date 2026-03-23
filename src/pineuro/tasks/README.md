@@ -139,10 +139,6 @@ normalizer = ActivationNormalizer(window_size=50, lower_percentile=10, upper_per
 normalized = normalizer.update(raw_activation)  # Returns value in [0, 1]
 ```
 
-## Examples
-
-See [examples/run_feedback_with_task.py](../../../examples/run_feedback_with_task.py) for complete working example with command-line interface.
-
 ## Tips
 
 - **Always run coordinator in background**: Set `run_in_background=True`
@@ -156,4 +152,3 @@ See [examples/run_feedback_with_task.py](../../../examples/run_feedback_with_tas
 - pineuro (this package)
 - psychopy
 - numpy
-- See `docs/references.md` for underlying method references.

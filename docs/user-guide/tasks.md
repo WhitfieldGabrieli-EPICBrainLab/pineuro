@@ -1,6 +1,6 @@
 # Feedback Tasks
 
-Tasks are the visual displays shown to participants during neurofeedback. pineuro includes three built-in feedback tasks and two localizer tasks, with a plugin system for custom tasks.
+Tasks are the visual displays shown to participants during neurofeedback. pineuro includes three built-in feedback tasks, three RNT (Repetitive Negative Thinking) task variants, and two localizer tasks, with a plugin system for custom tasks.
 
 ## Built-In Feedback Tasks
 
@@ -88,6 +88,51 @@ A block-design audio task with thermometer feedback. Participants listen to voic
 | `confirm_button` | `3` | Rating scale confirm |
 
 **Networks required:** 1
+
+## RNT (Repetitive Negative Thinking) Tasks
+
+Three specialized tasks for studying rumination and repetitive negative thinking.
+
+### RNT Localizer
+
+A rumination localizer task where participants view personal keywords and rate how much they ruminate about each one. Used to identify brain networks involved in repetitive negative thinking.
+
+**Paradigm:** 9-stage trial protocol with keyword presentation, rumination induction, and 1–5 rating scales. Produces BIDS events TSV output.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `keywords_file` | — | Path to participant-specific keywords file |
+| `n_trials` | 10 | Number of keyword trials |
+| `rating_duration` | 6.0 | Duration for each rating scale |
+
+**Networks required:** 0 (localizer only)
+
+### RNT Experience Sampling
+
+An activation-triggered experience sampling task. Monitors real-time brain activation and presents experience sampling probes (sadness + focus ratings) when activation exceeds a threshold.
+
+**Trigger logic:** Activation threshold with trend detection and cooldown period to avoid over-sampling. Phases: baseline → monitoring → prompt.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `trigger_threshold` | 1.5 | Activation z-score to trigger a probe |
+| `cooldown_duration` | 30.0 | Minimum seconds between probes |
+
+**Networks required:** 1
+
+### RNT Triggered Ball
+
+A 3-network feedback task combining rumination detection with the ball game. When the trigger network exceeds a threshold, a ball feedback episode begins using the other two networks.
+
+**Display:** Ball moves based on differential activation of top and bottom networks (like BallTask), but episodes are triggered by the third network crossing a threshold.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `trigger_threshold` | 1.5 | Trigger network z-score to start an episode |
+| `episode_duration` | 30.0 | Duration of each ball episode |
+| `timeout_duration` | 60.0 | Max wait before forced episode |
+
+**Networks required:** 3 (trigger, top, bottom)
 
 ## Built-In Localizer Tasks
 

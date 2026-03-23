@@ -4,7 +4,7 @@ Get up and running with pineuro in 5 minutes.
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.10 or 3.11
 - pineuro installed (`pip install -e /path/to/pineuro`)
 
 ## 1. Preprocess Resting-State Data
@@ -111,7 +111,7 @@ The `feedbacklog.tsv` contains columns:
 
 - [First Session Tutorial](first-session.md) — Complete walkthrough with the GUI
 - [Pipeline Overview](../user-guide/pipeline-overview.md) — Understand the full workflow
-- [Creating Tasks](../task-development/creating-tasks.md) — Build custom feedback displays
+- [Tasks](../user-guide/tasks.md) — Built-in and custom feedback displays
 
 ## Common Issues
 

@@ -97,10 +97,13 @@ pineuro supports multiple atlases for network identification:
 |-------|-----|------------------|
 | Yeo 7-network | `yeo_7` | Vis, SomMot, DorsAttn, SalVentAttn, Limbic, Cont, Default |
 | Yeo 17-network | `yeo_17` | ContA/B, DefaultA/B, DorsAttnA/B, SalVentAttnA/B, LimbicA/B, SomMotA/B, TempPar, VisA/B/C |
-| Schaefer 100 | `schaefer_100` | 100 parcels grouped by 7 or 17 networks |
-| Schaefer 400 | `schaefer_400` | 400 parcels grouped by 7 or 17 networks |
+| Schaefer 100 (7-net) | `schaefer_100_7net` | 100 parcels grouped by 7 networks |
+| Schaefer 100 (17-net) | `schaefer_100_17net` | 100 parcels grouped by 17 networks |
+| Schaefer 400 (7-net) | `schaefer_400_7net` | 400 parcels grouped by 7 networks |
+| Schaefer 400 (17-net) | `schaefer_400_17net` | 400 parcels grouped by 17 networks |
 | Harvard-Oxford | `harvard_oxford` | Anatomical cortical regions |
 | AAL (SPM12) | `aal` | Automated Anatomical Labeling regions |
+| Gray Matter | `gray_matter` | Whole-brain gray matter (no region selection) |
 
 Atlas labels are fetched on demand and cached locally.
 

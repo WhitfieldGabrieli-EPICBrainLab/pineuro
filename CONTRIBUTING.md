@@ -185,7 +185,7 @@ All PRs are checked by CI (GitHub Actions). The following must pass before merge
 
 - **Lint**: `ruff check .` + `ruff format . --check`
 - **Type check**: `mypy src/pineuro/`
-- **Tests**: `pytest` on Ubuntu/Windows/macOS × Python 3.10/3.11/3.12
+- **Tests**: `pytest` on Ubuntu/Windows/macOS × Python 3.10/3.11
 - **Build**: package builds successfully
 
 ## Versioning
@@ -207,19 +207,32 @@ pineuro uses **pytest**. Tests live in `tests/` with this structure:
 
 ```
 tests/
-├── conftest.py              # Shared fixtures (synthetic NIfTI, masks, etc.)
-├── test_import.py           # Smoke test
-├── test_config.py           # Platform detection
-├── test_utils.py            # Utilities, timing, file I/O, masking
-├── test_feedback.py         # IncrementalGLM, FeedbackEstimator
-├── test_preprocessing.py    # Pipeline steps (concat, smoothing, filtering)
-├── test_mask_extraction.py  # ICA, GLM, atlas workflows
-├── test_session.py          # Config dataclasses, visit management
-├── test_sham.py             # Randomization, replay providers
-├── test_tasks.py            # Plugin registry, designs, session state
-├── test_qc.py               # QC reports and plotting
-└── integration/             # Real-data tests (require Rockland_NFB)
-    ├── conftest.py          # Data path fixtures (auto-skip if absent)
+├── conftest.py                       # Shared fixtures (synthetic NIfTI, masks, etc.)
+├── test_import.py                    # Smoke test
+├── test_config.py                    # Platform detection
+├── test_utils.py                     # Utilities, timing, file I/O, masking
+├── test_feedback.py                  # IncrementalGLM, FeedbackEstimator
+├── test_preprocessing.py             # Pipeline steps (concat, smoothing, filtering)
+├── test_mask_extraction.py           # ICA, GLM, atlas workflows
+├── test_session.py                   # Config dataclasses, visit management
+├── test_session_orchestration.py     # Multi-run/multi-visit orchestration
+├── test_sham.py                      # Randomization, replay providers
+├── test_simulator.py                 # Volume simulator
+├── test_tasks.py                     # Plugin registry, designs, session state
+├── test_newer_tasks.py               # Gauge, RNT task variants
+├── test_rnt_experience_sampling.py   # RNT experience sampling task
+├── test_qc.py                        # QC reports and plotting
+├── test_atlas_registry.py            # Atlas metadata registry
+├── test_collection_qc.py             # Real-time collection QC
+├── test_scanner_setup.py             # Scanner connectivity testing
+├── test_script_generator.py          # Script generation
+├── test_gui_config_manager.py        # GUI config persistence
+├── test_gui_config_snapshot.py       # GUI config snapshots
+├── test_gui_csv_poller.py            # GUI CSV polling component
+├── test_gui_models.py                # GUI data models
+├── test_gui_utils.py                 # GUI utilities
+└── integration/                      # Real-data tests (require Rockland_NFB)
+    ├── conftest.py                   # Data path fixtures (auto-skip if absent)
     ├── test_preprocessing_integration.py
     ├── test_mask_extraction_integration.py
     └── test_feedback_integration.py
