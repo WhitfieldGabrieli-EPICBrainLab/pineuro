@@ -40,8 +40,8 @@ logger = logging.getLogger(__name__)
 
 # Color palette for network activations
 NETWORK_COLORS = [
-    ft.Colors.BLUE_500,
     ft.Colors.RED_500,
+    ft.Colors.BLUE_500,
     ft.Colors.GREEN_500,
     ft.Colors.ORANGE_500,
     ft.Colors.PURPLE_500,

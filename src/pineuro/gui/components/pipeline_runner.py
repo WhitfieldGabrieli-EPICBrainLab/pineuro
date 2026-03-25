@@ -550,6 +550,17 @@ class PipelineRunner:
         tr = config["scan"].get("localizer_tr", 1.2)
         expected_duration = n_volumes * tr
         collection_timeout = max(300.0, expected_duration + 120.0)
+
+        # Create QC monitor for real-time motion/quality metrics during collection
+        from pineuro.collection_qc import CollectionQCMonitor
+
+        motion_mode = config.get("feedback", {}).get("motion_correction", "siemens_moco")
+        qc_monitor = CollectionQCMonitor(
+            log_path=output_dir / "collectionlog.tsv",
+            motion_correction=motion_mode,
+            on_qc_data=self.on_qc_data,
+        )
+
         collect_dicoms(
             watch_dir=watch_dir,
             output_dir=output_dir,
@@ -563,7 +574,7 @@ class PipelineRunner:
             trigger_event=trigger_event,
             task_done_event=task_done_event,
             timeout=collection_timeout,
-            qc_monitor=None,
+            qc_monitor=qc_monitor,
         )
 
         # Report actual collected count (may be less than n_volumes for
@@ -1258,6 +1269,7 @@ class PipelineRunner:
         Priority:
         1. boldref from preprocessing (best quality, brain-extracted)
         2. Mean of initial reference DICOMs (converted to NIfTI)
+        3. Mean of realtime reference DICOMs (for 0-localizer MNI atlas mode)
 
         Returns:
             Path to reference NIfTI file
@@ -1277,15 +1289,16 @@ class PipelineRunner:
             self._emit_progress(f"Using boldref from preprocessing: {boldref.name}")
             return boldref
 
-        # Option 2: Initial reference DICOMs → convert to NIfTI → compute mean
         collection_dir = base_dir / "collection"
+        mni_ref_dir = base_dir / "mask_extraction" / "00_mni_ref"
+
+        # Option 2: Initial reference DICOMs → convert to NIfTI → compute mean
         ref_dirs = sorted(collection_dir.glob("task-reference_acq-*_run-01"))
         for ref_dir in reversed(ref_dirs):  # newest acq first
             dicoms = list(ref_dir.iterdir())
             if dicoms:
                 from pineuro.utils import compute_mean, dicom_to_nifti
 
-                mni_ref_dir = base_dir / "mask_extraction" / "00_mni_ref"
                 mni_ref_dir.mkdir(parents=True, exist_ok=True)
 
                 mean_file = mni_ref_dir / f"{self.participant_id}_task-reference_mean.nii.gz"
@@ -1306,9 +1319,35 @@ class PipelineRunner:
                     if mean_file.exists():
                         return mean_file
 
+        # Option 3: Realtime reference DICOMs (for 0-localizer MNI atlas mode)
+        rt_ref_dirs = sorted(collection_dir.glob("task-reference_acq-*_run-02"))
+        for ref_dir in reversed(rt_ref_dirs):  # newest acq first
+            dicoms = list(ref_dir.iterdir())
+            if dicoms:
+                from pineuro.utils import compute_mean, dicom_to_nifti
+
+                mni_ref_dir.mkdir(parents=True, exist_ok=True)
+
+                mean_file = mni_ref_dir / f"{self.participant_id}_task-reference-realtime_mean.nii.gz"
+                if mean_file.exists():
+                    self._emit_progress(f"Using existing realtime reference mean: {mean_file.name}")
+                    return mean_file
+
+                self._emit_progress(f"Converting realtime reference DICOMs from {ref_dir.name}...")
+                nifti_file = dicom_to_nifti(
+                    dicom_dir=ref_dir,
+                    output_dir=mni_ref_dir,
+                    output_name=f"{self.participant_id}_task-reference-realtime",
+                )
+                nifti_path = Path(nifti_file)
+                if nifti_path.exists():
+                    self._emit_progress("Computing mean realtime reference volume...")
+                    compute_mean(input_file=nifti_path, output_file=mean_file)
+                    if mean_file.exists():
+                        return mean_file
+
         raise FileNotFoundError(
-            "No reference image available for MNI registration. "
-            "Collect an initial reference scan or run preprocessing first."
+            "No reference image available for MNI registration. Collect a reference scan or run preprocessing first."
         )
 
     def _run_mni_mask_extraction(self) -> None:

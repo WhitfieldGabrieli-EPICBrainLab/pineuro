@@ -456,8 +456,6 @@ class StudyEditorScreen:
 
     def _on_remove_localizer_at(self, index: int):
         """Remove localizer at given index."""
-        if len(self._localizer_configs) <= 1:
-            return
         self._collect_all_configs()
         self._localizer_configs.pop(index)
         self._rebuild_tabs()
@@ -502,8 +500,6 @@ class StudyEditorScreen:
 
     def _on_remove_feedback_at(self, index: int):
         """Remove feedback task at given index."""
-        if len(self._feedback_configs) <= 1:
-            return
         self._collect_all_configs()
         self._feedback_configs.pop(index)
         self._rebuild_tabs()
@@ -741,7 +737,6 @@ class StudyEditorScreen:
                 icon=ft.Icons.CLOSE,
                 tooltip="Remove this localizer",
                 on_click=lambda e, idx=i: self._on_remove_localizer_at(idx),
-                visible=len(self._localizer_configs) > 1,
             )
             loc_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
 
@@ -767,7 +762,6 @@ class StudyEditorScreen:
                 icon=ft.Icons.CLOSE,
                 tooltip="Remove this feedback task",
                 on_click=lambda e, idx=i: self._on_remove_feedback_at(idx),
-                visible=len(self._feedback_configs) > 1,
             )
             fb_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
 
@@ -1365,6 +1359,20 @@ class StudyEditorScreen:
 
         self._update_study_from_form()
 
+        # Validate: at least one localizer or feedback run required
+        config = self.study_config.session_config
+        has_localizers = len(config.get("localizers", [])) > 0
+        has_feedback = len(config.get("feedback_runs", [])) > 0
+        if not has_localizers and not has_feedback:
+            _snack = ft.SnackBar(
+                ft.Text("At least one localizer or feedback task is required"),
+                bgcolor=ft.Colors.RED_200,
+            )
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
         try:
             path = self.config_manager.save_study(self.study_config, overwrite=True)
             _snack = ft.SnackBar(ft.Text(f"Study saved: {self.study_config.metadata.name}"))
@@ -1567,6 +1575,8 @@ class StudyEditorScreen:
         self._localizer_configs = localizer_configs
 
         # Backward compat: write flat keys from first localizer
+        if not localizer_configs:
+            config["scan"]["localizer_n_runs"] = 0
         if localizer_configs:
             first = localizer_configs[0]
             config["scan"]["localizer_tr"] = first.get("tr", 1.2)
@@ -1625,6 +1635,8 @@ class StudyEditorScreen:
         config["feedback_runs"] = self._feedback_configs
 
         # Backward compat: write flat keys from first feedback run
+        if not feedback_configs:
+            config["task"]["max_feedback_runs"] = 0
         if feedback_configs:
             first_fb = feedback_configs[0]
             config["scan"]["feedback_tr"] = first_fb.get("tr", 1.2)

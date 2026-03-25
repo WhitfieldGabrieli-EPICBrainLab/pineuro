@@ -2036,6 +2036,10 @@ class ParticipantWorkflowScreen:
         # Build feedback/transfer steps from feedback_runs or legacy config
         fb_steps = _build_feedback_step_ids(config)
 
+        has_feedback = len(fb_steps) > 0
+        localizers = config.get("localizers", [])
+        has_localizers = len(localizers) > 1 or n_localizer_runs > 0
+
         if is_mask_reuse:
             # Mask reuse mode: only need reference + coregistration + feedback
             # Skip localizer, preprocessing, mask extraction
@@ -2043,9 +2047,30 @@ class ParticipantWorkflowScreen:
                 steps.extend(["reference_realtime", "coregistration_realtime"])
             # Add transfer and feedback steps
             steps.extend(sid for sid, _label in fb_steps)
+        elif not has_localizers and has_feedback:
+            # No localizers: MNI atlas mode
+            self._is_mni_atlas_mode = True
+            # Use reference_realtime as registration target (masks in realtime space)
+            if reference_realtime_enabled:
+                steps.append("reference_realtime")
+            steps.extend(["mni_mask_extraction", "mask_approval"])
+            # Add transfer and feedback steps (no coregistration needed —
+            # masks are already in realtime reference space)
+            steps.extend(sid for sid, _label in fb_steps)
+        elif has_localizers and not has_feedback:
+            # Localizer-only mode: collect localizers with QC monitoring, no feedback
+            if reference_initial_enabled:
+                steps.append("reference_initial")
+            if localizers and len(localizers) > 1:
+                for loc_idx, loc in enumerate(localizers):
+                    loc_n_runs = loc.get("n_runs", 2)
+                    for run in range(1, loc_n_runs + 1):
+                        steps.append(f"localizer_{loc_idx}_run_{run}")
+            else:
+                for i in range(1, n_localizer_runs + 1):
+                    steps.append(f"rest_run_{i}")
         else:
-            # Standard mode: full pipeline
-            localizers = config.get("localizers", [])
+            # Standard mode: full pipeline (localizers + feedback)
             if reference_initial_enabled:
                 steps.append("reference_initial")
 
@@ -6087,7 +6112,7 @@ class ParticipantWorkflowScreen:
             self.collection_progress = None
 
             if is_task_localizer:
-                # Task-based localizer: Show TaskMirror (no activation/FD plots)
+                # Task-based localizer: Show TaskMirror + QC plots
                 # Get n_volumes for progress tracking
                 if is_multi_loc_run:
                     loc_idx = int(step_id.split("_")[1])
@@ -6106,12 +6131,20 @@ class ParticipantWorkflowScreen:
                 # Create task mirror
                 self.task_mirror = TaskMirror(width=640, height=480)
 
+                # Create QC plots for motion monitoring
+                fd_threshold = self._fb("fd_threshold", 0.5)
+                self.fd_plot = FDPlot(n_volumes=n_volumes, height=150, threshold=fd_threshold)
+                dvars_threshold = self._fb("dvars_threshold", 1.5)
+                self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=150, threshold=dvars_threshold)
+                tsnr_threshold = self._fb("tsnr_threshold", 20)
+                self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=150, threshold=tsnr_threshold)
+
                 # Create progress UI elements
                 self._progress_bar = ft.ProgressBar(value=0, width=400)
                 self._progress_text = ft.Text("0 / 0 volumes", size=14)
                 self._status_text = ft.Text("Waiting for task...", size=14, color=ft.Colors.GREY_600)
 
-                # Build monitoring panel with task mirror
+                # Build monitoring panel with task mirror + QC plots
                 monitoring_panel = ft.Container(
                     content=ft.Column(
                         [
@@ -6150,6 +6183,50 @@ class ParticipantWorkflowScreen:
                                 ],
                                 spacing=10,
                             ),
+                            # QC plots: FD, DVARS, tSNR side by side
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
+                                                    ft.Text(
+                                                        "Framewise Displacement", size=11, weight=ft.FontWeight.W_500
+                                                    ),
+                                                    self.fd_plot.build(),
+                                                ],
+                                                spacing=3,
+                                            ),
+                                            expand=1,
+                                            height=200,
+                                        ),
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
+                                                    ft.Text("DVARS", size=11, weight=ft.FontWeight.W_500),
+                                                    self.dvars_plot.build(),
+                                                ],
+                                                spacing=3,
+                                            ),
+                                            expand=1,
+                                            height=200,
+                                        ),
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
+                                                    ft.Text("tSNR", size=11, weight=ft.FontWeight.W_500),
+                                                    self.tsnr_plot.build(),
+                                                ],
+                                                spacing=3,
+                                            ),
+                                            expand=1,
+                                            height=200,
+                                        ),
+                                    ],
+                                    spacing=12,
+                                ),
+                                padding=ft.padding.symmetric(horizontal=20),
+                            ),
                             # Stop button
                             ft.Container(height=10),
                             ft.Row(
@@ -6172,7 +6249,7 @@ class ParticipantWorkflowScreen:
                 )
 
             elif is_localizer_run_step:
-                # Localizer/rest collection: brain slice + task mirror (no QC plots)
+                # Localizer/rest collection: brain slice + task mirror + QC plots
                 n_volumes = self._get_collection_n_volumes(step_id)
 
                 # Brain slice image
@@ -6202,6 +6279,14 @@ class ParticipantWorkflowScreen:
 
                 # Task mirror for localizer task preview
                 self.task_mirror = TaskMirror(width=480, height=270)
+
+                # Create QC plots for motion monitoring
+                fd_threshold = self._fb("fd_threshold", 0.5)
+                self.fd_plot = FDPlot(n_volumes=n_volumes, height=150, threshold=fd_threshold)
+                dvars_threshold = self._fb("dvars_threshold", 1.5)
+                self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=150, threshold=dvars_threshold)
+                tsnr_threshold = self._fb("tsnr_threshold", 20)
+                self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=150, threshold=tsnr_threshold)
 
                 # Progress UI
                 self._progress_bar = ft.ProgressBar(value=0, width=300)
@@ -6277,6 +6362,50 @@ class ParticipantWorkflowScreen:
                                 ],
                                 spacing=20,
                                 vertical_alignment=ft.CrossAxisAlignment.START,
+                            ),
+                            # Row 2: QC plots side by side
+                            ft.Container(
+                                content=ft.Row(
+                                    [
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
+                                                    ft.Text(
+                                                        "Framewise Displacement", size=11, weight=ft.FontWeight.W_500
+                                                    ),
+                                                    self.fd_plot.build(),
+                                                ],
+                                                spacing=3,
+                                            ),
+                                            expand=1,
+                                            height=200,
+                                        ),
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
+                                                    ft.Text("DVARS", size=11, weight=ft.FontWeight.W_500),
+                                                    self.dvars_plot.build(),
+                                                ],
+                                                spacing=3,
+                                            ),
+                                            expand=1,
+                                            height=200,
+                                        ),
+                                        ft.Container(
+                                            content=ft.Column(
+                                                [
+                                                    ft.Text("tSNR", size=11, weight=ft.FontWeight.W_500),
+                                                    self.tsnr_plot.build(),
+                                                ],
+                                                spacing=3,
+                                            ),
+                                            expand=1,
+                                            height=200,
+                                        ),
+                                    ],
+                                    spacing=12,
+                                ),
+                                padding=ft.padding.symmetric(horizontal=20),
                             ),
                         ],
                         spacing=8,
