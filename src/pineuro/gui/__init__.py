@@ -89,7 +89,7 @@ pineuro.feedback : Real-time feedback estimation
 from pathlib import Path
 
 # Version info
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Default study storage location
 STUDIES_DIR = Path.home() / ".pineuro" / "studies"
