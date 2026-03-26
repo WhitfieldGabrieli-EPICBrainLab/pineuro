@@ -2040,6 +2040,10 @@ class ParticipantWorkflowScreen:
         localizers = config.get("localizers", [])
         has_localizers = len(localizers) > 1 or n_localizer_runs > 0
 
+        # Store for section visibility in _refresh_step_list
+        self._has_feedback = has_feedback
+        self._has_localizers = has_localizers
+
         if is_mask_reuse:
             # Mask reuse mode: only need reference + coregistration + feedback
             # Skip localizer, preprocessing, mask extraction
@@ -6646,8 +6650,11 @@ class ParticipantWorkflowScreen:
 
         # This callback runs in the background thread
         # Render DICOM slice in background thread (heavy I/O) before scheduling UI update
+        # Skip when QC monitor is active — it provides properly unpacked slices
+        # via _on_collection_qc_data, avoiding flicker between mosaic and single slice.
         slice_b64 = None
-        if dicom_path and hasattr(self, "_slice_image") and self._slice_image is not None:
+        has_qc_plots = hasattr(self, "fd_plot") and self.fd_plot is not None
+        if dicom_path and hasattr(self, "_slice_image") and self._slice_image is not None and not has_qc_plots:
             try:
                 from ..components.collection_progress import dicom_to_base64_png
 
@@ -7171,11 +7178,16 @@ class ParticipantWorkflowScreen:
 
         # Rebuild the expansion panel list with updated statuses
         panels = []
+        has_localizers = getattr(self, "_has_localizers", True)
+        has_feedback = getattr(self, "_has_feedback", True)
+
         # Only show localizer and mask extraction sections if NOT in mask reuse mode
-        if not self._is_mask_reuse_mode:
+        if not self._is_mask_reuse_mode and has_localizers:
             panels.append(self._build_localizer_session_section())
+        if not self._is_mask_reuse_mode and has_feedback:
             panels.append(self._build_mask_extraction_section())
-        panels.append(self._build_feedback_section())
+        if has_feedback:
+            panels.append(self._build_feedback_section())
         panels.append(self._build_utilities_section())
         self.step_panel_list.controls = panels
 
@@ -7262,11 +7274,15 @@ class ParticipantWorkflowScreen:
         is_simulator = self.study_config.session_config.get("scan", {}).get("simulator_enabled", True)
         if not is_simulator:
             panels.append(self._build_scanner_connection_section())
-        # Only show localizer and mask extraction sections if NOT in mask reuse mode
-        if not self._is_mask_reuse_mode:
+        # Only show sections relevant to the session mode
+        has_localizers = getattr(self, "_has_localizers", True)
+        has_feedback = getattr(self, "_has_feedback", True)
+        if not self._is_mask_reuse_mode and has_localizers:
             panels.append(self._build_localizer_session_section())
+        if not self._is_mask_reuse_mode and has_feedback:
             panels.append(self._build_mask_extraction_section())
-        panels.append(self._build_feedback_section())
+        if has_feedback:
+            panels.append(self._build_feedback_section())
         panels.append(self._build_utilities_section())
 
         self.step_panel_list = ft.ExpansionPanelList(

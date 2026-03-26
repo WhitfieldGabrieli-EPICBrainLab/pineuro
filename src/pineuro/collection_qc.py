@@ -154,6 +154,12 @@ class CollectionQCMonitor:
         self._welford_mean: NDArray[np.float64] | None = None
         self._welford_m2: NDArray[np.float64] | None = None
 
+        # Software motion correction state (ANTsPy)
+        self._ref_ants: Any = None  # Cached ANTs reference image
+        self._ref_spacing: list[float] | None = None
+        self._prev_transform: str | None = None  # Warm-start path
+        self._geometry_cache: Any = None  # DICOM geometry cache for mosaic unpacking
+
         # CSV writer
         self._csv_file: IO[str] | None = None
         self._csv_writer: Any = None
@@ -175,6 +181,31 @@ class CollectionQCMonitor:
             self._csv_file.close()
             self._csv_file = None
             self._csv_writer = None
+
+    def _software_motion_correct(self, vol_3d: NDArray[np.float64], spacing: list[float]) -> NDArray[np.float64]:
+        """Run ANTsPy rigid registration and return motion parameters.
+
+        First volume becomes the reference. Subsequent volumes are registered
+        to it with warm-start from the previous transform.
+        """
+        from .feedback import _ants_register_volume
+
+        if self._ref_ants is None:
+            # First volume: cache as reference, motion is zero
+            import ants
+
+            self._ref_ants = ants.from_numpy(vol_3d.astype(np.float32), spacing=spacing)
+            self._ref_spacing = spacing
+            return np.zeros(6, dtype=np.float64)
+
+        _corrected, motion_params, transform_path = _ants_register_volume(
+            ref_ants=self._ref_ants,
+            mov_vol=vol_3d,
+            spacing=self._ref_spacing or spacing,
+            initial_transform=self._prev_transform,
+        )
+        self._prev_transform = transform_path
+        return motion_params
 
     def _update_tsnr(self, voxel_values: NDArray[np.float64]) -> float:
         """Update running tSNR via Welford's online algorithm."""
@@ -228,6 +259,8 @@ class CollectionQCMonitor:
         slice_b64: str | None = None
 
         motion_params: NDArray[np.float64] | None = None
+        vol_3d: NDArray[np.float64] | None = None  # For software moco
+        spacing: list[float] | None = None
         try:
             if is_nifti_file(volume_path):
                 # NIfTI path — read with nibabel
@@ -237,9 +270,8 @@ class CollectionQCMonitor:
                 data = np.asarray(img.dataobj, dtype=np.float64)  # type: ignore[attr-defined]
                 voxels = data.ravel()
 
-                # Motion: check JSON sidecar
-                motion_params = None
                 if self._motion_correction == "siemens_moco":
+                    # Motion: check JSON sidecar
                     from .utils import get_json_sidecar_path
 
                     json_path = get_json_sidecar_path(volume_path)
@@ -255,24 +287,43 @@ class CollectionQCMonitor:
                             match = _MOTION_PATTERN.search(comments)
                             if match:
                                 motion_params = np.array([float(m) for m in match.groups()], dtype=np.float64)
+                elif self._motion_correction == "software" and data.ndim >= 3:
+                    vol_3d = data
+                    spacing = list(img.header.get_zooms()[:3])  # type: ignore[union-attr,attr-defined]
 
                 # Slice image from 3D data
                 if data.ndim >= 3:
                     slice_b64 = _dicom_middle_slice_png(data)
 
             else:
-                # DICOM path — read with pydicom
-                dcm = pydicom.dcmread(volume_path)
-                pixel_array = dcm.pixel_array
-                voxels = pixel_array.astype(np.float64).ravel()
+                # DICOM path
+                if self._motion_correction == "software":
+                    # Use _read_dicom_volume for proper mosaic unpacking → 3D
+                    from .feedback import _read_dicom_volume
 
-                # Motion from ImageComments
-                motion_params = None
-                if self._motion_correction == "siemens_moco":
-                    motion_params = _extract_motion_from_dicom_header(dcm)
+                    vol_data, _affine, vol_spacing, self._geometry_cache = _read_dicom_volume(
+                        volume_path, geometry_cache=self._geometry_cache
+                    )
+                    voxels = vol_data.ravel()
+                    vol_3d = vol_data
+                    spacing = vol_spacing
+                    # Slice image from unpacked 3D data
+                    slice_b64 = _dicom_middle_slice_png(vol_data)
+                else:
+                    # Standard DICOM read (siemens_moco or none)
+                    dcm = pydicom.dcmread(volume_path)
+                    pixel_array = dcm.pixel_array
+                    voxels = pixel_array.astype(np.float64).ravel()
 
-                # Slice image
-                slice_b64 = _dicom_middle_slice_png(pixel_array)
+                    if self._motion_correction == "siemens_moco":
+                        motion_params = _extract_motion_from_dicom_header(dcm)
+
+                    # Slice image
+                    slice_b64 = _dicom_middle_slice_png(pixel_array)
+
+            # Software motion correction (ANTsPy rigid registration)
+            if self._motion_correction == "software" and vol_3d is not None and spacing is not None:
+                motion_params = self._software_motion_correct(vol_3d, spacing)
 
             # Compute QC metrics
             if motion_params is not None:

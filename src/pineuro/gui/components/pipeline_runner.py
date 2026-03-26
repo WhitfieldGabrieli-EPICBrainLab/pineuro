@@ -554,7 +554,10 @@ class PipelineRunner:
         # Create QC monitor for real-time motion/quality metrics during collection
         from pineuro.collection_qc import CollectionQCMonitor
 
-        motion_mode = config.get("feedback", {}).get("motion_correction", "siemens_moco")
+        motion_mode = config.get("scan", {}).get(
+            "localizer_motion_correction",
+            config.get("feedback", {}).get("motion_correction", "siemens_moco"),
+        )
         qc_monitor = CollectionQCMonitor(
             log_path=output_dir / "collectionlog.tsv",
             motion_correction=motion_mode,
@@ -1040,6 +1043,7 @@ class PipelineRunner:
             "localizer_n_volumes": orig_scan.get("localizer_n_volumes"),
             "localizer_n_runs": orig_scan.get("localizer_n_runs"),
             "localizer_source_dicoms": orig_scan.get("localizer_source_dicoms"),
+            "localizer_motion_correction": orig_scan.get("localizer_motion_correction"),
             "localizer_type": orig_mask.get("localizer_type"),
         }
         try:
@@ -1048,6 +1052,7 @@ class PipelineRunner:
             orig_scan["localizer_n_volumes"] = loc.get("n_volumes", 200)
             orig_scan["localizer_n_runs"] = loc.get("n_runs", 2)
             orig_scan["localizer_source_dicoms"] = loc.get("source_dicoms", [])
+            orig_scan["localizer_motion_correction"] = loc.get("motion_correction", "siemens_moco")
             orig_mask["localizer_type"] = "rest" if loc_type == "rest" else "task"
 
             self._run_rest_run(run_num)

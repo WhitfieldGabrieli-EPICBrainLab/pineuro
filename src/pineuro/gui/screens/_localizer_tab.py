@@ -141,6 +141,20 @@ class LocalizerTabBuilder:
             on_change=self._on_n_runs_changed,
         )
 
+        # Motion correction for QC monitoring
+        mc_value = c.get("motion_correction", "siemens_moco")
+        self.motion_correction_dropdown = ft.Dropdown(
+            label="Motion correction",
+            width=600,
+            value=mc_value,
+            options=[
+                ft.dropdown.Option(key="siemens_moco", text="Siemens MoCo"),
+                ft.dropdown.Option(key="software", text="Software (ANTsPy)"),
+                ft.dropdown.Option(key="none", text="None"),
+            ],
+            tooltip="How motion parameters are extracted during localizer collection for real-time QC monitoring.",
+        )
+
         # Reverse contrasts checkbox (task-based only)
         self.include_reverse_contrasts_checkbox = ft.Checkbox(
             label="Include reverse contrasts (enables dual-network from single-contrast localizer)",
@@ -412,6 +426,7 @@ class LocalizerTabBuilder:
             _f(self.tr_field),
             self.n_volumes_field,
             self.n_runs_field,
+            self.motion_correction_dropdown,
             ft.Divider(),
             self.target_networks_section,
             self.networks_section,
@@ -451,6 +466,7 @@ class LocalizerTabBuilder:
             "tr": float(self.tr_field.value or 1.2),
             "n_volumes": int(self.n_volumes_field.value or 200),
             "n_runs": int(self.n_runs_field.value or 2),
+            "motion_correction": self.motion_correction_dropdown.value or "siemens_moco",
             "threshold": int(self.threshold_field.value or 2000),
             "threshold_method": self.threshold_method_dropdown.value or "top_n",
         }

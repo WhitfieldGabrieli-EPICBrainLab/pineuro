@@ -441,6 +441,7 @@ class StudyEditorScreen:
                 "tr": 1.2,
                 "n_volumes": 200,
                 "n_runs": 2,
+                "motion_correction": "siemens_moco",
                 "network_atlas": "yeo_17",
                 "n_yeo": 17,
                 "yeo_targets": ["DefaultA", "ContA"],
@@ -1583,6 +1584,7 @@ class StudyEditorScreen:
             config["scan"]["localizer_n_volumes"] = first.get("n_volumes", 200)
             config["scan"]["localizer_n_runs"] = first.get("n_runs", 2)
             config["scan"]["localizer_task_type"] = first.get("type", "rest")
+            config["scan"]["localizer_motion_correction"] = first.get("motion_correction", "siemens_moco")
 
             # Flat mask keys from first localizer
             config["mask"]["localizer_type"] = "rest" if first.get("type") == "rest" else "task"
