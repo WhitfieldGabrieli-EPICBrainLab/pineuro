@@ -52,7 +52,7 @@ Key settings:
 
 ## Project Architecture
 
-See `CLAUDE.md` for a quick reference of the project layout. Key points:
+Key points:
 
 - **Numbered output directories**: `01_nifti/`, `02_motion_correction/`, `03_masks/`, etc.
 - **Threading model**: Coordinator thread (background processing) + Task thread (PsychoPy in main thread, required by OpenGL).
