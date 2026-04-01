@@ -809,7 +809,7 @@ class MaskConfig:
     smooth_fwhm: float = 5.0
     highpass: float = 0.01
     lowpass: float | None = None
-    mask_names: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
+    mask_names: list[str] = field(default_factory=lambda: ["ContA", "DefaultA"])
 
     # Task-based extraction fields
     localizer_type: str = "rest"
