@@ -466,8 +466,8 @@ class BallTask(BaseTask):
         super().show_instructions(
             slides=slides,
             advance_keys=self.instruction_advance_keys,
-            text_height=0.06,
-            wrap_width=1.2,
+            text_height=0.05,
+            wrap_width=1.4,
         )
 
     def _show_post_run_questions(
