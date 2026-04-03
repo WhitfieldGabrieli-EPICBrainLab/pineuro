@@ -1523,8 +1523,9 @@ def collect_volumes(
 
             # --- Check Timeout ---
             # Prevent infinite waiting if scanner stops sending files
-            # Use initial_wait_start for timeout (starts from beginning, not first volume)
-            elapsed_since_start = time.time() - initial_wait_start
+            # Use start_time (trigger or first volume) for timeout; fall back to
+            # initial_wait_start if neither has occurred yet
+            elapsed_since_start = time.time() - (start_time if start_time is not None else initial_wait_start)
             if elapsed_since_start > timeout:
                 raise TimeoutError(
                     f"Timeout after {elapsed_since_start:.1f}s: collected {collected_count}/{n_volumes} volumes"
