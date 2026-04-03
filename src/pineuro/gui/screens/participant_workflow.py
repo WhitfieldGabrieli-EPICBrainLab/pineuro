@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 # are deferred to method bodies to avoid loading numpy/nibabel/scipy at import time.
 import flet as ft
 
-from ..components.acq_selection_dialog import AcqSelectionDialog, RunAcqInfo, scan_collection_acqs
 from ..components.activation_plot import ActivationPlot
 from ..components.collection_progress import CollectionProgressPanel
 from ..components.csv_poller import FeedbackMonitor
@@ -40,8 +39,8 @@ from ..components.mask_selection_dialog import MaskReviewInfo, MaskSelectionDial
 from ..components.pipeline_runner import PipelineRunner
 from ..components.qc_plots import DVARSPlot, FDPlot, TSNRPlot
 from ..components.qc_viewer import QCReportManager
-from ..components.run_selection_dialog import RunInfo, RunSelectionDialog
 from ..components.task_mirror import TaskMirror
+from ..components.unified_acq_dialog import RunGroup, UnifiedAcqDialog, scan_collection_acqs
 from ..config_manager import ConfigManager
 from ..config_snapshot import (
     archive_config_snapshot,
@@ -257,7 +256,7 @@ class ParticipantWorkflowScreen:
         # Selected rest runs for preprocessing (None = use all available)
         self._selected_rest_runs: list[int] | None = None
         # Selected acquisitions per run for preprocessing (None = auto-select best)
-        self._selected_acqs: dict[int, int] | None = None
+        self._selected_acqs: dict[int, list[int]] | None = None
 
         # Overwrite flag — set to True to re-run already-complete steps
         self._pending_overwrite: bool = False
@@ -1736,14 +1735,11 @@ class ParticipantWorkflowScreen:
         # Has data but none complete
         return StepStatus.INTERRUPTED
 
-    def _get_rest_run_info(self) -> list[RunInfo]:
-        """Get information about available localizer runs (rest or task-based).
-
-        Scans for acq-based folder names (task-{name}_acq-XX_run-XX).
-        Reports the best acquisition per run (highest complete, or highest overall).
+    def _get_unified_acq_info(self) -> list[RunGroup]:
+        """Get all acquisitions for all configured localizer runs.
 
         Returns:
-            List of RunInfo objects for all configured localizer runs
+            List of RunGroup objects with all acquisitions per run
         """
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
@@ -1752,172 +1748,73 @@ class ParticipantWorkflowScreen:
         localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
         task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
-        runs = []
-
-        # Get expected volumes (use new localizer_n_volumes, fall back to legacy)
         expected_vols = config["scan"].get("localizer_n_volumes")
         if expected_vols is None:
             rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
             expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
-        # Build run info for each configured localizer run
+        run_groups = []
         for run_num in range(1, n_localizer_runs + 1):
-            # Find best acq folder for this run
-            best_dir = None
-            actual_vols = 0
-
-            collections = PipelineRunner.find_available_collections(
-                collection_dir=collection_dir,
-                task=f"task-{task_name}",
-                run=run_num,
-                expected_volumes=expected_vols,
-            )
-
-            if collections:
-                # Use highest complete, or highest overall
-                complete = [c for c in collections if c["is_complete"]]
-                best = complete[0] if complete else collections[0]
-                best_dir = best["path"]
-                actual_vols = best["n_volumes"]
-
-            runs.append(
-                RunInfo(
-                    run_id=run_num,
-                    run_name=f"Localizer Run {run_num}",
-                    directory=best_dir or (collection_dir / f"task-{task_name}_acq-01_run-{run_num:02d}"),
-                    expected_volumes=expected_vols,
-                    actual_volumes=actual_vols,
-                    is_complete=actual_vols >= expected_vols,
-                    selected=actual_vols > 0,
-                )
-            )
-
-        return runs
-
-    def _needs_run_selection(self) -> bool:
-        """Check if run selection dialog should be shown for preprocessing.
-
-        Returns True if:
-        - Not all configured runs have data
-        - Any run is incomplete
-        """
-        runs = self._get_rest_run_info()
-        runs_with_data = [r for r in runs if r.actual_volumes > 0]
-
-        # No data at all - don't show dialog
-        if not runs_with_data:
-            return False
-
-        # Show selection if not all runs have data or any run is incomplete
-        return not (len(runs_with_data) == len(runs) and all(r.is_complete for r in runs_with_data))
-
-    def _show_run_selection_dialog(self, on_selected):
-        """Show the run selection dialog.
-
-        Args:
-            on_selected: Callback with list of selected run IDs
-        """
-        runs = self._get_rest_run_info()
-
-        def on_confirm(selected_run_ids: list[int]):
-            self._selected_rest_runs = selected_run_ids
-            on_selected(selected_run_ids)
-
-        def on_cancel():
-            # Return to preview panel
-            self._on_preview_cancel()
-
-        dialog = RunSelectionDialog(
-            page=self.page,
-            runs=runs,
-            on_confirm=on_confirm,
-            on_cancel=on_cancel,
-        )
-        dialog.show()
-
-    def _needs_acq_selection(self, selected_runs: list[int] | None = None) -> bool:
-        """Check if acquisition selection dialog should be shown.
-
-        Returns True if any selected run has multiple acquisition attempts.
-
-        Args:
-            selected_runs: Run IDs to check (None = all configured runs)
-        """
-        config = self.study_config.session_config
-        base_dir = Path(config["paths"]["base_dir"])
-        collection_dir = base_dir / "collection"
-        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
-
-        expected_vols = config["scan"].get("localizer_n_volumes")
-        if expected_vols is None:
-            rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
-            expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
-
-        runs_to_check = selected_runs or list(range(1, n_localizer_runs + 1))
-
-        for run_num in runs_to_check:
             acqs = scan_collection_acqs(
                 collection_dir=collection_dir,
                 task=f"task-{task_name}",
                 run=run_num,
                 expected_volumes=expected_vols,
             )
-            if len(acqs) > 1:
+            run_groups.append(
+                RunGroup(
+                    run_id=run_num,
+                    run_name=f"Localizer Run {run_num}",
+                    acquisitions=acqs,
+                )
+            )
+
+        return run_groups
+
+    def _needs_unified_dialog(self) -> bool:
+        """Check if the unified acq selection dialog should be shown.
+
+        Returns True if any run is incomplete/missing or has multiple acqs.
+        """
+        run_groups = self._get_unified_acq_info()
+
+        # No data at all — don't show
+        if not any(rg.acquisitions for rg in run_groups):
+            return False
+
+        for rg in run_groups:
+            # Run has no data
+            if not rg.acquisitions:
+                return True
+            # Run has multiple acquisition attempts
+            if len(rg.acquisitions) > 1:
+                return True
+            # Single acq but incomplete
+            if not rg.acquisitions[0].is_complete:
                 return True
 
         return False
 
-    def _show_acq_selection_dialog(self, on_selected, selected_runs: list[int] | None = None):
-        """Show the acquisition selection dialog.
+    def _show_unified_acq_dialog(self, on_selected):
+        """Show the unified acquisition selection dialog.
 
         Args:
-            on_selected: Callback with dict {run_id: selected_acq_num}
-            selected_runs: Run IDs to show (None = all configured runs)
+            on_selected: Callback invoked after user confirms selection
         """
-        config = self.study_config.session_config
-        base_dir = Path(config["paths"]["base_dir"])
-        collection_dir = base_dir / "collection"
-        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+        run_groups = self._get_unified_acq_info()
 
-        expected_vols = config["scan"].get("localizer_n_volumes")
-        if expected_vols is None:
-            rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
-            expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
-
-        runs_to_check = selected_runs or list(range(1, n_localizer_runs + 1))
-
-        run_acq_infos = []
-        for run_num in runs_to_check:
-            acqs = scan_collection_acqs(
-                collection_dir=collection_dir,
-                task=f"task-{task_name}",
-                run=run_num,
-                expected_volumes=expected_vols,
-            )
-            if acqs:
-                run_acq_infos.append(
-                    RunAcqInfo(
-                        run_id=run_num,
-                        run_name=f"Localizer Run {run_num}",
-                        acquisitions=acqs,
-                    )
-                )
-
-        def on_confirm(selected_acqs: dict[int, int]):
+        def on_confirm(selected_acqs: dict[int, list[int]]):
             self._selected_acqs = selected_acqs
+            self._selected_rest_runs = list(selected_acqs.keys())
             self._add_log(f"Selected acquisitions: {selected_acqs}")
             on_selected(selected_acqs)
 
         def on_cancel():
             self._on_preview_cancel()
 
-        dialog = AcqSelectionDialog(
+        dialog = UnifiedAcqDialog(
             page=self.page,
-            runs=run_acq_infos,
+            run_groups=run_groups,
             on_confirm=on_confirm,
             on_cancel=on_cancel,
         )
@@ -5334,42 +5231,20 @@ class ParticipantWorkflowScreen:
         # Store overwrite choice to pass to pipeline runner
         self._pending_overwrite = overwrite
 
-        # For preprocessing, handle run selection and acq selection dialogs
+        # For preprocessing, show unified acq selection dialog if needed
         if step_id == "preprocessing":
-            if self._needs_run_selection():
-                # Show run selection dialog first, then acq selection
-                def on_runs_selected(selected_runs: list[int]):
-                    self._add_log(f"Selected runs for preprocessing: {selected_runs}")
-                    self._maybe_show_acq_dialog(step_id, selected_runs)
-
-                self._show_run_selection_dialog(on_runs_selected)
+            if self._needs_unified_dialog():
+                self._show_unified_acq_dialog(lambda _: self._start_step(step_id))
                 return
-            else:
-                # No run selection needed, but check for acq selection
-                self._maybe_show_acq_dialog(step_id)
-                return
+            self._selected_rest_runs = None
+            self._selected_acqs = None
+            self._start_step(step_id)
+            return
 
         # Clear any previous selection for non-preprocessing steps
         self._selected_rest_runs = None
         self._selected_acqs = None
         self._start_step(step_id)
-
-    def _maybe_show_acq_dialog(self, step_id: str, selected_runs: list[int] | None = None):
-        """Show acq selection dialog if multiple acqs exist, otherwise start step.
-
-        Args:
-            step_id: Step identifier to execute
-            selected_runs: Run IDs to check (None = all configured runs)
-        """
-        if self._needs_acq_selection(selected_runs):
-
-            def on_acqs_selected(selected_acqs: dict[int, int]):
-                self._start_step(step_id)
-
-            self._show_acq_selection_dialog(on_acqs_selected, selected_runs)
-        else:
-            self._selected_acqs = None
-            self._start_step(step_id)
 
     def _start_step(self, step_id: str):
         """Actually start executing a pipeline step.

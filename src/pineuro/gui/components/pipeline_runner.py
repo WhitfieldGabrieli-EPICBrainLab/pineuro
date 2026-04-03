@@ -78,7 +78,7 @@ class PipelineRunner:
         self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
         self.overwrite: bool = False
         self._selected_rest_runs: list | None = None  # Selected runs for preprocessing
-        self._selected_acqs: dict[int, int] | None = None  # {run_id: acq_num} for preprocessing
+        self._selected_acqs: dict[int, list[int]] | None = None  # {run_id: [acq_nums]}
 
     def _resolve_feedback_run_config(self, step_id: str) -> dict[str, Any] | None:
         """Return the ``feedback_runs`` entry for *step_id*, or None.
@@ -108,11 +108,11 @@ class PipelineRunner:
 
         return step_to_frc.get(step_id)
 
-    def set_selected_acqs(self, acqs: dict[int, int] | None) -> None:
-        """Set which acquisition to use for each run.
+    def set_selected_acqs(self, acqs: dict[int, list[int]] | None) -> None:
+        """Set which acquisitions to use for each run.
 
         Args:
-            acqs: Dict {run_id: acq_num}, or None to auto-select highest complete
+            acqs: Dict {run_id: [acq_nums]}, or None to auto-select highest complete
         """
         self._selected_acqs = acqs
 
@@ -723,16 +723,20 @@ class PipelineRunner:
         for run_num in runs_to_process:
             expected_vols = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
 
-            # If user selected a specific acq, use that directly
+            # If user selected specific acqs, use those directly
             if self._selected_acqs and run_num in self._selected_acqs:
-                acq_num = self._selected_acqs[run_num]
-                acq_path = collection_dir / f"task-{task_name}_acq-{acq_num:02d}_run-{run_num:02d}"
-                if acq_path.exists():
-                    self._emit_progress(f"Run {run_num}: Using selected acq-{acq_num:02d}")
-                    selected_paths.append(acq_path)
+                acq_nums = self._selected_acqs[run_num]
+                found_any = False
+                for acq_num in acq_nums:
+                    acq_path = collection_dir / f"task-{task_name}_acq-{acq_num:02d}_run-{run_num:02d}"
+                    if acq_path.exists():
+                        self._emit_progress(f"Run {run_num}: Using selected acq-{acq_num:02d}")
+                        selected_paths.append(acq_path)
+                        found_any = True
+                    else:
+                        logger.warning(f"Selected acq-{acq_num:02d} for run {run_num} not found")
+                if found_any:
                     continue
-                else:
-                    logger.warning(f"Selected acq-{acq_num:02d} for run {run_num} not found, falling back")
 
             # Auto-select: find highest complete acq
             collections = self.find_available_collections(
@@ -864,11 +868,14 @@ class PipelineRunner:
                 # If acqs were selected, prefer events file matching selected acq
                 events_file = None
                 if self._selected_acqs:
-                    for run_num, acq_num in self._selected_acqs.items():
-                        acq_pattern = f"acq-{acq_num:02d}_run-{run_num:02d}"
-                        for ef in events_glob:
-                            if acq_pattern in ef.name:
-                                events_file = str(ef)
+                    for run_num, acq_nums in self._selected_acqs.items():
+                        for acq_num in acq_nums:
+                            acq_pattern = f"acq-{acq_num:02d}_run-{run_num:02d}"
+                            for ef in events_glob:
+                                if acq_pattern in ef.name:
+                                    events_file = str(ef)
+                                    break
+                            if events_file:
                                 break
                         if events_file:
                             break

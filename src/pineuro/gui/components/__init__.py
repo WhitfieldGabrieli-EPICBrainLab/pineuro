@@ -82,8 +82,8 @@ from .mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
 from .pipeline_runner import PipelineRunner
 from .qc_plots import FDData, FDPlot
 from .qc_viewer import QCReportManager, open_qc_report
-from .run_selection_dialog import RunInfo, RunSelectionDialog
 from .task_mirror import TaskMirror
+from .unified_acq_dialog import RunGroup, UnifiedAcqDialog
 from .visit_selection_dialog import VisitSelectionDialog
 
 __all__ = [
@@ -99,8 +99,8 @@ __all__ = [
     "QCReportManager",
     "open_qc_report",
     "CollectionProgressPanel",
-    "RunSelectionDialog",
-    "RunInfo",
+    "UnifiedAcqDialog",
+    "RunGroup",
     "MaskSelectionDialog",
     "MaskReviewInfo",
     "VisitSelectionDialog",
