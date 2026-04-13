@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-13
+
+### Added
+
+- **Scanner preflight check**: Before each localizer, reference, or feedback collection, `test_scanner_connection` runs in a background thread; if it fails, the operator is prompted with a proceed-anyway warning
+- **Persistent Scanner Connection panel**: The panel no longer disappears across step refreshes when simulator mode is off, so connection status stays visible throughout a session
+
+### Changed
+
+- **Localizer volume collection**: `collect_volumes` no longer enforces an elapsed-time timeout — it waits indefinitely for the expected number of volumes and exits only via `stop_event` (user abort) or `task_done_event` (variable-duration task completion). Prevents spurious `TimeoutError`s from slow or stalled scanners mid-run.
+
+### Fixed
+
+- **Held-key screen skipping**: The READY slide in the ball task (and any slide/trigger-wait reached while a key was still physically held) no longer dismisses in a single frame. `_reset_poll_state()` now arms a one-shot seed so the user must release and re-press before the next screen advances.
+- **Sham hemisphere-split roles**: In alternative-masks sham mode, the task's non-target role was falling through to the real non-target network instead of the contralateral hemisphere produced by `hemisphere_split`. Activation mode now uses the full sham pair (connectivity mode was already correct), and sham entries that collide with a real mask name are deduped when building the combined mask list instead of silently dropped.
+
 ## [0.3.0] - 2026-04-03
 
 ### Changed
