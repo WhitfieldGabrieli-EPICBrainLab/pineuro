@@ -20,6 +20,7 @@ to be resumed after interruption.
 
 import contextlib
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -5162,23 +5163,206 @@ class ParticipantWorkflowScreen:
         Args:
             step_id: Step identifier to execute
         """
-        # Check if outputs exist for processing steps (not collection/feedback)
         is_feedback_transfer = step_id.startswith("transfer_") or step_id.startswith("feedback_")
         is_collection = (
             step_id.startswith("rest_run_")
             or (step_id.startswith("localizer_") and "_run_" in step_id)
             or step_id in ("reference_initial", "reference_realtime")
         )
+        scanner_touching = is_feedback_transfer or is_collection
 
-        if not is_feedback_transfer and not is_collection:
-            config = self.study_config.session_config
-            base_dir = Path(config["paths"]["base_dir"])
-            step_info = self._get_step_info(step_id, config, base_dir, self.participant_id)
-            if step_info.get("outputs_exist", False):
-                self._show_overwrite_dialog(step_id)
+        def _after_preflight():
+            if not is_feedback_transfer and not is_collection:
+                config = self.study_config.session_config
+                base_dir = Path(config["paths"]["base_dir"])
+                step_info = self._get_step_info(step_id, config, base_dir, self.participant_id)
+                if step_info.get("outputs_exist", False):
+                    self._show_overwrite_dialog(step_id)
+                    return
+            self._continue_preview_start(step_id, overwrite=False)
+
+        if scanner_touching:
+            self._preflight_scanner_connection(_after_preflight)
+        else:
+            _after_preflight()
+
+    def _preflight_scanner_connection(self, on_proceed: Callable[[], None]):
+        """Run a quick scanner connection test before starting a scanner-touching run.
+
+        Skipped in simulator mode. On success, silently invokes ``on_proceed``.
+        On failure, shows a warning dialog with Proceed Anyway / Cancel actions.
+        Also refreshes the left-panel Scanner Connection status indicator.
+        """
+        config = self.study_config.session_config
+        is_simulator = config.get("scan", {}).get("simulator_enabled", True)
+        if is_simulator:
+            on_proceed()
+            return
+
+        scanner_ip = config["scan"].get("scanner_ip", "")
+        watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
+
+        progress_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.SETTINGS_ETHERNET, color=ft.Colors.BLUE),
+                    ft.Text("Checking Scanner Connection", weight=ft.FontWeight.BOLD),
+                ],
+                spacing=10,
+            ),
+            content=ft.Container(
+                content=ft.Row(
+                    [
+                        ft.ProgressRing(width=20, height=20, stroke_width=2),
+                        ft.Text("Testing connection to scanner...", size=13),
+                    ],
+                    spacing=12,
+                ),
+                width=400,
+                padding=10,
+            ),
+        )
+        self.page.overlay.append(progress_dialog)
+        progress_dialog.open = True
+        self.page.update()
+
+        def _close_progress():
+            progress_dialog.open = False
+            with contextlib.suppress(Exception):
+                self.page.update()
+
+        def _update_status_indicator(ok: bool):
+            icon = getattr(self, "_scanner_status_icon", None)
+            text = getattr(self, "_scanner_status_text", None)
+            if icon is None or text is None:
                 return
+            if ok:
+                icon.name = ft.Icons.CHECK_CIRCLE
+                icon.color = ft.Colors.GREEN
+                text.value = "Connection OK"
+                text.color = ft.Colors.GREEN
+            else:
+                icon.name = ft.Icons.ERROR
+                icon.color = ft.Colors.RED
+                text.value = "Issues detected"
+                text.color = ft.Colors.RED
+            text.italic = False
+            with contextlib.suppress(Exception):
+                self.page.update()
 
-        self._continue_preview_start(step_id, overwrite=False)
+        def _show_failure_dialog(result):
+            ping_detail = result.ping_detail or "(no ping info)"
+            dir_detail = result.dir_detail or "(no directory info)"
+            ping_ok = result.ping_ok is not False
+            dir_ok = result.dir_exists and result.dir_writable
+
+            def _ping_icon():
+                if result.ping_ok is None:
+                    return ft.Icon(ft.Icons.REMOVE_CIRCLE_OUTLINE, color=ft.Colors.GREY, size=20)
+                return ft.Icon(
+                    ft.Icons.CHECK_CIRCLE if ping_ok else ft.Icons.ERROR,
+                    color=ft.Colors.GREEN if ping_ok else ft.Colors.RED,
+                    size=20,
+                )
+
+            def _dir_icon():
+                return ft.Icon(
+                    ft.Icons.CHECK_CIRCLE if dir_ok else ft.Icons.ERROR,
+                    color=ft.Colors.GREEN if dir_ok else ft.Colors.RED,
+                    size=20,
+                )
+
+            def _row(icon: ft.Control, label: str, detail: str) -> ft.Row:
+                return ft.Row(
+                    [
+                        icon,
+                        ft.Text(f"{label}: ", weight=ft.FontWeight.W_500, size=13),
+                        ft.Text(detail, size=12, color=ft.Colors.GREY_700, expand=True),
+                    ],
+                    spacing=8,
+                )
+
+            warning_dialog = ft.AlertDialog(modal=True)
+
+            def _close_warning():
+                warning_dialog.open = False
+                with contextlib.suppress(Exception):
+                    self.page.update()
+
+            def _on_cancel(e):
+                _close_warning()
+
+            def _on_proceed_anyway(e):
+                _close_warning()
+                on_proceed()
+
+            warning_dialog.title = ft.Row(
+                [
+                    ft.Icon(ft.Icons.WARNING, color=ft.Colors.ORANGE),
+                    ft.Text("Scanner Connection Issue", weight=ft.FontWeight.BOLD),
+                ],
+                spacing=10,
+            )
+            warning_dialog.content = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "The scanner connection check reported problems:",
+                            size=13,
+                        ),
+                        ft.Container(height=6),
+                        _row(_ping_icon(), "Network Ping", ping_detail),
+                        _row(_dir_icon(), "Watch Directory", dir_detail),
+                        ft.Container(height=10),
+                        ft.Text(
+                            "Proceed anyway?",
+                            size=13,
+                            weight=ft.FontWeight.BOLD,
+                        ),
+                    ],
+                    spacing=6,
+                ),
+                width=520,
+            )
+            warning_dialog.actions = [
+                ft.TextButton("Cancel", on_click=_on_cancel),
+                ft.FilledButton("Proceed Anyway", on_click=_on_proceed_anyway),
+            ]
+            warning_dialog.actions_alignment = ft.MainAxisAlignment.END
+
+            self.page.overlay.append(warning_dialog)
+            warning_dialog.open = True
+            with contextlib.suppress(Exception):
+                self.page.update()
+
+        def _run_test():
+            from pineuro.scanner_setup import test_scanner_connection
+
+            try:
+                result = test_scanner_connection(scanner_ip=scanner_ip, watch_dir=watch_dir)
+            except Exception as e:
+                logger.error(f"Scanner preflight test failed: {e}")
+                result = None
+
+            async def _apply():
+                _close_progress()
+                if result is None:
+                    _update_status_indicator(False)
+                    on_proceed()
+                    return
+                _update_status_indicator(result.overall_ok)
+                if result.overall_ok:
+                    on_proceed()
+                else:
+                    _show_failure_dialog(result)
+
+            try:
+                self.page.run_task(_apply)
+            except Exception as e:
+                logger.error(f"Failed to apply preflight result: {e}")
+
+        self.page.run_thread(_run_test)
 
     def _show_overwrite_dialog(self, step_id: str):
         """Show dialog asking user whether to skip existing outputs or overwrite.
@@ -7053,6 +7237,9 @@ class ParticipantWorkflowScreen:
 
         # Rebuild the expansion panel list with updated statuses
         panels = []
+        is_simulator = self.study_config.session_config.get("scan", {}).get("simulator_enabled", True)
+        if not is_simulator:
+            panels.append(self._build_scanner_connection_section())
         has_localizers = getattr(self, "_has_localizers", True)
         has_feedback = getattr(self, "_has_feedback", True)
 
