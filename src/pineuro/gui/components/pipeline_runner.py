@@ -563,10 +563,6 @@ class PipelineRunner:
 
         # collect_dicoms just watches the directory - no simulator
         # (simulator is controlled by the task for synchronization)
-        # Timeout must exceed the expected run duration (n_volumes * TR) plus buffer
-        tr = config["scan"].get("localizer_tr", 1.2)
-        expected_duration = n_volumes * tr
-        collection_timeout = max(300.0, expected_duration + 120.0)
 
         # Create QC monitor for real-time motion/quality metrics during collection
         from pineuro.collection_qc import CollectionQCMonitor
@@ -593,7 +589,6 @@ class PipelineRunner:
             stop_event=self._stop_event,
             trigger_event=trigger_event,
             task_done_event=task_done_event,
-            timeout=collection_timeout,
             qc_monitor=qc_monitor,
         )
 

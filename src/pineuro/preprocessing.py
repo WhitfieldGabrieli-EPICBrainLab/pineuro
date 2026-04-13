@@ -1179,7 +1179,6 @@ def collect_volumes(
     watch_dir: Union[str, Path],
     output_dir: Union[str, Path],
     n_volumes: int,
-    timeout: float = 300.0,
     clear_watch_dir: bool = True,
     clear_output_dir: bool = True,
     simulator_source_dir: Union[str, Path] | None = None,
@@ -1196,7 +1195,8 @@ def collect_volumes(
 
     Watches an incoming directory for volumes from the scanner, copies them
     to an output folder, and returns when the expected number of volumes have
-    been collected.
+    been collected. Collection waits indefinitely for volumes to arrive;
+    early termination is only via ``stop_event`` or ``task_done_event``.
 
     Supports both DICOM and NIfTI input files. For NIfTI files, also copies
     the JSON sidecar file if present.
@@ -1211,8 +1211,6 @@ def collect_volumes(
         Directory to copy collected volumes to.
     n_volumes : int
         Number of volumes to collect.
-    timeout : float, default=300.0
-        Maximum time to wait for all volumes (seconds).
     clear_watch_dir : bool, default=True
         Clear watch_dir before starting.
     clear_output_dir : bool, default=True
@@ -1244,8 +1242,6 @@ def collect_volumes(
 
     Raises
     ------
-    TimeoutError
-        If all volumes are not collected within timeout.
     FileNotFoundError
         If watch_dir does not exist (and not using simulator).
 
@@ -1470,8 +1466,6 @@ def collect_volumes(
     # The loop combines filesystem events (fast) with periodic scanning (reliable)
     # to ensure we never miss files.
 
-    initial_wait_start = time.time()  # Track timeout from beginning
-
     # If a trigger event is provided, wait for it to start the elapsed timer.
     # This synchronizes timing with the actual acquisition start (trigger moment).
     if trigger_event is not None:
@@ -1520,16 +1514,6 @@ def collect_volumes(
                     f"Task done — collection stopped after {collected_count} volumes (configured max: {n_volumes})"
                 )
                 break
-
-            # --- Check Timeout ---
-            # Prevent infinite waiting if scanner stops sending files
-            # Use start_time (trigger or first volume) for timeout; fall back to
-            # initial_wait_start if neither has occurred yet
-            elapsed_since_start = time.time() - (start_time if start_time is not None else initial_wait_start)
-            if elapsed_since_start > timeout:
-                raise TimeoutError(
-                    f"Timeout after {elapsed_since_start:.1f}s: collected {collected_count}/{n_volumes} volumes"
-                )
 
             # --- Periodic Backup Scan ---
             # Filesystem events can be missed under heavy load or on network

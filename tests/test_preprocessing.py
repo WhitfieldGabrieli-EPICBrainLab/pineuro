@@ -249,7 +249,6 @@ class TestCollectVolumesRecursive:
             n_volumes=3,
             simulator_source_dir=source_dir,
             simulator_speed=100.0,
-            timeout=30.0,
         )
         collected = sorted(result.iterdir())
         assert len([f for f in collected if f.is_file()]) >= 3
@@ -276,7 +275,6 @@ class TestCollectVolumesRecursive:
             watch_dir=watch_dir,
             output_dir=output_dir,
             n_volumes=3,
-            timeout=15.0,
         )
         writer.join()
         collected = [f for f in result.iterdir() if f.is_file()]
@@ -311,7 +309,6 @@ class TestCollectVolumesRecursive:
             output_dir=output_dir,
             n_volumes=3,
             clear_watch_dir=False,  # Don't clear — old files should be skipped via pre-cataloging
-            timeout=15.0,
         )
         writer.join()
 
