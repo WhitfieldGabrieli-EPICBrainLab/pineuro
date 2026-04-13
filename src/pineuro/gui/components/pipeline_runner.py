@@ -17,6 +17,23 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _select_sham_task_mask_names(
+    sham_mask_names: list[str],
+    real_mask_names: list[str],
+) -> list[str]:
+    """Pick the pair of masks that drive the feedback task in sham condition.
+
+    Assumes ``sham_mask_names`` is non-empty. When two or more sham masks are
+    available, both the target and non-target roles are driven by sham masks
+    (e.g. ``[target_hemi, non_target_hemi]`` for ``hemisphere_split``). With
+    only a single sham mask, the target role is swapped and the real
+    non-target is kept.
+    """
+    if len(sham_mask_names) >= 2:
+        return list(sham_mask_names[:2])
+    return [sham_mask_names[0], real_mask_names[1]]
+
+
 class _DispatchedTask:
     """Thin wrapper around a :class:`~concurrent.futures.Future`.
 
@@ -2089,31 +2106,29 @@ class PipelineRunner:
                         if delivery_method == "alternative_masks":
                             mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
                             if mask_mode == "hemisphere_split":
-                                # Hemisphere split: use left/right halves of a single network
+                                # Hemisphere split: use left/right halves of a single network.
+                                # Sham target = {network}_{target_hemisphere},
+                                # sham non-target = contralateral hemisphere.
                                 hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
                                 target_hemisphere = sham_config.get("target_hemisphere", "right")
                                 non_target_hemisphere = "left" if target_hemisphere == "right" else "right"
 
-                                # Target hemisphere is sham target, non-target is sham non-target
                                 for hemi in [target_hemisphere, non_target_hemisphere]:
                                     alt_name = f"{hemisphere_network}_{hemi}"
-                                    if alt_name not in real_mask_names:
-                                        try:
-                                            sham_mask_files.append(find_mask_file(alt_name))
-                                            sham_mask_names.append(alt_name)
-                                        except ValueError as e:
-                                            logger.warning(f"Sham hemisphere mask not found: {e}")
+                                    try:
+                                        sham_mask_files.append(find_mask_file(alt_name))
+                                        sham_mask_names.append(alt_name)
+                                    except ValueError as e:
+                                        logger.warning(f"Sham hemisphere mask not found: {e}")
                             else:
                                 # Two networks mode: use two distinct networks
                                 alternative_targets = sham_config.get("alternative_mask_targets", [])
                                 for alt_name in alternative_targets:
-                                    # Only add if not already in real_mask_names
-                                    if alt_name not in real_mask_names:
-                                        try:
-                                            sham_mask_files.append(find_mask_file(alt_name))
-                                            sham_mask_names.append(alt_name)
-                                        except ValueError as e:
-                                            logger.warning(f"Sham mask not found: {e}")
+                                    try:
+                                        sham_mask_files.append(find_mask_file(alt_name))
+                                        sham_mask_names.append(alt_name)
+                                    except ValueError as e:
+                                        logger.warning(f"Sham mask not found: {e}")
 
                         elif delivery_method == "replay" and condition == "sham":
                             # Replay mode: find feedbacklog from matched participant
@@ -2182,9 +2197,16 @@ class PipelineRunner:
                 else:
                     logger.warning(f"Randomization file not found: {randomization_path}")
 
-        # Combine all masks: real masks + any additional sham masks
-        all_mask_files = real_mask_files + sham_mask_files
-        all_mask_names = real_mask_names + sham_mask_names
+        # Combine all masks: real masks + any additional sham masks.
+        # Dedupe by mask name so a mask present in both lists (e.g. the real
+        # target happens to equal one of the hemisphere-split sham masks) is
+        # only computed once.
+        all_mask_files = list(real_mask_files)
+        all_mask_names = list(real_mask_names)
+        for name, path in zip(sham_mask_names, sham_mask_files, strict=True):
+            if name not in all_mask_names:
+                all_mask_names.append(name)
+                all_mask_files.append(path)
         if self._is_blind_mode():
             self._emit_progress_file_only(f"Computing activations for masks: {all_mask_names}")
             generic_labels = ["Target", "Non-Target"] + [f"Network {i + 1}" for i in range(2, len(all_mask_names))]
@@ -2192,16 +2214,10 @@ class PipelineRunner:
         else:
             self._emit_progress(f"Computing activations for masks: {all_mask_names}")
 
-        # Determine which masks control the task based on condition
-        # For real: use real_mask_names
-        # For sham: substitute masks based on signal mode
+        # Determine which masks control the task based on condition.
+        # For real: use real_mask_names. For sham: delegate to helper.
         if condition == "sham" and sham_mask_names:
-            if signal_mode == "connectivity" and len(sham_mask_names) >= 2:
-                # Connectivity: use both sham masks as the pair
-                task_mask_names = sham_mask_names[:2]
-            else:
-                # Dual-network activation: swap first mask only
-                task_mask_names = [sham_mask_names[0], real_mask_names[1]]
+            task_mask_names = _select_sham_task_mask_names(sham_mask_names, real_mask_names)
             if self._is_blind_mode():
                 self._emit_progress_file_only(
                     f"Sham: task controlled by {task_mask_names} (instead of {real_mask_names})"
