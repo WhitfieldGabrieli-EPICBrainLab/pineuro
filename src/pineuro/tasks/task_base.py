@@ -81,6 +81,7 @@ class TaskBase(ABC):  # noqa: B024
 
         # Inline key polling state (Windows only, for unfocused key capture)
         self._poll_prev: set[str] = set()
+        self._poll_seed_pending: bool = False
 
     # =========================================================================
     # Mirror callback support
@@ -169,8 +170,14 @@ class TaskBase(ABC):  # noqa: B024
     }
 
     def _reset_poll_state(self) -> None:
-        """Clear key-down tracking for a fresh waiting loop."""
+        """Arm a one-shot seed so currently-held keys don't fire on next poll.
+
+        Without this, a key still physically held from the previous wait loop
+        would be re-injected immediately after the reset — dismissing the next
+        slide / trigger wait in a single frame.
+        """
         self._poll_prev.clear()
+        self._poll_seed_pending = True
 
     def _inject_keys_if_unfocused(self, key_names: list[str]) -> None:
         """If PsychoPy window lacks focus, poll keys and inject into event buffer.
@@ -214,6 +221,7 @@ class TaskBase(ABC):  # noqa: B024
 
         if user32.GetForegroundWindow() == hwnd:
             self._poll_prev.clear()
+            self._poll_seed_pending = False
             return
 
         for name in key_names:
@@ -224,10 +232,12 @@ class TaskBase(ABC):  # noqa: B024
                 continue
             pressed = bool(user32.GetAsyncKeyState(vk) & 0x8000)
             if pressed and name not in self._poll_prev:
-                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                if not self._poll_seed_pending:
+                    psychopy_event._keyBuffer.append((name, 0, core.getTime()))
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)
+        self._poll_seed_pending = False
 
     # -- Linux (X11) -----------------------------------------------------------
 
@@ -267,6 +277,7 @@ class TaskBase(ABC):  # noqa: B024
             focused_id = focused.id if hasattr(focused, "id") else None
             if focused_id == window_id:
                 self._poll_prev.clear()
+                self._poll_seed_pending = False
                 return
         except Exception:
             pass  # Assume unfocused and poll anyway
@@ -284,10 +295,12 @@ class TaskBase(ABC):  # noqa: B024
                 continue
             pressed = bool(keymap[kc // 8] & (1 << (kc % 8)))
             if pressed and name not in self._poll_prev:
-                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                if not self._poll_seed_pending:
+                    psychopy_event._keyBuffer.append((name, 0, core.getTime()))
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)
+        self._poll_seed_pending = False
 
     # -- macOS (Quartz) --------------------------------------------------------
 
@@ -306,6 +319,7 @@ class TaskBase(ABC):  # noqa: B024
             app = NSApplication.sharedApplication()
             if app.keyWindow() is self.win.winHandle._window:
                 self._poll_prev.clear()
+                self._poll_seed_pending = False
                 return
         except Exception:
             return
@@ -318,10 +332,12 @@ class TaskBase(ABC):  # noqa: B024
                 continue
             pressed = CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, vk)
             if pressed and name not in self._poll_prev:
-                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                if not self._poll_seed_pending:
+                    psychopy_event._keyBuffer.append((name, 0, core.getTime()))
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)
+        self._poll_seed_pending = False
 
     def _capture_and_emit_screenshot(self, force: bool = False) -> None:
         """Capture current PsychoPy frame and emit to mirror callback.
