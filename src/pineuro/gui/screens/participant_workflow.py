@@ -4119,6 +4119,36 @@ class ParticipantWorkflowScreen:
         self._config_change_banner = banner
         return banner
 
+    def _build_simulator_banner(self) -> ft.Container | None:
+        """Build a persistent banner shown when simulator mode is enabled.
+
+        Returns:
+            A styled container, or None if simulator mode is disabled.
+        """
+        scan_cfg = self.study_config.session_config.get("scan", {})
+        if not scan_cfg.get("simulator_enabled", True):
+            return None
+
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.FAST_FORWARD, color=ft.Colors.RED_700, size=20),
+                    ft.Text(
+                        "Simulator mode — replaying recorded DICOMs (no live scanner)",
+                        size=13,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.RED_900,
+                        expand=True,
+                    ),
+                ],
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.symmetric(horizontal=20, vertical=8),
+            bgcolor=ft.Colors.RED_50,
+            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.RED_200)),
+        )
+
     def _show_config_change_dialog(self):
         """Show a dialog listing all config differences."""
         rows = []
@@ -7271,8 +7301,8 @@ class ParticipantWorkflowScreen:
             Flet control for the workflow screen
         """
         # Header
-        use_simulator = self.study_config.session_config.get("scan", {}).get("collection_speed", 1.0) > 1.0
-        simulator_text = " | Simulator Mode" if use_simulator else ""
+        is_simulator = self.study_config.session_config.get("scan", {}).get("simulator_enabled", True)
+        simulator_text = " | Simulator Mode" if is_simulator else ""
 
         # Store simulator text for header rebuilding
         self._simulator_text = simulator_text
@@ -7391,7 +7421,12 @@ class ParticipantWorkflowScreen:
         # Config change banner (shown when study config differs from saved snapshot)
         config_change_banner = self._build_config_change_banner()
 
+        # Simulator banner (shown whenever simulator mode is enabled)
+        simulator_banner = self._build_simulator_banner()
+
         main_controls: list[ft.Control] = [self.header_container]
+        if simulator_banner is not None:
+            main_controls.append(simulator_banner)
         if config_change_banner is not None:
             main_controls.append(config_change_banner)
         if resumption_banner is not None:
