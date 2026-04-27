@@ -285,9 +285,26 @@ class ConfigManager:
         # Update modified timestamp
         study_config.metadata.update_modified()
 
-        # Determine save path
+        # Determine save path. If the study was loaded from disk and its name
+        # has since been changed, the file (and any version history) must be
+        # moved to match — otherwise the YAML keeps its old filename and
+        # load_study(new_name) would compute a path that doesn't exist.
+        target_path = self._get_study_path(study_config.metadata.name)
         if study_config.file_path is None:
-            study_config.file_path = self._get_study_path(study_config.metadata.name)
+            study_config.file_path = target_path
+        elif target_path != study_config.file_path:
+            if target_path.exists():
+                raise FileExistsError(f"Cannot rename: a study with name '{study_config.metadata.name}' already exists")
+            old_versions_dir = self.studies_dir / ".versions" / study_config.file_path.stem
+            if study_config.file_path.exists():
+                study_config.file_path.rename(target_path)
+            study_config.file_path = target_path
+            new_versions_dir = self._get_study_versions_dir(study_config.metadata.name)
+            if old_versions_dir.exists() and old_versions_dir != new_versions_dir:
+                try:
+                    old_versions_dir.rename(new_versions_dir)
+                except OSError as ex:
+                    logger.warning(f"Failed to rename versions dir {old_versions_dir} -> {new_versions_dir}: {ex}")
 
         # Check for overwrite
         if study_config.file_path.exists() and not overwrite:

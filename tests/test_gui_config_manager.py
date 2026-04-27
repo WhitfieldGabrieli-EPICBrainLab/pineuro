@@ -328,3 +328,90 @@ class TestVersionHistory:
         versions = manager.list_versions("Test Study")
         assert len(versions) == 3
         assert versions[0]["version"] < versions[1]["version"] < versions[2]["version"]
+
+
+# =============================================================================
+# Rename via save (regression: blank study after Copy + rename + Save)
+# =============================================================================
+
+
+class TestRenameViaSave:
+    def test_rename_via_save_moves_file(self, manager):
+        study = make_study("Original")
+        old_path = manager.save_study(study)
+        assert old_path.exists()
+
+        study.metadata.name = "Renamed"
+        new_path = manager.save_study(study)
+
+        assert new_path.name == "Renamed.yaml"
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        loaded = manager.load_study("Renamed")
+        assert loaded is not None
+        assert loaded.metadata.name == "Renamed"
+        assert loaded.session_config == study.session_config
+
+    def test_rename_then_load_by_new_name_returns_full_config(self, manager):
+        session = {"scan": {"tr": 1.5, "n_volumes": 200}, "feedback": {"n_baseline": 25}}
+        study = make_study("Original (Copy)", session_config=session)
+        manager.save_study(study)
+
+        study.metadata.name = "My New Study"
+        manager.save_study(study)
+
+        loaded = manager.load_study("My New Study")
+        assert loaded is not None
+        assert loaded.session_config == session
+
+    def test_rename_collision_rejected_overwrite_true(self, manager):
+        manager.save_study(make_study("Foo"))
+        bar = make_study("Bar")
+        manager.save_study(bar)
+
+        bar.metadata.name = "Foo"
+        with pytest.raises(FileExistsError):
+            manager.save_study(bar, overwrite=True)
+
+        assert manager.load_study("Foo") is not None
+        assert manager.load_study("Bar") is not None
+
+    def test_rename_collision_rejected_overwrite_false(self, manager):
+        manager.save_study(make_study("Foo"))
+        bar = make_study("Bar")
+        manager.save_study(bar)
+
+        bar.metadata.name = "Foo"
+        with pytest.raises(FileExistsError):
+            manager.save_study(bar, overwrite=False)
+
+        assert manager.load_study("Foo") is not None
+        assert manager.load_study("Bar") is not None
+
+    def test_rename_moves_versions_dir(self, manager):
+        study = make_study("Original")
+        manager.save_study(study)
+        study.metadata.description = "edit 1"
+        manager.save_study(study)
+        assert len(manager.list_versions("Original")) == 1
+
+        old_versions_dir = manager.studies_dir / ".versions" / "Original"
+        assert old_versions_dir.exists()
+
+        study.metadata.name = "Renamed"
+        manager.save_study(study)
+
+        new_versions_dir = manager.studies_dir / ".versions" / "Renamed"
+        assert new_versions_dir.exists()
+        assert not old_versions_dir.exists()
+        assert len(manager.list_versions("Renamed")) >= 1
+
+    def test_rename_same_name_no_op(self, manager):
+        """Saving without renaming hits the fast path and doesn't error."""
+        study = make_study("Stable")
+        path = manager.save_study(study)
+        study.metadata.description = "Updated"
+        path2 = manager.save_study(study)
+        assert path == path2
+        assert manager.load_study("Stable").metadata.description == "Updated"
