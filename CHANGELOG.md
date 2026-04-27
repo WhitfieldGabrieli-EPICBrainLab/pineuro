@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-27
+
+### Added
+
+- **Simulator-mode banner**: A persistent red banner under the participant workflow header now reads "Simulator mode — replaying recorded DICOMs (no live scanner)" whenever `scan.simulator_enabled` is true, so the operator cannot mistake replayed fixtures for a live scan.
+
+### Fixed
+
+- **Renamed studies opening blank**: After renaming a study and saving, reopening it no longer presents a blank editor — the workflow now reloads from the new on-disk study path instead of the stale in-memory handle.
+- **Header subtitle simulator hint**: The " | Simulator Mode" suffix in the workflow header was driven by a stale `collection_speed > 1.0` heuristic that disagreed with the canonical `simulator_enabled` flag used elsewhere; both now read from the same flag.
+
 ## [0.4.0] - 2026-04-13
 
 ### Added
