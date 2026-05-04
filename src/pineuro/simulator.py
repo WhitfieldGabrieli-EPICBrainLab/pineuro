@@ -319,6 +319,10 @@ class VolumeSimulator:
         return False
 
     def _send_keypress_win32(self, key: str) -> bool:
+        import sys
+
+        if sys.platform != "win32":
+            return False
         try:
             import ctypes
             from ctypes import wintypes
@@ -356,7 +360,7 @@ class VolumeSimulator:
             n_down = user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
             time.sleep(0.05)
             n_up = user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
-            ok = n_down == 1 and n_up == 1
+            ok: bool = bool(n_down == 1) and bool(n_up == 1)
             if ok:
                 logger.info(f"Sent synthetic Win32 keypress: {key!r} (VK=0x{vk:02X})")
             else:

@@ -218,7 +218,10 @@ class TaskBase(ABC):  # noqa: B024
 
     def _snapshot_win32(self) -> set[str]:
         import ctypes
+        import sys
 
+        if sys.platform != "win32":
+            return set()
         try:
             user32 = ctypes.windll.user32
         except Exception:
@@ -929,7 +932,7 @@ class TaskBase(ABC):  # noqa: B024
                 if attached:
                     user32.AttachThreadInput(cur_tid, fg_tid, False)
 
-            return user32.GetForegroundWindow() == hwnd
+            return bool(user32.GetForegroundWindow() == hwnd)
         except Exception as e:
             logger.debug(f"Win32 activation failed: {e}")
             return False
