@@ -154,17 +154,45 @@ class TestCopyVolumesIter:
         assert callback_args[1][0] == 2
         assert callback_args[2][0] == 3
 
-    def test_trigger_callback(self, tmp_path):
+    def test_manual_trigger_waits_for_event(self, tmp_path):
         source = self._make_nifti_source(tmp_path, n_volumes=2)
         target = tmp_path / "target"
 
-        sim = VolumeSimulator(source, target, tr=0.05, speed=100.0)
-        triggered = []
-        sim.trigger_callback = lambda: triggered.append(True)
+        trigger_event = threading.Event()
+        sim = VolumeSimulator(
+            source,
+            target,
+            tr=0.05,
+            speed=100.0,
+            trigger_mode="manual",
+            trigger_event=trigger_event,
+        )
 
-        list(sim.copy_volumes_iter())
+        # Start consumer in a thread; it should block on trigger_event.
+        copied: list[int] = []
 
-        assert len(triggered) == 1
+        def consume():
+            for vol in sim.copy_volumes_iter():
+                copied.append(vol)
+
+        thread = threading.Thread(target=consume)
+        thread.start()
+        # Without the trigger, simulator must not have copied anything.
+        time.sleep(0.05)
+        assert copied == []
+        trigger_event.set()
+        thread.join(timeout=2.0)
+        assert copied == [1, 2]
+
+    def test_collection_only_no_trigger_event(self, tmp_path):
+        # When trigger_event is None (collection-only contexts), the simulator
+        # must not block waiting for a trigger.
+        source = self._make_nifti_source(tmp_path, n_volumes=2)
+        target = tmp_path / "target"
+
+        sim = VolumeSimulator(source, target, tr=0.05, speed=100.0, trigger_mode="manual")
+        copied = list(sim.copy_volumes_iter())
+        assert copied == [1, 2]
 
     def test_clear_target_removes_old_files(self, tmp_path):
         source = self._make_nifti_source(tmp_path, n_volumes=2)

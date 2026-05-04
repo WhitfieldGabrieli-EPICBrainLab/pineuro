@@ -79,9 +79,14 @@ class TaskBase(ABC):  # noqa: B024
         self._mirror_frame_counter = 0
         self._mirror_frame_skip = 4  # Only capture every Nth frame
 
-        # Inline key polling state (Windows only, for unfocused key capture)
+        # Unfocused key polling state. _poll_prev is seeded with currently-held
+        # keys at each _reset_poll_state() so a carry-over key must be released
+        # before its next press fires; a fresh press always fires.
         self._poll_prev: set[str] = set()
-        self._poll_seed_pending: bool = False
+
+        # Source of the most recently injected key (for trigger-path diagnostics).
+        # Set by _poll_keys_* when they append to _keyBuffer; cleared on reset.
+        self._last_inject_source: str | None = None
 
     # =========================================================================
     # Mirror callback support
@@ -169,22 +174,115 @@ class TaskBase(ABC):  # noqa: B024
         "return": 0x24,
     }
 
-    def _reset_poll_state(self) -> None:
-        """Arm a one-shot seed so currently-held keys don't fire on next poll.
+    # Snapshot superset: keys we might poll across any wait loop. Over-snapshotting
+    # is harmless — keys never polled just sit unused in _poll_prev.
+    _SNAPSHOT_KEYS: tuple[str, ...] = (
+        "t",
+        "+",
+        "5",
+        "equal",
+        "space",
+        "return",
+        "1",
+        "2",
+        "3",
+        "left",
+        "right",
+    )
 
-        Without this, a key still physically held from the previous wait loop
-        would be re-injected immediately after the reset — dismissing the next
-        slide / trigger wait in a single frame.
+    def _reset_poll_state(self) -> None:
+        """Snapshot currently-held keys so carry-over presses don't fire.
+
+        A key held at reset time must be released before its next press is
+        reported; a fresh press after reset always fires. Old behavior dropped
+        the very first detection regardless of whether it was carry-over,
+        which silently lost short-lived scanner triggers (~50-100ms keypresses)
+        during the wait_for_trigger race window.
         """
-        self._poll_prev.clear()
-        self._poll_seed_pending = True
+        self._poll_prev = self._snapshot_held_keys()
+        self._last_inject_source = None
+
+    def _snapshot_held_keys(self) -> set[str]:
+        """Return the subset of _SNAPSHOT_KEYS currently down on this platform."""
+        import sys
+
+        if self.win is None:
+            return set()
+        if sys.platform == "win32":
+            return self._snapshot_win32()
+        if sys.platform == "linux":
+            return self._snapshot_x11()
+        if sys.platform == "darwin":
+            return self._snapshot_quartz()
+        return set()
+
+    def _snapshot_win32(self) -> set[str]:
+        import ctypes
+
+        try:
+            user32 = ctypes.windll.user32
+        except Exception:
+            return set()
+        held: set[str] = set()
+        for name in self._SNAPSHOT_KEYS:
+            vk = self._PSYCHOPY_TO_VK.get(name)
+            if vk is None:
+                continue
+            if user32.GetAsyncKeyState(vk) & 0x8000:
+                held.add(name)
+        return held
+
+    def _snapshot_x11(self) -> set[str]:
+        try:
+            from Xlib import XK
+            from Xlib import display as xlib_display
+        except ImportError:
+            return set()
+        if not hasattr(self, "_x11_display"):
+            try:
+                self._x11_display = xlib_display.Display()
+                self._x11_keycodes = {}
+                for name, keysym_str in self._PSYCHOPY_TO_XKEYSYM.items():
+                    ks = XK.string_to_keysym(keysym_str)
+                    if ks:
+                        kc = self._x11_display.keysym_to_keycode(ks)
+                        if kc:
+                            self._x11_keycodes[name] = kc
+            except Exception:
+                return set()
+        try:
+            keymap = self._x11_display.query_keymap()
+        except Exception:
+            return set()
+        held: set[str] = set()
+        for name in self._SNAPSHOT_KEYS:
+            kc = self._x11_keycodes.get(name)
+            if kc is None:
+                continue
+            if keymap[kc // 8] & (1 << (kc % 8)):
+                held.add(name)
+        return held
+
+    def _snapshot_quartz(self) -> set[str]:
+        try:
+            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedSessionState
+        except ImportError:
+            return set()
+        held: set[str] = set()
+        for name in self._SNAPSHOT_KEYS:
+            vk = self._PSYCHOPY_TO_MAC_VK.get(name)
+            if vk is None:
+                continue
+            if CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, vk):
+                held.add(name)
+        return held
 
     def _inject_keys_if_unfocused(self, key_names: list[str]) -> None:
         """If PsychoPy window lacks focus, poll keys and inject into event buffer.
 
         Uses platform-native APIs to detect key presses regardless of which
-        window has focus.  Injects into ``event._keyBuffer`` using the same
-        3-tuple format as the simulator's ``_inject_trigger_key()``.
+        window has focus.  Injects into ``event._keyBuffer`` so the trigger
+        wait loop sees it via the same code path as a focused-window key.
 
         Only fires on key-down transitions (not repeats).  Skips "escape" to
         prevent accidental task abort from GUI typing.
@@ -219,9 +317,10 @@ class TaskBase(ABC):  # noqa: B024
         except Exception:
             return
 
+        # Focused: pyglet's normal event path handles keys; do not clear
+        # _poll_prev — the next _reset_poll_state will re-snapshot, and
+        # clearing here causes a focus-flicker race in reverse.
         if user32.GetForegroundWindow() == hwnd:
-            self._poll_prev.clear()
-            self._poll_seed_pending = False
             return
 
         for name in key_names:
@@ -232,36 +331,26 @@ class TaskBase(ABC):  # noqa: B024
                 continue
             pressed = bool(user32.GetAsyncKeyState(vk) & 0x8000)
             if pressed and name not in self._poll_prev:
-                if not self._poll_seed_pending:
-                    psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                self._last_inject_source = "poll_win32"
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)
-        self._poll_seed_pending = False
 
     # -- Linux (X11) -----------------------------------------------------------
 
     def _poll_keys_x11(self, key_names: list[str]) -> None:
         """Poll global key state on Linux via XQueryKeymap."""
-        try:
-            from Xlib import XK
-            from Xlib import display as xlib_display
-        except ImportError:
-            return
-
         from psychopy import core
         from psychopy import event as psychopy_event
 
         # Lazily open a persistent X display connection and resolve keycodes
+        # via _snapshot_x11, which initializes self._x11_display and
+        # self._x11_keycodes if not yet present.
         if not hasattr(self, "_x11_display"):
-            self._x11_display = xlib_display.Display()
-            self._x11_keycodes: dict[str, int] = {}
-            for name, keysym_str in self._PSYCHOPY_TO_XKEYSYM.items():
-                ks = XK.string_to_keysym(keysym_str)
-                if ks:
-                    kc = self._x11_display.keysym_to_keycode(ks)
-                    if kc:
-                        self._x11_keycodes[name] = kc
+            self._snapshot_x11()
+            if not hasattr(self, "_x11_display"):
+                return  # X11 unavailable
 
         d = self._x11_display
 
@@ -276,8 +365,6 @@ class TaskBase(ABC):  # noqa: B024
             focused, _ = d.get_input_focus()
             focused_id = focused.id if hasattr(focused, "id") else None
             if focused_id == window_id:
-                self._poll_prev.clear()
-                self._poll_seed_pending = False
                 return
         except Exception:
             pass  # Assume unfocused and poll anyway
@@ -295,12 +382,11 @@ class TaskBase(ABC):  # noqa: B024
                 continue
             pressed = bool(keymap[kc // 8] & (1 << (kc % 8)))
             if pressed and name not in self._poll_prev:
-                if not self._poll_seed_pending:
-                    psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                self._last_inject_source = "poll_x11"
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)
-        self._poll_seed_pending = False
 
     # -- macOS (Quartz) --------------------------------------------------------
 
@@ -318,8 +404,6 @@ class TaskBase(ABC):  # noqa: B024
         try:
             app = NSApplication.sharedApplication()
             if app.keyWindow() is self.win.winHandle._window:
-                self._poll_prev.clear()
-                self._poll_seed_pending = False
                 return
         except Exception:
             return
@@ -332,12 +416,11 @@ class TaskBase(ABC):  # noqa: B024
                 continue
             pressed = CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, vk)
             if pressed and name not in self._poll_prev:
-                if not self._poll_seed_pending:
-                    psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                self._last_inject_source = "poll_quartz"
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)
-        self._poll_seed_pending = False
 
     def _capture_and_emit_screenshot(self, force: bool = False) -> None:
         """Capture current PsychoPy frame and emit to mirror callback.
@@ -797,14 +880,68 @@ class TaskBase(ABC):  # noqa: B024
     # Trigger Waiting
     # =========================================================================
 
+    def _activate_window(self) -> bool:
+        """Best-effort: bring the PsychoPy window to the OS foreground.
+
+        Returns True if the window appears foreground after the attempt
+        (only used for diagnostic logging). Never raises.
+
+        Win10/11 blocks SetForegroundWindow from non-foreground processes;
+        the AttachThreadInput trick is the standard workaround.
+        """
+        import sys
+
+        if self.win is None:
+            return False
+
+        try:
+            self.win.winHandle.activate()
+        except Exception as e:
+            logger.debug(f"winHandle.activate failed: {e}")
+
+        if sys.platform != "win32":
+            return True  # Linux/macOS: trust the activate call
+
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            try:
+                hwnd = self.win.winHandle._hwnd
+            except Exception:
+                return False
+
+            if user32.GetForegroundWindow() == hwnd:
+                return True
+
+            fg_hwnd = user32.GetForegroundWindow()
+            fg_tid = user32.GetWindowThreadProcessId(fg_hwnd, None) if fg_hwnd else 0
+            cur_tid = kernel32.GetCurrentThreadId()
+            attached = False
+            try:
+                if fg_tid and fg_tid != cur_tid:
+                    attached = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
+                user32.BringWindowToTop(hwnd)
+                user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                user32.SetForegroundWindow(hwnd)
+            finally:
+                if attached:
+                    user32.AttachThreadInput(cur_tid, fg_tid, False)
+
+            return user32.GetForegroundWindow() == hwnd
+        except Exception as e:
+            logger.debug(f"Win32 activation failed: {e}")
+            return False
+
     def wait_for_trigger(self, message: str = "Waiting for scanner...") -> None:
         """Wait for scanner trigger before starting task.
 
-        Displays a message and waits for a trigger key press. In simulation
-        mode, the simulator injects a synthetic trigger key (replicating the
-        real scanner behavior) before starting to produce DICOMs.
-
-        The same keyboard-polling code path runs in both real and sim mode.
+        Displays a message and waits for a trigger key press. In simulator
+        mode, the simulator either waits for the user's keypress (trigger_mode
+        == "manual") or injects a synthetic OS-level keypress (trigger_mode
+        == "os_key") — both routes go through the same focus-dependent code
+        path as a real scan.
 
         Parameters
         ----------
@@ -818,6 +955,9 @@ class TaskBase(ABC):  # noqa: B024
         """
         from psychopy import core, event, visual
 
+        if self.trigger_event is None:
+            self.trigger_event = threading.Event()
+
         # Display waiting message
         waiting_text = visual.TextStim(
             self.win,
@@ -830,15 +970,39 @@ class TaskBase(ABC):  # noqa: B024
         self._capture_and_emit_screenshot(force=True)
         self.win.flip()
 
-        # Clear stale keyboard events before waiting
-        logger.info(f"Waiting for trigger (keys: {self.trigger_keys})...")
+        # Pull window to foreground so the focused (pyglet) path works.
+        # Failure is non-fatal — the unfocused-poll path is the safety net.
+        is_foreground = self._activate_window()
+
+        # Coverage check: warn if any trigger key isn't in the active platform's
+        # keymap (otherwise the unfocused-poll path silently drops it).
+        platform_map = self._active_keymap()
+        if platform_map is not None:
+            unmapped = [k for k in self.trigger_keys if k not in platform_map]
+            if unmapped:
+                logger.warning(
+                    f"Trigger keys missing from platform keymap (will not be "
+                    f"detected when window is unfocused): {unmapped}"
+                )
+
         event.clearEvents("keyboard")
 
-        # Start simulator if present (replicates real scanner: trigger key + DICOMs)
-        # Must be AFTER clearEvents to avoid wiping the injected trigger key
+        # Start simulator if present. For "manual" trigger mode the simulator
+        # blocks on self.trigger_event until we detect the keypress here; for
+        # "os_key" mode it sends a synthetic OS keypress.
         if self._simulator is not None:
             self._start_simulator_thread()
         self._reset_poll_state()
+
+        try:
+            hwnd = getattr(self.win.winHandle, "_hwnd", None)
+        except Exception:
+            hwnd = None
+        logger.info(
+            f"wait_for_trigger: keys={self.trigger_keys} hwnd={hwnd} "
+            f"is_foreground={is_foreground} held_at_reset={sorted(self._poll_prev)}"
+        )
+
         while True:
             if not self._running:
                 raise KeyboardInterrupt("Stopped by user")
@@ -847,17 +1011,31 @@ class TaskBase(ABC):  # noqa: B024
             keys = event.getKeys(keyList=self.trigger_keys + ["escape"])
             if "escape" in keys:
                 raise KeyboardInterrupt("Escaped during trigger wait")
-            if any(k in keys for k in self.trigger_keys):
-                logger.info("Trigger received, starting task")
-                # Signal external listeners (e.g., collect_dicoms timing)
-                if self.trigger_event is not None:
-                    self.trigger_event.set()
+            detected = next((k for k in keys if k in self.trigger_keys), None)
+            if detected is not None:
+                source = self._last_inject_source or "focused_event"
+                logger.info(f"Trigger received via {source}: key={detected!r}")
+                self.trigger_event.set()
                 break
 
             core.wait(0.01)
 
         # Post-trigger hook (e.g., BaseTask calls coordinator.send_trigger())
         self._on_trigger()
+
+    def _active_keymap(self) -> dict[str, int] | None:
+        """Return the platform-native VK/keysym map currently in use, or None."""
+        import sys
+
+        if sys.platform == "win32":
+            return self._PSYCHOPY_TO_VK
+        if sys.platform == "linux":
+            # Force X11 init via a snapshot call; populates self._x11_keycodes.
+            self._snapshot_x11()
+            return getattr(self, "_x11_keycodes", None)
+        if sys.platform == "darwin":
+            return self._PSYCHOPY_TO_MAC_VK
+        return None
 
     def _on_trigger(self) -> None:  # noqa: B027
         """Hook called after trigger is received.
@@ -870,24 +1048,12 @@ class TaskBase(ABC):  # noqa: B024
     # Simulator Thread Management
     # =========================================================================
 
-    def _inject_trigger_key(self) -> None:
-        """Inject synthetic trigger key into PsychoPy's event buffer.
-
-        Called by the simulator's trigger_callback to replicate the real
-        scanner sending a trigger key before acquiring volumes.
-        """
-        from psychopy import event as psychopy_event
-
-        key = self.trigger_keys[0]  # e.g. 't'
-        psychopy_event._keyBuffer.append((key, 0.0))
-        logger.info(f"Simulator injected synthetic trigger key: '{key}'")
-
     def _start_simulator_thread(self) -> None:
         """Start the simulator in a background thread.
 
-        The simulator replicates real scanner behavior:
-        1. Injects a synthetic trigger key (via trigger_callback)
-        2. Copies DICOMs at TR intervals
+        Wires the task's trigger_event and trigger_key into the simulator so
+        it can either wait for a manual keypress (mode="manual") or inject
+        a synthetic OS-level keypress (mode="os_key") before copying volumes.
         """
         logger.info("Starting simulator thread")
 
@@ -896,8 +1062,8 @@ class TaskBase(ABC):  # noqa: B024
             self._simulator._clear_target_directory()
             self._simulator.clear_target = False
 
-        # Set trigger callback to inject synthetic key press
-        self._simulator.trigger_callback = self._inject_trigger_key
+        self._simulator.trigger_event = self.trigger_event
+        self._simulator.trigger_key = self.trigger_keys[0] if self.trigger_keys else "t"
 
         # Set start time for deadline-based timing
         self._simulator.start_time = time.monotonic()

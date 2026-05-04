@@ -103,6 +103,7 @@ class StudyEditorScreen:
                 "simulator_enabled": True,
                 "collection_speed": 10.0,
                 "feedback_simulator_speed": 1.0,
+                "simulator_trigger_mode": "manual",
                 "scanner_dicom_dir": "/BOLD_DICOM",
                 "scanner_ip": "",
             },
@@ -225,6 +226,16 @@ class StudyEditorScreen:
             value=str(config["scan"].get("feedback_simulator_speed", 1.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Speed for feedback runs",
+        )
+        self.simulator_trigger_mode_dropdown = ft.Dropdown(
+            width=290,
+            label="Simulator trigger mode",
+            value=config["scan"].get("simulator_trigger_mode", "manual"),
+            options=[
+                ft.dropdown.Option("manual", "Manual (press key)"),
+                ft.dropdown.Option("os_key", "Synthetic OS keypress"),
+            ],
+            hint_text="Manual mimics a real scan; OS keypress is hands-off",
         )
 
         # Scanner settings
@@ -708,6 +719,7 @@ class StudyEditorScreen:
         is_simulator = self.simulator_enabled_checkbox.value
         self.collection_speed_field.visible = is_simulator
         self.feedback_simulator_speed_field.visible = is_simulator
+        self.simulator_trigger_mode_dropdown.visible = is_simulator
         self.scanner_dicom_dir_field.visible = not is_simulator
         self.scanner_dicom_dir_browse_btn.visible = not is_simulator
         self.scanner_ip_field.visible = not is_simulator
@@ -831,6 +843,7 @@ class StudyEditorScreen:
                     ft.Text("Acquisition Mode", size=16, weight=ft.FontWeight.BOLD),
                     self.simulator_enabled_checkbox,
                     ft.Row([self.collection_speed_field, self.feedback_simulator_speed_field]),
+                    ft.Row([self.simulator_trigger_mode_dropdown]),
                     ft.Row([self.scanner_dicom_dir_field, self.scanner_dicom_dir_browse_btn]),
                     ft.Row(
                         [self.scanner_ip_field, self.scanner_setup_guide_btn],
@@ -1116,6 +1129,7 @@ class StudyEditorScreen:
         is_simulator = self.simulator_enabled_checkbox.value
         self.collection_speed_field.visible = is_simulator
         self.feedback_simulator_speed_field.visible = is_simulator
+        self.simulator_trigger_mode_dropdown.visible = is_simulator
         self.scanner_dicom_dir_field.visible = not is_simulator
         if hasattr(self, "scanner_dicom_dir_browse_btn"):
             self.scanner_dicom_dir_browse_btn.visible = not is_simulator
@@ -1554,6 +1568,7 @@ class StudyEditorScreen:
             config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value or 1.0)
         except (ValueError, TypeError):
             config["scan"]["feedback_simulator_speed"] = 1.0
+        config["scan"]["simulator_trigger_mode"] = self.simulator_trigger_mode_dropdown.value or "manual"
         config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip() or "/BOLD_DICOM"
         config["scan"]["scanner_ip"] = self.scanner_ip_field.value.strip()
 

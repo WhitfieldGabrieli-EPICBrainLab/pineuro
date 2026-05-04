@@ -532,6 +532,7 @@ class PipelineRunner:
                 tr=config["scan"].get("localizer_tr", 1.2),  # Use configured TR from study
                 speed=simulator_speed,
                 clear_target=True,
+                trigger_mode=config["scan"].get("simulator_trigger_mode", "manual"),
             )
 
         # Determine which localizer task to use
@@ -2254,6 +2255,7 @@ class PipelineRunner:
                 use_efficiency_weights=_fb("use_efficiency_weights", True),
                 simulator_source_dir=simulator_source_dir,
                 simulator_speed=simulator_speed,
+                simulator_trigger_mode=config.get("scan", {}).get("simulator_trigger_mode", "manual"),
                 step_id=step_id,  # Use slot-based naming with acq entity
                 qc_enabled=True,
                 fd_threshold=_fb("fd_threshold", 0.5),

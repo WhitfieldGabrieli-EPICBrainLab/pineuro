@@ -677,6 +677,11 @@ class ScanConfig:
     simulator_source_mapping: Path | None = None
     collection_speed: float = 10.0
     feedback_simulator_speed: float = 10.0
+    # "manual": user presses the trigger key during simulator runs (matches
+    # real-scan code path exactly). "os_key": simulator injects a synthetic
+    # OS-level keypress so testing is hands-off but still routes through the
+    # task's focus-dependent trigger detection. Default = manual.
+    simulator_trigger_mode: str = "manual"
 
     # Legacy aliases
     @property
@@ -2739,6 +2744,7 @@ def run_single_task(
             "simulator_speed": config.scan.feedback_simulator_speed,
             "simulator_clear_target": True,
             "simulator_cleanup": False,
+            "simulator_trigger_mode": config.scan.simulator_trigger_mode,
         }
 
     # Resolve mask names from network assignment

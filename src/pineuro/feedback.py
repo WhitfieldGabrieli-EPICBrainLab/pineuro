@@ -3752,6 +3752,7 @@ def run_feedback_session(
     simulator_speed: float = 1.0,
     simulator_clear_target: bool = True,
     simulator_cleanup: bool = True,
+    simulator_trigger_mode: str = "manual",
     activation_callback: Callable[[dict[str, float], int, float, bool, bool], None] | None = None,
     error_callback: Callable[[Exception], None] | None = None,
     qc_enabled: bool = True,
@@ -4061,6 +4062,7 @@ def run_feedback_session(
             speed=simulator_speed,
             clear_target=simulator_clear_target,
             cleanup_on_complete=False,  # Coordinator handles cleanup
+            trigger_mode=simulator_trigger_mode,  # type: ignore[arg-type]
         )
         logger.info(f"Simulator configured (speed={simulator_speed}x)")
 

@@ -39,6 +39,7 @@ SCAN_EXCLUDED_KEYS = frozenset(
         "simulator_enabled",
         "collection_speed",
         "feedback_simulator_speed",
+        "simulator_trigger_mode",
         "scanner_dicom_dir",
         "scanner_ip",
     }

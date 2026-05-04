@@ -44,10 +44,13 @@ References
 import argparse
 import logging
 import shutil
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Union
+from typing import Literal, Union
+
+TriggerMode = Literal["manual", "os_key"]
 
 # Third-party imports
 # Local imports
@@ -138,6 +141,9 @@ class VolumeSimulator:
         speed: float = 1.0,
         clear_target: bool = True,
         cleanup_on_complete: bool = False,
+        trigger_mode: TriggerMode = "manual",
+        trigger_key: str = "t",
+        trigger_event: threading.Event | None = None,
     ):
         self.source_dir = Path(source_dir)
         self.target_dir = Path(target_dir)
@@ -146,10 +152,17 @@ class VolumeSimulator:
         self.clear_target = clear_target
         self.cleanup_on_complete = cleanup_on_complete
 
+        # Trigger control: "manual" blocks on trigger_event until the task
+        # detects a real keypress; "os_key" injects a synthetic OS keypress
+        # that the task receives via the same focus-dependent code path as
+        # a real scanner. Both modes faithfully exercise the real-scan path.
+        self.trigger_mode: TriggerMode = trigger_mode
+        self.trigger_key: str = trigger_key
+        self.trigger_event: threading.Event | None = trigger_event
+
         # Timing state
         self.start_time: float | None = None
         self.volume_copied_callback: Callable[[int, float, float], None] | None = None
-        self.trigger_callback: Callable[[], None] | None = None
 
         if not self.source_dir.exists():
             raise FileNotFoundError(f"Source directory not found: {self.source_dir}")
@@ -233,6 +246,190 @@ class VolumeSimulator:
             shutil.rmtree(self.target_dir)
             logger.info(f"Deleted target directory: {self.target_dir}")
 
+    # ------------------------------------------------------------------
+    # OS-level synthetic keypress (for trigger_mode="os_key")
+    # ------------------------------------------------------------------
+    # Routes the simulated trigger through the real OS input queue so it
+    # exercises the same focus-dependent code path as a USB-keyboard scanner
+    # trigger. Without this, simulator runs cannot reproduce real-scan failures.
+
+    _VK_WIN: dict[str, int] = {
+        "0": 0x30,
+        "1": 0x31,
+        "2": 0x32,
+        "3": 0x33,
+        "4": 0x34,
+        "5": 0x35,
+        "6": 0x36,
+        "7": 0x37,
+        "8": 0x38,
+        "9": 0x39,
+        "t": 0x54,
+        "equal": 0xBB,
+        "+": 0x6B,
+        "space": 0x20,
+        "return": 0x0D,
+    }
+    _VK_MAC: dict[str, int] = {
+        "0": 0x1D,
+        "1": 0x12,
+        "2": 0x13,
+        "3": 0x14,
+        "4": 0x15,
+        "5": 0x17,
+        "6": 0x16,
+        "7": 0x1A,
+        "8": 0x1C,
+        "9": 0x19,
+        "t": 0x11,
+        "equal": 0x18,
+        "+": 0x45,
+        "space": 0x31,
+        "return": 0x24,
+    }
+    _XKEYSYM: dict[str, str] = {
+        "0": "0",
+        "1": "1",
+        "2": "2",
+        "3": "3",
+        "4": "4",
+        "5": "5",
+        "6": "6",
+        "7": "7",
+        "8": "8",
+        "9": "9",
+        "t": "t",
+        "equal": "equal",
+        "+": "plus",
+        "space": "space",
+        "return": "Return",
+    }
+
+    def _send_os_keypress(self, key: str) -> bool:
+        """Send a synthetic OS-level key down+up. Returns True on success."""
+        import sys
+
+        if sys.platform == "win32":
+            return self._send_keypress_win32(key)
+        if sys.platform == "linux":
+            return self._send_keypress_x11(key)
+        if sys.platform == "darwin":
+            return self._send_keypress_macos(key)
+        logger.warning(f"OS keypress not supported on platform: {sys.platform}")
+        return False
+
+    def _send_keypress_win32(self, key: str) -> bool:
+        try:
+            import ctypes
+            from ctypes import wintypes
+        except Exception as e:
+            logger.warning(f"Win32 keypress unavailable: {e}")
+            return False
+
+        vk = self._VK_WIN.get(key)
+        if vk is None:
+            logger.warning(f"No Win32 VK mapping for key {key!r}")
+            return False
+
+        KEYEVENTF_KEYUP = 0x0002
+        INPUT_KEYBOARD = 1
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.c_void_p),
+            ]
+
+        class INPUT_I(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [("type", wintypes.DWORD), ("i", INPUT_I)]
+
+        try:
+            user32 = ctypes.windll.user32
+            down = INPUT(type=INPUT_KEYBOARD, i=INPUT_I(ki=KEYBDINPUT(vk, 0, 0, 0, None)))
+            up = INPUT(type=INPUT_KEYBOARD, i=INPUT_I(ki=KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, None)))
+            n_down = user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
+            time.sleep(0.05)
+            n_up = user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
+            ok = n_down == 1 and n_up == 1
+            if ok:
+                logger.info(f"Sent synthetic Win32 keypress: {key!r} (VK=0x{vk:02X})")
+            else:
+                logger.warning(f"Win32 SendInput partial: down={n_down}, up={n_up}")
+            return ok
+        except Exception as e:
+            logger.warning(f"Win32 SendInput failed: {e}")
+            return False
+
+    def _send_keypress_x11(self, key: str) -> bool:
+        try:
+            from Xlib import XK
+            from Xlib import display as xlib_display
+            from Xlib.ext import xtest
+        except ImportError as e:
+            logger.warning(f"X11 keypress unavailable (Wayland-pure session?): {e}")
+            return False
+
+        keysym_str = self._XKEYSYM.get(key)
+        if keysym_str is None:
+            logger.warning(f"No X11 keysym mapping for key {key!r}")
+            return False
+
+        try:
+            d = xlib_display.Display()
+            keysym = XK.string_to_keysym(keysym_str)
+            keycode = d.keysym_to_keycode(keysym)
+            if not keycode:
+                logger.warning(f"X11 could not resolve keycode for {key!r}")
+                return False
+            xtest.fake_input(d, 2, keycode)  # KeyPress
+            d.sync()
+            time.sleep(0.05)
+            xtest.fake_input(d, 3, keycode)  # KeyRelease
+            d.sync()
+            logger.info(f"Sent synthetic X11 keypress: {key!r} (kc={keycode})")
+            return True
+        except Exception as e:
+            logger.warning(f"X11 fake_input failed (likely Wayland): {e}")
+            return False
+
+    def _send_keypress_macos(self, key: str) -> bool:
+        try:
+            from Quartz import (
+                CGEventCreateKeyboardEvent,
+                CGEventPost,
+                kCGHIDEventTap,
+            )
+        except ImportError as e:
+            logger.warning(f"Quartz keypress unavailable: {e}")
+            return False
+
+        vk = self._VK_MAC.get(key)
+        if vk is None:
+            logger.warning(f"No macOS VK mapping for key {key!r}")
+            return False
+
+        try:
+            down = CGEventCreateKeyboardEvent(None, vk, True)
+            up = CGEventCreateKeyboardEvent(None, vk, False)
+            CGEventPost(kCGHIDEventTap, down)
+            time.sleep(0.05)
+            CGEventPost(kCGHIDEventTap, up)
+            logger.info(
+                f"Sent synthetic macOS keypress: {key!r} (VK=0x{vk:02X}). "
+                "If the task did not receive it, grant Accessibility "
+                "permission to this binary in System Settings."
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Quartz CGEventPost failed: {e}")
+            return False
+
     def _copy_volume_file(self, src_file: Path) -> Path:
         """
         Copy a volume file (and its JSON sidecar for NIfTI) to target directory.
@@ -306,16 +503,34 @@ class VolumeSimulator:
         logger.info(f"Starting {self.source_type} simulator: {n_total} volumes at {self.speed}x speed")
         logger.debug(f"TR: {self.tr}s | Delay: {self.delay:.3f}s")
 
-        # Set start time if not already set (coordinator may set it earlier)
-        if self.start_time is None:
-            self.start_time = time.monotonic()
-        # Fire trigger callback before any volume copies (replicates real
-        # scanner sending trigger key before acquiring the first volume)
-        if self.trigger_callback is not None:
-            try:
-                self.trigger_callback()
-            except Exception as e:
-                logger.error(f"Trigger callback error: {e}")
+        # Issue or wait for the trigger before copying any volumes. The
+        # start_time is reset afterward so volume 0's deadline is measured
+        # from the trigger instant, not from simulator-thread launch.
+        # When trigger_event is None (collection-only contexts with no task),
+        # there is nothing to coordinate with, so trigger handling is skipped.
+        if self.trigger_event is not None:
+            logger.info(f"Simulator trigger_mode={self.trigger_mode}")
+            if self.trigger_mode == "manual":
+                logger.info("Simulator: waiting for manual trigger keypress")
+                while not self.trigger_event.is_set():
+                    if stop_event is not None and stop_event.is_set():
+                        logger.info("Simulator stopped while waiting for trigger")
+                        return
+                    self.trigger_event.wait(timeout=0.1)
+            elif self.trigger_mode == "os_key":
+                ok = self._send_os_keypress(self.trigger_key)
+                if not ok:
+                    logger.warning(
+                        "Simulator: OS keypress failed; falling back to manual mode. "
+                        "On Wayland, synthetic input is blocked by design. "
+                        "On macOS, grant Accessibility permission and retry."
+                    )
+                    while not self.trigger_event.is_set():
+                        if stop_event is not None and stop_event.is_set():
+                            return
+                        self.trigger_event.wait(timeout=0.1)
+
+        self.start_time = time.monotonic()
 
         volumes_copied = 0
         for i, src_file in enumerate(files_to_send):
