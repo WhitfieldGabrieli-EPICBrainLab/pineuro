@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-04
+
+### Fixed
+
+- **Scanner trigger reliability**: Real scans occasionally never received the scanner's trigger keypress, leaving the task stuck on "Waiting for scanner...". Two intertwined causes are addressed.
+  - The unfocused-window key-polling fallback (Windows `GetAsyncKeyState`, Linux `XQueryKeymap`, macOS `CGEventSourceKeyState`) had a one-shot seed-skip that silently dropped the very first detected press. Scanner triggers are short (~50-100ms) and the polling loop runs every 10ms, so the first detection was usually exactly the trigger itself. Replaced the seed-skip flag with a snapshot of currently-held keys taken at reset: a key already held must be released before its next press fires; a fresh press always fires.
+  - The PsychoPy task window was never explicitly brought to the OS foreground when launched from the GUI, so pyglet's focused-event path silently failed unless the user manually clicked the task window. Added a best-effort window activation at the start of `wait_for_trigger`, including the `AttachThreadInput` Win32 trick that bypasses Win10/11's foreground-stealing block.
+- **Diagnostics for trigger failures**: `wait_for_trigger` now logs the trigger keys, window handle, foreground state, keys held at reset, and which path delivered the trigger (`focused_event` / `poll_win32` / `poll_x11` / `poll_quartz` / `simulator_*`). Warns when a configured trigger key is missing from the active platform's keymap.
+
+### Changed
+
+- **Simulator trigger now exercises the real-scan code path**: previously the simulator bypassed the keyboard entirely by directly appending to PsychoPy's internal `_keyBuffer`, so simulator runs could never reproduce real-scan trigger failures. The simulator now routes through the same focus-dependent path as a real scanner, controlled by a new `scan.simulator_trigger_mode` setting in the study editor:
+  - `manual` (default): simulator waits for the operator to press the trigger key, identical to a real scan.
+  - `os_key`: simulator injects a synthetic OS-level keypress via `SendInput` (Windows), `Xlib.ext.xtest.fake_input` (X11), or `CGEventPost` (macOS). Pure-Wayland sessions and macOS without Accessibility permission automatically fall back to manual mode with a clear warning.
+
 ## [0.5.0] - 2026-04-27
 
 ### Added
