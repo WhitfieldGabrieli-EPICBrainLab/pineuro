@@ -2023,7 +2023,7 @@ class ParticipantWorkflowScreen:
                     loc_type = loc.get("type", "rest")
                     loc_task_name = "rest" if loc_type == "rest" else loc_type
                     loc_n_runs = loc.get("n_runs", 2)
-                    loc_n_vols = loc.get("n_volumes", 200)
+                    loc_n_vols = loc.get("n_volumes", 250)
 
                     # Check collection steps
                     for run_num in range(1, loc_n_runs + 1):
@@ -4882,7 +4882,7 @@ class ParticipantWorkflowScreen:
             localizers = config.get("localizers", [])
             loc = localizers[loc_idx] if loc_idx < len(localizers) else {}
             loc_type = loc.get("type", "rest")
-            loc_n_vols = loc.get("n_volumes", 200)
+            loc_n_vols = loc.get("n_volumes", 250)
             loc_tr = loc.get("tr", 1.2)
             loc_source_dicoms = loc.get("source_dicoms", [])
             source_dicom = loc_source_dicoms[run_num - 1] if run_num <= len(loc_source_dicoms) else ""
@@ -5041,7 +5041,7 @@ class ParticipantWorkflowScreen:
 
             loc_task = config["scan"].get("localizer_task_type", "rest")
             loc_name = loc_task if loc_task != "rest" else "rest"
-            expected_vols = config["scan"].get("localizer_n_volumes") or 200
+            expected_vols = config["scan"].get("localizer_n_volumes") or 250
 
             # Get acq info for this run (same pattern as feedback steps)
             collection_dir = base_dir / "collection"
@@ -6210,7 +6210,7 @@ class ParticipantWorkflowScreen:
                 if is_multi_loc_run:
                     loc_idx = int(step_id.split("_")[1])
                     localizers = config.get("localizers", [])
-                    n_volumes = localizers[loc_idx].get("n_volumes", 200) if loc_idx < len(localizers) else 200
+                    n_volumes = localizers[loc_idx].get("n_volumes", 250) if loc_idx < len(localizers) else 250
                 else:
                     n_volumes = config["scan"].get("localizer_n_volumes")
                     if n_volumes is None:
@@ -6704,8 +6704,8 @@ class ParticipantWorkflowScreen:
             loc_idx = int(step_id.split("_")[1])
             localizers = config.get("localizers", [])
             if loc_idx < len(localizers):
-                return int(localizers[loc_idx].get("n_volumes", 200))
-            return 200
+                return int(localizers[loc_idx].get("n_volumes", 250))
+            return 250
 
         elif step_id.startswith("rest_run_"):
             # Single localizer

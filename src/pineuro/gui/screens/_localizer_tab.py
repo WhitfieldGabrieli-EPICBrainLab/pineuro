@@ -126,7 +126,7 @@ class LocalizerTabBuilder:
         self.n_volumes_field = ft.TextField(
             width=600,
             label="Volumes per localizer run",
-            value=str(c.get("n_volumes", 200)),
+            value=str(c.get("n_volumes", 250)),
             hint_text="Volumes acquired per localizer run",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_volumes", self.n_volumes_field, validate_positive_int),
@@ -464,7 +464,7 @@ class LocalizerTabBuilder:
         cfg: dict[str, Any] = {
             "type": loc_type,
             "tr": float(self.tr_field.value or 1.2),
-            "n_volumes": int(self.n_volumes_field.value or 200),
+            "n_volumes": int(self.n_volumes_field.value or 250),
             "n_runs": int(self.n_runs_field.value or 2),
             "motion_correction": self.motion_correction_dropdown.value or "siemens_moco",
             "threshold": int(self.threshold_field.value or 2000),

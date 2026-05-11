@@ -645,7 +645,7 @@ class PipelineRunner:
         if task_id == "fixation":
             # For fixation task, use scan parameters
             localizer_params = {
-                "duration": config["scan"].get("localizer_n_volumes", 200) * config["scan"].get("localizer_tr", 2.0)
+                "duration": config["scan"].get("localizer_n_volumes", 250) * config["scan"].get("localizer_tr", 2.0)
             }
         else:
             # For other tasks, get from localizer_task config section
@@ -1069,7 +1069,7 @@ class PipelineRunner:
         try:
             orig_scan["localizer_task_type"] = task_name
             orig_scan["localizer_tr"] = loc.get("tr", 1.2)
-            orig_scan["localizer_n_volumes"] = loc.get("n_volumes", 200)
+            orig_scan["localizer_n_volumes"] = loc.get("n_volumes", 250)
             orig_scan["localizer_n_runs"] = loc.get("n_runs", 2)
             orig_scan["localizer_source_dicoms"] = loc.get("source_dicoms", [])
             orig_scan["localizer_motion_correction"] = loc.get("motion_correction", "siemens_moco")
@@ -1103,7 +1103,7 @@ class PipelineRunner:
         preprocessing_dir = base_dir / "preprocessing"
 
         n_runs = loc.get("n_runs", 2)
-        n_volumes = loc.get("n_volumes", 200)
+        n_volumes = loc.get("n_volumes", 250)
 
         self._emit_progress(f"Preprocessing localizer {loc_idx}: {task_name}")
 

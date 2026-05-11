@@ -546,7 +546,7 @@ class LocalizerConfig:
 
     # Scan parameters
     tr: float = 1.2
-    n_volumes: int = 200
+    n_volumes: int = 250
     n_runs: int = 2
     source_dicoms: list[Path] = field(default_factory=list)
 
@@ -654,7 +654,7 @@ class ScanConfig:
 
     # Localizer parameters
     localizer_tr: float = 1.2
-    localizer_n_volumes: int = 200
+    localizer_n_volumes: int = 250
     localizer_n_runs: int = 2
     localizer_task_type: str = "rest"
 
