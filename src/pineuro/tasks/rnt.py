@@ -12,7 +12,8 @@ the GLM-based mask extraction pipeline.
 Protocol (per Shreiner et al., 2025)
 -------------------------------------
 - 2 runs per session, 4 trials each
-- Run 1 uses memories from pass 1, run 2 from pass 2
+- Pass → run assignment is shuffled deterministically per participant,
+  and memories within the chosen pass are shuffled before presentation.
 - Each trial (~145-165s):
     1. Memory prompt + keyword (5s)
     2. Reflection: "Think about this memory in detail" (25s)
@@ -27,11 +28,19 @@ Protocol (per Shreiner et al., 2025)
 
 Keywords File
 -------------
-Pre-created file in keywords_dir, discovered by participant ID.
-Supported formats: JSON or TSV.
+Pre-created JSON file per participant in ``keywords_dir``, discovered by
+participant ID via glob matching. Each memory entry must include:
 
-JSON: {"memories": [{"keyword": "...", "pass": 1}, ...]}
-TSV: keyword<tab>pass header, 8 rows (4 per pass)
+- ``keyword`` (str): shown on screen with the memory prompt as a recall anchor.
+- ``pass`` (int, 1 or 2): which of the two passes this memory belongs to.
+- ``memory_prompt`` (str): the prompt text shown to the participant.
+
+Optional fields (recorded in the events TSV but not used to drive task logic):
+
+- ``unpleasantness``: participant's pre-rated unpleasantness for this memory.
+- ``trial``: the trial index from the source file.
+
+JSON: ``{"memories": [{"keyword": "...", "pass": 1, "memory_prompt": "..."}, ...]}``
 
 Reference
 ---------
@@ -44,7 +53,6 @@ Dependencies
 PsychoPy (visual, event, core), pandas, json
 """
 
-import csv
 import json
 import logging
 import math
@@ -60,13 +68,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Constants — prompts from Shreiner et al. (2025)
 # ============================================================================
-
-MEMORY_PROMPTS = [
-    "Remember a time when your feelings were badly hurt.",
-    "Remember a time when you felt rejected by someone.",
-    "Remember a time when you felt ashamed.",
-    "Remember a time when you felt very lonely.",
-]
 
 RUMINATION_PROMPTS = [
     "Think about why this memory still bothers you.",
@@ -218,11 +219,13 @@ class RNTTask(BaseLocalizerTask):
     participant_id : str
         Participant identifier.
     keywords_dir : str or Path
-        Directory containing per-participant keyword files. Files are
-        matched by participant ID. Alternatively, pass ``keywords_file``
-        directly for standalone use.
+        Directory containing per-participant keyword JSON files. The file
+        for this participant is discovered by glob match on ``participant_id``.
+        See the module docstring for the required JSON schema. Alternatively,
+        pass ``keywords_file`` directly for standalone use.
     run : int
-        Run number (1 or 2). Run 1 uses pass-1 keywords, run 2 uses pass-2.
+        Run number (1 or 2). The pass each run draws from is randomized
+        deterministically per participant.
     memory_display_duration : float
         Duration to show memory prompt + keyword (default: 5.0s).
     reflection_duration : float
@@ -327,19 +330,22 @@ class RNTTask(BaseLocalizerTask):
 
         patterns = [
             f"*{self.participant_id}*rnt*keywords*",
-            f"*{self.participant_id}*rnt*",
+            f"*rnt*keywords*{self.participant_id}*",
             f"*{self.participant_id}*keywords*",
+            f"*keywords*{self.participant_id}*",
+            f"*{self.participant_id}*rnt*",
+            f"*rnt*{self.participant_id}*",
         ]
 
         for pattern in patterns:
-            matches = [p for p in self.keywords_dir.glob(pattern) if p.suffix in (".json", ".tsv", ".csv")]
+            matches = [p for p in self.keywords_dir.glob(pattern) if p.suffix == ".json"]
             if matches:
                 keywords_file = matches[0]
                 logger.info(f"Found keywords file: {keywords_file}")
                 return keywords_file
 
         raise FileNotFoundError(
-            f"No keywords file found in {self.keywords_dir} matching "
+            f"No .json keywords file found in {self.keywords_dir} matching "
             f"participant='{self.participant_id}'. "
             f"Tried patterns: {patterns}"
         )
@@ -347,41 +353,44 @@ class RNTTask(BaseLocalizerTask):
     def _load_keywords(self) -> None:
         """Load keywords file and assign memories to this run.
 
-        Run 1 uses pass-1 keywords, run 2 uses pass-2 keywords. Each
-        keyword is paired with the corresponding memory prompt from
-        MEMORY_PROMPTS by position within the pass.
+        Randomizes deterministically per participant (seed derived from
+        ``participant_id``):
 
-        Also shuffles rumination and distraction prompts for this run
-        using a deterministic seed based on participant_id.
+        1. Pass → run mapping is shuffled, so for some participants run 1
+           draws from pass 1 and for others from pass 2.
+        2. The memories within the selected pass are shuffled before the
+           first ``n_trials_per_run`` are taken.
+
+        Also shuffles rumination and distraction prompts using the same
+        RNG (existing behavior, preserved).
         """
         keywords_path = self._resolve_keywords_file()
         logger.info(f"Loading keywords file: {keywords_path}")
 
         all_memories = self._parse_keywords_file(keywords_path)
 
-        # Assign memories to this run based on pass number
-        target_pass = self.run_number  # run 1 → pass 1, run 2 → pass 2
-        run_memories = [m for m in all_memories if m["pass"] == target_pass]
+        # Deterministic per-participant RNG (same pattern as the existing
+        # rumination/distraction shuffles below).
+        seed = hash(self.participant_id) & 0xFFFFFFFF
+        rng = random.Random(seed)
 
+        # 1. Randomize which pass this run draws from.
+        pass_order = [1, 2]
+        rng.shuffle(pass_order)
+        target_pass = pass_order[self.run_number - 1]
+
+        # 2. Filter to this pass and shuffle within-pass order.
+        run_memories = [m for m in all_memories if m["pass"] == target_pass]
         if len(run_memories) < self.n_trials_per_run:
             raise ValueError(
                 f"Keywords file has {len(run_memories)} memories for pass "
                 f"{target_pass}, but n_trials_per_run={self.n_trials_per_run}. "
                 f"Need at least {self.n_trials_per_run} memories per pass."
             )
-
-        # Pair each keyword with corresponding memory prompt by position
-        for i, memory in enumerate(run_memories[: self.n_trials_per_run]):
-            prompt_idx = i % len(MEMORY_PROMPTS)
-            memory["prompt"] = MEMORY_PROMPTS[prompt_idx]
-            memory["prompt_index"] = prompt_idx
-
+        rng.shuffle(run_memories)
         self._memories = run_memories[: self.n_trials_per_run]
 
-        # Shuffle rumination and distraction prompts deterministically
-        seed = hash(self.participant_id) & 0xFFFFFFFF
-        rng = random.Random(seed)
-
+        # 3. Shuffle rumination / distraction prompts (unchanged).
         rumination_order = list(range(len(RUMINATION_PROMPTS)))
         distraction_order = list(range(len(DISTRACTION_PROMPTS)))
         rng.shuffle(rumination_order)
@@ -400,38 +409,42 @@ class RNTTask(BaseLocalizerTask):
         logger.info(f"Loaded {len(self._memories)} memories for run {self.run_number} (pass {target_pass})")
 
     def _parse_keywords_file(self, path: Path) -> list[dict[str, Any]]:
-        """Parse a keywords file (JSON or TSV/CSV).
+        """Parse a keywords JSON file.
+
+        Each entry must include ``keyword`` (str), ``pass`` (int, 1 or 2),
+        and ``memory_prompt`` (str). Optional ``unpleasantness`` and ``trial``
+        fields are passed through for event recording but do not drive task
+        logic.
 
         Parameters
         ----------
         path : Path
-            Path to the keywords file.
+            Path to the keywords JSON file.
 
         Returns
         -------
         list of dict
-            Each dict has at least "keyword" (str) and "pass" (int).
-        """
-        if path.suffix == ".json":
-            with open(path) as f:
-                data = json.load(f)
-            memories: list[dict[str, Any]] = data.get("memories", data) if isinstance(data, dict) else data
-            for m in memories:
-                m["pass"] = int(m["pass"])
-            return memories
 
-        # TSV or CSV
-        delimiter = "\t" if path.suffix == ".tsv" else ","
-        memories = []
-        with open(path, newline="") as f:
-            reader = csv.DictReader(f, delimiter=delimiter)
-            for row in reader:
-                memories.append(
-                    {
-                        "keyword": row["keyword"].strip(),
-                        "pass": int(row["pass"]),
-                    }
+        Raises
+        ------
+        ValueError
+            If any entry is missing a required field.
+        """
+        with open(path) as f:
+            data = json.load(f)
+        memories: list[dict[str, Any]] = data.get("memories", data) if isinstance(data, dict) else data
+
+        required = ("keyword", "pass", "memory_prompt")
+        for i, m in enumerate(memories):
+            missing = [k for k in required if k not in m]
+            if missing:
+                raise ValueError(
+                    f"Keywords file {path} entry {i} is missing required field(s): {missing}. "
+                    f"Each memory must include: {list(required)}."
                 )
+            m["pass"] = int(m["pass"])
+            m["keyword"] = str(m["keyword"]).strip()
+            m["memory_prompt"] = str(m["memory_prompt"])
         return memories
 
     # =========================================================================
@@ -617,7 +630,7 @@ class RNTTask(BaseLocalizerTask):
         # 1. Memory prompt + keyword
         onset = self._experiment_clock.getTime()
         self._show_text(
-            f"{memory['prompt']}\n\nKeyword: {memory['keyword']}",
+            f"{memory['memory_prompt']}\n\nKeyword: {memory['keyword']}",
             self.memory_display_duration,
         )
         self.record_event(
@@ -626,7 +639,10 @@ class RNTTask(BaseLocalizerTask):
             "memory_prompt",
             trial=trial_num,
             keyword=memory["keyword"],
-            prompt_index=memory["prompt_index"],
+            memory_prompt=memory["memory_prompt"],
+            pass_num=memory["pass"],
+            unpleasantness=memory.get("unpleasantness"),
+            trial_id=memory.get("trial"),
         )
 
         # 2. Reflection

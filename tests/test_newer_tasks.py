@@ -96,17 +96,22 @@ class TestRNTKeywordParsing:
     def test_parse_json_keywords(self, tmp_path):
         from pineuro.tasks.rnt import RNTTask
 
-        # Create a JSON keywords file
         keywords = {
             "memories": [
-                {"keyword": "loss", "pass": 1},
-                {"keyword": "shame", "pass": 1},
-                {"keyword": "anger", "pass": 1},
-                {"keyword": "fear", "pass": 1},
-                {"keyword": "lonely", "pass": 2},
-                {"keyword": "rejected", "pass": 2},
-                {"keyword": "hurt", "pass": 2},
-                {"keyword": "sad", "pass": 2},
+                {"keyword": "loss", "pass": 1, "memory_prompt": "Remember a time you lost something."},
+                {"keyword": "shame", "pass": 1, "memory_prompt": "Remember a time you felt ashamed."},
+                {"keyword": "anger", "pass": 1, "memory_prompt": "Remember a time you felt angry."},
+                {"keyword": "fear", "pass": 1, "memory_prompt": "Remember a time you felt afraid."},
+                {
+                    "keyword": "lonely",
+                    "pass": 2,
+                    "memory_prompt": "Remember a time you felt lonely.",
+                    "unpleasantness": 7,
+                    "trial": 5,
+                },
+                {"keyword": "rejected", "pass": 2, "memory_prompt": "Remember a time you felt rejected."},
+                {"keyword": "hurt", "pass": 2, "memory_prompt": "Remember a time your feelings were hurt."},
+                {"keyword": "sad", "pass": 2, "memory_prompt": "Remember a time you felt sad."},
             ]
         }
         kw_file = tmp_path / "sub-01_rnt_keywords.json"
@@ -118,26 +123,27 @@ class TestRNTKeywordParsing:
         assert len(result) == 8
         assert result[0]["keyword"] == "loss"
         assert result[0]["pass"] == 1
+        assert result[0]["memory_prompt"] == "Remember a time you lost something."
+        # Optional fields preserved as-is
+        assert result[4]["unpleasantness"] == 7
+        assert result[4]["trial"] == 5
 
-    def test_parse_tsv_keywords(self, tmp_path):
+    def test_parse_rejects_missing_memory_prompt(self, tmp_path):
         from pineuro.tasks.rnt import RNTTask
 
-        content = "keyword\tpass\nloss\t1\nshame\t1\nanger\t1\nfear\t1\nlonely\t2\nrejected\t2\nhurt\t2\nsad\t2\n"
-        kw_file = tmp_path / "keywords.tsv"
-        kw_file.write_text(content)
+        keywords = {"memories": [{"keyword": "loss", "pass": 1}]}  # no memory_prompt
+        kw_file = tmp_path / "sub-01_rnt_keywords.json"
+        kw_file.write_text(json.dumps(keywords))
 
         task = RNTTask.__new__(RNTTask)
-        result = task._parse_keywords_file(kw_file)
-
-        assert len(result) == 8
-        assert result[4]["keyword"] == "lonely"
-        assert result[4]["pass"] == 2
+        with pytest.raises(ValueError, match="memory_prompt"):
+            task._parse_keywords_file(kw_file)
 
     def test_resolve_keywords_file_direct(self, tmp_path):
         from pineuro.tasks.rnt import RNTTask
 
         kw_file = tmp_path / "keywords.json"
-        kw_file.write_text(json.dumps({"memories": [{"keyword": "test", "pass": 1}]}))
+        kw_file.write_text(json.dumps({"memories": [{"keyword": "test", "pass": 1, "memory_prompt": "Test prompt."}]}))
 
         task = RNTTask.__new__(RNTTask)
         task.keywords_dir = None
@@ -164,7 +170,24 @@ class TestRNTKeywordParsing:
         kw_dir = tmp_path / "keywords"
         kw_dir.mkdir()
         kw_file = kw_dir / "sub-01_rnt_keywords.json"
-        kw_file.write_text(json.dumps({"memories": [{"keyword": "test", "pass": 1}]}))
+        kw_file.write_text(json.dumps({"memories": [{"keyword": "test", "pass": 1, "memory_prompt": "Test prompt."}]}))
+
+        task = RNTTask.__new__(RNTTask)
+        task.keywords_dir = kw_dir
+        task._keywords_file_override = None
+        task.participant_id = "sub-01"
+
+        result = task._resolve_keywords_file()
+        assert result == kw_file
+
+    def test_resolve_keywords_file_by_glob_keywords_first(self, tmp_path):
+        """Glob should also find files where 'keywords' appears before the participant ID."""
+        from pineuro.tasks.rnt import RNTTask
+
+        kw_dir = tmp_path / "keywords"
+        kw_dir.mkdir()
+        kw_file = kw_dir / "RIT_keywords_sub-01.json"
+        kw_file.write_text(json.dumps({"memories": [{"keyword": "test", "pass": 1, "memory_prompt": "Test prompt."}]}))
 
         task = RNTTask.__new__(RNTTask)
         task.keywords_dir = kw_dir
@@ -176,16 +199,88 @@ class TestRNTKeywordParsing:
 
 
 # =============================================================================
+# RNT keyword loading — randomization behavior
+# =============================================================================
+
+
+class TestRNTKeywordLoading:
+    """Tests for _load_keywords pass-assignment and within-pass shuffles."""
+
+    @staticmethod
+    def _write_keywords(tmp_path):
+        memories = [
+            {"keyword": f"kw{i}_p{p}", "pass": p, "memory_prompt": f"Prompt {i} pass {p}"}
+            for p in (1, 2)
+            for i in range(1, 5)
+        ]
+        kw_file = tmp_path / "sub-01_rnt_keywords.json"
+        kw_file.write_text(json.dumps({"memories": memories}))
+        return kw_file
+
+    @staticmethod
+    def _make_task(kw_file, participant_id, run):
+        from pineuro.tasks.rnt import RNTTask
+
+        task = RNTTask.__new__(RNTTask)
+        task.keywords_dir = None
+        task._keywords_file_override = kw_file
+        task.participant_id = participant_id
+        task.run_number = run
+        task.n_trials_per_run = 4
+        return task
+
+    def test_load_keywords_deterministic_per_participant(self, tmp_path):
+        kw_file = self._write_keywords(tmp_path)
+        task1 = self._make_task(kw_file, "sub-001", 1)
+        task2 = self._make_task(kw_file, "sub-001", 1)
+        task1._load_keywords()
+        task2._load_keywords()
+        assert [m["keyword"] for m in task1._memories] == [m["keyword"] for m in task2._memories]
+
+    def test_load_keywords_all_memories_same_pass(self, tmp_path):
+        kw_file = self._write_keywords(tmp_path)
+        task = self._make_task(kw_file, "sub-001", 1)
+        task._load_keywords()
+        passes = {m["pass"] for m in task._memories}
+        assert len(passes) == 1, f"run 1 mixed multiple passes: {passes}"
+        assert len(task._memories) == 4
+
+    def test_load_keywords_pass_assignment_varies_across_participants(self, tmp_path):
+        """Across many participant IDs, run 1 should sometimes draw from pass 2."""
+        kw_file = self._write_keywords(tmp_path)
+        passes_for_run1 = set()
+        for i in range(64):
+            task = self._make_task(kw_file, f"sub-{i:03d}", 1)
+            task._load_keywords()
+            passes_for_run1.add(task._memories[0]["pass"])
+            if len(passes_for_run1) == 2:
+                break
+        assert passes_for_run1 == {1, 2}, (
+            f"Expected both pass values for run 1 across participants; saw {passes_for_run1}"
+        )
+
+    def test_load_keywords_within_pass_shuffles(self, tmp_path):
+        """Memories within the chosen pass aren't always presented in file order."""
+        kw_file = self._write_keywords(tmp_path)
+        file_order_p1 = [f"kw{i}_p1" for i in range(1, 5)]
+        file_order_p2 = [f"kw{i}_p2" for i in range(1, 5)]
+        seen_shuffle = False
+        for i in range(64):
+            task = self._make_task(kw_file, f"sub-{i:03d}", 1)
+            task._load_keywords()
+            order = [m["keyword"] for m in task._memories]
+            if order != file_order_p1 and order != file_order_p2:
+                seen_shuffle = True
+                break
+        assert seen_shuffle, "Expected to observe at least one shuffled within-pass order across participants"
+
+
+# =============================================================================
 # RNT prompts
 # =============================================================================
 
 
 class TestRNTPrompts:
-    def test_memory_prompts_not_empty(self):
-        from pineuro.tasks.rnt import MEMORY_PROMPTS
-
-        assert len(MEMORY_PROMPTS) >= 4
-
     def test_rumination_prompts_not_empty(self):
         from pineuro.tasks.rnt import RUMINATION_PROMPTS
 
