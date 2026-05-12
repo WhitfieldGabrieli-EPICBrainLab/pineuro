@@ -1,6 +1,7 @@
 """Tests for pineuro.simulator — VolumeSimulator deadline-based volume copier."""
 
 import json
+import sys
 import threading
 import time
 
@@ -246,3 +247,21 @@ class TestCleanup:
         list(sim.copy_volumes_iter())
 
         assert not target.exists()
+
+
+# =============================================================================
+# Win32 SendInput struct layout (regression for os_key trigger mode)
+# =============================================================================
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32-only SendInput INPUT struct")
+def test_win32_input_struct_size_matches_sendinput():
+    import ctypes
+
+    from pineuro.simulator import _INPUT
+
+    # Win32 INPUT is 40 bytes on 64-bit Windows, 28 on 32-bit. If sizeof(INPUT)
+    # doesn't match what SendInput expects, every call returns 0 and the
+    # synthetic-keypress trigger path silently breaks.
+    expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
+    assert ctypes.sizeof(_INPUT) == expected

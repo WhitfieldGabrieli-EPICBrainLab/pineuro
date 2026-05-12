@@ -44,6 +44,7 @@ References
 import argparse
 import logging
 import shutil
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -51,6 +52,47 @@ from pathlib import Path
 from typing import Literal, Union
 
 TriggerMode = Literal["manual", "os_key"]
+
+# Win32 SendInput structs. Lifted to module level so the regression test can
+# verify their size — the union MUST include MOUSEINPUT (its 32-byte size on
+# 64-bit / 24-byte on 32-bit dominates the union), otherwise ctypes.sizeof(INPUT)
+# is 32/20 bytes and SendInput silently rejects every call (returns 0).
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    class _MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.c_void_p),
+        ]
+
+    class _KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.c_void_p),
+        ]
+
+    class _HARDWAREINPUT(ctypes.Structure):
+        _fields_ = [
+            ("uMsg", wintypes.DWORD),
+            ("wParamL", wintypes.WORD),
+            ("wParamH", wintypes.WORD),
+        ]
+
+    class _INPUT_I(ctypes.Union):
+        _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT), ("hi", _HARDWAREINPUT)]
+
+    class _INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("i", _INPUT_I)]
+
 
 # Third-party imports
 # Local imports
@@ -307,8 +349,6 @@ class VolumeSimulator:
 
     def _send_os_keypress(self, key: str) -> bool:
         """Send a synthetic OS-level key down+up. Returns True on success."""
-        import sys
-
         if sys.platform == "win32":
             return self._send_keypress_win32(key)
         if sys.platform == "linux":
@@ -319,15 +359,7 @@ class VolumeSimulator:
         return False
 
     def _send_keypress_win32(self, key: str) -> bool:
-        import sys
-
         if sys.platform != "win32":
-            return False
-        try:
-            import ctypes
-            from ctypes import wintypes
-        except Exception as e:
-            logger.warning(f"Win32 keypress unavailable: {e}")
             return False
 
         vk = self._VK_WIN.get(key)
@@ -338,28 +370,13 @@ class VolumeSimulator:
         KEYEVENTF_KEYUP = 0x0002
         INPUT_KEYBOARD = 1
 
-        class KEYBDINPUT(ctypes.Structure):
-            _fields_ = [
-                ("wVk", wintypes.WORD),
-                ("wScan", wintypes.WORD),
-                ("dwFlags", wintypes.DWORD),
-                ("time", wintypes.DWORD),
-                ("dwExtraInfo", ctypes.c_void_p),
-            ]
-
-        class INPUT_I(ctypes.Union):
-            _fields_ = [("ki", KEYBDINPUT)]
-
-        class INPUT(ctypes.Structure):
-            _fields_ = [("type", wintypes.DWORD), ("i", INPUT_I)]
-
         try:
             user32 = ctypes.windll.user32
-            down = INPUT(type=INPUT_KEYBOARD, i=INPUT_I(ki=KEYBDINPUT(vk, 0, 0, 0, None)))
-            up = INPUT(type=INPUT_KEYBOARD, i=INPUT_I(ki=KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, None)))
-            n_down = user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
+            down = _INPUT(type=INPUT_KEYBOARD, i=_INPUT_I(ki=_KEYBDINPUT(vk, 0, 0, 0, None)))
+            up = _INPUT(type=INPUT_KEYBOARD, i=_INPUT_I(ki=_KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, None)))
+            n_down = user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(_INPUT))
             time.sleep(0.05)
-            n_up = user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
+            n_up = user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(_INPUT))
             ok: bool = bool(n_down == 1) and bool(n_up == 1)
             if ok:
                 logger.info(f"Sent synthetic Win32 keypress: {key!r} (VK=0x{vk:02X})")
