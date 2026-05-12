@@ -31,6 +31,7 @@ class TestRNTExperienceSamplingRegistration:
         assert "activation_contrast" in param_keys
         assert "consecutive_volumes" in param_keys
         assert "activation_trend" in param_keys
+        assert "trend_method" in param_keys
         assert "min_prompt_interval" in param_keys
         assert "timeout_duration" in param_keys
         assert "rating_timeout" in param_keys
@@ -97,6 +98,7 @@ class TestTriggerDetection:
         stub.activation_contrast = kwargs.get("activation_contrast", "positive")
         stub.consecutive_volumes = kwargs.get("consecutive_volumes", 3)
         stub.activation_trend = kwargs.get("activation_trend", "increasing")
+        stub.trend_method = kwargs.get("trend_method", "strict")
         stub.min_prompt_interval = kwargs.get("min_prompt_interval", 30.0)
         stub.timeout_duration = kwargs.get("timeout_duration", 60.0)
         stub._trigger_state = TriggerState()
@@ -264,3 +266,102 @@ class TestTriggerDetection:
         # all() over empty range returns True
         result = stub._check_trigger(35.0, 0.5)
         assert result == "triggered"
+
+
+# =============================================================================
+# Slope-mode trend detection
+# =============================================================================
+
+
+class TestSlopeModeTriggerDetection:
+    """Slope-mode coverage; shares the stub-builder shape with TestTriggerDetection."""
+
+    def _make_task_stub(self, **kwargs):
+        from pineuro.tasks.rnt_experience_sampling import RNTExperienceSamplingTask, TriggerState
+
+        class TriggerStub:
+            pass
+
+        stub = TriggerStub()
+        stub.activation_contrast = kwargs.get("activation_contrast", "positive")
+        stub.consecutive_volumes = kwargs.get("consecutive_volumes", 3)
+        stub.activation_trend = kwargs.get("activation_trend", "increasing")
+        stub.trend_method = kwargs.get("trend_method", "strict")
+        stub.min_prompt_interval = kwargs.get("min_prompt_interval", 30.0)
+        stub.timeout_duration = kwargs.get("timeout_duration", 60.0)
+        stub._trigger_state = TriggerState()
+        stub._check_trigger = RNTExperienceSamplingTask._check_trigger.__get__(stub)
+        return stub
+
+    def test_strict_rejects_blip(self):
+        # Anchor: current strict behavior is preserved under the new param.
+        stub = self._make_task_stub(
+            trend_method="strict",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+        )
+        stub._trigger_state.last_prompt_time = 30.0
+        stub._trigger_state.activation_history.extend([0.1, 0.4, 0.3])
+        assert stub._check_trigger(40.0, 0.3) is None
+
+    def test_slope_accepts_blip(self):
+        stub = self._make_task_stub(
+            trend_method="slope",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+        )
+        stub._trigger_state.last_prompt_time = 30.0
+        stub._trigger_state.activation_history.extend([0.1, 0.4, 0.3])
+        assert stub._check_trigger(40.0, 0.3) == "triggered"
+
+    def test_slope_rejects_when_last_value_below_threshold(self):
+        stub = self._make_task_stub(
+            trend_method="slope",
+            activation_contrast="positive",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+        )
+        stub._trigger_state.last_prompt_time = 30.0
+        stub._trigger_state.activation_history.extend([-0.5, -0.3, -0.1])
+        assert stub._check_trigger(40.0, -0.1) is None
+
+    def test_slope_negative_contrast_with_blip(self):
+        stub = self._make_task_stub(
+            trend_method="slope",
+            activation_contrast="negative",
+            activation_trend="decreasing",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+        )
+        stub._trigger_state.last_prompt_time = 30.0
+        stub._trigger_state.activation_history.extend([-0.1, -0.4, -0.3])
+        assert stub._check_trigger(40.0, -0.3) == "triggered"
+
+    def test_slope_rejects_when_trend_wrong_direction(self):
+        stub = self._make_task_stub(
+            trend_method="slope",
+            activation_contrast="positive",
+            activation_trend="increasing",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+        )
+        stub._trigger_state.last_prompt_time = 30.0
+        stub._trigger_state.activation_history.extend([0.5, 0.4, 0.3])
+        # Threshold passes (last value > 0) but slope is negative.
+        assert stub._check_trigger(40.0, 0.3) is None
+
+
+# =============================================================================
+# Constructor validation
+# =============================================================================
+
+
+class TestConstructorValidation:
+    def test_invalid_trend_method_raises(self, mock_coordinator):
+        import pytest
+
+        from pineuro.tasks.rnt_experience_sampling import RNTExperienceSamplingTask
+
+        coord = mock_coordinator(mask_names=["RNT"])
+        with pytest.raises(ValueError, match="trend_method"):
+            RNTExperienceSamplingTask(coord, trend_method="bogus")

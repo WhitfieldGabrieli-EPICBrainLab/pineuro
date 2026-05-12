@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from .base import BaseTask
 from .factory import register_task_class
+from .rnt_triggered_ball import _least_squares_slope
 from .task_registry import (
     NetworkRole,
     TaskMetadata,
@@ -141,6 +142,7 @@ class RNTExperienceSamplingTask(BaseTask):
         activation_contrast: str = "positive",
         consecutive_volumes: int = 3,
         activation_trend: str = "increasing",
+        trend_method: str = "strict",
         min_prompt_interval: float = 30.0,
         timeout_duration: float = 60.0,
         rating_timeout: float = 15.0,
@@ -154,6 +156,8 @@ class RNTExperienceSamplingTask(BaseTask):
         **kwargs,
     ):
         mask_names = mask_names or coordinator.mask_names[:1]
+        if trend_method not in ("strict", "slope"):
+            raise ValueError(f"trend_method must be 'strict' or 'slope', got {trend_method!r}")
 
         super().__init__(
             coordinator=coordinator,
@@ -171,6 +175,7 @@ class RNTExperienceSamplingTask(BaseTask):
         self.activation_contrast = activation_contrast
         self.consecutive_volumes = consecutive_volumes
         self.activation_trend = activation_trend
+        self.trend_method = trend_method
         self.min_prompt_interval = min_prompt_interval
         self.timeout_duration = timeout_duration
         self.rating_timeout = rating_timeout
@@ -224,8 +229,8 @@ class RNTExperienceSamplingTask(BaseTask):
         logger.info(
             f"RNTExperienceSamplingTask initialized: mask={self.mask_name}, "
             f"contrast={activation_contrast}, consecutive={consecutive_volumes}, "
-            f"trend={activation_trend}, cooldown={min_prompt_interval}s, "
-            f"timeout={timeout_duration}s"
+            f"trend={activation_trend}, method={trend_method}, "
+            f"cooldown={min_prompt_interval}s, timeout={timeout_duration}s"
         )
 
     # =========================================================================
@@ -260,23 +265,28 @@ class RNTExperienceSamplingTask(BaseTask):
             self._trigger_state.volume_history.append(volume)
 
             history = list(self._trigger_state.activation_history)
-            # Use the same window algorithm as _check_trigger: find the largest
-            # window (up to consecutive_volumes) ending at the current value
-            # that is monotonically increasing/decreasing.
-            consecutive = 0
-            for w in range(min(len(history), self.consecutive_volumes), 0, -1):
-                window = history[-w:]
-                if self.activation_trend == "increasing":
-                    if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
-                        consecutive = w
-                        break
-                else:
-                    if all(window[i] > window[i + 1] for i in range(len(window) - 1)):
-                        consecutive = w
-                        break
+            if self.trend_method == "strict":
+                # Same window algorithm as _check_trigger: largest window
+                # (up to consecutive_volumes) ending at the current value
+                # that is monotonically increasing/decreasing.
+                consecutive = 0
+                for w in range(min(len(history), self.consecutive_volumes), 0, -1):
+                    window = history[-w:]
+                    if self.activation_trend == "increasing":
+                        if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
+                            consecutive = w
+                            break
+                    else:
+                        if all(window[i] > window[i + 1] for i in range(len(window) - 1)):
+                            consecutive = w
+                            break
 
-            trend_str = f"{consecutive}/{self.consecutive_volumes}"
-            self._volume_log_suffix = f" | {self.activation_trend} {trend_str}"
+                trend_str = f"{consecutive}/{self.consecutive_volumes}"
+                self._volume_log_suffix = f" | {self.activation_trend} {trend_str}"
+            else:  # "slope"
+                window = history[-self.consecutive_volumes :] if len(history) >= self.consecutive_volumes else history
+                slope = _least_squares_slope(window)
+                self._volume_log_suffix = f" | slope {slope:+.3f} (n={len(window)})"
         else:
             self._volume_log_suffix = ""
 
@@ -328,10 +338,17 @@ class RNTExperienceSamplingTask(BaseTask):
             return None
 
         recent = history[-self.consecutive_volumes :]
-        if self.activation_trend == "increasing":
-            trending = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
-        else:
-            trending = all(recent[i] > recent[i + 1] for i in range(len(recent) - 1))
+        if self.trend_method == "strict":
+            if self.activation_trend == "increasing":
+                trending = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
+            else:
+                trending = all(recent[i] > recent[i + 1] for i in range(len(recent) - 1))
+        else:  # "slope"
+            slope = _least_squares_slope(recent)
+            if self.activation_trend == "increasing":
+                trending = slope > 0
+            else:
+                trending = slope < 0
 
         if trending:
             return "triggered"
@@ -903,13 +920,29 @@ RNT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
             hint="Positive = activation > baseline, Negative = activation < baseline",
         ),
         TaskParameter(
+            key="trend_method",
+            label="Trend Method",
+            type="str",
+            default="strict",
+            choices=["strict", "slope"],
+            hint=(
+                "strict = require monotonic change across all Consecutive Volumes "
+                "(current behavior). slope = require least-squares slope sign to "
+                "match Activation Trend (tolerant of single blips; increase "
+                "Consecutive Volumes to ~5 for stronger blip-tolerance)."
+            ),
+        ),
+        TaskParameter(
             key="consecutive_volumes",
             label="Consecutive Volumes",
             type="int",
             default=3,
             min_value=1,
             max_value=20,
-            hint="Number of consecutive trending volumes required to trigger",
+            hint=(
+                "With trend_method=strict: number of consecutive trending volumes "
+                "required. With trend_method=slope: regression window length."
+            ),
         ),
         TaskParameter(
             key="activation_trend",

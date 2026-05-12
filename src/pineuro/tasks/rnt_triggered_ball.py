@@ -68,6 +68,24 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# Helpers
+# ============================================================================
+
+
+def _least_squares_slope(values: list[float]) -> float:
+    """Slope of least-squares line through ``values`` with x = 0..N-1.
+
+    Returns 0.0 for windows shorter than 2.
+    """
+    if len(values) < 2:
+        return 0.0
+    x = np.arange(len(values), dtype=float)
+    y = np.asarray(values, dtype=float)
+    slope, _ = np.polyfit(x, y, 1)
+    return float(slope)
+
+
+# ============================================================================
 # Data structures
 # ============================================================================
 
@@ -150,6 +168,7 @@ class RNTTriggeredBallTask(BaseTask):
         activation_contrast: str = "positive",
         consecutive_volumes: int = 3,
         activation_trend: str = "increasing",
+        trend_method: str = "strict",
         min_prompt_interval: float = 30.0,
         timeout_duration: float = 60.0,
         episode_duration: float = 30.0,
@@ -170,6 +189,8 @@ class RNTTriggeredBallTask(BaseTask):
             raise ValueError(
                 f"RNTTriggeredBallTask requires 3 mask names [trigger, top_ball, bottom_ball], got {len(mask_names)}"
             )
+        if trend_method not in ("strict", "slope"):
+            raise ValueError(f"trend_method must be 'strict' or 'slope', got {trend_method!r}")
 
         super().__init__(
             coordinator=coordinator,
@@ -187,6 +208,7 @@ class RNTTriggeredBallTask(BaseTask):
         self.activation_contrast = activation_contrast
         self.consecutive_volumes = consecutive_volumes
         self.activation_trend = activation_trend
+        self.trend_method = trend_method
         self.min_prompt_interval = min_prompt_interval
         self.timeout_duration = timeout_duration
 
@@ -253,7 +275,8 @@ class RNTTriggeredBallTask(BaseTask):
             f"RNTTriggeredBallTask initialized: trigger={self.mask_name}, "
             f"ball=[{self._ball_mask_names[0]}, {self._ball_mask_names[1]}], "
             f"contrast={activation_contrast}, consecutive={consecutive_volumes}, "
-            f"trend={activation_trend}, cooldown={min_prompt_interval}s, "
+            f"trend={activation_trend}, method={trend_method}, "
+            f"cooldown={min_prompt_interval}s, "
             f"timeout={timeout_duration}s, episode={episode_duration}s"
         )
 
@@ -290,22 +313,26 @@ class RNTTriggeredBallTask(BaseTask):
             self._trigger_state.activation_history.append(trigger_val)
             self._trigger_state.volume_history.append(volume)
 
-            # Compute consecutive trend for log suffix
             history = list(self._trigger_state.activation_history)
-            consecutive = 0
-            for w in range(min(len(history), self.consecutive_volumes), 0, -1):
-                window = history[-w:]
-                if self.activation_trend == "increasing":
-                    if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
-                        consecutive = w
-                        break
-                else:
-                    if all(window[i] > window[i + 1] for i in range(len(window) - 1)):
-                        consecutive = w
-                        break
+            if self.trend_method == "strict":
+                consecutive = 0
+                for w in range(min(len(history), self.consecutive_volumes), 0, -1):
+                    window = history[-w:]
+                    if self.activation_trend == "increasing":
+                        if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
+                            consecutive = w
+                            break
+                    else:
+                        if all(window[i] > window[i + 1] for i in range(len(window) - 1)):
+                            consecutive = w
+                            break
 
-            trend_str = f"{consecutive}/{self.consecutive_volumes}"
-            self._volume_log_suffix = f" | {self.activation_trend} {trend_str}"
+                trend_str = f"{consecutive}/{self.consecutive_volumes}"
+                self._volume_log_suffix = f" | {self.activation_trend} {trend_str}"
+            else:  # "slope"
+                window = history[-self.consecutive_volumes :] if len(history) >= self.consecutive_volumes else history
+                slope = _least_squares_slope(window)
+                self._volume_log_suffix = f" | slope {slope:+.3f} (n={len(window)})"
         else:
             self._volume_log_suffix = ""
 
@@ -347,10 +374,17 @@ class RNTTriggeredBallTask(BaseTask):
             return None
 
         recent = history[-self.consecutive_volumes :]
-        if self.activation_trend == "increasing":
-            trending = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
-        else:
-            trending = all(recent[i] > recent[i + 1] for i in range(len(recent) - 1))
+        if self.trend_method == "strict":
+            if self.activation_trend == "increasing":
+                trending = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
+            else:
+                trending = all(recent[i] > recent[i + 1] for i in range(len(recent) - 1))
+        else:  # "slope"
+            slope = _least_squares_slope(recent)
+            if self.activation_trend == "increasing":
+                trending = slope > 0
+            else:
+                trending = slope < 0
 
         if trending:
             return "triggered"
@@ -982,13 +1016,29 @@ RNT_TRIGGERED_BALL_METADATA = TaskMetadata(
             hint="Positive = trigger activation > baseline, Negative = trigger activation < baseline",
         ),
         TaskParameter(
+            key="trend_method",
+            label="Trend Method",
+            type="str",
+            default="strict",
+            choices=["strict", "slope"],
+            hint=(
+                "strict = require monotonic change across all Consecutive Volumes "
+                "(current behavior). slope = require least-squares slope sign to "
+                "match Activation Trend (tolerant of single blips; increase "
+                "Consecutive Volumes to ~5 for stronger blip-tolerance)."
+            ),
+        ),
+        TaskParameter(
             key="consecutive_volumes",
             label="Consecutive Volumes",
             type="int",
             default=3,
             min_value=1,
             max_value=20,
-            hint="Number of consecutive trending volumes required to trigger",
+            hint=(
+                "With trend_method=strict: number of consecutive trending volumes "
+                "required. With trend_method=slope: regression window length."
+            ),
         ),
         TaskParameter(
             key="activation_trend",
