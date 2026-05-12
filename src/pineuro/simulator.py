@@ -53,45 +53,51 @@ from typing import Literal, Union
 
 TriggerMode = Literal["manual", "os_key"]
 
-# Win32 SendInput structs. Lifted to module level so the regression test can
-# verify their size — the union MUST include MOUSEINPUT (its 32-byte size on
-# 64-bit / 24-byte on 32-bit dominates the union), otherwise ctypes.sizeof(INPUT)
-# is 32/20 bytes and SendInput silently rejects every call (returns 0).
-if sys.platform == "win32":
-    import ctypes
-    from ctypes import wintypes
+# Win32 SendInput structs. Defined unconditionally (ctypes/wintypes are stdlib and
+# importable on all platforms; only ctypes.windll is Windows-only) so the regression
+# test can verify their size on any CI runner — the union MUST include MOUSEINPUT
+# (its 32-byte size on 64-bit / 24-byte on 32-bit dominates the union), otherwise
+# ctypes.sizeof(INPUT) is 32/20 bytes and SendInput silently rejects every call
+# (returns 0).
+import ctypes
+from ctypes import wintypes
 
-    class _MOUSEINPUT(ctypes.Structure):
-        _fields_ = [
-            ("dx", wintypes.LONG),
-            ("dy", wintypes.LONG),
-            ("mouseData", wintypes.DWORD),
-            ("dwFlags", wintypes.DWORD),
-            ("time", wintypes.DWORD),
-            ("dwExtraInfo", ctypes.c_void_p),
-        ]
 
-    class _KEYBDINPUT(ctypes.Structure):
-        _fields_ = [
-            ("wVk", wintypes.WORD),
-            ("wScan", wintypes.WORD),
-            ("dwFlags", wintypes.DWORD),
-            ("time", wintypes.DWORD),
-            ("dwExtraInfo", ctypes.c_void_p),
-        ]
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_void_p),
+    ]
 
-    class _HARDWAREINPUT(ctypes.Structure):
-        _fields_ = [
-            ("uMsg", wintypes.DWORD),
-            ("wParamL", wintypes.WORD),
-            ("wParamH", wintypes.WORD),
-        ]
 
-    class _INPUT_I(ctypes.Union):
-        _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT), ("hi", _HARDWAREINPUT)]
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_void_p),
+    ]
 
-    class _INPUT(ctypes.Structure):
-        _fields_ = [("type", wintypes.DWORD), ("i", _INPUT_I)]
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    ]
+
+
+class _INPUT_I(ctypes.Union):
+    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT), ("hi", _HARDWAREINPUT)]
+
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("i", _INPUT_I)]
 
 
 # Third-party imports

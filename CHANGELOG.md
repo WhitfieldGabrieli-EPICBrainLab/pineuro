@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-12
+
+### Added
+
+- **Declarative live metrics**: Each task now declares what to surface in the participant workflow monitoring panel via a `live_metrics: list[LiveMetric]` field on its `TaskMetadata`. The GUI, end-of-run summary dialog, and saved QC HTML report all iterate these declarations — no `task_id` branches in shared infra. Ball surfaces Hits, Gauge surfaces Score, RNT triggered-ball / experience-sampling surface cumulative trigger and prompt counts, and tasks declaring nothing hide the row entirely instead of showing a stale "Hits: --".
+- **Slope-based trend option for RNT trigger detection** as an alternative to threshold-based triggering.
+- **Brain slice live view during task-localizer runs**: task and rest localizers now share the same monitoring panel, so task runs get the live brain slice alongside the task mirror and QC plots.
+- **Auto-computed localizer `n_volumes` for variable-duration tasks**: localizer setup derives the volume count from task duration instead of requiring a manual entry.
+- **Save prompt before starting a session**: clicking Start Session with unsaved study-editor edits now opens a Cancel / Start without Saving / Save and Start dialog instead of silently using the in-memory config while the on-disk YAML stays stale.
+- **Per-participant RNT memory prompts** with randomized trial order.
+
+### Changed
+
+- **Default localizer `collection_speed`**: 10x → 1x.
+- **Default localizer `n_volumes`**: 200 → 250.
+- **Test suite restructured by source module** (`tests/{tasks,gui,gui/components,gui/screens,integration}/` mirroring `src/pineuro/`), with 174 new tests covering surfaces that previously had no direct test file. 519 → 690 passing unit tests.
+
+### Fixed
+
+- **Windows `os_key` simulator trigger silently dropped**: `SendInput` was returning 0 for both key-down and key-up because the ctypes `INPUT` struct's union only contained `KEYBDINPUT`, making `sizeof(INPUT) = 32` bytes; the real Win32 struct's union also carries the larger `MOUSEINPUT` and is 40 bytes, and `SendInput` rejects any `cbSize` mismatch. Added `MOUSEINPUT` and `HARDWAREINPUT` to the union so sizes match.
+
 ## [0.6.0] - 2026-05-04
 
 ### Fixed
