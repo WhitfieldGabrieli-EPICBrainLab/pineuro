@@ -5,6 +5,7 @@ Localizer and feedback tabs are created dynamically based on user-specified coun
 """
 
 import contextlib
+import copy
 import logging
 
 import flet as ft
@@ -56,6 +57,24 @@ class StudyEditorScreen:
         # Create Study tab and Paths tab fields (non-dynamic)
         self._create_study_fields()
         self._create_paths_fields()
+
+        # Baseline snapshot for unsaved-change detection on Start Session.
+        self._saved_snapshot: dict = self._capture_snapshot()
+
+    # ------------------------------------------------------------------
+    # Unsaved-change detection
+    # ------------------------------------------------------------------
+
+    def _capture_snapshot(self) -> dict:
+        """Deep-copy of study config for dirty-check; excludes metadata.modified."""
+        snap = copy.deepcopy(self.study_config.to_dict())
+        meta = snap.get("_metadata")
+        if isinstance(meta, dict):
+            meta.pop("modified", None)
+        return snap
+
+    def _has_unsaved_changes(self) -> bool:
+        return self._capture_snapshot() != self._saved_snapshot
 
     # ------------------------------------------------------------------
     # Config initialization
@@ -1364,13 +1383,22 @@ class StudyEditorScreen:
         if self.on_cancel_callback:
             self.on_cancel_callback()
 
-    def _on_save(self, e):
+    def _save_study(self) -> bool:
+        """Validate and persist the current study to disk.
+
+        Shows a snackbar on success or failure. Refreshes the baseline
+        snapshot on success so the editor is no longer "dirty".
+        Does NOT invoke ``on_save_callback`` (no navigation).
+
+        Returns:
+            True if the study was written; False otherwise.
+        """
         if self.validation_errors:
             _snack = ft.SnackBar(ft.Text("Please fix validation errors before saving"))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
-            return
+            return False
 
         self._update_study_from_form()
 
@@ -1386,23 +1414,29 @@ class StudyEditorScreen:
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
-            return
+            return False
 
         try:
             path = self.config_manager.save_study(self.study_config, overwrite=True)
-            _snack = ft.SnackBar(ft.Text(f"Study saved: {self.study_config.metadata.name}"))
-            _snack.open = True
-            self.page.overlay.append(_snack)
-            self.page.update()
-            logger.info(f"Study saved: {path}")
-            if self.on_save_callback:
-                self.on_save_callback()
         except Exception as ex:
             logger.error(f"Failed to save study: {ex}")
             _snack = ft.SnackBar(ft.Text(f"Error saving study: {ex}"))
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
+            return False
+
+        _snack = ft.SnackBar(ft.Text(f"Study saved: {self.study_config.metadata.name}"))
+        _snack.open = True
+        self.page.overlay.append(_snack)
+        self.page.update()
+        logger.info(f"Study saved: {path}")
+        self._saved_snapshot = self._capture_snapshot()
+        return True
+
+    def _on_save(self, e):
+        if self._save_study() and self.on_save_callback:
+            self.on_save_callback()
 
     def _on_save_as(self, e):
         new_name_field = ft.TextField(
@@ -1441,6 +1475,7 @@ class StudyEditorScreen:
                 self.page.overlay.append(_snack)
                 self.page.update()
                 logger.info(f"Study saved as: {path}")
+                self._saved_snapshot = self._capture_snapshot()
                 if self.on_save_callback:
                     self.on_save_callback()
             except Exception as ex:
@@ -1455,6 +1490,39 @@ class StudyEditorScreen:
         self.page.show_dialog(dialog)
 
     def _on_start_session(self, e):
+        self._update_study_from_form()
+        if self._has_unsaved_changes():
+            self._prompt_unsaved_changes_before_start()
+            return
+        self._show_participant_id_dialog()
+
+    def _prompt_unsaved_changes_before_start(self):
+        def close():
+            self.page.pop_dialog()
+
+        def on_save_and_start(_):
+            close()
+            if self._save_study():
+                self._show_participant_id_dialog()
+
+        def on_start_without_saving(_):
+            close()
+            self._show_participant_id_dialog()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Save changes before starting?"),
+            content=ft.Text(
+                "You have unsaved changes to this study. Save them before starting the participant session?"
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: close()),
+                ft.TextButton("Start without Saving", on_click=on_start_without_saving),
+                ft.FilledButton("Save and Start", on_click=on_save_and_start),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _show_participant_id_dialog(self):
         from pathlib import Path
 
         from ..components.visit_selection_dialog import VisitSelectionDialog
@@ -1496,7 +1564,6 @@ class StudyEditorScreen:
                 participant_id_field.update()
                 return
 
-            self._update_study_from_form()
             self.page.pop_dialog()
             logger.info(f"Starting session for participant: {participant_id}")
 
