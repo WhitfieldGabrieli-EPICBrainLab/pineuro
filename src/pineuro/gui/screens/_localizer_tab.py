@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -130,6 +131,17 @@ class LocalizerTabBuilder:
             hint_text="Volumes acquired per localizer run",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_volumes", self.n_volumes_field, validate_positive_int),
+        )
+
+        # Informational label shown in place of n_volumes_field for tasks
+        # that declare their own duration via TaskMetadata.compute_max_run_seconds.
+        # Visibility is set in _configure_computed_n_volumes() below.
+        self.n_volumes_info_text = ft.Text(
+            "",
+            size=12,
+            color=ft.Colors.BLUE_700,
+            italic=True,
+            visible=False,
         )
 
         self.n_runs_field = ft.TextField(
@@ -350,6 +362,11 @@ class LocalizerTabBuilder:
         # Create localizer task parameter fields
         self._create_task_parameter_fields()
 
+        # If this localizer's task declares its own duration, hide the
+        # editable n_volumes field, show the computed value, and wire
+        # live refresh on TR / task-param changes.
+        self._configure_computed_n_volumes()
+
     # ------------------------------------------------------------------
     # Build
     # ------------------------------------------------------------------
@@ -425,6 +442,7 @@ class LocalizerTabBuilder:
             ),
             _f(self.tr_field),
             self.n_volumes_field,
+            self.n_volumes_info_text,
             self.n_runs_field,
             self.motion_correction_dropdown,
             ft.Divider(),
@@ -722,6 +740,84 @@ class LocalizerTabBuilder:
         for param in meta.parameters:
             field = self._create_field_for_parameter(param, task_config)
             self.task_param_fields[param.key] = field
+
+    def _configure_computed_n_volumes(self):
+        """Hide n_volumes_field and show a computed-value label when the
+        selected task declares its own duration via
+        ``TaskMetadata.compute_max_run_seconds``.
+
+        Also wires refresh handlers onto ``tr_field`` and every task-param
+        field so the displayed value updates live as the user edits.
+        """
+        loc_type = self._loc_type
+        if loc_type == "rest":
+            return
+        try:
+            meta = get_task_metadata(loc_type)
+        except (KeyError, ValueError):
+            return
+        if meta.compute_max_run_seconds is None:
+            return
+
+        self.n_volumes_field.visible = False
+        self.n_volumes_info_text.visible = True
+        self._refresh_n_volumes_info()
+
+        # Wrap the existing on_change so we both run validation/save and
+        # refresh the computed display. Same pattern for every task-param
+        # field so a change to e.g. rating_timeout updates the display.
+        self._wrap_on_change_for_refresh(self.tr_field)
+        for field in self.task_param_fields.values():
+            target = field.controls[0] if isinstance(field, ft.Row) else field
+            self._wrap_on_change_for_refresh(target)
+
+    def _wrap_on_change_for_refresh(self, control: Any) -> None:
+        """Append a call to ``_refresh_n_volumes_info`` to a control's on_change."""
+        existing = getattr(control, "on_change", None)
+
+        def wrapped(e, _existing=existing):
+            if _existing is not None:
+                _existing(e)
+            self._refresh_n_volumes_info()
+
+        with contextlib.suppress(AttributeError):
+            control.on_change = wrapped
+
+    def _refresh_n_volumes_info(self) -> None:
+        """Recompute the displayed n_volumes from current TR and task params."""
+        if not self.n_volumes_info_text.visible:
+            return
+        try:
+            meta = get_task_metadata(self._loc_type)
+        except (KeyError, ValueError):
+            return
+        if meta.compute_max_run_seconds is None:
+            return
+
+        try:
+            tr = float(self.tr_field.value)
+        except (TypeError, ValueError):
+            tr = 0.0
+        if tr <= 0:
+            self.n_volumes_info_text.value = "Auto-computed: (set a valid TR)"
+            with contextlib.suppress(Exception):
+                self.page.update()
+            return
+
+        try:
+            params = self._collect_task_params()
+        except (TypeError, ValueError):
+            params = self.config.get("task_params", {})
+
+        duration = meta.compute_max_run_seconds(params)
+        n_volumes = math.ceil(duration / tr)
+        self.n_volumes_info_text.value = (
+            f"Auto-computed: {n_volumes} volumes (worst-case run "
+            f"~{duration:.0f}s at TR={tr}s; collection stops early "
+            f"when the task finishes)"
+        )
+        with contextlib.suppress(Exception):
+            self.page.update()
 
     def _create_field_for_parameter(self, param: TaskParameter, task_config: dict) -> Any:
         """Create appropriate Flet control for a parameter."""

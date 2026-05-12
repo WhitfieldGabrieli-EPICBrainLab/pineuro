@@ -91,6 +91,28 @@ DISTRACTION_PROMPTS = [
     "Think about the shape of California.",
 ]
 
+# Head/tail buffer for trigger wait + small end-of-run grace before the
+# scanner cuts off. Added to the per-trial sum to compute n_volumes.
+HEAD_TAIL_BUFFER_S = 10.0
+
+
+def _rnt_max_run_seconds(params: dict[str, Any]) -> float:
+    """Worst-case duration of a single RNT run, in seconds.
+
+    Assumes every rating phase runs to its full ``rating_timeout`` and the
+    rest jitter takes its ``rest_max``. Defaults match ``RNT_METADATA``.
+    """
+    n_trials = int(params.get("n_trials_per_run", 4))
+    memory = float(params.get("memory_display_duration", 5.0))
+    reflection = float(params.get("reflection_duration", 25.0))
+    block = float(params.get("rumination_duration", 30.0))  # rumination + distraction
+    rating_to = float(params.get("rating_timeout", 15.0))
+    rest_max = float(params.get("rest_max", 15.0))
+
+    per_trial = memory + reflection + 2 * block + 4 * rating_to + rest_max
+    return n_trials * per_trial + HEAD_TAIL_BUFFER_S
+
+
 # ============================================================================
 # Task metadata
 # ============================================================================
@@ -196,6 +218,7 @@ RNT_METADATA = TaskMetadata(
             hint="Number of trials per run (default: 4)",
         ),
     ],
+    compute_max_run_seconds=_rnt_max_run_seconds,
 )
 
 

@@ -6,6 +6,7 @@ allowing the GUI to remain responsive during long-running operations.
 
 import contextlib
 import logging
+import math
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -455,6 +456,25 @@ class PipelineRunner:
                     n_volumes = rest_volumes[0] if rest_volumes else 200
             else:
                 n_volumes = rest_volumes
+
+        # If the localizer task declares its own worst-case duration, override
+        # the user-configured n_volumes with the computed ceiling. The existing
+        # task_done_event mechanism still lets collect_dicoms stop early when
+        # the task finishes, so this only caps collection — it never forces it
+        # to run longer than the task actually does.
+        if localizer_type == "task" and localizer_task_type != "rest":
+            from pineuro.tasks.task_registry import get_task_metadata
+
+            meta = get_task_metadata(localizer_task_type)
+            if meta.compute_max_run_seconds is not None:
+                task_params = config.get("localizer_task", {}).get(localizer_task_type, {})
+                tr = config["scan"].get("localizer_tr", 1.2)
+                computed = math.ceil(meta.compute_max_run_seconds(task_params) / tr)
+                self._emit_progress(
+                    f"{localizer_task_type}: auto-computed n_volumes={computed} "
+                    f"(worst-case ceiling; collection ends early on task_done_event)"
+                )
+                n_volumes = computed
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(

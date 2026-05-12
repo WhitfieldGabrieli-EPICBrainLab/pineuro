@@ -293,6 +293,71 @@ class TestRNTPrompts:
 
 
 # =============================================================================
+# RNT volume computation — TaskMetadata.compute_max_run_seconds
+# =============================================================================
+
+
+class TestRNTVolumeComputation:
+    """Tests for the worst-case run-duration calculator on RNT."""
+
+    def test_compute_max_run_seconds_defaults(self):
+        from pineuro.tasks.rnt import HEAD_TAIL_BUFFER_S, _rnt_max_run_seconds
+
+        # 4 trials * (5 + 25 + 60 + 60 + 15) + 10 buffer = 670s with defaults
+        expected = 4 * (5.0 + 25.0 + 2 * 30.0 + 4 * 15.0 + 15.0) + HEAD_TAIL_BUFFER_S
+        assert _rnt_max_run_seconds({}) == pytest.approx(expected)
+
+    def test_compute_max_run_seconds_scales_with_trials(self):
+        from pineuro.tasks.rnt import HEAD_TAIL_BUFFER_S, _rnt_max_run_seconds
+
+        d4 = _rnt_max_run_seconds({"n_trials_per_run": 4})
+        d8 = _rnt_max_run_seconds({"n_trials_per_run": 8})
+        # Doubling trials doubles the per-trial portion (buffer unchanged)
+        per_trial_portion_4 = d4 - HEAD_TAIL_BUFFER_S
+        per_trial_portion_8 = d8 - HEAD_TAIL_BUFFER_S
+        assert per_trial_portion_8 == pytest.approx(2 * per_trial_portion_4)
+
+    def test_compute_max_run_seconds_respects_rating_timeout(self):
+        from pineuro.tasks.rnt import _rnt_max_run_seconds
+
+        base = _rnt_max_run_seconds({})  # rating_timeout=15
+        bumped = _rnt_max_run_seconds({"rating_timeout": 30.0})
+        # 4 ratings per trial * 4 trials = 16 rating phases; each grows by 15s
+        assert bumped - base == pytest.approx(16 * 15.0)
+
+    def test_rnt_metadata_exposes_callable(self):
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("rnt")
+        assert meta.compute_max_run_seconds is not None
+        result = meta.compute_max_run_seconds({})
+        assert isinstance(result, float)
+        assert result > 0
+
+
+class TestTaskMetadataField:
+    """Tests for the generic TaskMetadata.compute_max_run_seconds field."""
+
+    def test_compute_max_run_seconds_defaults_to_none(self):
+        from pineuro.tasks.task_registry import TaskMetadata
+
+        meta = TaskMetadata(
+            task_id="dummy",
+            display_name="Dummy",
+            description="Test task without duration calculator",
+            parameters=[],
+        )
+        assert meta.compute_max_run_seconds is None
+
+    def test_fixation_task_has_no_duration_calculator(self):
+        """Fixed-duration tasks (like fixation) don't set the callable."""
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("fixation")
+        assert meta.compute_max_run_seconds is None
+
+
+# =============================================================================
 # Gauge task — metadata and registration
 # =============================================================================
 

@@ -230,6 +230,12 @@ class TaskMetadata:
             task regressors are computed. Options:
             - "block": HRF-convolved boxcar (baseline → active). Default.
             - "nuisance_only": No task regressors (nuisance-only model).
+        compute_max_run_seconds: Optional. Callable that, given the task's
+            parameter dict, returns the worst-case duration of a single run
+            in seconds. Used by the pipeline runner to override the
+            user-configured n_volumes for variable-duration tasks, and by
+            the GUI to hide the n_volumes field. Tasks with predictable,
+            fixed-by-n_volumes duration leave this as None.
     """
 
     task_id: str
@@ -244,6 +250,7 @@ class TaskMetadata:
     session_state_fields: list[SessionStateField] = field(default_factory=list)
     post_run_questions: list[PostRunQuestion] = field(default_factory=list)
     design_type: str = "block"
+    compute_max_run_seconds: Callable[[dict[str, Any]], float] | None = None
 
     def validate_config(self, config: dict[str, Any]) -> None:
         """Validate a complete task configuration.
