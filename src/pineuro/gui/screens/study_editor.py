@@ -101,7 +101,7 @@ class StudyEditorScreen:
                 "transfer_source_dicoms": ["", ""],
                 "simulator_source_mapping": "",
                 "simulator_enabled": True,
-                "collection_speed": 10.0,
+                "collection_speed": 1.0,
                 "feedback_simulator_speed": 1.0,
                 "simulator_trigger_mode": "manual",
                 "scanner_dicom_dir": "/BOLD_DICOM",
@@ -216,7 +216,7 @@ class StudyEditorScreen:
         self.collection_speed_field = ft.TextField(
             width=290,
             label="Localizer speed (× realtime)",
-            value=str(config["scan"].get("collection_speed", 10.0)),
+            value=str(config["scan"].get("collection_speed", 1.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Speed for localizer/setup runs",
         )
@@ -1561,9 +1561,9 @@ class StudyEditorScreen:
         # Acquisition mode
         config["scan"]["simulator_enabled"] = self.simulator_enabled_checkbox.value
         try:
-            config["scan"]["collection_speed"] = float(self.collection_speed_field.value or 10.0)
+            config["scan"]["collection_speed"] = float(self.collection_speed_field.value or 1.0)
         except (ValueError, TypeError):
-            config["scan"]["collection_speed"] = 10.0
+            config["scan"]["collection_speed"] = 1.0
         try:
             config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value or 1.0)
         except (ValueError, TypeError):

@@ -675,7 +675,7 @@ class ScanConfig:
     reference_realtime_dicoms: Path | None = None
     feedback_dicoms: Path | None = None
     simulator_source_mapping: Path | None = None
-    collection_speed: float = 10.0
+    collection_speed: float = 1.0
     feedback_simulator_speed: float = 10.0
     # "manual": user presses the trigger key during simulator runs (matches
     # real-scan code path exactly). "os_key": simulator injects a synthetic

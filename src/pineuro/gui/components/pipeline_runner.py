@@ -402,7 +402,7 @@ class PipelineRunner:
                     except Exception as e:
                         logger.warning(f"Failed to resolve reference_initial from mapping: {e}")
 
-            simulator_speed = config["scan"].get("collection_speed", 10.0)
+            simulator_speed = config["scan"].get("collection_speed", 1.0)
         else:
             # Real-time mode: watch scanner DICOM directory
             watch_dir = Path(config["scan"]["scanner_dicom_dir"])
@@ -514,7 +514,7 @@ class PipelineRunner:
             for f in watch_dir.iterdir():
                 if f.is_file():
                     f.unlink()
-            simulator_speed = config["scan"].get("collection_speed", 10.0)
+            simulator_speed = config["scan"].get("collection_speed", 1.0)
         else:
             # Real-time mode: watch scanner DICOM directory
             source_dir = None
@@ -1786,7 +1786,7 @@ class PipelineRunner:
                     except Exception as e:
                         logger.warning(f"Failed to resolve reference_realtime from mapping: {e}")
 
-            simulator_speed = config["scan"].get("collection_speed", 10.0)
+            simulator_speed = config["scan"].get("collection_speed", 1.0)
         else:
             # Real-time mode: watch scanner DICOM directory
             watch_dir = Path(config["scan"]["scanner_dicom_dir"])
@@ -2051,7 +2051,7 @@ class PipelineRunner:
                             simulator_source_dir = feedback_sources[0]
 
             simulator_speed = config["scan"].get(
-                "feedback_simulator_speed", config["scan"].get("collection_speed", 10.0)
+                "feedback_simulator_speed", config["scan"].get("collection_speed", 1.0)
             )
         else:
             # Real-time mode: watch scanner DICOM directory

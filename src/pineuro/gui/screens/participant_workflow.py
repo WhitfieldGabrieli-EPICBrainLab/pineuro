@@ -4763,7 +4763,7 @@ class ParticipantWorkflowScreen:
                     "none": "Disabled",
                 }.get(_val("motion_correction", "siemens_moco"), "Unknown"),
                 "Output": base_dir / "feedback" / "02_feedback_output",
-                "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x",
+                "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 1.0))}x",
             },
             "output_path": base_dir
             / "feedback"
@@ -4920,7 +4920,7 @@ class ParticipantWorkflowScreen:
                 "TR": f"{loc_tr}s",
                 "Source": source_dicom or "(not configured)",
                 "Output": base_dir / "collection" / f"task-{loc_task_name}_acq-{run_info['acq']:02d}_run-{run_num:02d}",
-                "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 10.0))}x",
+                "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 1.0))}x",
             }
 
             # Add task-specific parameters for non-rest localizers
@@ -5066,7 +5066,7 @@ class ParticipantWorkflowScreen:
                     "Volumes": expected_vols,
                     "Source": source_dicom,
                     "Output": base_dir / "collection" / f"task-{loc_name}_acq-{run_info['acq']:02d}_run-{run_num:02d}",
-                    "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 10.0))}x",
+                    "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 1.0))}x",
                 },
                 "output_path": base_dir / "collection",
                 "output_pattern": f"task-{loc_name}_acq-*_run-{run_num:02d}",
@@ -5114,7 +5114,7 @@ class ParticipantWorkflowScreen:
             }.get(_fb_get("motion_correction", "siemens_moco"), "Unknown")
             params["Output"] = base_dir / "feedback" / "02_feedback_output"
             params["Simulator Speed"] = (
-                f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 10.0))}x"
+                f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 1.0))}x"
             )
 
             info = {
