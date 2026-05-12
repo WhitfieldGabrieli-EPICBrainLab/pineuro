@@ -6187,326 +6187,13 @@ class ParticipantWorkflowScreen:
             is_rest_run_step = step_id.startswith("rest_run_")
             is_multi_loc_run = step_id.startswith("localizer_") and "_run_" in step_id
             is_localizer_run_step = is_rest_run_step or is_multi_loc_run
-            if is_multi_loc_run:
-                # Multi-localizer: determine type from the localizer config
-                loc_idx = int(step_id.split("_")[1])
-                localizers = config.get("localizers", [])
-                loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
-                is_task_localizer = loc_type != "rest"
-            elif is_localizer_run_step:
-                localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-                is_task_localizer = localizer_type == "task" and localizer_task_type != "rest"
-            else:
-                is_task_localizer = False
-
             # Clear stale collection_progress from previous steps (e.g. reference)
             # so the callback falls through to _progress_bar for localizer runs.
             self.collection_progress = None
 
-            if is_task_localizer:
-                # Task-based localizer: Show TaskMirror + QC plots
-                # Get n_volumes for progress tracking
-                if is_multi_loc_run:
-                    loc_idx = int(step_id.split("_")[1])
-                    localizers = config.get("localizers", [])
-                    n_volumes = localizers[loc_idx].get("n_volumes", 250) if loc_idx < len(localizers) else 250
-                else:
-                    n_volumes = config["scan"].get("localizer_n_volumes")
-                    if n_volumes is None:
-                        rest_volumes = config["scan"].get("rest_n_volumes", [200])
-                        if isinstance(rest_volumes, list):
-                            run_num = int(step_id.split("_")[-1])
-                            n_volumes = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
-                        else:
-                            n_volumes = rest_volumes
-
-                # Create task mirror
-                self.task_mirror = TaskMirror(width=640, height=480)
-
-                # Create QC plots for motion monitoring
-                fd_threshold = self._fb("fd_threshold", 0.5)
-                self.fd_plot = FDPlot(n_volumes=n_volumes, height=150, threshold=fd_threshold)
-                dvars_threshold = self._fb("dvars_threshold", 1.5)
-                self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=150, threshold=dvars_threshold)
-                tsnr_threshold = self._fb("tsnr_threshold", 20)
-                self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=150, threshold=tsnr_threshold)
-
-                # Create progress UI elements
-                self._progress_bar = ft.ProgressBar(value=0, width=400)
-                self._progress_text = ft.Text("0 / 0 volumes", size=14)
-                self._status_text = ft.Text("Waiting for task...", size=14, color=ft.Colors.GREY_600)
-
-                # Build monitoring panel with task mirror + QC plots
-                monitoring_panel = ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text(
-                                self._get_step_label(step_id),
-                                size=18,
-                                weight=ft.FontWeight.BOLD,
-                            ),
-                            ft.Divider(),
-                            # Task mirror (centered)
-                            ft.Container(
-                                content=ft.Column(
-                                    [
-                                        ft.Text("Task Display", size=14, weight=ft.FontWeight.W_500),
-                                        self.task_mirror.build(),
-                                    ],
-                                    spacing=5,
-                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                ),
-                            ),
-                            # Progress section
-                            ft.Container(height=10),
-                            ft.Row(
-                                [
-                                    ft.Text("Progress:", size=14, weight=ft.FontWeight.W_500),
-                                    self._progress_bar,
-                                    self._progress_text,
-                                ],
-                                spacing=10,
-                                alignment=ft.MainAxisAlignment.START,
-                            ),
-                            ft.Row(
-                                [
-                                    ft.Text("Status:", size=14, weight=ft.FontWeight.W_500),
-                                    self._status_text,
-                                ],
-                                spacing=10,
-                            ),
-                            # QC plots: FD, DVARS, tSNR side by side
-                            ft.Container(
-                                content=ft.Row(
-                                    [
-                                        ft.Container(
-                                            content=ft.Column(
-                                                [
-                                                    ft.Text(
-                                                        "Framewise Displacement", size=11, weight=ft.FontWeight.W_500
-                                                    ),
-                                                    self.fd_plot.build(),
-                                                ],
-                                                spacing=3,
-                                            ),
-                                            expand=1,
-                                            height=200,
-                                        ),
-                                        ft.Container(
-                                            content=ft.Column(
-                                                [
-                                                    ft.Text("DVARS", size=11, weight=ft.FontWeight.W_500),
-                                                    self.dvars_plot.build(),
-                                                ],
-                                                spacing=3,
-                                            ),
-                                            expand=1,
-                                            height=200,
-                                        ),
-                                        ft.Container(
-                                            content=ft.Column(
-                                                [
-                                                    ft.Text("tSNR", size=11, weight=ft.FontWeight.W_500),
-                                                    self.tsnr_plot.build(),
-                                                ],
-                                                spacing=3,
-                                            ),
-                                            expand=1,
-                                            height=200,
-                                        ),
-                                    ],
-                                    spacing=12,
-                                ),
-                                padding=ft.padding.symmetric(horizontal=20),
-                            ),
-                            # Stop button
-                            ft.Container(height=10),
-                            ft.Row(
-                                [
-                                    ft.FilledButton(
-                                        "Stop",
-                                        icon=ft.Icons.STOP,
-                                        on_click=lambda e: self._on_stop_clicked(),
-                                        bgcolor=ft.Colors.RED,
-                                    ),
-                                ],
-                                alignment=ft.MainAxisAlignment.END,
-                            ),
-                        ],
-                        spacing=10,
-                        scroll=ft.ScrollMode.AUTO,
-                    ),
-                    padding=20,
-                    expand=True,
-                )
-
-            elif is_localizer_run_step:
-                # Localizer/rest collection: brain slice + task mirror + QC plots
+            if is_localizer_run_step:
                 n_volumes = self._get_collection_n_volumes(step_id)
-
-                # Brain slice image
-                self._slice_image = ft.Image(
-                    src="",
-                    width=480,
-                    height=270,
-                    fit=ft.BoxFit.CONTAIN,
-                    visible=False,
-                )
-                self._slice_placeholder = ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Icon(ft.Icons.IMAGE_OUTLINED, size=48, color=ft.Colors.GREY_400),
-                            ft.Text("Waiting for first volume...", size=12, color=ft.Colors.GREY_500),
-                        ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=8,
-                    ),
-                    width=480,
-                    height=270,
-                    alignment=ft.Alignment(0, 0),
-                    border=ft.border.all(1, ft.Colors.GREY_300),
-                    border_radius=5,
-                    bgcolor=ft.Colors.BLACK,
-                )
-
-                # Task mirror for localizer task preview
-                self.task_mirror = TaskMirror(width=480, height=270)
-
-                # Create QC plots for motion monitoring
-                fd_threshold = self._fb("fd_threshold", 0.5)
-                self.fd_plot = FDPlot(n_volumes=n_volumes, height=150, threshold=fd_threshold)
-                dvars_threshold = self._fb("dvars_threshold", 1.5)
-                self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=150, threshold=dvars_threshold)
-                tsnr_threshold = self._fb("tsnr_threshold", 20)
-                self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=150, threshold=tsnr_threshold)
-
-                # Progress UI
-                self._progress_bar = ft.ProgressBar(value=0, width=300)
-                self._progress_text = ft.Text("0 / 0 volumes", size=12)
-                self._status_text = ft.Text("Waiting...", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
-
-                monitoring_panel = ft.Container(
-                    content=ft.Column(
-                        [
-                            # Header + stop button
-                            ft.Row(
-                                [
-                                    ft.Text(
-                                        self._get_step_label(step_id),
-                                        size=18,
-                                        weight=ft.FontWeight.BOLD,
-                                    ),
-                                    ft.FilledButton(
-                                        "Stop",
-                                        icon=ft.Icons.STOP,
-                                        on_click=lambda e: self._on_stop_clicked(),
-                                        bgcolor=ft.Colors.RED,
-                                    ),
-                                ],
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                            ft.Divider(),
-                            # Status strip
-                            ft.Container(
-                                content=ft.Row(
-                                    [
-                                        self._status_text,
-                                        ft.Row(
-                                            [self._progress_bar, self._progress_text],
-                                            spacing=8,
-                                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                        ),
-                                    ],
-                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                ),
-                                bgcolor=ft.Colors.GREY_50,
-                                border_radius=8,
-                                padding=ft.padding.symmetric(horizontal=12, vertical=6),
-                            ),
-                            # Row 1: Brain slice + Task mirror
-                            ft.Row(
-                                [
-                                    ft.Container(
-                                        content=ft.Column(
-                                            [
-                                                ft.Text("Brain Slice", size=14, weight=ft.FontWeight.W_500),
-                                                ft.Stack([self._slice_placeholder, self._slice_image]),
-                                            ],
-                                            spacing=5,
-                                        ),
-                                        expand=True,
-                                        height=300,
-                                    ),
-                                    ft.Container(
-                                        content=ft.Column(
-                                            [
-                                                ft.Text("Task Display", size=14, weight=ft.FontWeight.W_500),
-                                                self.task_mirror.build(),
-                                            ],
-                                            spacing=5,
-                                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                        ),
-                                        width=500,
-                                        height=300,
-                                    ),
-                                ],
-                                spacing=20,
-                                vertical_alignment=ft.CrossAxisAlignment.START,
-                            ),
-                            # Row 2: QC plots side by side
-                            ft.Container(
-                                content=ft.Row(
-                                    [
-                                        ft.Container(
-                                            content=ft.Column(
-                                                [
-                                                    ft.Text(
-                                                        "Framewise Displacement", size=11, weight=ft.FontWeight.W_500
-                                                    ),
-                                                    self.fd_plot.build(),
-                                                ],
-                                                spacing=3,
-                                            ),
-                                            expand=1,
-                                            height=200,
-                                        ),
-                                        ft.Container(
-                                            content=ft.Column(
-                                                [
-                                                    ft.Text("DVARS", size=11, weight=ft.FontWeight.W_500),
-                                                    self.dvars_plot.build(),
-                                                ],
-                                                spacing=3,
-                                            ),
-                                            expand=1,
-                                            height=200,
-                                        ),
-                                        ft.Container(
-                                            content=ft.Column(
-                                                [
-                                                    ft.Text("tSNR", size=11, weight=ft.FontWeight.W_500),
-                                                    self.tsnr_plot.build(),
-                                                ],
-                                                spacing=3,
-                                            ),
-                                            expand=1,
-                                            height=200,
-                                        ),
-                                    ],
-                                    spacing=12,
-                                ),
-                                padding=ft.padding.symmetric(horizontal=20),
-                            ),
-                        ],
-                        spacing=8,
-                        scroll=ft.ScrollMode.AUTO,
-                    ),
-                    padding=20,
-                    expand=True,
-                )
+                monitoring_panel = self._build_localizer_monitoring_panel(step_id, n_volumes)
 
             elif step_id in ["reference_initial", "reference_realtime"]:
                 # Simple collection progress for short reference scans
@@ -6720,6 +6407,168 @@ class ParticipantWorkflowScreen:
             return int(rest_volumes[0]) if isinstance(rest_volumes, list) else int(rest_volumes)
 
         return 0
+
+    def _build_localizer_monitoring_panel(self, step_id: str, n_volumes: int) -> ft.Container:
+        """Build the right-hand monitoring panel for a localizer run.
+
+        Used for both rest and task localizers. Creates the slice/task-mirror/QC/progress
+        widget attributes that `_on_collection_progress` and `_on_collection_qc_data`
+        update during the run, then returns the assembled container.
+        """
+        self._slice_image = ft.Image(
+            src="",
+            width=480,
+            height=270,
+            fit=ft.BoxFit.CONTAIN,
+            visible=False,
+        )
+        self._slice_placeholder = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Icon(ft.Icons.IMAGE_OUTLINED, size=48, color=ft.Colors.GREY_400),
+                    ft.Text("Waiting for first volume...", size=12, color=ft.Colors.GREY_500),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=8,
+            ),
+            width=480,
+            height=270,
+            alignment=ft.Alignment(0, 0),
+            border=ft.border.all(1, ft.Colors.GREY_300),
+            border_radius=5,
+            bgcolor=ft.Colors.BLACK,
+        )
+
+        self.task_mirror = TaskMirror(width=480, height=270)
+
+        fd_threshold = self._fb("fd_threshold", 0.5)
+        self.fd_plot = FDPlot(n_volumes=n_volumes, height=150, threshold=fd_threshold)
+        dvars_threshold = self._fb("dvars_threshold", 1.5)
+        self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=150, threshold=dvars_threshold)
+        tsnr_threshold = self._fb("tsnr_threshold", 20)
+        self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=150, threshold=tsnr_threshold)
+
+        self._progress_bar = ft.ProgressBar(value=0, width=300)
+        self._progress_text = ft.Text("0 / 0 volumes", size=12)
+        self._status_text = ft.Text("Waiting...", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text(
+                                self._get_step_label(step_id),
+                                size=18,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            ft.FilledButton(
+                                "Stop",
+                                icon=ft.Icons.STOP,
+                                on_click=lambda e: self._on_stop_clicked(),
+                                bgcolor=ft.Colors.RED,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Divider(),
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                self._status_text,
+                                ft.Row(
+                                    [self._progress_bar, self._progress_text],
+                                    spacing=8,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        bgcolor=ft.Colors.GREY_50,
+                        border_radius=8,
+                        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                    ),
+                    # Row 1: Brain slice + Task mirror
+                    ft.Row(
+                        [
+                            ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.Text("Brain Slice", size=14, weight=ft.FontWeight.W_500),
+                                        ft.Stack([self._slice_placeholder, self._slice_image]),
+                                    ],
+                                    spacing=5,
+                                ),
+                                expand=True,
+                                height=300,
+                            ),
+                            ft.Container(
+                                content=ft.Column(
+                                    [
+                                        ft.Text("Task Display", size=14, weight=ft.FontWeight.W_500),
+                                        self.task_mirror.build(),
+                                    ],
+                                    spacing=5,
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                ),
+                                width=500,
+                                height=300,
+                            ),
+                        ],
+                        spacing=20,
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                    ),
+                    # Row 2: QC plots side by side
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text("Framewise Displacement", size=11, weight=ft.FontWeight.W_500),
+                                            self.fd_plot.build(),
+                                        ],
+                                        spacing=3,
+                                    ),
+                                    expand=1,
+                                    height=200,
+                                ),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text("DVARS", size=11, weight=ft.FontWeight.W_500),
+                                            self.dvars_plot.build(),
+                                        ],
+                                        spacing=3,
+                                    ),
+                                    expand=1,
+                                    height=200,
+                                ),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text("tSNR", size=11, weight=ft.FontWeight.W_500),
+                                            self.tsnr_plot.build(),
+                                        ],
+                                        spacing=3,
+                                    ),
+                                    expand=1,
+                                    height=200,
+                                ),
+                            ],
+                            spacing=12,
+                        ),
+                        padding=ft.padding.symmetric(horizontal=20),
+                    ),
+                ],
+                spacing=8,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            padding=20,
+            expand=True,
+        )
 
     def _on_collection_progress(
         self,
