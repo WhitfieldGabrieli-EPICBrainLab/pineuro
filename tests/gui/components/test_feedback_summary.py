@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from pineuro.tasks.task_registry import LiveMetric
+
 
 def _write_feedbacklog(path: Path, *, n_volumes, fd_values=None, dvars_values=None, tsnr_values=None):
     """Write a minimal feedbacklog.tsv compatible with compute_feedback_summary."""
@@ -33,6 +35,15 @@ def _write_psychopy_log(path: Path, *, network_to_max_hits):
             row.append(str(min(i, network_to_max_hits[n])))
         lines.append("\t".join(row))
     path.write_text("\n".join(lines))
+
+
+_BALL_HITS_METRIC = LiveMetric(
+    key="hits",
+    label="Hits",
+    column_pattern="*_hits",
+    name_strip_suffix="_hits",
+    remap_blind_names=True,
+)
 
 
 class TestCompleteFlag:
@@ -112,16 +123,20 @@ class TestFdStatistics:
         assert summary.fd_max == pytest.approx(0.8)
 
 
-class TestHitsParsing:
+class TestLiveMetricSnapshots:
     def test_no_psychopy_log(self, tmp_path):
         from pineuro.gui.components.feedback_summary import compute_feedback_summary
 
         fb = tmp_path / "feedbacklog.tsv"
         _write_feedbacklog(fb, n_volumes=10)
         summary = compute_feedback_summary(
-            feedbacklog_path=fb, psychopy_log_path=None, n_baseline=0, n_expected_volumes=10
+            feedbacklog_path=fb,
+            psychopy_log_path=None,
+            n_baseline=0,
+            n_expected_volumes=10,
+            live_metrics=[_BALL_HITS_METRIC],
         )
-        assert summary.hits_per_network == {}
+        assert summary.live_metric_snapshots == {}
 
     def test_missing_psychopy_log_silent(self, tmp_path):
         from pineuro.gui.components.feedback_summary import compute_feedback_summary
@@ -133,10 +148,27 @@ class TestHitsParsing:
             psychopy_log_path=tmp_path / "doesnt_exist.tsv",
             n_baseline=0,
             n_expected_volumes=10,
+            live_metrics=[_BALL_HITS_METRIC],
         )
-        assert summary.hits_per_network == {}
+        assert summary.live_metric_snapshots == {}
 
-    def test_extracts_max_hit_per_network(self, tmp_path):
+    def test_no_metrics_declared_returns_empty(self, tmp_path):
+        from pineuro.gui.components.feedback_summary import compute_feedback_summary
+
+        fb = tmp_path / "feedbacklog.tsv"
+        ppy = tmp_path / "psychopylog.tsv"
+        _write_feedbacklog(fb, n_volumes=10)
+        _write_psychopy_log(ppy, network_to_max_hits={"DefaultA": 3, "ContA": 5})
+        summary = compute_feedback_summary(
+            feedbacklog_path=fb,
+            psychopy_log_path=ppy,
+            n_baseline=0,
+            n_expected_volumes=10,
+        )
+        # No live_metrics passed -> nothing surfaced.
+        assert summary.live_metric_snapshots == {}
+
+    def test_glob_pattern_extracts_per_network_hits(self, tmp_path):
         from pineuro.gui.components.feedback_summary import compute_feedback_summary
 
         fb = tmp_path / "feedbacklog.tsv"
@@ -145,9 +177,13 @@ class TestHitsParsing:
         _write_psychopy_log(ppy, network_to_max_hits={"DefaultA": 3, "ContA": 5})
 
         summary = compute_feedback_summary(
-            feedbacklog_path=fb, psychopy_log_path=ppy, n_baseline=0, n_expected_volumes=10
+            feedbacklog_path=fb,
+            psychopy_log_path=ppy,
+            n_baseline=0,
+            n_expected_volumes=10,
+            live_metrics=[_BALL_HITS_METRIC],
         )
-        assert summary.hits_per_network == {"DefaultA": 3, "ContA": 5}
+        assert summary.live_metric_snapshots == {"hits": {"DefaultA": "3", "ContA": "5"}}
 
 
 class TestTsnr:

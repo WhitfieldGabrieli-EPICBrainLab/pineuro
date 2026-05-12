@@ -144,6 +144,8 @@ import pandas as pd
 from nibabel import load
 from nibabel.nifti1 import Nifti1Image
 
+from pineuro.tasks.task_registry import LiveMetric, read_live_metrics
+
 # ============================================================================
 # SECTION 1: Core Plotting Primitives
 # ============================================================================
@@ -3255,6 +3257,7 @@ def generate_feedback_report(
     acq: str | None = None,
     fd_threshold: float = 0.5,
     display_names: dict[str, str] | None = None,
+    live_metrics: "list[LiveMetric] | None" = None,
 ) -> Path:
     """
     Generate comprehensive QC report for feedback session outputs.
@@ -3406,7 +3409,7 @@ def generate_feedback_report(
     else:
         summary_data["Status"] = "NO DATA"
 
-    # Try to find and parse PsychoPy log for hit counts
+    # Locate the matching PsychoPy log for declared live metrics.
     if acq is not None:
         acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
         psychopy_pattern = f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_psychopylog.tsv"
@@ -3414,26 +3417,30 @@ def generate_feedback_report(
         psychopy_pattern = f"{subject}_task-{task}_run-{run:02d}_psychopylog.tsv"
     psychopy_log = feedback_dir / psychopy_pattern
 
-    if psychopy_log.exists():
-        try:
-            psych_df = pd.read_csv(psychopy_log, sep="\t")
-            hit_cols = [col for col in psych_df.columns if col.endswith("_hits")]
-            total_hits = 0
-            hit_strs = []
-            for col in hit_cols:
-                network_name = col.replace("_hits", "")
-                max_val = psych_df[col].max()
-                if pd.isna(max_val):
-                    continue
-                hits = int(max_val)
-                total_hits += hits
-                shown_name = display_names.get(network_name, network_name) if display_names else network_name
-                hit_strs.append(f"{shown_name}: {hits}")
-            if hit_strs:
-                summary_data["Network hits"] = ", ".join(hit_strs)
-                summary_data["Total hits"] = str(total_hits)
-        except Exception as e:
-            logger.warning(f"Failed to parse PsychoPy log for hits: {e}")
+    if live_metrics and psychopy_log.exists():
+        snapshots = read_live_metrics(psychopy_log, live_metrics)
+        for metric in live_metrics:
+            cells = snapshots.get(metric.key, {})
+            if not cells:
+                continue
+            if len(cells) == 1 and next(iter(cells)) == metric.column_pattern:
+                # Literal single-column metric (e.g. gauge "score").
+                summary_data[metric.label] = next(iter(cells.values()))
+                continue
+            # Multi-column / pattern metric (e.g. ball "*_hits").
+            parts = []
+            int_total = 0
+            all_int = True
+            for name, value in cells.items():
+                shown = display_names.get(name, name) if metric.remap_blind_names and display_names else name
+                parts.append(metric.item_format.format(name=shown, value=value))
+                try:
+                    int_total += int(value)
+                except ValueError:
+                    all_int = False
+            summary_data[metric.label] = metric.join_with.join(parts)
+            if all_int and len(cells) > 1:
+                summary_data[f"{metric.label} total"] = str(int_total)
 
     sections.append({"type": "summary", "content": summary_data})
 

@@ -27,9 +27,11 @@ Example:
     register_task(ball_metadata)
 """
 
+import fnmatch
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
@@ -225,6 +227,62 @@ class LiveMetric:
     join_with: str = ", "
     name_strip_suffix: str = ""
     remap_blind_names: bool = False
+
+
+def read_live_metrics(log_path: Path, metrics: list[LiveMetric]) -> dict[str, dict[str, str]]:
+    """Read declared live metrics from the last row of a psychopylog.tsv.
+
+    For each metric, every column matching its `column_pattern` (literal name
+    or fnmatch glob) is parsed from the most recent row, formatted via
+    `value_format`, and keyed by the column name with `name_strip_suffix`
+    removed. Callers (live monitor, post-run summary, QC report) iterate the
+    returned mapping and apply task-agnostic rendering rules.
+
+    Args:
+        log_path: Path to the psychopylog.tsv file.
+        metrics: Declarations from `TaskMetadata.live_metrics`.
+
+    Returns:
+        `{metric.key: {item_name: formatted_value, ...}}`. Metrics with no
+        matching columns are omitted; an unreadable, missing, or empty file
+        returns `{}`.
+    """
+    if not metrics or not log_path.exists():
+        return {}
+    try:
+        with open(log_path) as f:
+            lines = f.readlines()
+        if len(lines) < 2:  # Need header + at least one data row
+            return {}
+        header = lines[0].rstrip("\n").split("\t")
+        last_row = lines[-1].rstrip("\n").split("\t")
+        out: dict[str, dict[str, str]] = {}
+        for m in metrics:
+            cells: dict[str, str] = {}
+            for i, col in enumerate(header):
+                if i >= len(last_row):
+                    continue
+                if not (col == m.column_pattern or fnmatch.fnmatchcase(col, m.column_pattern)):
+                    continue
+                raw = last_row[i]
+                value: Any
+                try:
+                    value = int(raw)
+                except ValueError:
+                    try:
+                        value = float(raw)
+                    except ValueError:
+                        value = raw
+                if m.name_strip_suffix and col.endswith(m.name_strip_suffix):
+                    name = col[: -len(m.name_strip_suffix)]
+                else:
+                    name = col
+                cells[name] = m.value_format.format(value=value)
+            if cells:
+                out[m.key] = cells
+        return out
+    except Exception:
+        return {}
 
 
 @dataclass

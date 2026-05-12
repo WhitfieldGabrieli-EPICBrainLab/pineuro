@@ -2,7 +2,7 @@
 
 Displays a summary after feedback runs complete, showing:
 - Status (completed/interrupted)
-- Network hit counts (from PsychoPy log)
+- Task-declared live metrics (from PsychoPy log; declared on TaskMetadata)
 - FD, DVARS, and tSNR quality cards (from feedbacklog)
 - Activation timeseries plot
 """
@@ -10,12 +10,14 @@ Displays a summary after feedback runs complete, showing:
 import logging
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import flet as ft
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
+
+from pineuro.tasks.task_registry import LiveMetric, read_live_metrics
 
 from .base_dialog import BaseDialog
 
@@ -30,7 +32,6 @@ class FeedbackSummaryData:
     baseline_volumes: int
     feedback_volumes: int
     expected_volumes: int
-    hits_per_network: dict[str, int]  # {network_name: final_hit_count}
     fd_mean: float
     fd_max: float
     fd_above_threshold: int
@@ -43,6 +44,8 @@ class FeedbackSummaryData:
     dvars_pct_above_threshold: float
     dvars_threshold: float
     tsnr_final: float
+    # {metric.key: {item_name: formatted_value, ...}} from psychopylog last row
+    live_metric_snapshots: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def compute_feedback_summary(
@@ -52,16 +55,19 @@ def compute_feedback_summary(
     n_expected_volumes: int,
     fd_threshold: float = 0.5,
     dvars_threshold: float = 1.5,
+    live_metrics: list[LiveMetric] | None = None,
 ) -> FeedbackSummaryData:
     """Compute summary statistics from feedback and PsychoPy logs.
 
     Args:
         feedbacklog_path: Path to feedbacklog.tsv file
-        psychopy_log_path: Path to psychopylog.tsv file (optional, for hit counts)
+        psychopy_log_path: Path to psychopylog.tsv file (optional, for live metrics)
         n_baseline: Number of baseline volumes
         n_expected_volumes: Expected total number of volumes
         fd_threshold: FD threshold in mm for counting excessive motion
         dvars_threshold: DVARS threshold (standardized) for counting high-variability volumes
+        live_metrics: Task-declared live metrics (from TaskMetadata.live_metrics) to read
+            from the psychopylog last row. Empty list -> no metric cards shown.
 
     Returns:
         FeedbackSummaryData with computed statistics
@@ -81,24 +87,10 @@ def compute_feedback_summary(
     fd_above = int(np.sum(fd_values > fd_threshold))
     fd_pct = (fd_above / total_volumes * 100) if total_volumes > 0 else 0.0
 
-    # Parse hits from PsychoPy log
-    hits_per_network: dict[str, int] = {}
-    if psychopy_log_path and psychopy_log_path.exists():
-        try:
-            psych_df = pd.read_csv(psychopy_log_path, sep="\t")
-            # Find columns ending with _hits
-            hit_cols = [col for col in psych_df.columns if col.endswith("_hits")]
-            for col in hit_cols:
-                # Extract network name (e.g., "DefaultA_hits" -> "DefaultA")
-                network_name = col.replace("_hits", "")
-                # Get max value (cumulative, so last row has final count)
-                max_val = psych_df[col].max()
-                if pd.isna(max_val):
-                    continue
-                hits = int(max_val)
-                hits_per_network[network_name] = hits
-        except Exception as e:
-            logger.warning(f"Failed to parse PsychoPy log for hits: {e}")
+    # Read declared live metrics from psychopylog (last row).
+    live_metric_snapshots: dict[str, dict[str, str]] = {}
+    if psychopy_log_path is not None and live_metrics:
+        live_metric_snapshots = read_live_metrics(psychopy_log_path, live_metrics)
 
     completed = total_volumes >= n_expected_volumes
 
@@ -128,7 +120,6 @@ def compute_feedback_summary(
         baseline_volumes=baseline_volumes,
         feedback_volumes=feedback_volumes,
         expected_volumes=n_expected_volumes,
-        hits_per_network=hits_per_network,
         fd_mean=fd_mean,
         fd_max=fd_max,
         fd_above_threshold=fd_above,
@@ -141,6 +132,7 @@ def compute_feedback_summary(
         dvars_pct_above_threshold=dvars_pct,
         dvars_threshold=dvars_threshold,
         tsnr_final=tsnr_final,
+        live_metric_snapshots=live_metric_snapshots,
     )
 
 
@@ -166,6 +158,7 @@ class FeedbackSummaryDialog(BaseDialog):
         on_close: Callable[[], None] | None = None,
         on_view_full_qc: Callable[[], None] | None = None,
         display_names: dict[str, str] | None = None,
+        live_metrics: list[LiveMetric] | None = None,
     ):
         """Initialize the feedback summary dialog.
 
@@ -180,6 +173,8 @@ class FeedbackSummaryDialog(BaseDialog):
             on_close: Callback when dialog is closed
             on_view_full_qc: Callback to open full QC report
             display_names: Optional mapping of network names to display names (for blind mode)
+            live_metrics: Task-declared live metrics (from TaskMetadata.live_metrics).
+                One card is rendered per metric; an empty list shows none.
         """
         super().__init__(page)
         self.summary_data = summary_data
@@ -191,6 +186,7 @@ class FeedbackSummaryDialog(BaseDialog):
         self.on_close = on_close
         self.on_view_full_qc = on_view_full_qc
         self.display_names = display_names or {}
+        self.live_metrics = list(live_metrics) if live_metrics else []
 
     def show(self):
         """Display the modal dialog."""
@@ -245,10 +241,11 @@ class FeedbackSummaryDialog(BaseDialog):
             border_radius=8,
         )
 
-        # Stats cards row: Network Hits | FD | DVARS | tSNR
+        # Stats cards row: one combined task-metrics card (when any), then FD | DVARS | tSNR
+        metric_card = self._build_metric_card()
         stats_row = ft.Row(
             [
-                self._build_hits_card(),
+                *([metric_card] if metric_card is not None else []),
                 self._build_fd_card(),
                 self._build_dvars_card(),
                 self._build_tsnr_card(),
@@ -291,39 +288,103 @@ class FeedbackSummaryDialog(BaseDialog):
             padding=10,
         )
 
-    def _build_hits_card(self) -> ft.Control:
-        """Build the network hits summary card."""
-        data = self.summary_data
+    def _build_metric_card(self) -> ft.Control | None:
+        """Build one combined card with all declared live metrics.
 
-        hit_rows: list[ft.Control] = []
-        total_hits = 0
-        for network, hits in data.hits_per_network.items():
-            total_hits += hits
-            # Use display name if available (for blind mode)
-            display_name = self.display_names.get(network, network)
-            hit_rows.append(
+        Returns None when no declared metric has data (so the caller can skip
+        rendering an empty card). All metrics share a single "Task Metrics"
+        card with one section per metric:
+
+        - Single-cell metric (e.g. gauge "Score"): a single `Label: value` row.
+        - Multi-cell metric (e.g. ball "Hits"): a label header, indented
+          per-item rows, and an indented "Total" row when every cell parses as
+          an int.
+
+        Multiple metrics on the same card are separated by a thin divider.
+        """
+        rendered_blocks: list[list[ft.Control]] = []
+        for metric in self.live_metrics:
+            cells = self.summary_data.live_metric_snapshots.get(metric.key, {})
+            if not cells:
+                continue
+            rendered_blocks.append(self._render_metric_block(metric, cells))
+
+        if not rendered_blocks:
+            return None
+
+        rows: list[ft.Control] = []
+        for i, block in enumerate(rendered_blocks):
+            if i > 0:
+                rows.append(ft.Divider(height=1))
+            rows.extend(block)
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.TRACK_CHANGES, color=ft.Colors.BLUE, size=20),
+                            ft.Text("Task Metrics", size=14, weight=ft.FontWeight.BOLD),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Container(height=8),
+                    *rows,
+                ],
+                spacing=4,
+            ),
+            padding=15,
+            bgcolor=ft.Colors.GREY_100,
+            border_radius=8,
+            border=ft.border.all(1, ft.Colors.GREY_300),
+            width=200,
+        )
+
+    def _render_metric_block(self, metric: LiveMetric, cells: dict[str, str]) -> list[ft.Control]:
+        """Render a single metric's rows for inclusion in the combined card."""
+        block: list[ft.Control] = []
+        is_literal_single = len(cells) == 1 and next(iter(cells)) == metric.column_pattern
+
+        if is_literal_single:
+            value = next(iter(cells.values()))
+            block.append(
                 ft.Row(
                     [
-                        ft.Text(f"{display_name}:", size=13, color=ft.Colors.GREY_700),
-                        ft.Text(
-                            str(hits),
-                            size=13,
-                            weight=ft.FontWeight.W_500,
-                        ),
+                        ft.Text(f"{metric.label}:", size=13, color=ft.Colors.GREY_700),
+                        ft.Text(value, size=13, weight=ft.FontWeight.W_500),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 )
             )
+            return block
 
-        # Add total row
-        if data.hits_per_network:
-            hit_rows.append(ft.Divider(height=1))
-            hit_rows.append(
+        # Multi-cell: label header, indented per-item rows, optional total.
+        block.append(ft.Text(metric.label, size=13, weight=ft.FontWeight.W_500))
+        int_total = 0
+        all_int = True
+        for name, value in cells.items():
+            disp = self.display_names.get(name, name) if metric.remap_blind_names else name
+            block.append(
                 ft.Row(
                     [
-                        ft.Text("Total:", size=13, weight=ft.FontWeight.W_500),
+                        ft.Text(f"  {disp}:", size=13, color=ft.Colors.GREY_700),
+                        ft.Text(value, size=13, weight=ft.FontWeight.W_500),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                )
+            )
+            try:
+                int_total += int(value)
+            except ValueError:
+                all_int = False
+
+        if all_int and len(cells) > 1:
+            block.append(
+                ft.Row(
+                    [
+                        ft.Text("  Total:", size=13, weight=ft.FontWeight.W_500),
                         ft.Text(
-                            str(total_hits),
+                            str(int_total),
                             size=13,
                             weight=ft.FontWeight.BOLD,
                             color=ft.Colors.BLUE,
@@ -332,41 +393,8 @@ class FeedbackSummaryDialog(BaseDialog):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 )
             )
-        else:
-            hit_rows.append(
-                ft.Text(
-                    "No hit data available",
-                    size=12,
-                    color=ft.Colors.GREY_500,
-                    italic=True,
-                )
-            )
 
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.TRACK_CHANGES, color=ft.Colors.BLUE, size=20),
-                            ft.Text(
-                                "Network Hits",
-                                size=14,
-                                weight=ft.FontWeight.BOLD,
-                            ),
-                        ],
-                        spacing=8,
-                    ),
-                    ft.Container(height=8),
-                    *hit_rows,
-                ],
-                spacing=4,
-            ),
-            padding=15,
-            bgcolor=ft.Colors.GREY_100,
-            border_radius=8,
-            border=ft.border.all(1, ft.Colors.GREY_300),
-            width=170,
-        )
+        return block
 
     def _build_fd_card(self) -> ft.Control:
         """Build the framewise displacement summary card."""

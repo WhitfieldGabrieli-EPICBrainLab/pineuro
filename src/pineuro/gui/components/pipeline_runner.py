@@ -2294,6 +2294,7 @@ class PipelineRunner:
                 connectivity_pairs=connectivity_pairs,  # Sliding-window correlation pairs (may include sham pair)
                 connectivity_window=_fb("connectivity_window", 15),  # Correlation window size
                 connectivity_target=_fb("connectivity_target", "increase"),  # Target direction
+                task_id=feedback_task_type,  # Registered task_id for live-metric QC summary
             )
 
             # Wait for the coordinator thread to complete

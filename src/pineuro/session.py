@@ -2778,6 +2778,7 @@ def run_single_task(
         csf_mask_path=config.feedback.csf_mask_path,
         connectivity_pairs=eff_connectivity_pairs,
         connectivity_window=eff_connectivity_window,
+        task_id=eff_task_type,
         **simulator_kwargs,
     )
 

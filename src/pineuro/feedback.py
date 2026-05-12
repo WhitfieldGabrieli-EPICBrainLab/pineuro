@@ -2151,6 +2151,7 @@ def _generate_partial_qc(
     task: str,
     run: int,
     acq: str | None = None,
+    task_id: str | None = None,
 ) -> Path | None:
     """Generate QC report for interrupted session before archiving.
 
@@ -2168,6 +2169,9 @@ def _generate_partial_qc(
         Run number
     acq : str, optional
         Acquisition letter (e.g., 'a', 'b'). If provided, uses new acq-based naming.
+    task_id : str, optional
+        Registered task identifier (e.g., "ball", "gauge"). When provided, the
+        QC report surfaces the task's declared live metrics in its summary.
 
     Returns
     -------
@@ -2176,9 +2180,17 @@ def _generate_partial_qc(
     """
     try:
         from pineuro import qc
+        from pineuro.tasks.task_registry import get_task_metadata
 
         qc_output_dir = output_dir / "qc"
         qc_output_dir.mkdir(parents=True, exist_ok=True)
+
+        live_metrics = None
+        if task_id:
+            try:
+                live_metrics = list(get_task_metadata(task_id).live_metrics)
+            except (KeyError, ValueError):
+                live_metrics = None
 
         report_path = qc.generate_feedback_report(
             feedback_dir=output_dir,
@@ -2188,6 +2200,7 @@ def _generate_partial_qc(
             acq=acq,
             output_dir=qc_output_dir,
             open_browser=False,
+            live_metrics=live_metrics,
         )
         logger.info(f"Generated partial QC report: {report_path}")
         return report_path
@@ -2513,6 +2526,7 @@ class NeurofeedbackCoordinator:
         connectivity_target: str = "increase",  # "increase" or "decrease" (negate r)
         wm_mask_path: Path | str | None = None,  # WM tissue mask for nuisance regression
         csf_mask_path: Path | str | None = None,  # CSF tissue mask for nuisance regression
+        task_id: str | None = None,  # Registered task_id for live-metric QC summary lookup
     ) -> None:
         self.watch_dir = Path(watch_dir)
         self.output_dir = Path(output_dir)
@@ -2520,6 +2534,7 @@ class NeurofeedbackCoordinator:
         self.task = task
         self.run_number = run
         self.acq = acq  # Acquisition letter for retry tracking
+        self._task_id = task_id
         self.n_baseline = n_baseline
         self.n_volumes = n_volumes
         self._tr = tr
@@ -3581,6 +3596,14 @@ class NeurofeedbackCoordinator:
         """Generate QC report after session completes."""
         try:
             from . import qc
+            from .tasks.task_registry import get_task_metadata
+
+            live_metrics = None
+            if self._task_id:
+                try:
+                    live_metrics = list(get_task_metadata(self._task_id).live_metrics)
+                except (KeyError, ValueError):
+                    live_metrics = None
 
             logger.info("Generating feedback QC report...")
             report_path = qc.generate_feedback_report(
@@ -3594,6 +3617,7 @@ class NeurofeedbackCoordinator:
                 open_browser=False,
                 expected_volumes=self.n_volumes,
                 fd_threshold=self._fd_threshold,
+                live_metrics=live_metrics,
             )
             logger.info(f"QC report saved to: {report_path}")
         except Exception as e:
@@ -3774,6 +3798,7 @@ def run_feedback_session(
     connectivity_target: str = "increase",
     wm_mask_path: Path | str | None = None,
     csf_mask_path: Path | str | None = None,
+    task_id: str | None = None,
 ) -> dict:
     """Run a complete feedback session with optional volume simulation.
 
@@ -4002,7 +4027,7 @@ def run_feedback_session(
     if interrupted is not None:
         logger.warning(f"Found interrupted run with {interrupted['volumes_completed']} volumes (expected {n_volumes})")
         # Generate partial QC before archiving
-        _generate_partial_qc(output_dir, subject, task, run, acq=acq)
+        _generate_partial_qc(output_dir, subject, task, run, acq=acq, task_id=task_id)
         # Archive interrupted data
         archive_path = _archive_interrupted_run(output_dir, subject, task, run, acq=acq)
         logger.info(f"Archived interrupted run to: {archive_path}")
@@ -4106,6 +4131,7 @@ def run_feedback_session(
         connectivity_target=connectivity_target,
         wm_mask_path=wm_mask_path,
         csf_mask_path=csf_mask_path,
+        task_id=task_id,
     )
 
     # Set cleanup flags for simulation mode

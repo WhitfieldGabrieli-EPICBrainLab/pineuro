@@ -3722,6 +3722,7 @@ class ParticipantWorkflowScreen:
             step_id: The completed step ID (transfer_1, feedback_1, feedback_2, transfer_2)
         """
         from pineuro import qc
+        from pineuro.tasks.task_registry import get_task_metadata
 
         from ..components.feedback_summary import (
             FeedbackSummaryDialog,
@@ -3750,6 +3751,15 @@ class ParticipantWorkflowScreen:
         fd_threshold = _fv("fd_threshold", 0.5)
         dvars_threshold = _fv("dvars_threshold", 1.5)
 
+        # Resolve declarative live metrics for this run's task.
+        summary_task_type = (
+            frc.get("task_type", "ball") if frc is not None else config.get("task", {}).get("task_type", "ball")
+        )
+        try:
+            summary_live_metrics = list(get_task_metadata(summary_task_type).live_metrics)
+        except (KeyError, ValueError):
+            summary_live_metrics = []
+
         # Find the feedbacklog and psychopylog files
         output_dir = base_dir / "feedback" / "02_feedback_output"
         feedbacklog_path = self._find_latest_feedback_file(output_dir, task, run, "feedbacklog.tsv")
@@ -3774,6 +3784,7 @@ class ParticipantWorkflowScreen:
                 n_expected_volumes=n_volumes,
                 fd_threshold=fd_threshold,
                 dvars_threshold=dvars_threshold,
+                live_metrics=summary_live_metrics,
             )
         except Exception as e:
             logger.error(f"Failed to compute feedback summary: {e}")
@@ -3847,6 +3858,7 @@ class ParticipantWorkflowScreen:
                     expected_volumes=n_volumes,
                     display_names=display_names_dict,
                     fd_threshold=fd_threshold,
+                    live_metrics=summary_live_metrics,
                 )
             except Exception as e:
                 logger.warning(f"Failed to regenerate QC report: {e}")
@@ -3862,6 +3874,7 @@ class ParticipantWorkflowScreen:
             connectivity_plot_path=connectivity_plot_path if connectivity_plot_path.exists() else None,
             on_view_full_qc=on_view_full_qc,
             display_names=display_names_dict,
+            live_metrics=summary_live_metrics,
         )
         dialog.show()
 
@@ -5951,7 +5964,7 @@ class ParticipantWorkflowScreen:
 
             n_volumes = self._fb("n_volumes", 150)
 
-            # Store display names mapping for hits counter (blind mode)
+            # Store display names mapping for live metrics (blind mode)
             if display_names:
                 self._feedback_display_names: dict[str, str] | None = {
                     mask_names[i]: display_names[i] for i in range(len(mask_names))
@@ -6090,7 +6103,7 @@ class ParticipantWorkflowScreen:
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
                         ft.Divider(),
-                        # Status strip: status, progress, hits
+                        # Status strip: status, progress, task-declared live metrics
                         ft.Container(
                             content=ft.Column(
                                 [
