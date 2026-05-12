@@ -54,12 +54,13 @@ import numpy as np
 from .base import BaseTask
 from .factory import register_task_class
 from .task_registry import (
+    LiveMetric,
     NetworkRole,
     TaskMetadata,
     TaskParameter,
     register_task,
 )
-from .utils import is_activation_outlier
+from .utils import is_activation_outlier, make_bids_run_prefix
 
 if TYPE_CHECKING:
     from .session import SessionState
@@ -271,6 +272,18 @@ class RNTTriggeredBallTask(BaseTask):
         # Separate dedup counter for trigger checks
         self._last_trigger_checked_volume: int = 0
 
+        # Per-volume psychopylog for live monitoring
+        prefix = make_bids_run_prefix(
+            coordinator.subject,
+            coordinator.task,
+            coordinator.run_number,
+            acq=getattr(coordinator, "acq", None),
+        )
+        self._psychopy_log_path = Path(coordinator.output_dir) / f"{prefix}_psychopylog.tsv"
+        self._psychopy_log_file: Any = None
+        self._psychopy_log_writer: Any = None
+        self._frame_counter: int = 0
+
         logger.info(
             f"RNTTriggeredBallTask initialized: trigger={self.mask_name}, "
             f"ball=[{self._ball_mask_names[0]}, {self._ball_mask_names[1]}], "
@@ -335,6 +348,18 @@ class RNTTriggeredBallTask(BaseTask):
                 self._volume_log_suffix = f" | slope {slope:+.3f} (n={len(window)})"
         else:
             self._volume_log_suffix = ""
+
+        if self._psychopy_log_writer is not None:
+            self._frame_counter += 1
+            self._psychopy_log_writer.writerow(
+                [
+                    self._frame_counter,
+                    f"{elapsed:.4f}",
+                    volume,
+                    self._trigger_state.n_episodes_triggered,
+                ]
+            )
+            self._psychopy_log_file.flush()
 
     def get_volume_log_suffix(self) -> str:
         return self._volume_log_suffix
@@ -609,6 +634,14 @@ class RNTTriggeredBallTask(BaseTask):
     def setup(self) -> None:
         """Initialize PsychoPy window, stimuli, instructions, and trigger."""
         from psychopy import core
+
+        # Open per-volume psychopylog so the GUI live-metrics panel can poll triggers.
+        self._psychopy_log_file = open(  # noqa: SIM115
+            self._psychopy_log_path, "w", newline="", encoding="utf-8"
+        )
+        self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter="\t")
+        self._psychopy_log_writer.writerow(["frame", "time", "volume", "triggers"])
+        self._psychopy_log_file.flush()
 
         self.create_window(
             monitor_position=self.presenter_monitor,
@@ -963,6 +996,14 @@ class RNTTriggeredBallTask(BaseTask):
         except Exception:
             logger.exception("Failed to save events TSV during cleanup")
 
+        if self._psychopy_log_file is not None:
+            try:
+                self._psychopy_log_file.close()
+            except Exception:
+                logger.exception("Failed to close psychopylog during cleanup")
+            self._psychopy_log_file = None
+            self._psychopy_log_writer = None
+
         # Delete visual stimuli while GL context is still alive
         for attr in ["_fixation", "_ball"]:
             if hasattr(self, attr):
@@ -1110,6 +1151,9 @@ RNT_TRIGGERED_BALL_METADATA = TaskMetadata(
     ],
     session_state_fields=[],
     post_run_questions=[],
+    live_metrics=[
+        LiveMetric(key="triggers", label="Triggers", column_pattern="triggers"),
+    ],
 )
 
 register_task(RNT_TRIGGERED_BALL_METADATA)

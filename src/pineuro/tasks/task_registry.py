@@ -196,6 +196,37 @@ class PostRunQuestion:
     condition: Literal["always", "feedback_only", "last_feedback_only"] = "always"
 
 
+@dataclass(frozen=True)
+class LiveMetric:
+    """Declarative live-monitoring metric, polled from the last row of psychopylog.tsv.
+
+    Attributes:
+        key: Stable identifier (e.g., "hits", "score"). Used as the widget key.
+        label: UI prefix (e.g., "Hits"). Rendered before the value(s).
+        column_pattern: Either a literal psychopylog column name (e.g., "score")
+            or an fnmatch glob (e.g., "*_hits") matching multiple columns.
+        value_format: Per-cell format string. {value} is the parsed cell
+            (int/float/str). Example: "{value:.1f}".
+        item_format: Used only when column_pattern matches more than one column.
+            {name} is the column suffix (after stripping name_strip_suffix);
+            {value} is the formatted cell. Example: "{name}: {value}".
+        join_with: Separator joining multiple items (e.g., ", ").
+        name_strip_suffix: Suffix removed from matched column names to derive
+            {name} (e.g., "_hits" so "ContA_hits" becomes "ContA").
+        remap_blind_names: When True, the GUI applies its blind-mode display
+            name map to {name} (e.g., "ContA" -> "Network A").
+    """
+
+    key: str
+    label: str
+    column_pattern: str
+    value_format: str = "{value}"
+    item_format: str = "{name}: {value}"
+    join_with: str = ", "
+    name_strip_suffix: str = ""
+    remap_blind_names: bool = False
+
+
 @dataclass
 class TaskMetadata:
     """Metadata for a task type.
@@ -236,6 +267,11 @@ class TaskMetadata:
             user-configured n_volumes for variable-duration tasks, and by
             the GUI to hide the n_volumes field. Tasks with predictable,
             fixed-by-n_volumes duration leave this as None.
+        live_metrics: Declarative live-monitoring metrics surfaced in the GUI
+            participant workflow panel. Each entry maps psychopylog.tsv
+            columns to a labeled display (e.g., "Hits: ContA: 5"). Tasks that
+            do not write per-frame logs or have nothing meaningful to surface
+            leave this empty -- the GUI hides the row entirely.
     """
 
     task_id: str
@@ -251,6 +287,7 @@ class TaskMetadata:
     post_run_questions: list[PostRunQuestion] = field(default_factory=list)
     design_type: str = "block"
     compute_max_run_seconds: Callable[[dict[str, Any]], float] | None = None
+    live_metrics: list[LiveMetric] = field(default_factory=list)
 
     def validate_config(self, config: dict[str, Any]) -> None:
         """Validate a complete task configuration.

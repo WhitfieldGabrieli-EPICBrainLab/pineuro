@@ -48,11 +48,13 @@ from .base import BaseTask
 from .factory import register_task_class
 from .rnt_triggered_ball import _least_squares_slope
 from .task_registry import (
+    LiveMetric,
     NetworkRole,
     TaskMetadata,
     TaskParameter,
     register_task,
 )
+from .utils import make_bids_run_prefix
 
 if TYPE_CHECKING:
     from .session import SessionState
@@ -226,6 +228,18 @@ class RNTExperienceSamplingTask(BaseTask):
         # Separate dedup counter for trigger checks (history managed in _update_data)
         self._last_trigger_checked_volume: int = 0
 
+        # Per-volume psychopylog for live monitoring
+        prefix = make_bids_run_prefix(
+            coordinator.subject,
+            coordinator.task,
+            coordinator.run_number,
+            acq=getattr(coordinator, "acq", None),
+        )
+        self._psychopy_log_path = Path(coordinator.output_dir) / f"{prefix}_psychopylog.tsv"
+        self._psychopy_log_file: Any = None
+        self._psychopy_log_writer: Any = None
+        self._frame_counter: int = 0
+
         logger.info(
             f"RNTExperienceSamplingTask initialized: mask={self.mask_name}, "
             f"contrast={activation_contrast}, consecutive={consecutive_volumes}, "
@@ -289,6 +303,19 @@ class RNTExperienceSamplingTask(BaseTask):
                 self._volume_log_suffix = f" | slope {slope:+.3f} (n={len(window)})"
         else:
             self._volume_log_suffix = ""
+
+        if self._psychopy_log_writer is not None:
+            self._frame_counter += 1
+            self._psychopy_log_writer.writerow(
+                [
+                    self._frame_counter,
+                    f"{elapsed:.4f}",
+                    volume,
+                    self._trigger_state.n_prompts_triggered,
+                    self._trigger_state.n_prompts_timeout,
+                ]
+            )
+            self._psychopy_log_file.flush()
 
     def get_volume_log_suffix(self) -> str:
         return self._volume_log_suffix
@@ -556,6 +583,14 @@ class RNTExperienceSamplingTask(BaseTask):
     def setup(self) -> None:
         """Initialize PsychoPy window, stimuli, instructions, and trigger."""
         from psychopy import core
+
+        # Open per-volume psychopylog so the GUI live-metrics panel can poll prompt counts.
+        self._psychopy_log_file = open(  # noqa: SIM115
+            self._psychopy_log_path, "w", newline="", encoding="utf-8"
+        )
+        self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter="\t")
+        self._psychopy_log_writer.writerow(["frame", "time", "volume", "triggered_prompts", "timeout_prompts"])
+        self._psychopy_log_file.flush()
 
         self.create_window(
             monitor_position=self.presenter_monitor,
@@ -870,6 +905,14 @@ class RNTExperienceSamplingTask(BaseTask):
         except Exception:
             logger.exception("Failed to save events TSV during cleanup")
 
+        if self._psychopy_log_file is not None:
+            try:
+                self._psychopy_log_file.close()
+            except Exception:
+                logger.exception("Failed to close psychopylog during cleanup")
+            self._psychopy_log_file = None
+            self._psychopy_log_writer = None
+
         # Delete visual stimuli while GL context is still alive
         for attr in [
             "_fixation",
@@ -1010,6 +1053,10 @@ RNT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
     ],
     session_state_fields=[],
     post_run_questions=[],
+    live_metrics=[
+        LiveMetric(key="triggered", label="Triggered", column_pattern="triggered_prompts"),
+        LiveMetric(key="timeout", label="Timeout", column_pattern="timeout_prompts"),
+    ],
 )
 
 register_task(RNT_EXPERIENCE_SAMPLING_METADATA)

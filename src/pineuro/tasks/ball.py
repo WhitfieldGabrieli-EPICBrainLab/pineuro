@@ -1187,6 +1187,7 @@ class BallTask(BaseTask):
 from typing import Any
 
 from .task_registry import (
+    LiveMetric,
     NetworkRole,
     PostRunQuestion,
     SessionStateField,
@@ -1364,6 +1365,15 @@ BALL_TASK_METADATA = TaskMetadata(
         ),
     ],
     design_type="block",
+    live_metrics=[
+        LiveMetric(
+            key="hits",
+            label="Hits",
+            column_pattern="*_hits",
+            name_strip_suffix="_hits",
+            remap_blind_names=True,
+        ),
+    ],
 )
 
 # Auto-register on import

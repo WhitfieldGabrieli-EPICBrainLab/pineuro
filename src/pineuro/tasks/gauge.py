@@ -823,6 +823,7 @@ class GaugeTask(BaseTask):
 # ==============================================================================
 
 from .task_registry import (
+    LiveMetric,
     NetworkRole,
     TaskMetadata,
     TaskParameter,
@@ -926,6 +927,14 @@ GAUGE_METADATA = TaskMetadata(
         ),
     ],
     design_type="nuisance_only",
+    live_metrics=[
+        LiveMetric(
+            key="score",
+            label="Score",
+            column_pattern="score",
+            value_format="{value:.1f}",
+        ),
+    ],
 )
 
 # Register task

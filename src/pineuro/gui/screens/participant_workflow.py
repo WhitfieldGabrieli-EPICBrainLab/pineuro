@@ -5959,6 +5959,21 @@ class ParticipantWorkflowScreen:
             else:
                 self._feedback_display_names = None
 
+            # Resolve declarative live metrics for this task (declared on TaskMetadata).
+            # The participant_workflow live monitoring panel renders one labeled
+            # widget per metric and hides the row entirely if the task declared none.
+            from pineuro.tasks.task_registry import get_task_metadata
+
+            _live_metrics_task_type = (
+                self._active_frc.get("task_type", "ball")
+                if self._active_frc is not None
+                else config.get("task", {}).get("task_type", "ball")
+            )
+            try:
+                self._live_metrics = list(get_task_metadata(_live_metrics_task_type).live_metrics)
+            except (KeyError, ValueError):
+                self._live_metrics = []
+
             # Determine what to plot: connectivity signal or individual activations
             feedback_mode = self._fb("feedback_mode", "activation")
             if feedback_mode == "connectivity" and len(mask_names) >= 2:
@@ -6043,7 +6058,12 @@ class ParticipantWorkflowScreen:
             self._progress_bar = ft.ProgressBar(value=0, width=300)
             self._progress_text = ft.Text("0 / 0 volumes", size=12)
             self._status_text = ft.Text("Waiting...", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
-            self._hits_text = ft.Text("Hits: --", size=12)
+            self._metric_texts: dict[str, ft.Text] = {m.key: ft.Text("", size=12) for m in self._live_metrics}
+            self._metrics_row = ft.Row(
+                list(self._metric_texts.values()),
+                spacing=16,
+                visible=bool(self._live_metrics),
+            )
 
             # Build monitoring panel:
             # Row 1: Activation/Connectivity plot + Task mirror (equal halves)
@@ -6086,7 +6106,7 @@ class ParticipantWorkflowScreen:
                                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                     ),
-                                    self._hits_text,
+                                    self._metrics_row,
                                 ],
                                 spacing=4,
                             ),
@@ -6818,22 +6838,27 @@ class ParticipantWorkflowScreen:
                         self._status_text.color = ft.Colors.GREEN_600
                     self._status_text.update()
 
-                # Update hits display (from psychopylog.tsv)
-                if self._hits_text:
-                    from ..components.csv_poller import get_hits_from_psychopylog
+                # Update declarative live metrics (from psychopylog.tsv)
+                live_metrics = getattr(self, "_live_metrics", [])
+                if live_metrics:
+                    from ..components.csv_poller import read_live_metrics
 
-                    hits = get_hits_from_psychopylog(self._psychopylog_path)
-                    if hits:
-                        # Use display names if in blind mode
-                        display_map = getattr(self, "_feedback_display_names", None)
-                        hit_strs = []
-                        for k, v in hits.items():
-                            display_name = display_map.get(k, k) if display_map else k
-                            hit_strs.append(f"{display_name}: {v}")
-                        self._hits_text.value = "Hits: " + ", ".join(hit_strs)
-                    else:
-                        self._hits_text.value = "Hits: --"
-                    self._hits_text.update()
+                    snapshot = read_live_metrics(self._psychopylog_path, live_metrics)
+                    display_map = getattr(self, "_feedback_display_names", None) or {}
+                    for metric in live_metrics:
+                        widget = self._metric_texts[metric.key]
+                        cells = snapshot.get(metric.key, {})
+                        if not cells:
+                            widget.value = f"{metric.label}: --"
+                        elif len(cells) == 1 and next(iter(cells)) == metric.column_pattern:
+                            widget.value = f"{metric.label}: {next(iter(cells.values()))}"
+                        else:
+                            parts = []
+                            for name, val in cells.items():
+                                disp = display_map.get(name, name) if metric.remap_blind_names else name
+                                parts.append(metric.item_format.format(name=disp, value=val))
+                            widget.value = f"{metric.label}: {metric.join_with.join(parts)}"
+                        widget.update()
 
             except Exception as e:
                 logger.error(f"Error updating feedback UI: {e}")

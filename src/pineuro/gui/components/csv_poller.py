@@ -5,11 +5,14 @@ and emit new data as it's written during neurofeedback sessions.
 """
 
 import csv
+import fnmatch
 import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from pineuro.tasks.task_registry import LiveMetric
 
 logger = logging.getLogger(__name__)
 
@@ -277,32 +280,57 @@ class FeedbackMonitor:
         self.on_update(volume, mask_activations, motion_params, fd, dvars, tsnr)
 
 
-def get_hits_from_psychopylog(log_path: Path) -> dict[str, int]:
-    """Read hit counts from last row of psychopylog.tsv.
+def read_live_metrics(log_path: Path, metrics: list[LiveMetric]) -> dict[str, dict[str, str]]:
+    """Read declared live metrics from the last row of psychopylog.tsv.
 
-    The psychopylog.tsv is written per-frame by the ball task and includes
-    columns ending in _hits (e.g., ContA_hits, DefaultA_hits).
+    For each metric, every column matching its `column_pattern` (literal name
+    or fnmatch glob) is parsed from the most recent row, formatted via
+    `value_format`, and keyed by the column name with `name_strip_suffix`
+    removed. The GUI then renders each metric using its `label` and
+    `item_format` / `join_with` rules.
 
     Args:
-        log_path: Path to the psychopylog.tsv file
+        log_path: Path to the psychopylog.tsv file.
+        metrics: Declarations from `TaskMetadata.live_metrics`.
 
     Returns:
-        Dict mapping mask name to hit count, or empty dict if file not found/empty.
+        `{metric.key: {item_name: formatted_value, ...}}`. Metrics with no
+        matching columns are omitted; an unreadable or empty file returns
+        `{}`.
     """
-    if not log_path.exists():
+    if not metrics or not log_path.exists():
         return {}
     try:
         with open(log_path) as f:
             lines = f.readlines()
         if len(lines) < 2:  # Need header + at least one data row
             return {}
-        header = lines[0].strip().split("\t")
-        last_row = lines[-1].strip().split("\t")
-        hits = {}
-        for i, col in enumerate(header):
-            if col.endswith("_hits") and i < len(last_row):
-                mask_name = col.replace("_hits", "")
-                hits[mask_name] = int(last_row[i])
-        return hits
+        header = lines[0].rstrip("\n").split("\t")
+        last_row = lines[-1].rstrip("\n").split("\t")
+        out: dict[str, dict[str, str]] = {}
+        for m in metrics:
+            cells: dict[str, str] = {}
+            for i, col in enumerate(header):
+                if i >= len(last_row):
+                    continue
+                if not (col == m.column_pattern or fnmatch.fnmatchcase(col, m.column_pattern)):
+                    continue
+                raw = last_row[i]
+                value: Any
+                try:
+                    value = int(raw)
+                except ValueError:
+                    try:
+                        value = float(raw)
+                    except ValueError:
+                        value = raw
+                if m.name_strip_suffix and col.endswith(m.name_strip_suffix):
+                    name = col[: -len(m.name_strip_suffix)]
+                else:
+                    name = col
+                cells[name] = m.value_format.format(value=value)
+            if cells:
+                out[m.key] = cells
+        return out
     except Exception:
         return {}
