@@ -28,7 +28,7 @@ ActivationNormalizer : Percentile-based normalization
 Session Orchestration
 --------------------
 SessionConfig : High-level session configuration
-TaskConfig : Generic task configuration (task_type, params, network assignment)
+LocalizerConfig / FeedbackRunConfig : Per-localizer and per-feedback-run configuration
 run_full_session : Run complete multi-run session
 setup_session : Initialize session (collection, preprocessing, mask extraction)
 run_single_task : Run one feedback/transfer task via task factory
@@ -111,11 +111,17 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # --- session.py (lightweight: stdlib only) ---
     "SessionConfig": (".session", "SessionConfig"),
     "PathConfig": (".session", "PathConfig"),
-    "ScanConfig": (".session", "ScanConfig"),
-    "MaskConfig": (".session", "MaskConfig"),
-    "FeedbackConfig": (".session", "FeedbackConfig"),
+    "LocalizerConfig": (".session", "LocalizerConfig"),
+    "LocalizerExtractionConfig": (".session", "LocalizerExtractionConfig"),
     "FeedbackRunConfig": (".session", "FeedbackRunConfig"),
-    "TaskConfig": (".session", "TaskConfig"),
+    "QCConfig": (".session", "QCConfig"),
+    "GLMConfig": (".session", "GLMConfig"),
+    "ConnectivityConfig": (".session", "ConnectivityConfig"),
+    "IntermittentConfig": (".session", "IntermittentConfig"),
+    "SimulatorConfig": (".session", "SimulatorConfig"),
+    "ScannerConfig": (".session", "ScannerConfig"),
+    "ReferenceConfig": (".session", "ReferenceConfig"),
+    "StudyInfoConfig": (".session", "StudyInfoConfig"),
     "VisitConfig": (".session", "VisitConfig"),
     "ShamConfig": (".session", "ShamConfig"),
     "SimulatorSourceMapping": (".session", "SimulatorSourceMapping"),
@@ -217,11 +223,17 @@ __all__ = [
     # Configuration dataclasses
     "SessionConfig",
     "PathConfig",
-    "ScanConfig",
-    "MaskConfig",
-    "FeedbackConfig",
+    "LocalizerConfig",
+    "LocalizerExtractionConfig",
     "FeedbackRunConfig",
-    "TaskConfig",
+    "QCConfig",
+    "GLMConfig",
+    "ConnectivityConfig",
+    "IntermittentConfig",
+    "SimulatorConfig",
+    "ScannerConfig",
+    "ReferenceConfig",
+    "StudyInfoConfig",
     "VisitConfig",
     "ShamConfig",
     "SimulatorSourceMapping",

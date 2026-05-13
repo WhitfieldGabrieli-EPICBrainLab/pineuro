@@ -122,12 +122,27 @@ class StudyConfig:
             **self.session_config,
         }
 
+    # Legacy top-level YAML keys that no longer exist in the new schema.
+    # Their presence triggers an immediate ValueError so partial migrations fail
+    # loudly at GUI load time rather than silently at runtime.
+    _LEGACY_TOP_LEVEL_KEYS = frozenset({"mask", "feedback", "task", "localizer_task", "scan"})
+
     @classmethod
     def from_dict(cls, data: dict, file_path: Path | None = None) -> "StudyConfig":
         """Create from dictionary loaded from YAML."""
         metadata_dict = data.get("_metadata", {})
         metadata = StudyMetadata.from_dict(metadata_dict)
         session_config = {k: v for k, v in data.items() if k != "_metadata"}
+
+        # Reject old-shape YAMLs early — fail loudly at load, not at runtime.
+        found_legacy = cls._LEGACY_TOP_LEVEL_KEYS & set(session_config.keys())
+        if found_legacy:
+            raise ValueError(
+                f"Study config uses outdated schema (found legacy top-level keys: "
+                f"{sorted(found_legacy)}). This version of pineuro removed the legacy "
+                f"single-block schema; regenerate the YAML via the GUI study editor or "
+                f"rebuild from scratch."
+            )
 
         return cls(
             metadata=metadata,

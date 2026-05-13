@@ -151,22 +151,29 @@ class TestValidatePositiveInt:
 class TestValidateSessionConfig:
     def _valid_config(self):
         return {
-            "scan": {
-                "tr": 1.5,
-                "n_volumes": 200,
-                "n_baseline": 10,
-                "rest_n_volumes": [100, 100],
-            },
-            "mask": {
-                "n_yeo": 7,
-                "yeo_targets": ["Default", "Cont"],
-                "smooth_fwhm": 5.0,
-                "highpass": 0.01,
-            },
-            "feedback": {
-                "n_baseline": 10,
-                "n_volumes": 200,
-            },
+            "localizers": [
+                {
+                    "id": "rest",
+                    "type": "rest",
+                    "tr": 1.5,
+                    "n_volumes": 200,
+                    "n_runs": 2,
+                    "networks": ["Default", "Cont"],
+                    "extraction": {
+                        "n_yeo": 7,
+                        "smooth_fwhm": 5.0,
+                        "highpass": 0.01,
+                    },
+                }
+            ],
+            "feedback_runs": [
+                {
+                    "task": "ball",
+                    "mask_source": "rest",
+                    "n_baseline": 10,
+                    "n_volumes": 200,
+                }
+            ],
         }
 
     def test_valid_config_passes(self):
@@ -176,94 +183,86 @@ class TestValidateSessionConfig:
 
     def test_invalid_tr_fails(self):
         config = self._valid_config()
-        config["scan"]["tr"] = 0
+        config["localizers"][0]["tr"] = 0
         ok, err = validate_session_config(config)
         assert ok is False
         assert err is not None
 
     def test_negative_tr_fails(self):
         config = self._valid_config()
-        config["scan"]["tr"] = -1.0
+        config["localizers"][0]["tr"] = -1.0
         ok, err = validate_session_config(config)
         assert ok is False
 
     def test_invalid_n_volumes_fails(self):
         config = self._valid_config()
-        config["scan"]["n_volumes"] = -1
+        config["localizers"][0]["n_volumes"] = -1
         ok, err = validate_session_config(config)
         assert ok is False
 
-    def test_zero_n_baseline_fails(self):
+    def test_zero_n_runs_fails(self):
         config = self._valid_config()
-        config["scan"]["n_baseline"] = 0
+        config["localizers"][0]["n_runs"] = 0
         ok, err = validate_session_config(config)
         assert ok is False
 
-    def test_empty_rest_n_volumes_fails(self):
+    def test_single_run_fails(self):
         config = self._valid_config()
-        config["scan"]["rest_n_volumes"] = []
-        ok, err = validate_session_config(config)
-        assert ok is False
-
-    def test_single_rest_volume_entry_fails(self):
-        # rest_n_volumes needs at least 2 entries
-        config = self._valid_config()
-        config["scan"]["rest_n_volumes"] = [100]
-        ok, err = validate_session_config(config)
-        assert ok is False
-
-    def test_rest_n_volumes_not_list_fails(self):
-        config = self._valid_config()
-        config["scan"]["rest_n_volumes"] = 100  # should be a list
+        config["localizers"][0]["n_runs"] = 1
         ok, err = validate_session_config(config)
         assert ok is False
 
     def test_invalid_n_yeo_fails(self):
         config = self._valid_config()
-        config["mask"]["n_yeo"] = 5  # only 7 or 17 allowed
+        config["localizers"][0]["extraction"]["n_yeo"] = 5  # only 7 or 17
         ok, err = validate_session_config(config)
         assert ok is False
 
     def test_valid_n_yeo_17(self):
         config = self._valid_config()
-        config["mask"]["n_yeo"] = 17
+        config["localizers"][0]["extraction"]["n_yeo"] = 17
         ok, err = validate_session_config(config)
         assert ok is True
 
-    def test_empty_yeo_targets_fails(self):
+    def test_empty_networks_fails(self):
         config = self._valid_config()
-        config["mask"]["yeo_targets"] = []
+        config["localizers"][0]["networks"] = []
         ok, err = validate_session_config(config)
         assert ok is False
 
-    def test_single_yeo_target_fails(self):
-        # Needs at least 2 networks for feedback
+    def test_single_network_fails(self):
         config = self._valid_config()
-        config["mask"]["yeo_targets"] = ["Default"]
+        config["localizers"][0]["networks"] = ["Default"]
         ok, err = validate_session_config(config)
         assert ok is False
 
     def test_invalid_smooth_fwhm_fails(self):
         config = self._valid_config()
-        config["mask"]["smooth_fwhm"] = 0
+        config["localizers"][0]["extraction"]["smooth_fwhm"] = 0
         ok, err = validate_session_config(config)
         assert ok is False
 
     def test_invalid_highpass_fails(self):
         config = self._valid_config()
-        config["mask"]["highpass"] = 0
+        config["localizers"][0]["extraction"]["highpass"] = 0
         ok, err = validate_session_config(config)
         assert ok is False
 
     def test_invalid_feedback_n_baseline_fails(self):
         config = self._valid_config()
-        config["feedback"]["n_baseline"] = 0
+        config["feedback_runs"][0]["n_baseline"] = 0
+        ok, err = validate_session_config(config)
+        assert ok is False
+
+    def test_missing_feedback_runs_fails(self):
+        config = self._valid_config()
+        config["feedback_runs"] = []
         ok, err = validate_session_config(config)
         assert ok is False
 
     def test_error_message_is_string(self):
         config = self._valid_config()
-        config["scan"]["tr"] = 0
+        config["localizers"][0]["tr"] = 0
         ok, err = validate_session_config(config)
         assert isinstance(err, str)
         assert len(err) > 0

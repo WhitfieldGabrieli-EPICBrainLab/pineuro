@@ -1,12 +1,10 @@
 """Tests for pineuro.session — orchestration functions and run sequence building."""
 
 from pineuro.session import (
-    FeedbackConfig,
     FeedbackRunConfig,
-    MaskConfig,
+    LocalizerConfig,
     PathConfig,
     SessionConfig,
-    TaskConfig,
     _build_run_sequence,
     reset_session_state,
 )
@@ -16,7 +14,7 @@ from pineuro.session import (
 # =============================================================================
 
 
-def _make_config(tmp_path, task_params=None):
+def _make_config(tmp_path, task_params=None, use_transfer_runs=True):
     """Build a minimal SessionConfig for testing."""
     base_dir = tmp_path / "study"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -27,9 +25,15 @@ def _make_config(tmp_path, task_params=None):
 
     return SessionConfig(
         paths=paths,
-        feedback=FeedbackConfig(),
-        mask=MaskConfig(),
-        task=TaskConfig(task_params=task_params or {}),
+        localizers=[LocalizerConfig(id="rest", type="rest", networks=["DefaultA", "ContA"])],
+        feedback_runs=[
+            FeedbackRunConfig(
+                task="ball",
+                mask_source="rest",
+                task_params=task_params or {},
+                use_transfer_runs=use_transfer_runs,
+            )
+        ],
     )
 
 
@@ -42,7 +46,7 @@ class TestBuildRunSequence:
     def test_with_transfer_runs(self, tmp_path):
         config = _make_config(tmp_path)
         config.feedback_runs = [
-            FeedbackRunConfig(task_type="ball", max_runs=2, use_transfer_runs=True),
+            FeedbackRunConfig(task="ball", mask_source="rest", max_runs=2, use_transfer_runs=True),
         ]
         seq = _build_run_sequence(config, n_feedback_runs=2)
         run_types = [rt for rt, _ in seq]
@@ -51,7 +55,7 @@ class TestBuildRunSequence:
     def test_without_transfer_runs(self, tmp_path):
         config = _make_config(tmp_path)
         config.feedback_runs = [
-            FeedbackRunConfig(task_type="ball", max_runs=3, use_transfer_runs=False),
+            FeedbackRunConfig(task="ball", mask_source="rest", max_runs=3, use_transfer_runs=False),
         ]
         seq = _build_run_sequence(config, n_feedback_runs=3)
         run_types = [rt for rt, _ in seq]
@@ -59,13 +63,14 @@ class TestBuildRunSequence:
 
     def test_empty_feedback_runs(self, tmp_path):
         config = _make_config(tmp_path)
+        config.feedback_runs = []
         seq = _build_run_sequence(config, n_feedback_runs=2)
         assert seq == []
 
     def test_single_feedback_run(self, tmp_path):
         config = _make_config(tmp_path)
         config.feedback_runs = [
-            FeedbackRunConfig(task_type="ball", max_runs=1, use_transfer_runs=False),
+            FeedbackRunConfig(task="ball", mask_source="rest", max_runs=1, use_transfer_runs=False),
         ]
         seq = _build_run_sequence(config, n_feedback_runs=1)
         run_types = [rt for rt, _ in seq]
@@ -75,8 +80,8 @@ class TestBuildRunSequence:
         """Multiple feedback task types with independent transfer settings."""
         config = _make_config(tmp_path)
         config.feedback_runs = [
-            FeedbackRunConfig(task_type="es", max_runs=2, use_transfer_runs=False),
-            FeedbackRunConfig(task_type="ball", max_runs=2, use_transfer_runs=True),
+            FeedbackRunConfig(task="es", mask_source="rest", max_runs=2, use_transfer_runs=False),
+            FeedbackRunConfig(task="ball", mask_source="rest", max_runs=2, use_transfer_runs=True),
         ]
         seq = _build_run_sequence(config, n_feedback_runs=0)
         run_types = [rt for rt, _ in seq]
@@ -95,8 +100,8 @@ class TestBuildRunSequence:
     def test_multi_feedback_runs_all_no_transfer(self, tmp_path):
         config = _make_config(tmp_path)
         config.feedback_runs = [
-            FeedbackRunConfig(task_type="a", max_runs=1, use_transfer_runs=False),
-            FeedbackRunConfig(task_type="b", max_runs=3, use_transfer_runs=False),
+            FeedbackRunConfig(task="a", mask_source="rest", max_runs=1, use_transfer_runs=False),
+            FeedbackRunConfig(task="b", mask_source="rest", max_runs=3, use_transfer_runs=False),
         ]
         seq = _build_run_sequence(config, n_feedback_runs=0)
         run_types = [rt for rt, _ in seq]
@@ -106,7 +111,7 @@ class TestBuildRunSequence:
         """n_feedback_runs arg is ignored when feedback_runs is populated."""
         config = _make_config(tmp_path)
         config.feedback_runs = [
-            FeedbackRunConfig(task_type="ball", max_runs=3, use_transfer_runs=False),
+            FeedbackRunConfig(task="ball", mask_source="rest", max_runs=3, use_transfer_runs=False),
         ]
         seq = _build_run_sequence(config, n_feedback_runs=99)
         assert len(seq) == 3
@@ -120,37 +125,44 @@ class TestBuildRunSequence:
 class TestFeedbackRunConfig:
     def test_defaults(self):
         frc = FeedbackRunConfig()
-        assert frc.task_type == "ball"
+        assert frc.task == "ball"
         assert frc.max_runs == 1
         assert frc.tr == 1.2
-        assert frc.motion_correction == "siemens_moco"
+        assert frc.glm.motion_correction == "siemens_moco"
 
     def test_invalid_motion_correction(self):
         import pytest
 
+        from pineuro.session import GLMConfig
+
         with pytest.raises(ValueError, match="motion_correction"):
-            FeedbackRunConfig(motion_correction="invalid")
+            GLMConfig(motion_correction="invalid")
 
     def test_roundtrip_via_session_config(self, tmp_path):
         """FeedbackRunConfig survives SessionConfig serialization."""
         config = _make_config(tmp_path)
         config.feedback_runs = [
-            FeedbackRunConfig(task_type="ball", max_runs=2, tr=1.5),
-            FeedbackRunConfig(task_type="thermo", max_runs=1, feedback_mode="connectivity"),
+            FeedbackRunConfig(task="ball", mask_source="rest", max_runs=2, tr=1.5),
+            FeedbackRunConfig(
+                task="thermo",
+                mask_source="rest",
+                max_runs=1,
+                feedback_mode="connectivity",
+            ),
         ]
         d = config._to_dict()
         assert "feedback_runs" in d
         assert len(d["feedback_runs"]) == 2
-        assert d["feedback_runs"][0]["task_type"] == "ball"
+        assert d["feedback_runs"][0]["task"] == "ball"
         assert d["feedback_runs"][1]["feedback_mode"] == "connectivity"
 
         # Round-trip through _from_dict
         config2 = SessionConfig._from_dict(d)
         assert len(config2.feedback_runs) == 2
-        assert config2.feedback_runs[0].task_type == "ball"
+        assert config2.feedback_runs[0].task == "ball"
         assert config2.feedback_runs[0].max_runs == 2
         assert config2.feedback_runs[0].tr == 1.5
-        assert config2.feedback_runs[1].task_type == "thermo"
+        assert config2.feedback_runs[1].task == "thermo"
         assert config2.feedback_runs[1].feedback_mode == "connectivity"
 
 
@@ -178,9 +190,9 @@ class TestResetSessionState:
 class TestRunNextTaskComplete:
     def test_returns_none_when_all_runs_done(self, tmp_path):
         from pineuro.session import run_next_task
-        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.session import RunInfo, SessionState
 
-        config = _make_config(tmp_path, task_params={"use_transfer_runs": False})
+        config = _make_config(tmp_path, task_params={"use_transfer_runs": False}, use_transfer_runs=False)
         session_dir = config.paths.session_dir
         session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -188,8 +200,6 @@ class TestRunNextTaskComplete:
         state = SessionState.reset(session_dir, task_id="ball")
         state.max_feedback_runs = 1
         # Manually add completed run
-        from pineuro.tasks.session import RunInfo
-
         state.completed_runs.append(RunInfo(run_number=1, run_type="feedback", volumes_processed=0))
         state.save()
 

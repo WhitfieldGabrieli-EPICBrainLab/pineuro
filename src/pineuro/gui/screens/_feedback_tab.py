@@ -88,10 +88,15 @@ class FeedbackTabBuilder:
     def _create_fields(self):
         """Create all form field controls for this feedback run."""
         c = self.config
-        fb = c.get("feedback", c)  # support both flat and nested format
+        # Nested sub-blocks introduced by the schema restructure; default to empty dicts so
+        # `.get(...)` calls work when those blocks are missing on legacy/partial configs.
+        qc_cfg = c.get("qc", {}) or {}
+        glm_cfg = c.get("glm", {}) or {}
+        connectivity_cfg = c.get("connectivity", {}) or {}
+        intermittent_cfg = c.get("intermittent", {}) or {}
 
         # Task type (read-only — set in Study tab)
-        self._task_type = c.get("task_type", "ball")
+        self._task_type = c.get("task", c.get("task_type", "ball"))
         try:
             task_meta = get_task_metadata(self._task_type)
             type_label = task_meta.display_name
@@ -122,7 +127,7 @@ class FeedbackTabBuilder:
         self.tr_field = ft.TextField(
             width=600,
             label="TR (seconds)",
-            value=str(c.get("tr", fb.get("feedback_tr", 1.2))),
+            value=str(c.get("tr", 1.2)),
             hint_text="Repetition time of the feedback sequence (e.g. 1.2)",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("tr", self.tr_field, validate_positive_number),
@@ -131,14 +136,14 @@ class FeedbackTabBuilder:
         self.n_volumes_field = ft.TextField(
             width=600,
             label="Volumes per feedback run",
-            value=str(c.get("n_volumes", fb.get("feedback_n_volumes", 150))),
+            value=str(c.get("n_volumes", 150)),
             hint_text="Volumes acquired per feedback run",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_volumes", self.n_volumes_field, validate_positive_int),
         )
 
         # Session structure
-        n_baseline_default = c.get("n_baseline", fb.get("n_baseline", 25))
+        n_baseline_default = c.get("n_baseline", 25)
 
         self.n_baseline_field = ft.TextField(
             width=600,
@@ -149,11 +154,11 @@ class FeedbackTabBuilder:
             on_change=lambda _: self._validate_field("n_baseline", self.n_baseline_field, validate_positive_int),
         )
 
-        # Quality thresholds
+        # Quality thresholds (qc sub-block)
         self.fd_threshold_field = ft.TextField(
             width=600,
             label="FD threshold (mm)",
-            value=str(c.get("fd_threshold", fb.get("fd_threshold", 0.5))),
+            value=str(qc_cfg.get("fd_threshold", 0.5)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Frames exceeding this are flagged in real time (default: 0.5 mm)",
             on_change=lambda _: self._validate_field("fd_threshold", self.fd_threshold_field, validate_positive_number),
@@ -162,7 +167,7 @@ class FeedbackTabBuilder:
         self.dvars_threshold_field = ft.TextField(
             width=600,
             label="DVARS threshold (standardized)",
-            value=str(c.get("dvars_threshold", fb.get("dvars_threshold", 1.5))),
+            value=str(qc_cfg.get("dvars_threshold", 1.5)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Standardized DVARS above this are flagged in real time (default: 1.5)",
             on_change=lambda _: self._validate_field(
@@ -173,7 +178,7 @@ class FeedbackTabBuilder:
         self.tsnr_threshold_field = ft.TextField(
             width=600,
             label="tSNR threshold",
-            value=str(c.get("tsnr_threshold", fb.get("tsnr_threshold", 20))),
+            value=str(qc_cfg.get("tsnr_threshold", 20)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="tSNR below this is flagged in real time (default: 20)",
             on_change=lambda _: self._validate_field(
@@ -181,11 +186,8 @@ class FeedbackTabBuilder:
             ),
         )
 
-        # Motion correction
-        mc_value = c.get("motion_correction", fb.get("motion_correction", "siemens_moco"))
-        # Backward compat
-        if "moco_enabled" in c and "motion_correction" not in c:
-            mc_value = "siemens_moco" if c["moco_enabled"] else "software"
+        # Motion correction (glm sub-block)
+        mc_value = glm_cfg.get("motion_correction", "siemens_moco")
 
         self.motion_correction_dropdown = ft.Dropdown(
             label="Motion correction",
@@ -200,31 +202,31 @@ class FeedbackTabBuilder:
             on_select=self._on_motion_correction_changed,
         )
 
-        # GLM nuisance regressors
+        # GLM nuisance regressors (glm sub-block)
         self.drift_checkbox = ft.Checkbox(
             label="Linear drift",
-            value=c.get("include_drift", fb.get("include_drift", True)),
+            value=glm_cfg.get("include_drift", True),
             tooltip="Include linear drift regressor in GLM nuisance model.",
         )
         self.motion_regressors_checkbox = ft.Checkbox(
             label="Motion parameters (6 DOF)",
-            value=c.get("include_motion_regressors", fb.get("include_motion_regressors", True)),
+            value=glm_cfg.get("include_motion_regressors", True),
             tooltip="Include 6 differential motion parameters in GLM. Requires motion correction.",
             disabled=mc_value == "none",
         )
         self.wm_regressor_checkbox = ft.Checkbox(
             label="White matter mean",
-            value=c.get("include_wm_regressor", fb.get("include_wm_regressor", False)),
+            value=glm_cfg.get("include_wm_regressor", False),
             tooltip="Include WM mean signal as GLM nuisance regressor.",
         )
         self.csf_regressor_checkbox = ft.Checkbox(
             label="CSF mean",
-            value=c.get("include_csf_regressor", fb.get("include_csf_regressor", False)),
+            value=glm_cfg.get("include_csf_regressor", False),
             tooltip="Include CSF mean signal as GLM nuisance regressor.",
         )
 
-        # Real-time smoothing
-        rt_smooth_val = c.get("smooth_fwhm", fb.get("smooth_fwhm"))
+        # Real-time smoothing (glm sub-block)
+        rt_smooth_val = glm_cfg.get("smooth_fwhm")
         self.rt_smooth_enabled_checkbox = ft.Checkbox(
             label="Enable real-time spatial smoothing",
             value=rt_smooth_val is not None,
@@ -243,7 +245,7 @@ class FeedbackTabBuilder:
         mask_options = [ft.dropdown.Option(key=n, text=n) for n in self._available_mask_names]
         has_multi_mask = len(self._available_mask_names) >= 2
         needs_multi_network = self._task_n_networks >= 2
-        feedback_mode_val = c.get("feedback_mode", fb.get("feedback_mode", "activation"))
+        feedback_mode_val = c.get("feedback_mode", "activation")
 
         self.feedback_mode_dropdown = ft.Dropdown(
             width=600,
@@ -257,8 +259,17 @@ class FeedbackTabBuilder:
             visible=needs_multi_network,
         )
 
-        # Single-mask selector (for single-network tasks like thermometer, experience sampling)
-        single_mask = c.get("target_mask", fb.get("target_mask"))
+        # network_assignment is the single source of truth for role-to-mask mapping.
+        network_assignment = c.get("network_assignment", {}) or {}
+
+        # Single-mask selector (for single-network tasks like thermometer, experience sampling).
+        # Use the single role key (typically "target_mask") from TaskMetadata.
+        single_role_key = (
+            self._task_network_roles[0].key
+            if self._task_n_networks == 1 and self._task_network_roles
+            else "target_mask"
+        )
+        single_mask = network_assignment.get(single_role_key)
         if not single_mask and self._available_mask_names:
             single_mask = self._available_mask_names[0]
         self.single_mask_dropdown = ft.Dropdown(
@@ -269,12 +280,11 @@ class FeedbackTabBuilder:
             visible=(self._task_n_networks == 1),
         )
 
-        # Extra network role dropdowns (for tasks with 3+ networks, e.g. trigger network)
+        # Extra network role dropdowns (for tasks with 3+ networks, e.g. trigger network).
         # Roles beyond the last 2 (which are handled by the differential pair) get
         # their own dropdown.
         self._extra_role_dropdowns: list[tuple[str, ft.Dropdown]] = []
         n_extra = max(0, self._task_n_networks - 2)
-        network_assignment = c.get("network_assignment", {})
         for role_idx in range(n_extra):
             if role_idx < len(self._task_network_roles):
                 role = self._task_network_roles[role_idx]
@@ -294,23 +304,24 @@ class FeedbackTabBuilder:
             visible=len(self._extra_role_dropdowns) > 0,
         )
 
-        # Differential pair
-        diff_pair = c.get("differential_pair", fb.get("differential_pair"))
+        # Differential pair — for 2-network tasks, the positive/negative dropdowns map
+        # to network_roles[-2] (top/positive) and network_roles[-1] (bottom/negative).
+        diff_roles = self._task_network_roles[len(self._extra_role_dropdowns) :]
+        diff_pos_key = diff_roles[0].key if len(diff_roles) >= 2 else None
+        diff_neg_key = diff_roles[1].key if len(diff_roles) >= 2 else None
+        diff_pos_val = network_assignment.get(diff_pos_key) if diff_pos_key else None
+        diff_neg_val = network_assignment.get(diff_neg_key) if diff_neg_key else None
         self.differential_positive_dropdown = ft.Dropdown(
             width=250,
             label="Positive mask",
             options=mask_options,
-            value=diff_pair[0]
-            if diff_pair and len(diff_pair) == 2
-            else (self._available_mask_names[0] if self._available_mask_names else None),
+            value=diff_pos_val or (self._available_mask_names[0] if self._available_mask_names else None),
         )
         self.differential_negative_dropdown = ft.Dropdown(
             width=250,
             label="Negative mask",
             options=mask_options,
-            value=diff_pair[1]
-            if diff_pair and len(diff_pair) == 2
-            else (self._available_mask_names[1] if has_multi_mask else None),
+            value=diff_neg_val or (self._available_mask_names[1] if has_multi_mask else None),
         )
         self.differential_row = ft.Column(
             [
@@ -326,9 +337,9 @@ class FeedbackTabBuilder:
             visible=needs_multi_network and has_multi_mask and feedback_mode_val == "activation",
         )
 
-        # Connectivity config
-        conn_pairs = c.get("connectivity_pairs", fb.get("connectivity_pairs"))
-        conn_window = c.get("connectivity_window", fb.get("connectivity_window", 15))
+        # Connectivity config (connectivity sub-block)
+        conn_pairs = connectivity_cfg.get("pairs")
+        conn_window = connectivity_cfg.get("window", 15)
         is_conn = feedback_mode_val == "connectivity"
 
         conn_pair_a = (
@@ -367,7 +378,7 @@ class FeedbackTabBuilder:
                 ft.dropdown.Option("increase", "Increase correlation"),
                 ft.dropdown.Option("decrease", "Decrease correlation (anti-correlation)"),
             ],
-            value=c.get("connectivity_target", fb.get("connectivity_target", "increase")),
+            value=connectivity_cfg.get("target", "increase"),
         )
         self.connectivity_section = ft.Column(
             [
@@ -385,8 +396,8 @@ class FeedbackTabBuilder:
             visible=needs_multi_network and is_conn,
         )
 
-        # Intermittent feedback
-        interval_val = c.get("feedback_interval", fb.get("feedback_interval"))
+        # Intermittent feedback (intermittent sub-block)
+        interval_val = intermittent_cfg.get("interval")
         self.intermittent_enabled_checkbox = ft.Checkbox(
             label="Enable intermittent feedback",
             value=interval_val is not None,
@@ -595,82 +606,79 @@ class FeedbackTabBuilder:
     # ------------------------------------------------------------------
 
     def collect_config(self) -> dict[str, Any]:
-        """Gather current field values into a config dict."""
+        """Gather current field values into a config dict (new nested schema)."""
         task_type = self._task_type or "ball"
 
+        # Smoothing value computed first so it can be placed in the glm sub-block
+        if self.rt_smooth_enabled_checkbox.value:
+            _v = self.rt_smooth_fwhm_field.value.strip()
+            smooth_fwhm: float | None = float(_v) if _v else 6.0
+        else:
+            smooth_fwhm = None
+
         cfg: dict[str, Any] = {
-            "task_type": task_type,
+            "task": task_type,
+            "mask_source": self.config.get("mask_source", ""),
             "max_runs": int(self.max_runs_field.value or 1),
             "tr": float(self.tr_field.value or 1.2),
             "n_volumes": int(self.n_volumes_field.value or 150),
             "n_baseline": int(self.n_baseline_field.value or 25),
-            "fd_threshold": float(self.fd_threshold_field.value or 0.5),
-            "dvars_threshold": float(self.dvars_threshold_field.value or 1.5),
-            "tsnr_threshold": float(self.tsnr_threshold_field.value or 20),
-            "motion_correction": self.motion_correction_dropdown.value or "siemens_moco",
-            "include_drift": self.drift_checkbox.value,
-            "include_motion_regressors": self.motion_regressors_checkbox.value,
-            "include_wm_regressor": self.wm_regressor_checkbox.value,
-            "include_csf_regressor": self.csf_regressor_checkbox.value,
+            "qc": {
+                "fd_threshold": float(self.fd_threshold_field.value or 0.5),
+                "dvars_threshold": float(self.dvars_threshold_field.value or 1.5),
+                "tsnr_threshold": float(self.tsnr_threshold_field.value or 20),
+            },
+            "glm": {
+                "motion_correction": self.motion_correction_dropdown.value or "siemens_moco",
+                "include_drift": self.drift_checkbox.value,
+                "include_motion_regressors": self.motion_regressors_checkbox.value,
+                "include_wm_regressor": self.wm_regressor_checkbox.value,
+                "include_csf_regressor": self.csf_regressor_checkbox.value,
+                "smooth_fwhm": smooth_fwhm,
+            },
         }
-
-        # Smoothing
-        if self.rt_smooth_enabled_checkbox.value:
-            val = self.rt_smooth_fwhm_field.value.strip()
-            cfg["smooth_fwhm"] = float(val) if val else 6.0
-        else:
-            cfg["smooth_fwhm"] = None
-
-        # Target mask (single-network tasks)
-        if self._task_n_networks == 1 and self.single_mask_dropdown.value:
-            cfg["target_mask"] = self.single_mask_dropdown.value
 
         # Feedback mode
         feedback_mode = self.feedback_mode_dropdown.value or "activation"
         cfg["feedback_mode"] = feedback_mode
 
-        # Differential pair
+        # Network assignment — single source of truth for role-to-mask mapping.
+        # Always emit it (no more 3+ network gating; differential_pair / target_mask
+        # / top_network / bottom_network are derived from this map at runtime).
         pos = self.differential_positive_dropdown.value
         neg = self.differential_negative_dropdown.value
-        if pos and neg and pos != neg:
-            cfg["differential_pair"] = [pos, neg]
-        else:
-            cfg["differential_pair"] = None
+        assignment: dict[str, str] = {}
+        for role_key, dd in self._extra_role_dropdowns:
+            if dd.value:
+                assignment[role_key] = dd.value
+        diff_roles = self._task_network_roles[len(self._extra_role_dropdowns) :]
+        if len(diff_roles) >= 2 and pos and neg:
+            assignment[diff_roles[0].key] = pos
+            assignment[diff_roles[1].key] = neg
+        elif self._task_n_networks == 1 and self.single_mask_dropdown.value:
+            single_role_key = self._task_network_roles[0].key if self._task_network_roles else "target_mask"
+            assignment[single_role_key] = self.single_mask_dropdown.value
+        cfg["network_assignment"] = assignment
 
-        # Network assignment (for tasks with 3+ networks)
-        if self._extra_role_dropdowns:
-            assignment: dict[str, str] = {}
-            for role_key, dd in self._extra_role_dropdowns:
-                if dd.value:
-                    assignment[role_key] = dd.value
-            # Also include the differential pair roles
-            diff_roles = self._task_network_roles[len(self._extra_role_dropdowns) :]
-            if len(diff_roles) >= 2 and pos and neg:
-                assignment[diff_roles[0].key] = pos
-                assignment[diff_roles[1].key] = neg
-            cfg["network_assignment"] = assignment
-
-        # Connectivity
-        cfg["connectivity_target"] = self.connectivity_target_dropdown.value or "increase"
+        # Connectivity (sub-block)
+        connectivity_block: dict[str, Any] = {"target": self.connectivity_target_dropdown.value or "increase"}
         if feedback_mode == "connectivity":
             a = self.connectivity_pair_a_dropdown.value
             b = self.connectivity_pair_b_dropdown.value
-            if a and b and a != b:
-                cfg["connectivity_pairs"] = [[a, b]]
-            else:
-                cfg["connectivity_pairs"] = None
+            connectivity_block["pairs"] = [[a, b]] if a and b and a != b else None
             window_str = self.connectivity_window_field.value.strip()
-            cfg["connectivity_window"] = int(window_str) if window_str else 15
+            connectivity_block["window"] = int(window_str) if window_str else 15
         else:
-            cfg["connectivity_pairs"] = None
-            cfg["connectivity_window"] = 15
+            connectivity_block["pairs"] = None
+            connectivity_block["window"] = 15
+        cfg["connectivity"] = connectivity_block
 
-        # Intermittent feedback
+        # Intermittent feedback (sub-block)
         if self.intermittent_enabled_checkbox.value:
             interval_str = self.feedback_interval_field.value.strip()
-            cfg["feedback_interval"] = int(interval_str) if interval_str else 5
+            cfg["intermittent"] = {"interval": int(interval_str) if interval_str else 5}
         else:
-            cfg["feedback_interval"] = None
+            cfg["intermittent"] = {"interval": None}
 
         # Task-specific params
         task_params = self._collect_task_params()

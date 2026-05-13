@@ -175,10 +175,11 @@ class LocalizerTabBuilder:
             on_change=self._on_reverse_contrasts_changed,
         )
 
-        # Network atlas
+        # Network atlas (extraction sub-block, with legacy flat-key fallback)
         from pineuro.mask_extraction import ATLAS_SOURCES
 
-        network_atlas = c.get("network_atlas", "yeo_17")
+        extraction_cfg = c.get("extraction", {}) or {}
+        network_atlas = extraction_cfg.get("network_atlas", c.get("network_atlas", "yeo_17"))
         self.network_atlas_dropdown = ft.Dropdown(
             width=600,
             label="Network atlas",
@@ -193,7 +194,8 @@ class LocalizerTabBuilder:
 
         # Network selection dropdowns (up to MAX_NETWORKS)
         MAX_NETWORKS = 5
-        yeo_targets = c.get("yeo_targets", ["DefaultA", "ContA"])
+        # Read from "networks" (new schema); fall back to legacy "yeo_targets" for back-compat.
+        yeo_targets = c.get("networks", c.get("yeo_targets", ["DefaultA", "ContA"]))
         self._n_target_networks = len(yeo_targets) if yeo_targets else 2
 
         current_n = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)
@@ -219,11 +221,11 @@ class LocalizerTabBuilder:
             )
             self._network_dropdowns.append(dd)
 
-        # ICA settings (rest only)
+        # ICA settings (rest only) — read from extraction sub-block with flat-key fallback
         self.n_components_field = ft.TextField(
             width=600,
             label="ICA components",
-            value=str(c.get("n_components", 20)),
+            value=str(extraction_cfg.get("n_components", c.get("n_components", 20))),
             hint_text="Number of ICA components for decomposition",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_components", self.n_components_field, validate_positive_int),
@@ -232,7 +234,7 @@ class LocalizerTabBuilder:
         self.smooth_fwhm_field = ft.TextField(
             width=600,
             label="Spatial smoothing (mm FWHM)",
-            value=str(c.get("smooth_fwhm", 5.0)),
+            value=str(extraction_cfg.get("smooth_fwhm", c.get("smooth_fwhm", 5.0))),
             hint_text="Gaussian kernel size in mm",
             keyboard_type=ft.KeyboardType.NUMBER,
         )
@@ -240,21 +242,27 @@ class LocalizerTabBuilder:
         self.highpass_field = ft.TextField(
             width=600,
             label="Highpass filter (Hz)",
-            value=str(c.get("highpass", 0.01)),
+            value=str(extraction_cfg.get("highpass", c.get("highpass", 0.01))),
             hint_text="Cutoff frequency for highpass filter",
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
-        # Mask extraction
+        # Mask extraction (extraction sub-block, with flat fallback)
+        # Convenience accessor — falls back to flat key for back-compat.
+        def _ex(key: str, default: Any = None) -> Any:
+            v = extraction_cfg.get(key, c.get(key, default))
+            return v if v is not None else default
+
         self.threshold_field = ft.TextField(
             width=600,
             label="Voxels per mask",
-            value=str(c.get("threshold", 2000)),
+            value=str(_ex("threshold", 2000)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Number of voxels to keep per extracted mask",
             on_change=lambda _: self._validate_field("threshold", self.threshold_field, validate_positive_int),
         )
 
+        threshold_method = _ex("threshold_method", "top_n")
         self.threshold_method_dropdown = ft.Dropdown(
             width=600,
             label="Thresholding method",
@@ -263,7 +271,7 @@ class LocalizerTabBuilder:
                 ft.dropdown.Option(key="cluster", text="Atlas-guided cluster"),
                 ft.dropdown.Option(key="cluster_extent", text="Cluster extent thresholding"),
             ],
-            value=c.get("threshold_method", "top_n"),
+            value=threshold_method,
             on_select=self._on_threshold_method_changed,
         )
 
@@ -273,15 +281,16 @@ class LocalizerTabBuilder:
             for k, v in ATLAS_SOURCES.items()
             if v["type"] in ("anatomical", "tissue") or k.startswith("schaefer")
         ]
+        atlas_source = _ex("atlas_source", "harvard_oxford")
         self.atlas_source_dropdown = ft.Dropdown(
             width=600,
             label="Atlas",
             options=cluster_atlas_options,
-            value=c.get("atlas_source", "harvard_oxford"),
+            value=atlas_source,
             on_select=self._on_atlas_source_changed,
         )
 
-        current_regions = c.get("atlas_regions") or []
+        current_regions = _ex("atlas_regions") or []
         self.atlas_region_dropdown = ft.Dropdown(
             width=600,
             label="Region",
@@ -292,7 +301,7 @@ class LocalizerTabBuilder:
         self.cluster_start_threshold_field = ft.TextField(
             width=290,
             label="Start threshold",
-            value=str(c.get("cluster_start_threshold", 2.0)),
+            value=str(_ex("cluster_start_threshold", 2.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Initial stat threshold for cluster search",
         )
@@ -300,14 +309,14 @@ class LocalizerTabBuilder:
         self.cluster_step_field = ft.TextField(
             width=290,
             label="Step size",
-            value=str(c.get("cluster_step", 0.1)),
+            value=str(_ex("cluster_step", 0.1)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Threshold increment per iteration",
         )
 
         self.cluster_return_all_checkbox = ft.Checkbox(
             label="Return all clusters (use for whole-brain atlases like gray matter)",
-            value=c.get("cluster_return_all", False),
+            value=_ex("cluster_return_all", False),
         )
 
         self.cluster_settings_section = ft.Column(
@@ -317,14 +326,14 @@ class LocalizerTabBuilder:
                 ft.Row([self.cluster_start_threshold_field, self.cluster_step_field]),
                 self.cluster_return_all_checkbox,
             ],
-            visible=c.get("threshold_method", "top_n") == "cluster",
+            visible=threshold_method == "cluster",
         )
 
         # Cluster-extent settings
         self.extent_stat_threshold_field = ft.TextField(
             width=290,
             label="Stat threshold",
-            value=str(c.get("cluster_start_threshold", 2.0)),
+            value=str(_ex("cluster_start_threshold", 2.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Fixed stat threshold (e.g. 2.0 for t-stat)",
         )
@@ -332,22 +341,23 @@ class LocalizerTabBuilder:
         self.min_cluster_size_field = ft.TextField(
             width=290,
             label="Min cluster size (voxels)",
-            value=str(c.get("min_cluster_size", 50)),
+            value=str(_ex("min_cluster_size", 50)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Clusters smaller than this are discarded",
         )
 
+        max_total = _ex("max_total_voxels")
         self.max_total_voxels_field = ft.TextField(
             width=290,
             label="Max total voxels (optional)",
-            value=str(c.get("max_total_voxels", "")) if c.get("max_total_voxels") else "",
+            value=str(max_total) if max_total else "",
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Safety cap on total mask size (leave empty for no cap)",
         )
 
         self.extent_grey_matter_checkbox = ft.Checkbox(
             label="Restrict to grey matter",
-            value=c.get("atlas_source") == "gray_matter" and c.get("threshold_method") == "cluster_extent",
+            value=atlas_source == "gray_matter" and threshold_method == "cluster_extent",
         )
 
         self.cluster_extent_settings_section = ft.Column(
@@ -356,7 +366,7 @@ class LocalizerTabBuilder:
                 self.max_total_voxels_field,
                 self.extent_grey_matter_checkbox,
             ],
-            visible=c.get("threshold_method", "top_n") == "cluster_extent",
+            visible=threshold_method == "cluster_extent",
         )
 
         # Create localizer task parameter fields
@@ -473,58 +483,62 @@ class LocalizerTabBuilder:
     # ------------------------------------------------------------------
 
     def collect_config(self) -> dict[str, Any]:
-        """Gather current field values into a config dict."""
+        """Gather current field values into a config dict (new nested schema)."""
         from pineuro.mask_extraction import ATLAS_SOURCES
 
         loc_type = self._loc_type or "rest"
         is_rest = loc_type == "rest"
 
-        cfg: dict[str, Any] = {
-            "type": loc_type,
-            "tr": float(self.tr_field.value or 1.2),
-            "n_volumes": int(self.n_volumes_field.value or 250),
-            "n_runs": int(self.n_runs_field.value or 2),
-            "motion_correction": self.motion_correction_dropdown.value or "siemens_moco",
+        extraction: dict[str, Any] = {
             "threshold": int(self.threshold_field.value or 2000),
             "threshold_method": self.threshold_method_dropdown.value or "top_n",
         }
 
-        # Cluster settings
-        if cfg["threshold_method"] == "cluster":
-            cfg["atlas_source"] = self.atlas_source_dropdown.value
+        cfg: dict[str, Any] = {
+            "type": loc_type,
+            "id": self.config.get("id", loc_type),
+            "tr": float(self.tr_field.value or 1.2),
+            "n_volumes": int(self.n_volumes_field.value or 250),
+            "n_runs": int(self.n_runs_field.value or 2),
+            "motion_correction": self.motion_correction_dropdown.value or "siemens_moco",
+        }
+
+        # Cluster settings — go into extraction sub-block
+        if extraction["threshold_method"] == "cluster":
+            extraction["atlas_source"] = self.atlas_source_dropdown.value
             region = self.atlas_region_dropdown.value
-            cfg["atlas_regions"] = [region] if region and region != "__loading__" else None
-            cfg["cluster_start_threshold"] = float(self.cluster_start_threshold_field.value or 2.0)
-            cfg["cluster_step"] = float(self.cluster_step_field.value or 0.1)
-            cfg["cluster_return_all"] = bool(self.cluster_return_all_checkbox.value)
-        elif cfg["threshold_method"] == "cluster_extent":
-            cfg["cluster_start_threshold"] = float(self.extent_stat_threshold_field.value or 2.0)
-            cfg["min_cluster_size"] = int(self.min_cluster_size_field.value or 50)
+            extraction["atlas_regions"] = [region] if region and region != "__loading__" else None
+            extraction["cluster_start_threshold"] = float(self.cluster_start_threshold_field.value or 2.0)
+            extraction["cluster_step"] = float(self.cluster_step_field.value or 0.1)
+            extraction["cluster_return_all"] = bool(self.cluster_return_all_checkbox.value)
+        elif extraction["threshold_method"] == "cluster_extent":
+            extraction["cluster_start_threshold"] = float(self.extent_stat_threshold_field.value or 2.0)
+            extraction["min_cluster_size"] = int(self.min_cluster_size_field.value or 50)
             max_val = self.max_total_voxels_field.value
-            cfg["max_total_voxels"] = int(max_val) if max_val else None
+            extraction["max_total_voxels"] = int(max_val) if max_val else None
             if self.extent_grey_matter_checkbox.value:
-                cfg["atlas_source"] = "gray_matter"
+                extraction["atlas_source"] = "gray_matter"
 
         if is_rest:
             network_atlas = self.network_atlas_dropdown.value or "yeo_17"
-            cfg["network_atlas"] = network_atlas
-            cfg["n_yeo"] = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)
+            extraction["network_atlas"] = network_atlas
+            extraction["n_yeo"] = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)
             smooth_val = self.smooth_fwhm_field.value
-            cfg["smooth_fwhm"] = float(smooth_val) if smooth_val and smooth_val != "None" else 5.0
+            extraction["smooth_fwhm"] = float(smooth_val) if smooth_val and smooth_val != "None" else 5.0
             highpass_val = self.highpass_field.value
-            cfg["highpass"] = float(highpass_val) if highpass_val and highpass_val != "None" else 0.01
-            cfg["lowpass"] = None
+            extraction["highpass"] = float(highpass_val) if highpass_val and highpass_val != "None" else 0.01
+            extraction["lowpass"] = None
             n_comp_val = self.n_components_field.value
-            cfg["n_components"] = int(n_comp_val) if n_comp_val and n_comp_val != "None" else 20
+            extraction["n_components"] = int(n_comp_val) if n_comp_val and n_comp_val != "None" else 30
 
-            # Network targets
+            # Network targets (renamed from yeo_targets)
             targets = []
             for i, dd in enumerate(self._network_dropdowns):
                 if i >= self._n_target_networks:
                     break
                 if dd.value:
                     targets.append(dd.value)
-            cfg["yeo_targets"] = targets
+            cfg["networks"] = targets
         else:
             # Task-based localizer
             cfg["include_reverse_contrasts"] = self.include_reverse_contrasts_checkbox.value
@@ -545,6 +559,8 @@ class LocalizerTabBuilder:
             task_params = self._collect_task_params()
             if task_params:
                 cfg["task_params"] = task_params
+
+        cfg["extraction"] = extraction
 
         # Preserve existing simulator source paths (managed by Paths tab)
         if "source_dicoms" in self.config:

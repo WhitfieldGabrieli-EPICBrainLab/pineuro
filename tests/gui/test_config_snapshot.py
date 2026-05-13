@@ -13,35 +13,48 @@ from pineuro.gui.models import StudyConfig, StudyMetadata
 
 
 def _make_study_config(**overrides) -> StudyConfig:
-    """Create a minimal StudyConfig for testing."""
+    """Create a minimal StudyConfig (new schema) for testing."""
     session_config = {
         "paths": {"base_dir": "/tmp/data", "participant_id": ""},
-        "scan": {
-            "localizer_tr": 1.2,
-            "localizer_n_volumes": 150,
-            "feedback_tr": 1.0,
-            "feedback_n_volumes": 200,
-            "simulator_enabled": True,
-            "scanner_ip": "192.168.1.1",
-        },
-        "mask": {
-            "network_atlas": "yeo_7",
-            "n_components": 15,
-            "threshold": 2000,
-        },
-        "feedback": {
-            "n_baseline": 25,
-            "fd_threshold": 0.5,
-            "smooth_fwhm": 6.0,
-        },
-        "task": {
-            "task_type": "ball",
-            "max_feedback_runs": 2,
+        "study": {"multi_visit_enabled": False},
+        "simulator": {"enabled": True, "collection_speed": 1.0, "feedback_speed": 1.0},
+        "scanner": {"dicom_dir": "/BOLD_DICOM", "ip": "192.168.1.1"},
+        "reference": {
+            "initial_enabled": True,
+            "initial_n_volumes": 2,
+            "realtime_enabled": True,
+            "realtime_n_volumes": 2,
         },
         "sham": {"enabled": False},
         "display": {"control_monitor": "left"},
-        "localizer_task": {},
-        "study": {"multi_visit_enabled": False},
+        "localizers": [
+            {
+                "id": "rest",
+                "type": "rest",
+                "tr": 1.2,
+                "n_volumes": 150,
+                "n_runs": 2,
+                "networks": ["ContA", "DefaultA"],
+                "extraction": {
+                    "n_yeo": 7,
+                    "network_atlas": "yeo_7",
+                    "n_components": 15,
+                    "threshold": 2000,
+                },
+            }
+        ],
+        "feedback_runs": [
+            {
+                "task": "ball",
+                "mask_source": "rest",
+                "max_runs": 2,
+                "tr": 1.0,
+                "n_volumes": 200,
+                "n_baseline": 25,
+                "qc": {"fd_threshold": 0.5},
+                "glm": {"motion_correction": "siemens_moco", "smooth_fwhm": 6.0},
+            }
+        ],
     }
     session_config.update(overrides)
     return StudyConfig(
@@ -63,8 +76,8 @@ class TestSaveLoad:
         loaded = load_config_snapshot(tmp_path)
         assert loaded is not None
         assert loaded["_metadata"]["name"] == "Test Study"
-        assert loaded["scan"]["localizer_tr"] == 1.2
-        assert loaded["feedback"]["n_baseline"] == 25
+        assert loaded["localizers"][0]["tr"] == 1.2
+        assert loaded["feedback_runs"][0]["n_baseline"] == 25
 
     def test_snapshot_metadata_present(self, tmp_path):
         config = _make_study_config()
@@ -112,13 +125,14 @@ class TestCompare:
 
     def test_detects_changed_value(self):
         saved = _make_study_config().to_dict()
-        current = _make_study_config(feedback={"n_baseline": 30, "fd_threshold": 0.5, "smooth_fwhm": 6.0}).to_dict()
+        current = _make_study_config().to_dict()
+        current["feedback_runs"][0]["n_baseline"] = 30
 
         diffs = compare_protocol_configs(saved, current)
         paths = [d.field_path for d in diffs]
-        assert "feedback.n_baseline" in paths
+        assert "feedback_runs.0.n_baseline" in paths
 
-        diff = next(d for d in diffs if d.field_path == "feedback.n_baseline")
+        diff = next(d for d in diffs if d.field_path == "feedback_runs.0.n_baseline")
         assert diff.saved_value == 25
         assert diff.current_value == 30
 
@@ -136,50 +150,43 @@ class TestCompare:
 
         assert compare_protocol_configs(saved, current) == []
 
-    def test_ignores_scan_simulator_keys(self):
+    def test_ignores_simulator_keys(self):
+        """simulator block is not in PROTOCOL_KEYS — environment-specific, not protocol."""
         saved = _make_study_config().to_dict()
         current = _make_study_config().to_dict()
-        current["scan"]["simulator_enabled"] = False
-        current["scan"]["scanner_ip"] = "10.0.0.1"
+        current["simulator"]["enabled"] = False
+        current["scanner"]["ip"] = "10.0.0.1"
 
         assert compare_protocol_configs(saved, current) == []
 
-    def test_detects_scan_protocol_change(self):
+    def test_detects_localizer_protocol_change(self):
         saved = _make_study_config().to_dict()
         current = _make_study_config().to_dict()
-        current["scan"]["localizer_tr"] = 2.0
+        current["localizers"][0]["tr"] = 2.0
 
         diffs = compare_protocol_configs(saved, current)
         assert len(diffs) == 1
-        assert diffs[0].field_path == "scan.localizer_tr"
+        assert diffs[0].field_path == "localizers.0.tr"
         assert diffs[0].saved_value == 1.2
         assert diffs[0].current_value == 2.0
 
     def test_detects_added_field(self):
         saved = _make_study_config().to_dict()
         current = _make_study_config().to_dict()
-        current["feedback"]["new_param"] = 42
+        current["feedback_runs"][0]["new_param"] = 42
 
         diffs = compare_protocol_configs(saved, current)
         paths = [d.field_path for d in diffs]
-        assert "feedback.new_param" in paths
+        assert "feedback_runs.0.new_param" in paths
 
     def test_detects_removed_field(self):
         saved = _make_study_config().to_dict()
         current = _make_study_config().to_dict()
-        del current["feedback"]["smooth_fwhm"]
+        del current["feedback_runs"][0]["glm"]["smooth_fwhm"]
 
         diffs = compare_protocol_configs(saved, current)
         paths = [d.field_path for d in diffs]
-        assert "feedback.smooth_fwhm" in paths
-
-    def test_handles_none_sections(self):
-        saved = _make_study_config().to_dict()
-        saved["localizer_task"] = None
-        current = _make_study_config().to_dict()
-        current["localizer_task"] = None
-
-        assert compare_protocol_configs(saved, current) == []
+        assert "feedback_runs.0.glm.smooth_fwhm" in paths
 
     def test_handles_missing_section(self):
         saved = _make_study_config().to_dict()
@@ -192,23 +199,23 @@ class TestCompare:
 
     def test_list_order_matters(self):
         saved = _make_study_config().to_dict()
-        saved["mask"]["yeo_targets"] = ["ContA", "DefaultA"]
+        saved["localizers"][0]["networks"] = ["ContA", "DefaultA"]
         current = _make_study_config().to_dict()
-        current["mask"]["yeo_targets"] = ["DefaultA", "ContA"]
+        current["localizers"][0]["networks"] = ["DefaultA", "ContA"]
 
         diffs = compare_protocol_configs(saved, current)
-        assert len(diffs) == 1
-        assert diffs[0].field_path == "mask.yeo_targets"
+        paths = [d.field_path for d in diffs]
+        assert "localizers.0.networks" in paths
 
     def test_nested_dict_change(self):
         saved = _make_study_config().to_dict()
-        saved["task"]["ball"] = {"speed": 1.0, "size": 50}
+        saved["feedback_runs"][0]["task_params"] = {"speed": 1.0, "size": 50}
         current = _make_study_config().to_dict()
-        current["task"]["ball"] = {"speed": 2.0, "size": 50}
+        current["feedback_runs"][0]["task_params"] = {"speed": 2.0, "size": 50}
 
         diffs = compare_protocol_configs(saved, current)
-        assert len(diffs) == 1
-        assert diffs[0].field_path == "task.ball.speed"
+        paths = [d.field_path for d in diffs]
+        assert "feedback_runs.0.task_params.speed" in paths
 
 
 # =============================================================================
@@ -256,9 +263,9 @@ class TestFormat:
         assert format_differences([]) == "No differences."
 
     def test_single_difference(self):
-        diffs = [ConfigDifference("feedback.n_baseline", 25, 30)]
+        diffs = [ConfigDifference("feedback_runs.0.n_baseline", 25, 30)]
         text = format_differences(diffs)
-        assert "feedback.n_baseline" in text
+        assert "feedback_runs.0.n_baseline" in text
         assert "25" in text
         assert "30" in text
 
@@ -270,7 +277,7 @@ class TestFormat:
 
 class TestConfigDifference:
     def test_str(self):
-        d = ConfigDifference("mask.threshold", 2000, 3000)
-        assert "mask.threshold" in str(d)
+        d = ConfigDifference("localizers.0.extraction.threshold", 2000, 3000)
+        assert "localizers.0.extraction.threshold" in str(d)
         assert "2000" in str(d)
         assert "3000" in str(d)

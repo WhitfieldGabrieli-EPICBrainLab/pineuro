@@ -3,11 +3,20 @@
 import pytest
 
 from pineuro.session import (
-    FeedbackConfig,
-    MaskConfig,
+    ConnectivityConfig,
+    FeedbackRunConfig,
+    GLMConfig,
+    IntermittentConfig,
+    LocalizerConfig,
+    LocalizerExtractionConfig,
     PathConfig,
+    QCConfig,
+    ReferenceConfig,
+    ScannerConfig,
+    SessionConfig,
     ShamConfig,
-    TaskConfig,
+    SimulatorConfig,
+    StudyInfoConfig,
     VisitConfig,
     detect_existing_visits,
     next_visit_id,
@@ -29,72 +38,194 @@ class TestPathConfig:
         config = PathConfig(base_dir=tmp_path, participant_id="sub-01", visit_id="ses-01")
         assert config.visit_id == "ses-01"
 
+    def test_example_participant_id(self, tmp_path):
+        config = PathConfig(base_dir=tmp_path, participant_id="sub-01", example_participant_id="sub-XXX")
+        assert config.example_participant_id == "sub-XXX"
+
 
 # =============================================================================
-# MaskConfig
+# LocalizerConfig + LocalizerExtractionConfig
 # =============================================================================
 
 
-class TestMaskConfig:
+class TestLocalizerConfig:
+    def test_defaults_rest(self):
+        config = LocalizerConfig()
+        assert config.type == "rest"
+        assert config.id == "rest"  # defaults to type
+        assert config.networks == ["DefaultA", "ContA"]
+        assert config.extraction.n_yeo == 17
+        assert config.extraction.network_atlas == "yeo_17"
+        assert config.motion_correction == "none"
+
+    def test_id_override(self):
+        config = LocalizerConfig(id="my_loc")
+        assert config.id == "my_loc"
+
+    def test_mask_names_rest(self):
+        config = LocalizerConfig(networks=["ContA", "DefaultA"])
+        assert config.mask_names == ["ContA", "DefaultA"]
+
+    def test_mask_names_task(self):
+        config = LocalizerConfig(type="rnt", contrasts={"rumination": "rum - dist"})
+        assert config.mask_names == ["rumination"]
+
+    def test_mask_names_task_reverse(self):
+        config = LocalizerConfig(type="rnt", contrasts={"rumination": "rum - dist"}, include_reverse_contrasts=True)
+        assert config.mask_names == ["rumination", "rumination_reverse"]
+
+    def test_manual_requires_paths(self):
+        with pytest.raises(ValueError, match="manual_mask_paths"):
+            LocalizerConfig(type="manual")
+
+    def test_manual_mask_names(self, tmp_path):
+        m1 = tmp_path / "roi_a.nii.gz"
+        m2 = tmp_path / "roi_b.nii"
+        for p in (m1, m2):
+            p.touch()
+        config = LocalizerConfig(type="manual", manual_mask_paths=[m1, m2])
+        assert config.mask_names == ["roi_a", "roi_b"]
+
+
+class TestLocalizerExtractionConfig:
     def test_defaults(self):
-        config = MaskConfig()
-        assert config.n_yeo == 17
-        assert config.network_atlas == "yeo_17"
+        ex = LocalizerExtractionConfig()
+        assert ex.n_yeo == 17
+        assert ex.threshold == 2000
+        assert ex.threshold_method == "top_n"
 
-    def test_custom_targets(self):
-        config = MaskConfig(yeo_targets=["DefaultA", "ContA"])
-        assert config.yeo_targets == ["DefaultA", "ContA"]
+    def test_invalid_method_rejected(self):
+        with pytest.raises(ValueError, match="threshold_method"):
+            LocalizerExtractionConfig(threshold_method="bogus")
 
 
 # =============================================================================
-# FeedbackConfig
+# FeedbackRunConfig + nested sub-blocks
 # =============================================================================
 
 
-class TestFeedbackConfig:
+class TestFeedbackRunConfig:
     def test_defaults(self):
-        config = FeedbackConfig()
-        assert config.n_baseline == 25
-        assert config.n_volumes == 150
-        assert config.motion_correction == "siemens_moco"
-        assert config.include_drift is True
-        assert config.include_motion_regressors is True
-        assert config.include_wm_regressor is False
-        assert config.include_csf_regressor is False
+        frc = FeedbackRunConfig()
+        assert frc.task == "ball"
+        assert frc.mask_source == ""
+        assert frc.max_runs == 1
+        assert frc.use_efficiency_weights is True
+        assert frc.qc.fd_threshold == 0.5
+        assert frc.glm.motion_correction == "siemens_moco"
+        assert frc.glm.include_drift is True
+        assert frc.connectivity.window == 15
+        assert frc.intermittent.interval is None
 
-    def test_custom_values(self):
-        config = FeedbackConfig(
-            n_baseline=10,
-            n_volumes=100,
-            motion_correction="siemens_moco",
-            include_wm_regressor=True,
+    def test_nested_sub_blocks(self):
+        frc = FeedbackRunConfig(
+            qc=QCConfig(fd_threshold=0.3),
+            glm=GLMConfig(motion_correction="software", include_drift=False),
+            connectivity=ConnectivityConfig(pairs=[["a", "b"]], target="decrease"),
+            intermittent=IntermittentConfig(interval=5),
         )
-        assert config.n_baseline == 10
-        assert config.motion_correction == "siemens_moco"
-        assert config.include_wm_regressor is True
+        assert frc.qc.fd_threshold == 0.3
+        assert frc.glm.motion_correction == "software"
+        assert frc.connectivity.pairs == [["a", "b"]]
+        assert frc.intermittent.interval == 5
+
+    def test_invalid_motion_correction_rejected(self):
+        with pytest.raises(ValueError, match="motion_correction"):
+            GLMConfig(motion_correction="bogus")
 
 
 # =============================================================================
-# TaskConfig
+# Top-level block dataclasses
 # =============================================================================
 
 
-class TestTaskConfig:
-    def test_defaults(self):
-        config = TaskConfig()
-        assert config.task_type == "ball"
-        assert config.max_feedback_runs == 2
-        assert config.task_params == {}
-        assert config.network_assignment == {}
+class TestNewTopLevelBlocks:
+    def test_study_info(self):
+        cfg = StudyInfoConfig(multi_visit_enabled=True)
+        assert cfg.multi_visit_enabled is True
 
-    def test_custom_params(self):
-        config = TaskConfig(
-            task_type="thermometer",
-            task_params={"orientation": "vertical"},
-            network_assignment={"target": "DefaultA"},
+    def test_simulator(self):
+        cfg = SimulatorConfig(enabled=False, feedback_speed=5.0)
+        assert cfg.enabled is False
+        assert cfg.feedback_speed == 5.0
+        assert cfg.collection_speed == 1.0  # default unchanged
+
+    def test_scanner(self):
+        cfg = ScannerConfig(ip="192.168.2.1")
+        assert cfg.ip == "192.168.2.1"
+        assert cfg.dicom_dir == "/BOLD_DICOM"
+
+    def test_reference(self):
+        cfg = ReferenceConfig(initial_enabled=False)
+        assert cfg.initial_enabled is False
+        assert cfg.realtime_enabled is True  # default
+
+
+# =============================================================================
+# SessionConfig
+# =============================================================================
+
+
+class TestSessionConfig:
+    def test_combined_mask_names(self, tmp_path):
+        cfg = SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01"),
+            localizers=[
+                LocalizerConfig(id="rest", type="rest", networks=["DefaultA", "ContA"]),
+            ],
         )
-        assert config.task_type == "thermometer"
-        assert config.task_params["orientation"] == "vertical"
+        assert cfg.combined_mask_names == ["DefaultA", "ContA"]
+
+    def test_combined_mask_names_deduplicates(self, tmp_path):
+        cfg = SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01"),
+            localizers=[
+                LocalizerConfig(id="r1", type="rest", networks=["DefaultA", "ContA"]),
+                LocalizerConfig(id="r2", type="rest", networks=["ContA", "SalVentAttnA"]),
+            ],
+        )
+        # First-occurrence wins, no duplicates
+        assert cfg.combined_mask_names == ["DefaultA", "ContA", "SalVentAttnA"]
+
+    def test_round_trip(self, tmp_path):
+        cfg = SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01"),
+            localizers=[LocalizerConfig(id="rest", networks=["DefaultA", "ContA"])],
+            feedback_runs=[
+                FeedbackRunConfig(
+                    task="ball",
+                    mask_source="rest",
+                    network_assignment={"top_network": "ContA", "bottom_network": "DefaultA"},
+                )
+            ],
+        )
+        d = cfg._to_dict()
+        assert "mask" not in d and "feedback" not in d and "task" not in d and "scan" not in d
+        assert d["localizers"][0]["id"] == "rest"
+        assert d["feedback_runs"][0]["task"] == "ball"
+        assert d["feedback_runs"][0]["network_assignment"]["top_network"] == "ContA"
+
+        cfg2 = SessionConfig._from_dict(d)
+        assert cfg2.feedback_runs[0].task == "ball"
+        assert cfg2.feedback_runs[0].network_assignment == {
+            "top_network": "ContA",
+            "bottom_network": "DefaultA",
+        }
+        assert cfg2.combined_mask_names == ["DefaultA", "ContA"]
+
+    def test_rejects_legacy_top_level_keys(self):
+        for legacy_key in ("mask", "feedback", "task", "localizer_task", "scan"):
+            with pytest.raises(ValueError, match="outdated schema"):
+                SessionConfig._from_dict({"paths": {"base_dir": "/tmp", "participant_id": "sub-01"}, legacy_key: {}})
+
+    def test_rejects_unknown_mask_source(self, tmp_path):
+        data = {
+            "paths": {"base_dir": str(tmp_path), "participant_id": "sub-01"},
+            "localizers": [{"id": "rest", "type": "rest"}],
+            "feedback_runs": [{"task": "ball", "mask_source": "no_such_localizer"}],
+        }
+        with pytest.raises(ValueError, match="mask_source"):
+            SessionConfig._from_dict(data)
 
 
 # =============================================================================

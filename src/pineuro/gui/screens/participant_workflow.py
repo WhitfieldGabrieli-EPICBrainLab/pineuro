@@ -80,7 +80,7 @@ def _build_feedback_step_ids(config: dict[str, Any]) -> list[tuple[str, str]]:
     fb_counter = 0
     tf_counter = 0
     for frc in feedback_runs:
-        task_type = frc.get("task_type", "?")
+        task_type = frc.get("task", "?")
         label_suffix = task_type.replace("_", " ").title()
         use_transfers = frc.get("use_transfer_runs", False)
         max_runs = frc.get("max_runs", 1)
@@ -415,7 +415,11 @@ class ParticipantWorkflowScreen:
 
         config = self.study_config.session_config
         atlas_name = config.get("mask", {}).get("network_atlas", "yeo_17")
-        targets = config.get("mask", {}).get("yeo_targets", ["DefaultA", "ContA"])
+        targets = (
+            config["localizers"][0].get("networks", ["DefaultA", "ContA"])
+            if config.get("localizers")
+            else ["DefaultA", "ContA"]
+        )
         targets_str = ", ".join(targets) if targets else "(none configured)"
 
         dialog = ft.AlertDialog(
@@ -485,7 +489,7 @@ class ParticipantWorkflowScreen:
                         if self.step_statuses.get(step_id) != StepStatus.COMPLETE:
                             self.step_statuses[step_id] = StepStatus.COMPLETE
             else:
-                n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+                n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
                 for run_num in range(1, n_localizer_runs + 1):
                     step_id = f"rest_run_{run_num}"
                     if self.step_statuses.get(step_id) != StepStatus.COMPLETE:
@@ -631,13 +635,27 @@ class ParticipantWorkflowScreen:
         # Get network names — for multi-localizer, use the specific localizer's targets
         if loc_idx is not None and localizers and len(localizers) > 1:
             loc = localizers[loc_idx]
-            network_names = list(loc.get("yeo_targets", []))
-            n_yeo = loc.get("n_yeo", config["mask"].get("n_yeo", 17))
-            threshold = loc.get("threshold", config["mask"].get("threshold", 2000))
+            network_names = list(loc.get("networks", loc.get("networks", loc.get("yeo_targets", []))))
+            n_yeo = loc.get(
+                "n_yeo",
+                (config["localizers"][0].get("extraction", {}).get("n_yeo", 17) if config.get("localizers") else 17),
+            )
+            threshold = loc.get(
+                "threshold",
+                (
+                    config["localizers"][0].get("extraction", {}).get("threshold", 2000)
+                    if config.get("localizers")
+                    else 2000
+                ),
+            )
         else:
-            network_names = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
-            n_yeo = config["mask"]["n_yeo"]
-            threshold = config["mask"].get("threshold", 2000)
+            network_names = list(config["localizers"][0]["networks"])  # Copy to avoid modifying original
+            n_yeo = config["localizers"][0]["extraction"]["n_yeo"]
+            threshold = (
+                config["localizers"][0].get("extraction", {}).get("threshold", 2000)
+                if config.get("localizers")
+                else 2000
+            )
 
         # Include sham alternative networks if sham is enabled with alternative masks
         sham_config = config.get("sham", {})
@@ -713,7 +731,9 @@ class ParticipantWorkflowScreen:
 
         # Generate overlays only for RECOMMENDED (best) components initially
         # Alternative overlays will be generated on-demand when user rejects a mask
-        n_components = config["mask"].get("n_components", 30)
+        n_components = (
+            config["localizers"][0].get("extraction", {}).get("n_components", 30) if config.get("localizers") else 30
+        )
         self._add_log("[INFO] Generating overlays for recommended ICA components...")
         self.page.update()
 
@@ -759,7 +779,11 @@ class ParticipantWorkflowScreen:
                 current_correlation = float(corr_df[network].iloc[current_component])
 
             # Get all ICA components as alternatives (sorted by correlation)
-            n_components = config["mask"].get("n_components", 30)
+            n_components = (
+                config["localizers"][0].get("extraction", {}).get("n_components", 30)
+                if config.get("localizers")
+                else 30
+            )
             alternatives = get_alternative_components(corr_df, network, top_n=n_components)
 
             # Find overlay paths
@@ -795,10 +819,14 @@ class ParticipantWorkflowScreen:
         brain_mask_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_preproc_mask.nii.gz"
 
         # Get ICA parameters from config
-        n_components = config["mask"].get("n_components", 30)
-        smooth_fwhm = config["mask"].get("smooth_fwhm")
-        highpass = config["mask"].get("highpass")
-        lowpass = config["mask"].get("lowpass")
+        n_components = (
+            config["localizers"][0].get("extraction", {}).get("n_components", 30) if config.get("localizers") else 30
+        )
+        smooth_fwhm = (
+            config["localizers"][0].get("extraction", {}).get("smooth_fwhm") if config.get("localizers") else None
+        )
+        highpass = config["localizers"][0].get("extraction", {}).get("highpass") if config.get("localizers") else None
+        lowpass = config["localizers"][0].get("extraction", {}).get("lowpass") if config.get("localizers") else None
 
         # Generate tissue mask overlays (WM/CSF) if they exist
         tissue_mask_overlays: dict[str, Path] = {}
@@ -1745,13 +1773,17 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
-        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+        n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
         localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
         task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
-        expected_vols = config["scan"].get("localizer_n_volumes")
+        expected_vols = config["localizers"][0].get("n_volumes") if config.get("localizers") else None
         if expected_vols is None:
-            rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
+            rest_n_volumes = (
+                [config["localizers"][0].get("n_volumes", 200)] * config["localizers"][0].get("n_runs", 1)
+                if config.get("localizers")
+                else [200]
+            )
             expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
         run_groups = []
@@ -1920,9 +1952,9 @@ class ParticipantWorkflowScreen:
         participant_id = self.participant_id
 
         # Get dynamic configuration values
-        n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
-        reference_initial_enabled = config["scan"].get("reference_initial_enabled", True)
-        reference_realtime_enabled = config["scan"].get("reference_realtime_enabled", True)
+        n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
+        reference_initial_enabled = config.get("reference", {}).get("initial_enabled", True)
+        reference_realtime_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
         # Check if this is a mask-reuse visit
         visit_config = config.get("visit", {})
@@ -2008,7 +2040,7 @@ class ParticipantWorkflowScreen:
             # Check reference initial collection (only if enabled)
             collection_dir = base_dir / "collection"
             if reference_initial_enabled:
-                n_vols = config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
+                n_vols = config.get("reference", {}).get("initial_n_volumes", 2)
                 status = self._check_acq_collection_status(collection_dir, "task-reference", 1, n_vols)
                 self.step_statuses["reference_initial"] = status
 
@@ -2057,9 +2089,13 @@ class ParticipantWorkflowScreen:
                         self.step_statuses[f"localizer_{loc_idx}_approval"] = StepStatus.COMPLETE
             else:
                 # Single localizer (legacy)
-                expected_vols = config["scan"].get("localizer_n_volumes")
+                expected_vols = config["localizers"][0].get("n_volumes") if config.get("localizers") else None
                 if expected_vols is None:
-                    rest_n_volumes = config["scan"].get("rest_n_volumes", [200])
+                    rest_n_volumes = (
+                        [config["localizers"][0].get("n_volumes", 200)] * config["localizers"][0].get("n_runs", 1)
+                        if config.get("localizers")
+                        else [200]
+                    )
                     expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
                 localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
@@ -2125,7 +2161,7 @@ class ParticipantWorkflowScreen:
             # In mask reuse mode, reference is run-01 (no initial reference)
             # In standard mode, reference is run-02 (after initial reference)
             realtime_reference_run = 1 if is_mask_reuse else 2
-            n_vols = config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
+            n_vols = config.get("reference", {}).get("realtime_n_volumes", 2)
             status = self._check_acq_collection_status(collection_dir, "task-reference", realtime_reference_run, n_vols)
             self.step_statuses["reference_realtime"] = status
 
@@ -2302,7 +2338,7 @@ class ParticipantWorkflowScreen:
         for loc_idx, loc in enumerate(localizers):
             loc_type = loc.get("type", "rest")
             if loc_type == "rest":
-                for target in loc.get("yeo_targets", []):
+                for target in loc.get("networks", loc.get("yeo_targets", [])):
                     mask_to_loc[target] = loc_idx
             else:
                 # Task localizer — contrasts dict keys are the mask names
@@ -2340,29 +2376,18 @@ class ParticipantWorkflowScreen:
     def _get_masks_for_frc(self, frc: dict) -> set[str]:
         """Extract the set of mask names a feedback run config actually uses.
 
-        Only considers the masks relevant to the feedback mode:
-        - activation: ``target_mask``, or ``differential_pair`` for dual-network tasks
-        - differential: ``differential_pair``
-        - connectivity: ``connectivity_pairs``
+        Reads from ``network_assignment`` (single source of truth) for activation
+        mode, or from the connectivity sub-block for connectivity mode.
         """
         masks: set[str] = set()
         mode = frc.get("feedback_mode", "activation")
+        net_assign = frc.get("network_assignment", {}) or {}
 
-        if mode == "activation":
-            target = frc.get("target_mask")
-            if target:
-                masks.add(target)
-            else:
-                # Dual-network task (e.g. Ball) — uses differential_pair even in activation mode
-                for name in frc.get("differential_pair", []) or []:
-                    if name:
-                        masks.add(name)
-        elif mode == "differential":
-            for name in frc.get("differential_pair", []) or []:
-                if name:
-                    masks.add(name)
+        if mode in ("activation", "differential"):
+            masks.update(name for name in net_assign.values() if name)
         elif mode == "connectivity":
-            for pair in frc.get("connectivity_pairs", []) or []:
+            connectivity_pairs = (frc.get("connectivity", {}) or {}).get("pairs") or []
+            for pair in connectivity_pairs:
                 for name in pair or []:
                     if name:
                         masks.add(name)
@@ -2370,11 +2395,36 @@ class ParticipantWorkflowScreen:
         return masks
 
     def _fb(self, key: str, default=None):
-        """Read a feedback parameter from the active FRC, falling back to global config."""
+        """Read a feedback parameter from the active FRC (new nested schema).
+
+        Maps legacy flat keys to their new sub-block locations
+        (qc / glm / connectivity / intermittent).
+        """
+        _NESTED_KEY_MAP = {
+            "fd_threshold": ("qc", "fd_threshold"),
+            "dvars_threshold": ("qc", "dvars_threshold"),
+            "tsnr_threshold": ("qc", "tsnr_threshold"),
+            "motion_correction": ("glm", "motion_correction"),
+            "include_drift": ("glm", "include_drift"),
+            "include_motion_regressors": ("glm", "include_motion_regressors"),
+            "include_wm_regressor": ("glm", "include_wm_regressor"),
+            "include_csf_regressor": ("glm", "include_csf_regressor"),
+            "smooth_fwhm": ("glm", "smooth_fwhm"),
+            "connectivity_pairs": ("connectivity", "pairs"),
+            "connectivity_window": ("connectivity", "window"),
+            "connectivity_target": ("connectivity", "target"),
+            "feedback_interval": ("intermittent", "interval"),
+        }
         frc = getattr(self, "_active_frc", None)
-        if frc and key in frc:
+        if not frc:
+            return default
+        if key in frc:
             return frc[key]
-        return self.study_config.session_config.get("feedback", {}).get(key, default)
+        sub_key = _NESTED_KEY_MAP.get(key)
+        if sub_key is not None:
+            block, inner = sub_key
+            return frc.get(block, {}).get(inner, default)
+        return default
 
     def _resolve_frc_mask_names(self, frc: dict) -> list[str]:
         """Return an ordered list of mask names for a feedback run config.
@@ -2385,7 +2435,7 @@ class ParticipantWorkflowScreen:
         # Use explicit network_assignment if available (covers 3+ network tasks)
         net_assign = frc.get("network_assignment", {})
         if net_assign:
-            task_type = frc.get("task_type", "ball")
+            task_type = frc.get("task", "ball")
             try:
                 from pineuro.tasks.task_registry import get_task_metadata
 
@@ -2397,19 +2447,12 @@ class ParticipantWorkflowScreen:
                 pass
 
         mode = frc.get("feedback_mode", "activation")
-        if mode == "activation":
-            target = frc.get("target_mask")
-            if target:
-                return [target]
-            # Dual-network: use differential_pair order
-            pair = frc.get("differential_pair") or []
-            return [n for n in pair if n]
-        elif mode == "differential":
-            pair = frc.get("differential_pair") or []
-            return [n for n in pair if n]
+        if mode in ("activation", "differential"):
+            # If we got here, network_assignment didn't cover all roles — return whatever it has.
+            return [v for v in (frc.get("network_assignment", {}) or {}).values() if v]
         elif mode == "connectivity":
             names_list: list[str] = []
-            for pair in frc.get("connectivity_pairs") or []:
+            for pair in (frc.get("connectivity", {}) or {}).get("pairs") or []:
                 for name in pair or []:
                     if name and name not in names_list:
                         names_list.append(name)
@@ -2548,7 +2591,7 @@ class ParticipantWorkflowScreen:
         controls = []
 
         # Add Initial Reference section only if enabled
-        if config["scan"].get("reference_initial_enabled", True):
+        if config.get("reference", {}).get("initial_enabled", True):
             controls.extend(
                 [
                     ft.Text("Initial Reference", size=14, weight=ft.FontWeight.W_500),
@@ -2597,7 +2640,7 @@ class ParticipantWorkflowScreen:
                     )
         else:
             # Single localizer
-            n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+            n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
             localizer_type = config.get("mask", {}).get("localizer_type", "rest")
             if localizer_type == "task":
                 localizer_task_type = config.get("scan", {}).get("localizer_task_type", "unknown")
@@ -2716,7 +2759,7 @@ class ParticipantWorkflowScreen:
                 )
 
             # Still show coregistration if initial reference is enabled
-            if config["scan"].get("reference_initial_enabled", True):
+            if config.get("reference", {}).get("initial_enabled", True):
                 controls.extend(
                     [
                         ft.Divider(),
@@ -2918,7 +2961,7 @@ class ParticipantWorkflowScreen:
 
         # Add coregistration section only if initial reference is enabled
         config = self.study_config.session_config
-        if config["scan"].get("reference_initial_enabled", True):
+        if config.get("reference", {}).get("initial_enabled", True):
             controls.extend(
                 [
                     ft.Divider(),
@@ -2967,7 +3010,7 @@ class ParticipantWorkflowScreen:
         controls = []
 
         # Add Real-time Reference section only if enabled
-        if config["scan"].get("reference_realtime_enabled", True):
+        if config.get("reference", {}).get("realtime_enabled", True):
             controls.extend(
                 [
                     ft.Text("Real-time Reference", size=14, weight=ft.FontWeight.W_500),
@@ -3131,8 +3174,8 @@ class ParticipantWorkflowScreen:
         and setup guide link for verifying real-time scanner connectivity.
         """
         config = self.study_config.session_config
-        scanner_ip = config["scan"].get("scanner_ip", "")
-        watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
+        scanner_ip = config.get("scanner", {}).get("ip", "")
+        watch_dir = config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM")
 
         self._scanner_status_icon = ft.Icon(ft.Icons.HELP_OUTLINE, color=ft.Colors.GREY, size=20)
         self._scanner_status_text = ft.Text(
@@ -3194,8 +3237,8 @@ class ParticipantWorkflowScreen:
         from ..components.scanner_connection_dialog import ScannerConnectionDialog
 
         config = self.study_config.session_config
-        scanner_ip = config["scan"].get("scanner_ip", "")
-        watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
+        scanner_ip = config.get("scanner", {}).get("ip", "")
+        watch_dir = config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM")
 
         def on_result(result):
             if result is None:
@@ -3230,8 +3273,8 @@ class ParticipantWorkflowScreen:
         from pineuro.scanner_setup import get_current_platform_key, get_setup_instructions
 
         config = self.study_config.session_config
-        watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
-        scanner_ip = config["scan"].get("scanner_ip", "")
+        watch_dir = config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM")
+        scanner_ip = config.get("scanner", {}).get("ip", "")
 
         instructions = get_setup_instructions(watch_dir, scanner_ip)
         platform_key = get_current_platform_key()
@@ -3753,7 +3796,9 @@ class ParticipantWorkflowScreen:
 
         # Resolve declarative live metrics for this run's task.
         summary_task_type = (
-            frc.get("task_type", "ball") if frc is not None else config.get("task", {}).get("task_type", "ball")
+            frc.get("task", "ball")
+            if frc is not None
+            else (config["feedback_runs"][0].get("task", "ball") if config.get("feedback_runs") else "ball")
         )
         try:
             summary_live_metrics = list(get_task_metadata(summary_task_type).live_metrics)
@@ -4455,7 +4500,7 @@ class ParticipantWorkflowScreen:
         Returns:
             List of all network names to extract
         """
-        network_names = list(config["mask"]["yeo_targets"])
+        network_names = list(config["localizers"][0]["networks"])
 
         # Include sham alternative networks if sham is enabled with alternative masks
         sham_config = config.get("sham", {})
@@ -4553,8 +4598,8 @@ class ParticipantWorkflowScreen:
                 "description": f"GLM contrast-based extraction of {len(contrasts)} masks from task localizer.",
                 "parameters": {
                     "Contrasts": ", ".join(f"{k}: {v}" for k, v in contrasts.items()),
-                    "Threshold": f"{config['mask'].get('threshold', 2000)} voxels",
-                    "Smoothing": f"{config['mask'].get('smooth_fwhm', 5.0)} mm FWHM",
+                    "Threshold": f"{(config['localizers'][0].get('extraction', {}).get('threshold', 2000) if config.get('localizers') else 2000)} voxels",
+                    "Smoothing": f"{(config['localizers'][0].get('extraction', {}).get('smooth_fwhm', 5.0) if config.get('localizers') else 5.0)} mm FWHM",
                     "Output": base_dir / "mask_extraction",
                 },
                 "output_path": base_dir / "mask_extraction",
@@ -4564,12 +4609,12 @@ class ParticipantWorkflowScreen:
             all_networks = self._get_all_network_targets(config)
             return {
                 "label": "Extract Network Masks (ICA)",
-                "description": f"ICA-based extraction of {len(all_networks)} network masks using {config['mask']['n_yeo']}-network Yeo atlas.",
+                "description": f"ICA-based extraction of {len(all_networks)} network masks using {config['localizers'][0]['extraction']['n_yeo']}-network Yeo atlas.",
                 "parameters": {
                     "Networks": ", ".join(all_networks),
-                    "Yeo Atlas": f"{config['mask']['n_yeo']} networks",
-                    "Smoothing": f"{config['mask']['smooth_fwhm']} mm FWHM",
-                    "Highpass": f"{config['mask']['highpass']} Hz",
+                    "Yeo Atlas": f"{config['localizers'][0]['extraction']['n_yeo']} networks",
+                    "Smoothing": f"{config['localizers'][0]['extraction']['smooth_fwhm']} mm FWHM",
+                    "Highpass": f"{config['localizers'][0]['extraction']['highpass']} Hz",
                     "Output": base_dir / "mask_extraction",
                 },
                 "output_path": base_dir / "mask_extraction",
@@ -4631,7 +4676,7 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step information
         """
-        enabled = config["scan"].get("reference_initial_enabled", True)
+        enabled = config.get("reference", {}).get("initial_enabled", True)
 
         if not enabled:
             return {
@@ -4644,7 +4689,7 @@ class ParticipantWorkflowScreen:
 
         from pineuro.session import get_localizer_run_info
 
-        n_vols = config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
+        n_vols = config.get("reference", {}).get("initial_n_volumes", 2)
         collection_dir = base_dir / "collection"
 
         run_info = get_localizer_run_info(
@@ -4666,7 +4711,7 @@ class ParticipantWorkflowScreen:
                 "Task": "reference (run-01)",
                 "Attempt": f"acq-{run_info['acq']:02d}",
                 "Volumes": n_vols,
-                "Source": config["scan"]["reference_initial_dicoms"],
+                "Source": config.get("reference", {}).get("initial_dicoms", ""),
                 "Output": base_dir / "collection" / f"task-reference_acq-{run_info['acq']:02d}_run-01",
                 "Enabled": "Yes",
             },
@@ -4689,7 +4734,7 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step information
         """
-        reference_enabled = config["scan"].get("reference_realtime_enabled", True)
+        reference_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
         # Check for mask reuse mode
         visit_config = config.get("visit", {})
@@ -4709,7 +4754,7 @@ class ParticipantWorkflowScreen:
 
         from pineuro.session import get_localizer_run_info
 
-        n_vols = config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
+        n_vols = config.get("reference", {}).get("realtime_n_volumes", 2)
         collection_dir = base_dir / "collection"
 
         run_info = get_localizer_run_info(
@@ -4731,7 +4776,7 @@ class ParticipantWorkflowScreen:
                 "Task": f"reference (run-{run_num:02d})",
                 "Attempt": f"acq-{run_info['acq']:02d}",
                 "Volumes": n_vols,
-                "Source": config["scan"]["reference_realtime_dicoms"],
+                "Source": config.get("reference", {}).get("realtime_dicoms", ""),
                 "Output": base_dir / "collection" / f"task-reference_acq-{run_info['acq']:02d}_run-{run_num:02d}",
                 "Enabled": "Yes",
             },
@@ -4776,7 +4821,7 @@ class ParticipantWorkflowScreen:
                     "none": "Disabled",
                 }.get(_val("motion_correction", "siemens_moco"), "Unknown"),
                 "Output": base_dir / "feedback" / "02_feedback_output",
-                "Simulator Speed": f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 1.0))}x",
+                "Simulator Speed": f"{config.get('simulator', {}).get('feedback_speed', 1.0)}x",
             },
             "output_path": base_dir
             / "feedback"
@@ -4805,7 +4850,7 @@ class ParticipantWorkflowScreen:
         # Cache session states per task type for multi-FRC support
         feedback_runs = config.get("feedback_runs", [])
         _session_states: dict[str, SessionState | None] = {}
-        default_task_type = config.get("task", {}).get("task_type", "ball")
+        default_task_type = config["feedback_runs"][0].get("task", "ball") if config.get("feedback_runs") else "ball"
 
         def _get_session_state(task_id: str) -> SessionState | None:
             if task_id not in _session_states:
@@ -4819,7 +4864,7 @@ class ParticipantWorkflowScreen:
             """Get task state summary string for a specific step."""
             frc_idx = self._get_feedback_step_frc_index(step_id)
             if frc_idx is not None and frc_idx < len(feedback_runs):
-                task_id = feedback_runs[frc_idx].get("task_type", default_task_type)
+                task_id = feedback_runs[frc_idx].get("task", default_task_type)
             else:
                 task_id = default_task_type
             session_state = _get_session_state(task_id)
@@ -4862,7 +4907,11 @@ class ParticipantWorkflowScreen:
                 "description": "Register MNI atlas to subject space and extract network masks directly from atlas parcellation.",
                 "parameters": {
                     "Atlas": config.get("mask", {}).get("network_atlas", "yeo_17"),
-                    "Networks": ", ".join(config.get("mask", {}).get("yeo_targets", ["DefaultA", "ContA"])),
+                    "Networks": ", ".join(
+                        config["localizers"][0].get("networks", ["DefaultA", "ContA"])
+                        if config.get("localizers")
+                        else ["DefaultA", "ContA"]
+                    ),
                     "Output": base_dir / "mask_extraction" / "03_masks",
                 },
                 "output_path": base_dir / "mask_extraction" / "03_masks",
@@ -4933,7 +4982,7 @@ class ParticipantWorkflowScreen:
                 "TR": f"{loc_tr}s",
                 "Source": source_dicom or "(not configured)",
                 "Output": base_dir / "collection" / f"task-{loc_task_name}_acq-{run_info['acq']:02d}_run-{run_num:02d}",
-                "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 1.0))}x",
+                "Simulator Speed": f"{config.get('simulator', {}).get('collection_speed', 1.0)}x",
             }
 
             # Add task-specific parameters for non-rest localizers
@@ -4946,8 +4995,8 @@ class ParticipantWorkflowScreen:
                 # Rest-specific params
                 if loc.get("n_components"):
                     params["ICA Components"] = loc["n_components"]
-                if loc.get("yeo_targets"):
-                    params["Target Networks"] = ", ".join(loc["yeo_targets"])
+                if loc.get("networks", loc.get("yeo_targets")):
+                    params["Target Networks"] = ", ".join(loc.get("networks", loc.get("yeo_targets", [])))
                 if loc.get("network_atlas"):
                     params["Atlas"] = loc["network_atlas"]
 
@@ -5008,7 +5057,7 @@ class ParticipantWorkflowScreen:
                     "Method": "ICA (Independent Component Analysis)",
                     "Atlas": loc.get("network_atlas", "yeo_17"),
                     "Components": loc.get("n_components", 20),
-                    "Target Networks": ", ".join(loc.get("yeo_targets", [])),
+                    "Target Networks": ", ".join(loc.get("networks", loc.get("yeo_targets", []))),
                     "Smoothing": f"{loc.get('smooth_fwhm', 5.0)} mm FWHM",
                     "Highpass": f"{loc.get('highpass', 0.01)} Hz",
                     "Threshold": f"{loc.get('threshold', 2000)} ({loc.get('threshold_method', 'top_n')})",
@@ -5047,14 +5096,12 @@ class ParticipantWorkflowScreen:
             run_num = int(step_id.split("_")[-1])
             run_idx = run_num - 1  # 0-indexed for accessing lists
 
-            localizer_dicoms = config["scan"].get("localizer_source_dicoms") or config["scan"].get(
-                "rest_source_dicoms", []
-            )
+            localizer_dicoms = config["localizers"][0].get("source_dicoms", []) if config.get("localizers") else []
             source_dicom = localizer_dicoms[run_idx] if run_idx < len(localizer_dicoms) else ""
 
-            loc_task = config["scan"].get("localizer_task_type", "rest")
+            loc_task = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
             loc_name = loc_task if loc_task != "rest" else "rest"
-            expected_vols = config["scan"].get("localizer_n_volumes") or 250
+            expected_vols = (config["localizers"][0].get("n_volumes") if config.get("localizers") else None) or 250
 
             # Get acq info for this run (same pattern as feedback steps)
             collection_dir = base_dir / "collection"
@@ -5079,7 +5126,7 @@ class ParticipantWorkflowScreen:
                     "Volumes": expected_vols,
                     "Source": source_dicom,
                     "Output": base_dir / "collection" / f"task-{loc_name}_acq-{run_info['acq']:02d}_run-{run_num:02d}",
-                    "Simulator Speed": f"{config['scan'].get('collection_speed', config['scan'].get('simulator_speed', 1.0))}x",
+                    "Simulator Speed": f"{config.get('simulator', {}).get('collection_speed', 1.0)}x",
                 },
                 "output_path": base_dir / "collection",
                 "output_pattern": f"task-{loc_name}_acq-*_run-{run_num:02d}",
@@ -5096,16 +5143,18 @@ class ParticipantWorkflowScreen:
             feedback_runs = config.get("feedback_runs", [])
             if frc_idx is not None and frc_idx < len(feedback_runs):
                 frc = feedback_runs[frc_idx]
-                _feedback_task_type = frc.get("task_type", "ball")
+                _feedback_task_type = frc.get("task", "ball")
                 networks_str = ", ".join(self._resolve_frc_mask_names(frc))
             else:
-                _feedback_task_type = config.get("task", {}).get("task_type", "ball")
+                _feedback_task_type = (
+                    config["feedback_runs"][0].get("task", "ball") if config.get("feedback_runs") else "ball"
+                )
                 networks_str = ", ".join(self._resolve_mask_names(config))
 
             _frc = frc if (frc_idx is not None and frc_idx < len(feedback_runs)) else None
 
             def _fb_get(k: str, d: Any = None) -> Any:
-                return _frc.get(k, config["feedback"].get(k, d)) if _frc else config["feedback"].get(k, d)
+                return _frc.get(k, d) if _frc else d
 
             params = {
                 "Task": f"feedback (run-{run_num:02d})",
@@ -5126,9 +5175,7 @@ class ParticipantWorkflowScreen:
                 "none": "Disabled",
             }.get(_fb_get("motion_correction", "siemens_moco"), "Unknown")
             params["Output"] = base_dir / "feedback" / "02_feedback_output"
-            params["Simulator Speed"] = (
-                f"{config['scan'].get('feedback_simulator_speed', config['scan'].get('collection_speed', 1.0))}x"
-            )
+            params["Simulator Speed"] = f"{config.get('simulator', {}).get('feedback_speed', 1.0)}x"
 
             info = {
                 "label": f"Feedback Run {run_num}",
@@ -5242,8 +5289,8 @@ class ParticipantWorkflowScreen:
             on_proceed()
             return
 
-        scanner_ip = config["scan"].get("scanner_ip", "")
-        watch_dir = config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM")
+        scanner_ip = config.get("scanner", {}).get("ip", "")
+        watch_dir = config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM")
 
         progress_dialog = ft.AlertDialog(
             modal=True,
@@ -5978,9 +6025,9 @@ class ParticipantWorkflowScreen:
             from pineuro.tasks.task_registry import get_task_metadata
 
             _live_metrics_task_type = (
-                self._active_frc.get("task_type", "ball")
+                self._active_frc.get("task", "ball")
                 if self._active_frc is not None
-                else config.get("task", {}).get("task_type", "ball")
+                else (config["feedback_runs"][0].get("task", "ball") if config.get("feedback_runs") else "ball")
             )
             try:
                 self._live_metrics = list(get_task_metadata(_live_metrics_task_type).live_metrics)
@@ -6231,7 +6278,7 @@ class ParticipantWorkflowScreen:
             elif step_id in ["reference_initial", "reference_realtime"]:
                 # Simple collection progress for short reference scans
                 n_volumes = self._get_collection_n_volumes(step_id)
-                tr = config["scan"].get("tr")
+                tr = config["feedback_runs"][0].get("tr") if config.get("feedback_runs") else None
 
                 self.collection_progress = CollectionProgressPanel(
                     n_volumes=n_volumes,
@@ -6414,10 +6461,10 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
 
         if step_id == "reference_initial":
-            return int(config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2)))
+            return int(config.get("reference", {}).get("initial_n_volumes", 2))
 
         elif step_id == "reference_realtime":
-            return int(config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2)))
+            return int(config.get("reference", {}).get("realtime_n_volumes", 2))
 
         elif step_id.startswith("localizer_") and "_run_" in step_id:
             # Multi-localizer: get n_volumes from the localizer config
@@ -6429,12 +6476,16 @@ class ParticipantWorkflowScreen:
 
         elif step_id.startswith("rest_run_"):
             # Single localizer
-            n_volumes = config["scan"].get("localizer_n_volumes")
+            n_volumes = config["localizers"][0].get("n_volumes") if config.get("localizers") else None
             if n_volumes is not None:
                 return int(n_volumes)
             run_num = int(step_id.split("_")[-1])
             run_idx = run_num - 1
-            rest_volumes = config["scan"].get("rest_n_volumes", [200])
+            rest_volumes = (
+                [config["localizers"][0].get("n_volumes", 200)] * config["localizers"][0].get("n_runs", 1)
+                if config.get("localizers")
+                else [200]
+            )
             if isinstance(rest_volumes, list) and run_idx < len(rest_volumes):
                 return int(rest_volumes[run_idx])
             return int(rest_volumes[0]) if isinstance(rest_volumes, list) else int(rest_volumes)
@@ -6981,8 +7032,8 @@ class ParticipantWorkflowScreen:
         """
         # Build dynamic workflow order based on configuration
         config = self.study_config.session_config
-        reference_initial_enabled = config["scan"].get("reference_initial_enabled", True)
-        reference_realtime_enabled = config["scan"].get("reference_realtime_enabled", True)
+        reference_initial_enabled = config.get("reference", {}).get("initial_enabled", True)
+        reference_realtime_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
         workflow: list[tuple[str, str]] = []
 
@@ -7031,7 +7082,7 @@ class ParticipantWorkflowScreen:
                     )
             else:
                 # Single localizer
-                n_localizer_runs = config["scan"].get("localizer_n_runs", 2)
+                n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
                 for run_num in range(1, n_localizer_runs + 1):
                     step_id = f"rest_run_{run_num}"
                     workflow.append((step_id, self._get_step_label(step_id)))

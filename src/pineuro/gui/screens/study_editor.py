@@ -102,75 +102,22 @@ class StudyEditorScreen:
                 "base_dir": "/data/pineuro",
                 "example_participant_id": "sub-001",
             },
-            "scan": {
-                "localizer_tr": 1.2,
-                "localizer_n_volumes": 250,
-                "localizer_n_runs": 2,
-                "localizer_task_type": "rest",
-                "feedback_tr": 1.2,
-                "feedback_n_volumes": 150,
-                "reference_initial_enabled": True,
-                "reference_initial_n_volumes": 2,
-                "reference_realtime_enabled": True,
-                "reference_realtime_n_volumes": 2,
-                "reference_initial_dicoms": "",
-                "reference_realtime_dicoms": "",
-                "localizer_source_dicoms": ["", ""],
-                "feedback_source_dicoms": ["", ""],
-                "transfer_source_dicoms": ["", ""],
-                "simulator_source_mapping": "",
-                "simulator_enabled": True,
+            "study": {"multi_visit_enabled": False},
+            "simulator": {
+                "enabled": True,
                 "collection_speed": 1.0,
-                "feedback_simulator_speed": 1.0,
-                "simulator_trigger_mode": "manual",
-                "scanner_dicom_dir": "/BOLD_DICOM",
-                "scanner_ip": "",
+                "feedback_speed": 1.0,
+                "trigger_mode": "manual",
+                "source_mapping": "",
             },
-            "mask": {
-                "n_yeo": 17,
-                "network_atlas": "yeo_17",
-                "yeo_targets": ["ContA", "DefaultA"],
-                "n_components": 20,
-                "smooth_fwhm": 5.0,
-                "highpass": 0.01,
-                "lowpass": None,
-                "mask_names": ["ContA", "DefaultA"],
-                "threshold": 2000,
-                "threshold_method": "top_n",
-                "atlas_name": None,
-                "atlas_mask": None,
-                "atlas_source": None,
-                "atlas_regions": None,
-                "cluster_start_threshold": 2.0,
-                "cluster_step": 0.1,
-                "cluster_return_all": False,
-                "min_cluster_size": 50,
-                "max_total_voxels": None,
-            },
-            "feedback": {
-                "n_baseline": 25,
-                "n_volumes": 150,
-                "use_efficiency_weights": True,
-                "fd_threshold": 0.5,
-                "dvars_threshold": 1.5,
-                "tsnr_threshold": 20,
-                "motion_correction": "siemens_moco",
-                "include_drift": True,
-                "include_motion_regressors": True,
-                "include_wm_regressor": False,
-                "include_csf_regressor": False,
-                "smooth_fwhm": None,
-                "differential_pair": None,
-                "feedback_interval": None,
-                "connectivity_pairs": None,
-                "connectivity_window": 15,
-                "feedback_mode": "activation",
-                "connectivity_target": "increase",
-            },
-            "localizer_task": {},
-            "task": {
-                "task_type": "ball",
-                "max_feedback_runs": 1,
+            "scanner": {"dicom_dir": "/BOLD_DICOM", "ip": ""},
+            "reference": {
+                "initial_enabled": True,
+                "initial_n_volumes": 2,
+                "initial_dicoms": "",
+                "realtime_enabled": True,
+                "realtime_n_volumes": 2,
+                "realtime_dicoms": "",
             },
             "sham": {
                 "enabled": False,
@@ -186,6 +133,66 @@ class StudyEditorScreen:
                 "control_monitor": "left",
                 "presenter_monitor": "right",
             },
+            "localizers": [
+                {
+                    "id": "rest",
+                    "type": "rest",
+                    "tr": 1.2,
+                    "n_volumes": 250,
+                    "n_runs": 2,
+                    "motion_correction": "none",
+                    "networks": ["ContA", "DefaultA"],
+                    "extraction": {
+                        "n_yeo": 17,
+                        "network_atlas": "yeo_17",
+                        "n_components": 30,
+                        "threshold": 2000,
+                        "threshold_method": "top_n",
+                        "smooth_fwhm": 5.0,
+                        "highpass": 0.01,
+                        "lowpass": None,
+                        "atlas_mask": None,
+                        "atlas_name": None,
+                        "atlas_source": None,
+                        "atlas_regions": None,
+                        "cluster_start_threshold": 2.0,
+                        "cluster_step": 0.1,
+                        "cluster_return_all": False,
+                        "min_cluster_size": 50,
+                        "max_total_voxels": None,
+                    },
+                    "source_dicoms": ["", ""],
+                }
+            ],
+            "feedback_runs": [
+                {
+                    "task": "ball",
+                    "mask_source": "rest",
+                    "max_runs": 1,
+                    "tr": 1.2,
+                    "n_volumes": 150,
+                    "n_baseline": 25,
+                    "feedback_mode": "activation",
+                    "use_efficiency_weights": True,
+                    "use_transfer_runs": True,
+                    "network_assignment": {"top_network": "ContA", "bottom_network": "DefaultA"},
+                    "qc": {"fd_threshold": 0.5, "dvars_threshold": 1.5, "tsnr_threshold": 20.0},
+                    "glm": {
+                        "motion_correction": "siemens_moco",
+                        "include_drift": True,
+                        "include_motion_regressors": True,
+                        "include_wm_regressor": False,
+                        "include_csf_regressor": False,
+                        "smooth_fwhm": None,
+                    },
+                    "connectivity": {"pairs": None, "window": 15, "target": "increase"},
+                    "intermittent": {"interval": None},
+                    "task_params": {},
+                    "sham": {},
+                    "source_dicoms": "",
+                    "transfer_source_dicoms": "",
+                }
+            ],
         }
         return StudyConfig(metadata=metadata, session_config=session_config)
 
@@ -227,29 +234,30 @@ class StudyEditorScreen:
         )
 
         # Simulator mode
+        simulator_cfg = config.get("simulator", {})
         self.simulator_enabled_checkbox = ft.Checkbox(
             label="Simulator Mode",
-            value=config["scan"].get("simulator_enabled", True),
+            value=simulator_cfg.get("enabled", True),
             on_change=self._on_simulator_mode_changed,
         )
         self.collection_speed_field = ft.TextField(
             width=290,
             label="Localizer speed (× realtime)",
-            value=str(config["scan"].get("collection_speed", 1.0)),
+            value=str(simulator_cfg.get("collection_speed", 1.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Speed for localizer/setup runs",
         )
         self.feedback_simulator_speed_field = ft.TextField(
             width=290,
             label="Feedback speed (× realtime)",
-            value=str(config["scan"].get("feedback_simulator_speed", 1.0)),
+            value=str(simulator_cfg.get("feedback_speed", 1.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Speed for feedback runs",
         )
         self.simulator_trigger_mode_dropdown = ft.Dropdown(
             width=290,
             label="Simulator trigger mode",
-            value=config["scan"].get("simulator_trigger_mode", "manual"),
+            value=simulator_cfg.get("trigger_mode", "manual"),
             options=[
                 ft.dropdown.Option("manual", "Manual (press key)"),
                 ft.dropdown.Option("os_key", "Synthetic OS keypress"),
@@ -258,16 +266,17 @@ class StudyEditorScreen:
         )
 
         # Scanner settings
+        scanner_cfg = config.get("scanner", {})
         self.scanner_dicom_dir_field = ft.TextField(
             width=540,
             label="Scanner DICOM Directory",
-            value=config["scan"].get("scanner_dicom_dir", "/BOLD_DICOM"),
+            value=scanner_cfg.get("dicom_dir", "/BOLD_DICOM"),
             hint_text="Directory where scanner exports DICOMs",
         )
         self.scanner_ip_field = ft.TextField(
             width=290,
             label="Scanner IP Address",
-            value=config["scan"].get("scanner_ip", ""),
+            value=scanner_cfg.get("ip", ""),
             hint_text="e.g., 192.168.2.1",
         )
         self.scanner_setup_guide_btn = ft.OutlinedButton(
@@ -277,29 +286,30 @@ class StudyEditorScreen:
         )
 
         # Reference scan settings (session-level)
+        reference_cfg = config.get("reference", {})
         self.reference_initial_enabled_checkbox = ft.Checkbox(
             label="Collect initial reference scan (before localizers)",
-            value=config["scan"].get("reference_initial_enabled", True),
+            value=reference_cfg.get("initial_enabled", True),
             on_change=self._on_reference_scan_changed,
         )
         self.reference_initial_n_volumes_field = ft.TextField(
             width=160,
             label="Volumes",
-            value=str(config["scan"].get("reference_initial_n_volumes", 2)),
+            value=str(reference_cfg.get("initial_n_volumes", 2)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            visible=config["scan"].get("reference_initial_enabled", True),
+            visible=reference_cfg.get("initial_enabled", True),
         )
         self.reference_realtime_enabled_checkbox = ft.Checkbox(
             label="Collect real-time reference scan (before feedback)",
-            value=config["scan"].get("reference_realtime_enabled", True),
+            value=reference_cfg.get("realtime_enabled", True),
             on_change=self._on_reference_scan_changed,
         )
         self.reference_realtime_n_volumes_field = ft.TextField(
             width=160,
             label="Volumes",
-            value=str(config["scan"].get("reference_realtime_n_volumes", 2)),
+            value=str(reference_cfg.get("realtime_n_volumes", 2)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            visible=config["scan"].get("reference_realtime_enabled", True),
+            visible=reference_cfg.get("realtime_enabled", True),
         )
 
         # Display settings
@@ -361,7 +371,8 @@ class StudyEditorScreen:
         )
 
         # Simulator source mode toggle
-        has_mapping = bool(config["scan"].get("simulator_source_mapping", "").strip())
+        sim_cfg = config.get("simulator", {})
+        has_mapping = bool(sim_cfg.get("source_mapping", "").strip())
         self.simulator_source_mode_radio = ft.RadioGroup(
             content=ft.Row(
                 [
@@ -376,7 +387,7 @@ class StudyEditorScreen:
         self.simulator_source_mapping_field = ft.TextField(
             width=540,
             label="Mapping File",
-            value=config["scan"].get("simulator_source_mapping", ""),
+            value=sim_cfg.get("source_mapping", ""),
             hint_text="CSV/TSV file mapping subjects to DICOM paths",
         )
 
@@ -475,7 +486,7 @@ class StudyEditorScreen:
                 "network_atlas": "yeo_17",
                 "n_yeo": 17,
                 "yeo_targets": ["DefaultA", "ContA"],
-                "n_components": 20,
+                "n_components": 30,
                 "smooth_fwhm": 5.0,
                 "highpass": 0.01,
                 "threshold": 2000,
@@ -1051,11 +1062,11 @@ class StudyEditorScreen:
             controls.append(ft.Divider())
 
         # --- Reference scans (session-level) ---
-        scan_config = self.study_config.session_config.get("scan", {})
+        reference_config = self.study_config.session_config.get("reference", {})
 
         # Initial reference
         init_enabled = self.reference_initial_enabled_checkbox.value
-        init_val = scan_config.get("reference_initial_dicoms", "")
+        init_val = reference_config.get("initial_dicoms", "")
         self._sim_loc_ref_label = ft.Text("Initial Reference Scan", size=14, weight=ft.FontWeight.W_500)
         self._sim_loc_ref_label.visible = init_enabled
         controls.append(self._sim_loc_ref_label)
@@ -1074,7 +1085,7 @@ class StudyEditorScreen:
 
         # Real-time reference
         rt_enabled = self.reference_realtime_enabled_checkbox.value
-        rt_val = scan_config.get("reference_realtime_dicoms", "")
+        rt_val = reference_config.get("realtime_dicoms", "")
         self._sim_fb_ref_label = ft.Text("Real-Time Reference Scan", size=14, weight=ft.FontWeight.W_500)
         self._sim_fb_ref_label.visible = rt_enabled
         controls.append(self._sim_fb_ref_label)
@@ -1096,7 +1107,7 @@ class StudyEditorScreen:
     def _collect_simulator_paths(self, config: dict | None = None):
         """Collect simulator source paths from Paths tab fields into configs.
 
-        Reference scan DICOM paths are written to config["scan"] (session-level).
+        Reference scan DICOM paths are written to config["reference"] (session-level).
         Per-run source DICOMs are written to localizer/feedback config dicts.
         """
         # Localizer sources
@@ -1116,12 +1127,14 @@ class StudyEditorScreen:
 
         # Reference scan DICOM paths (session-level)
         if config is not None:
+            if "reference" not in config:
+                config["reference"] = {}
             _loc_ref = getattr(self, "_sim_loc_ref_field", None)
             if _loc_ref is not None:
-                config["scan"]["reference_initial_dicoms"] = _loc_ref.value.strip()
+                config["reference"]["initial_dicoms"] = _loc_ref.value.strip()
             _fb_ref = getattr(self, "_sim_fb_ref_field", None)
             if _fb_ref is not None:
-                config["scan"]["reference_realtime_dicoms"] = _fb_ref.value.strip()
+                config["reference"]["realtime_dicoms"] = _fb_ref.value.strip()
 
     # ------------------------------------------------------------------
     # Event handlers (Study tab)
@@ -1598,7 +1611,7 @@ class StudyEditorScreen:
     # ------------------------------------------------------------------
 
     def _update_study_from_form(self):
-        """Update study config from form field values."""
+        """Update study config from form field values (new-shape YAML)."""
         self.study_config.metadata.name = self.name_field.value.strip()
         self.study_config.metadata.description = self.description_field.value.strip()
 
@@ -1608,42 +1621,50 @@ class StudyEditorScreen:
         config["paths"]["example_participant_id"] = self.example_participant_id_field.value.strip() or "sub-001"
         config["paths"]["base_dir"] = self.base_dir_field.value.strip() or "/data/pineuro"
 
-        # Multi-visit
+        # Multi-visit (study block)
         if "study" not in config:
             config["study"] = {}
         config["study"]["multi_visit_enabled"] = self.multi_visit_enabled_checkbox.value
 
-        # Reference scans (session-level, from Study tab)
-        config["scan"]["reference_initial_enabled"] = self.reference_initial_enabled_checkbox.value
+        # Reference scans
+        if "reference" not in config:
+            config["reference"] = {}
+        config["reference"]["initial_enabled"] = self.reference_initial_enabled_checkbox.value
         try:
-            config["scan"]["reference_initial_n_volumes"] = int(self.reference_initial_n_volumes_field.value or 2)
+            config["reference"]["initial_n_volumes"] = int(self.reference_initial_n_volumes_field.value or 2)
         except (ValueError, TypeError):
-            config["scan"]["reference_initial_n_volumes"] = 2
-        config["scan"]["reference_realtime_enabled"] = self.reference_realtime_enabled_checkbox.value
+            config["reference"]["initial_n_volumes"] = 2
+        config["reference"]["realtime_enabled"] = self.reference_realtime_enabled_checkbox.value
         try:
-            config["scan"]["reference_realtime_n_volumes"] = int(self.reference_realtime_n_volumes_field.value or 2)
+            config["reference"]["realtime_n_volumes"] = int(self.reference_realtime_n_volumes_field.value or 2)
         except (ValueError, TypeError):
-            config["scan"]["reference_realtime_n_volumes"] = 2
+            config["reference"]["realtime_n_volumes"] = 2
 
-        # Acquisition mode
-        config["scan"]["simulator_enabled"] = self.simulator_enabled_checkbox.value
+        # Simulator
+        if "simulator" not in config:
+            config["simulator"] = {}
+        config["simulator"]["enabled"] = self.simulator_enabled_checkbox.value
         try:
-            config["scan"]["collection_speed"] = float(self.collection_speed_field.value or 1.0)
+            config["simulator"]["collection_speed"] = float(self.collection_speed_field.value or 1.0)
         except (ValueError, TypeError):
-            config["scan"]["collection_speed"] = 1.0
+            config["simulator"]["collection_speed"] = 1.0
         try:
-            config["scan"]["feedback_simulator_speed"] = float(self.feedback_simulator_speed_field.value or 1.0)
+            config["simulator"]["feedback_speed"] = float(self.feedback_simulator_speed_field.value or 1.0)
         except (ValueError, TypeError):
-            config["scan"]["feedback_simulator_speed"] = 1.0
-        config["scan"]["simulator_trigger_mode"] = self.simulator_trigger_mode_dropdown.value or "manual"
-        config["scan"]["scanner_dicom_dir"] = self.scanner_dicom_dir_field.value.strip() or "/BOLD_DICOM"
-        config["scan"]["scanner_ip"] = self.scanner_ip_field.value.strip()
+            config["simulator"]["feedback_speed"] = 1.0
+        config["simulator"]["trigger_mode"] = self.simulator_trigger_mode_dropdown.value or "manual"
 
-        # Simulator mapping
+        # Scanner
+        if "scanner" not in config:
+            config["scanner"] = {}
+        config["scanner"]["dicom_dir"] = self.scanner_dicom_dir_field.value.strip() or "/BOLD_DICOM"
+        config["scanner"]["ip"] = self.scanner_ip_field.value.strip()
+
+        # Simulator source mapping
         if self.simulator_source_mode_radio.value == "mapping":
-            config["scan"]["simulator_source_mapping"] = self.simulator_source_mapping_field.value.strip()
+            config["simulator"]["source_mapping"] = self.simulator_source_mapping_field.value.strip()
         else:
-            config["scan"]["simulator_source_mapping"] = ""
+            config["simulator"]["source_mapping"] = ""
 
         # Display
         if "display" not in config:
@@ -1652,166 +1673,14 @@ class StudyEditorScreen:
         config["display"]["presenter_monitor"] = self.presenter_monitor_dropdown.value or "right"
 
         # --- Collect from tab builders ---
-
-        # Localizers — collect from builders, then inject Paths tab values
         localizer_configs = [b.collect_config() for b in self._localizer_builders]
         self._localizer_configs = localizer_configs
 
-        # Backward compat: write flat keys from first localizer
-        if not localizer_configs:
-            config["scan"]["localizer_n_runs"] = 0
-        if localizer_configs:
-            first = localizer_configs[0]
-            config["scan"]["localizer_tr"] = first.get("tr", 1.2)
-            config["scan"]["localizer_n_volumes"] = first.get("n_volumes", 250)
-            config["scan"]["localizer_n_runs"] = first.get("n_runs", 2)
-            config["scan"]["localizer_task_type"] = first.get("type", "rest")
-            config["scan"]["localizer_motion_correction"] = first.get("motion_correction", "siemens_moco")
-
-            # Flat mask keys from first localizer
-            config["mask"]["localizer_type"] = "rest" if first.get("type") == "rest" else "task"
-            if first.get("type") == "rest":
-                config["mask"]["network_atlas"] = first.get("network_atlas", "yeo_17")
-                config["mask"]["n_yeo"] = first.get("n_yeo", 17)
-                config["mask"]["n_components"] = first.get("n_components", 20)
-                config["mask"]["smooth_fwhm"] = first.get("smooth_fwhm", 5.0)
-                config["mask"]["highpass"] = first.get("highpass", 0.01)
-            config["mask"]["threshold"] = first.get("threshold", 2000)
-            config["mask"]["threshold_method"] = first.get("threshold_method", "top_n")
-            config["mask"]["include_reverse_contrasts"] = first.get("include_reverse_contrasts", False)
-            if first.get("threshold_method") == "cluster":
-                config["mask"]["atlas_source"] = first.get("atlas_source")
-                config["mask"]["atlas_regions"] = first.get("atlas_regions")
-                config["mask"]["cluster_start_threshold"] = first.get("cluster_start_threshold", 2.0)
-                config["mask"]["cluster_step"] = first.get("cluster_step", 0.1)
-                config["mask"]["cluster_return_all"] = first.get("cluster_return_all", False)
-            elif first.get("threshold_method") == "cluster_extent":
-                config["mask"]["cluster_start_threshold"] = first.get("cluster_start_threshold", 2.0)
-                config["mask"]["min_cluster_size"] = first.get("min_cluster_size", 50)
-                config["mask"]["max_total_voxels"] = first.get("max_total_voxels")
-                if first.get("atlas_source"):
-                    config["mask"]["atlas_source"] = first.get("atlas_source")
-
-            # Localizer source DICOMs (flat)
-            config["scan"]["localizer_source_dicoms"] = first.get("source_dicoms", [])
-
-        # Aggregate mask names from all localizers
-        all_mask_names: list[str] = []
-        for loc_cfg in localizer_configs:
-            if loc_cfg.get("type") == "rest":
-                all_mask_names.extend(loc_cfg.get("yeo_targets", []))
-            else:
-                contrasts = loc_cfg.get("contrasts", {})
-                all_mask_names.extend(contrasts.keys())
-                if loc_cfg.get("include_reverse_contrasts"):
-                    all_mask_names.extend(f"{k}_reverse" for k in contrasts)
-        config["mask"]["yeo_targets"] = all_mask_names
-        config["mask"]["mask_names"] = all_mask_names
-
-        # Feedback runs — collect from builders, then inject Paths tab values
         feedback_configs = [b.collect_config() for b in self._feedback_builders]
         self._feedback_configs = feedback_configs
 
-        # Now inject Paths tab simulator paths into the collected configs
+        # Inject Paths tab simulator paths into the collected configs
         self._collect_simulator_paths(config)
 
         config["localizers"] = self._localizer_configs
         config["feedback_runs"] = self._feedback_configs
-
-        # Backward compat: write flat keys from first feedback run
-        if not feedback_configs:
-            config["task"]["max_feedback_runs"] = 0
-        if feedback_configs:
-            first_fb = feedback_configs[0]
-            config["scan"]["feedback_tr"] = first_fb.get("tr", 1.2)
-            config["scan"]["feedback_n_volumes"] = first_fb.get("n_volumes", 150)
-
-            # Flat feedback config
-            config["feedback"]["n_baseline"] = first_fb.get("n_baseline", 25)
-            config["feedback"]["n_volumes"] = first_fb.get("n_volumes", 150)
-            config["feedback"]["fd_threshold"] = first_fb.get("fd_threshold", 0.5)
-            config["feedback"]["dvars_threshold"] = first_fb.get("dvars_threshold", 1.5)
-            config["feedback"]["tsnr_threshold"] = first_fb.get("tsnr_threshold", 20)
-            config["feedback"]["motion_correction"] = first_fb.get("motion_correction", "siemens_moco")
-            config["feedback"]["include_drift"] = first_fb.get("include_drift", True)
-            config["feedback"]["include_motion_regressors"] = first_fb.get("include_motion_regressors", True)
-            config["feedback"]["include_wm_regressor"] = first_fb.get("include_wm_regressor", False)
-            config["feedback"]["include_csf_regressor"] = first_fb.get("include_csf_regressor", False)
-            config["feedback"]["smooth_fwhm"] = first_fb.get("smooth_fwhm")
-            config["feedback"]["feedback_mode"] = first_fb.get("feedback_mode", "activation")
-            config["feedback"]["differential_pair"] = first_fb.get("differential_pair")
-            config["feedback"]["connectivity_pairs"] = first_fb.get("connectivity_pairs")
-            config["feedback"]["connectivity_window"] = first_fb.get("connectivity_window", 15)
-            config["feedback"]["connectivity_target"] = first_fb.get("connectivity_target", "increase")
-            config["feedback"]["feedback_interval"] = first_fb.get("feedback_interval")
-            # Remove legacy fields
-            config["feedback"].pop("moco_enabled", None)
-            config["feedback"].pop("nuisance_regression", None)
-
-            # Flat task config
-            task_type = first_fb.get("task_type", "ball")
-            config["task"]["task_type"] = task_type
-            # Total runs = sum of max_runs across all feedback tasks
-            config["task"]["max_feedback_runs"] = sum(fb_cfg.get("max_runs", 1) for fb_cfg in feedback_configs)
-            task_params = first_fb.get("task_params", {})
-            if task_type not in config["task"]:
-                config["task"][task_type] = {}
-            config["task"][task_type].update(task_params)
-            config["task"][task_type]["n_baseline"] = first_fb.get("n_baseline", 25)
-
-            # Flat sham config
-            sham = first_fb.get("sham", {})
-            if "sham" not in config:
-                config["sham"] = {}
-            config["sham"].update(sham)
-            config["sham"].pop("replay_source_dir", None)
-
-            # Flat DICOM sources
-            config["scan"]["feedback_source_dicoms"] = [fb_cfg.get("source_dicoms", "") for fb_cfg in feedback_configs]
-            config["scan"]["transfer_source_dicoms"] = [
-                fb_cfg.get("transfer_source_dicoms", "") for fb_cfg in feedback_configs[:2]
-            ]
-
-        # Remove legacy single-path
-        config["scan"].pop("feedback_dicoms", None)
-
-        # Localizer task config (flat, from first localizer if task-based)
-        if localizer_configs:
-            first_loc = localizer_configs[0]
-            if first_loc.get("type") != "rest":
-                loc_type = first_loc["type"]
-                if "localizer_task" not in config:
-                    config["localizer_task"] = {}
-                if loc_type not in config["localizer_task"]:
-                    config["localizer_task"][loc_type] = {}
-                config["localizer_task"][loc_type].update(first_loc.get("task_params", {}))
-                # Store contrasts in mask config
-                config["mask"]["contrasts"] = first_loc.get("contrasts", {})
-
-        # Network assignment for first feedback task
-        if feedback_configs and localizer_configs:
-            task_type = feedback_configs[0].get("task_type", "ball")
-            try:
-                task_meta = get_task_metadata(task_type)
-
-                if task_type not in config["task"]:
-                    config["task"][task_type] = {}
-
-                # Use explicit network_assignment from feedback tab if available
-                explicit_assignment = feedback_configs[0].get("network_assignment")
-                if explicit_assignment:
-                    config["task"][task_type].update(explicit_assignment)
-                else:
-                    # Fall back to inferring from differential pair / yeo targets
-                    first_loc = localizer_configs[0]
-                    is_task_loc = first_loc.get("type") != "rest"
-                    if is_task_loc:
-                        dropdowns_values = feedback_configs[0].get("differential_pair") or []
-                    else:
-                        dropdowns_values = first_loc.get("yeo_targets", [])
-
-                    for i, role in enumerate(task_meta.network_roles):
-                        if i < len(dropdowns_values) and dropdowns_values[i]:
-                            config["task"][task_type][role.key] = dropdowns_values[i]
-            except (ValueError, AttributeError):
-                pass

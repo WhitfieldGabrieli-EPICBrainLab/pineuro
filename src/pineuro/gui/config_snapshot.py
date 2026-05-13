@@ -25,25 +25,11 @@ logger = logging.getLogger(__name__)
 SNAPSHOT_FILENAME = "study_config.yaml"
 
 # Top-level config keys that define the experimental protocol.
-PROTOCOL_KEYS = frozenset({"scan", "mask", "feedback", "task", "sham", "display", "localizer_task", "study"})
-
-# Scan sub-keys that are source/simulator related, not protocol-defining.
-SCAN_EXCLUDED_KEYS = frozenset(
-    {
-        "localizer_source_dicoms",
-        "feedback_source_dicoms",
-        "transfer_source_dicoms",
-        "reference_initial_dicoms",
-        "reference_realtime_dicoms",
-        "simulator_source_mapping",
-        "simulator_enabled",
-        "collection_speed",
-        "feedback_simulator_speed",
-        "simulator_trigger_mode",
-        "scanner_dicom_dir",
-        "scanner_ip",
-    }
-)
+# Source/simulator/scanner blocks are intentionally excluded — they're environment-
+# specific, not protocol-defining. Per-localizer / per-feedback-run sub-keys like
+# `extraction:` and `qc:`/`glm:` are part of `localizers` / `feedback_runs` and
+# are compared recursively by the deep-diff.
+PROTOCOL_KEYS = frozenset({"study", "sham", "display", "reference", "localizers", "feedback_runs"})
 
 
 @dataclass
@@ -160,10 +146,6 @@ def compare_protocol_configs(
         if current_section is None:
             current_section = {}
 
-        if key == "scan":
-            saved_section = {k: v for k, v in saved_section.items() if k not in SCAN_EXCLUDED_KEYS}
-            current_section = {k: v for k, v in current_section.items() if k not in SCAN_EXCLUDED_KEYS}
-
         differences.extend(_deep_diff(saved_section, current_section, prefix=key))
 
     return differences
@@ -200,6 +182,24 @@ def _deep_diff(
                 differences.append(ConfigDifference(child_prefix, saved[k], "<not set>"))
             else:
                 differences.extend(_deep_diff(saved[k], current[k], prefix=child_prefix))
+    elif (
+        isinstance(saved, list)
+        and isinstance(current, list)
+        and saved
+        and current
+        and all(isinstance(x, dict) for x in saved)
+        and all(isinstance(x, dict) for x in current)
+    ):
+        # Lists of dicts (e.g. localizers, feedback_runs): compare element-wise
+        # with element-indexed paths so changes to individual fields surface.
+        for i in range(max(len(saved), len(current))):
+            child_prefix = f"{prefix}.{i}"
+            if i >= len(saved):
+                differences.append(ConfigDifference(child_prefix, "<not set>", current[i]))
+            elif i >= len(current):
+                differences.append(ConfigDifference(child_prefix, saved[i], "<not set>"))
+            else:
+                differences.extend(_deep_diff(saved[i], current[i], prefix=child_prefix))
     elif saved != current:
         differences.append(ConfigDifference(prefix, saved, current))
 

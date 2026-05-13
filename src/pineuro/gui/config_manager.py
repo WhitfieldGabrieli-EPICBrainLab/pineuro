@@ -20,9 +20,21 @@ Example YAML structure:
     paths:
         base_dir: "/data/pineuro"
         ...
-    scan:
-        tr: 1.2
-        ...
+    localizers:
+        - id: rest
+          type: rest
+          tr: 1.2
+          networks: [DefaultA, ContA]
+          extraction:
+            n_yeo: 17
+            ...
+    feedback_runs:
+        - task: ball
+          mask_source: rest
+          network_assignment:
+            top_network: ContA
+            bottom_network: DefaultA
+          ...
 """
 
 import hashlib

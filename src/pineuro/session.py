@@ -356,6 +356,7 @@ class ShamConfig:
     """
 
     enabled: bool = False
+    blind_mode: bool = False  # Hide condition assignment from operator (double-blind)
     delivery_method: str = "alternative_masks"  # "alternative_masks" or "replay"
     sham_mask_mode: str = "hemisphere_split"  # "hemisphere_split" or "two_networks"
     hemisphere_network: str = "SomMotA"  # Network to split for hemisphere_split mode
@@ -416,6 +417,7 @@ class PathConfig:
     base_dir: Path
     participant_id: str
     visit_id: str | None = None  # None = single-visit mode (backward compat)
+    example_participant_id: str = ""  # GUI placeholder text (e.g. "sub-001")
     session_dir: Path | None = None
     preprocessing_dir: Path | None = None
     mask_extraction_dir: Path | None = None
@@ -477,6 +479,245 @@ class PathConfig:
     def is_multi_visit(self) -> bool:
         """Check if this is a multi-visit configuration."""
         return self.visit_id is not None
+
+
+# =============================================================================
+# New top-level configuration blocks (replacing the legacy ScanConfig split)
+# =============================================================================
+
+
+@dataclass
+class StudyInfoConfig:
+    """Study-level configuration (the YAML ``study:`` block)."""
+
+    multi_visit_enabled: bool = False
+
+
+@dataclass
+class SimulatorConfig:
+    """Simulator-mode settings (the YAML ``simulator:`` block).
+
+    Parameters
+    ----------
+    enabled : bool
+        Whether simulator mode is active.
+    collection_speed : float
+        Speed multiplier for DICOM collection simulation (localizer/setup runs).
+    feedback_speed : float
+        Speed multiplier for feedback DICOM simulation.
+    trigger_mode : str
+        ``"manual"`` (user presses trigger key) or ``"os_key"`` (synthetic keypress).
+    source_mapping : str
+        Optional path to CSV/TSV mapping subjects to per-run DICOM source paths.
+        When set, takes priority over individual DICOM source fields.
+    """
+
+    enabled: bool = True
+    collection_speed: float = 1.0
+    feedback_speed: float = 10.0
+    trigger_mode: str = "manual"
+    source_mapping: str = ""
+
+
+@dataclass
+class ScannerConfig:
+    """Scanner connectivity settings (the YAML ``scanner:`` block)."""
+
+    dicom_dir: str = "/BOLD_DICOM"
+    ip: str = ""
+
+
+@dataclass
+class ReferenceConfig:
+    """Reference-scan acquisition settings (the YAML ``reference:`` block).
+
+    The reference scan(s) provide a stable baseline volume used for
+    real-time registration. ``initial`` runs before the localizer; ``realtime``
+    runs immediately before feedback (in scanner head pose).
+    """
+
+    initial_enabled: bool = True
+    initial_n_volumes: int = 2
+    initial_dicoms: str = ""
+    realtime_enabled: bool = True
+    realtime_n_volumes: int = 2
+    realtime_dicoms: str = ""
+
+
+@dataclass
+class LocalizerExtractionConfig:
+    """Mask-extraction parameters for a single localizer.
+
+    Grouped under ``localizers[*].extraction`` in the new schema. Replaces
+    the legacy ``mask:`` block (which mixed extraction params, target
+    network names, contrasts, and manual-import fields).
+    """
+
+    n_yeo: int = 17
+    network_atlas: str = "yeo_17"
+    n_components: int = 30
+    threshold: int = 2000
+    threshold_method: str = "top_n"
+    smooth_fwhm: float = 5.0
+    highpass: float = 0.01
+    lowpass: float | None = None
+    atlas_mask: str | None = None
+    atlas_name: str | None = None
+    atlas_source: str | None = None
+    atlas_regions: list[str] | None = None
+    cluster_start_threshold: float = 2.0
+    cluster_step: float = 0.1
+    cluster_return_all: bool = False
+    min_cluster_size: int = 50
+    max_total_voxels: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.threshold_method not in ("top_n", "cluster", "cluster_extent"):
+            raise ValueError(
+                f"threshold_method must be 'top_n', 'cluster', or 'cluster_extent', got '{self.threshold_method}'"
+            )
+
+
+@dataclass
+class QCConfig:
+    """Per-run quality-control thresholds (``feedback_runs[*].qc``)."""
+
+    fd_threshold: float = 0.5
+    dvars_threshold: float = 1.5
+    tsnr_threshold: float = 20.0
+
+
+@dataclass
+class GLMConfig:
+    """Per-run GLM and motion-correction settings (``feedback_runs[*].glm``)."""
+
+    VALID_MOTION_CORRECTION = {"siemens_moco", "software", "none"}
+
+    motion_correction: str = "siemens_moco"
+    include_drift: bool = True
+    include_motion_regressors: bool = True
+    include_wm_regressor: bool = False
+    include_csf_regressor: bool = False
+    smooth_fwhm: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.motion_correction not in self.VALID_MOTION_CORRECTION:
+            raise ValueError(
+                f"motion_correction must be one of {self.VALID_MOTION_CORRECTION}, got '{self.motion_correction}'"
+            )
+
+
+@dataclass
+class ConnectivityConfig:
+    """Per-run connectivity-mode settings (``feedback_runs[*].connectivity``).
+
+    Only used when ``FeedbackRunConfig.feedback_mode == "connectivity"``.
+    """
+
+    pairs: list[list[str]] | None = None
+    window: int = 15
+    target: str = "increase"
+
+
+@dataclass
+class IntermittentConfig:
+    """Per-run intermittent-feedback settings (``feedback_runs[*].intermittent``).
+
+    Omit (or ``interval=None``) for continuous feedback.
+    """
+
+    interval: int | None = None
+
+
+# Legacy dataclasses ScanConfig / MaskConfig / FeedbackConfig / TaskConfig removed in
+# the schema restructure. Their fields now live on:
+#   - LocalizerConfig.extraction (mask-extraction params, contrasts, manual_*)
+#   - LocalizerConfig.networks / .motion_correction / .task_params
+#   - FeedbackRunConfig.qc / .glm / .connectivity / .intermittent
+#   - SimulatorConfig / ScannerConfig / ReferenceConfig / StudyInfoConfig
+
+
+@dataclass
+class FeedbackRunConfig:
+    """Configuration for a single feedback task type in a session.
+
+    A session can have multiple feedback task types (e.g., triggered experience
+    sampling + ball task), each with independent scan parameters, GLM settings,
+    and feedback mode. Each ``FeedbackRunConfig`` is repeated for ``max_runs``
+    iterations during the session.
+
+    Parameters
+    ----------
+    task : str
+        Registered task identifier (e.g., ``"ball"``, ``"thermometer"``).
+    mask_source : str
+        Identifier of the :class:`LocalizerConfig` (its ``id`` field) that
+        supplies masks for this run.
+    max_runs : int
+        Number of feedback runs for this task type.
+    tr : float
+        Repetition time in seconds.
+    n_volumes : int
+        Total volumes per run.
+    n_baseline : int
+        Number of baseline volumes before task onset.
+    feedback_mode : str
+        ``"activation"`` or ``"connectivity"``.
+    use_efficiency_weights : bool
+        Use efficiency weights in activation estimation.
+    qc : QCConfig
+        Per-run QC thresholds (fd, dvars, tsnr).
+    glm : GLMConfig
+        Per-run GLM and motion-correction settings.
+    connectivity : ConnectivityConfig
+        Per-run connectivity settings (only used when feedback_mode == "connectivity").
+    intermittent : IntermittentConfig
+        Per-run intermittent-feedback settings (omit / interval=None for continuous).
+    use_transfer_runs : bool
+        Whether to include transfer runs for this task.
+    task_params : dict
+        Free-form task-specific parameters passed to ``create_task()``.
+    network_assignment : dict
+        Maps network role keys (declared by ``TaskMetadata.network_roles``) to mask names.
+    sham : dict
+        Optional per-run sham override. Empty dict means use the top-level
+        ``SessionConfig.sham`` block.
+    source_dicoms : str
+        Simulator DICOM source for feedback runs.
+    transfer_source_dicoms : str
+        Simulator DICOM source for transfer runs.
+    """
+
+    task: str = "ball"
+    mask_source: str = ""
+    max_runs: int = 1
+    tr: float = 1.2
+    n_volumes: int = 150
+    n_baseline: int = 25
+
+    # Feedback signal
+    feedback_mode: str = "activation"
+    use_efficiency_weights: bool = True
+
+    # Grouped sub-blocks
+    qc: QCConfig = field(default_factory=QCConfig)
+    glm: GLMConfig = field(default_factory=GLMConfig)
+    connectivity: ConnectivityConfig = field(default_factory=ConnectivityConfig)
+    intermittent: IntermittentConfig = field(default_factory=IntermittentConfig)
+
+    # Transfer runs
+    use_transfer_runs: bool = True
+
+    # Task-specific
+    task_params: dict[str, Any] = field(default_factory=dict)
+    network_assignment: dict[str, str] = field(default_factory=dict)
+
+    # Sham (per-run override; if empty, the top-level SessionConfig.sham applies)
+    sham: dict[str, Any] = field(default_factory=dict)
+
+    # Simulator sources
+    source_dicoms: str = ""
+    transfer_source_dicoms: str = ""
 
 
 @dataclass
@@ -543,20 +784,20 @@ class LocalizerConfig:
     """
 
     type: str = "rest"
+    id: str = ""  # stable identifier referenced by feedback_runs[*].mask_source
 
     # Scan parameters
     tr: float = 1.2
     n_volumes: int = 250
     n_runs: int = 2
+    motion_correction: str = "none"
     source_dicoms: list[Path] = field(default_factory=list)
 
-    # Rest-specific (ICA)
-    n_yeo: int = 17
-    yeo_targets: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
-    network_atlas: str = "yeo_17"
-    smooth_fwhm: float = 5.0
-    highpass: float = 0.01
-    lowpass: float | None = None
+    # Rest-specific (ICA): list of Yeo network short names (e.g. ["DefaultA", "ContA"])
+    networks: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
+
+    # Mask-extraction parameters (grouped)
+    extraction: LocalizerExtractionConfig = field(default_factory=LocalizerExtractionConfig)
 
     # Task-specific (GLM)
     contrasts: dict[str, str] = field(default_factory=dict)
@@ -566,23 +807,24 @@ class LocalizerConfig:
     hrf_model: str = "spm"
     drift_model: str = "cosine"
 
-    # Mask extraction (shared)
-    threshold: int = 2000
-    threshold_method: str = "top_n"
-    atlas_mask: str | None = None
-    atlas_name: str | None = None
-    atlas_source: str | None = None
-    atlas_regions: list[str] | None = None
-    cluster_start_threshold: float = 2.0
-    cluster_step: float = 0.1
-    cluster_return_all: bool = False
-    min_cluster_size: int = 50
-    max_total_voxels: int | None = None
+    # Task-localizer-only: PsychoPy/task-side parameters for task-type localizers
+    task_params: dict[str, Any] = field(default_factory=dict)
+
+    # Manual-import fields (used when type == "manual")
+    manual_mask_paths: list[Path] = field(default_factory=list)
+    manual_ref_file: Path | None = None
+    manual_anat_file: Path | None = None
+    manual_mask_space: str = "native"
 
     @property
     def is_rest(self) -> bool:
         """Whether this is a resting-state localizer."""
         return self.type == "rest"
+
+    @property
+    def is_manual(self) -> bool:
+        """Whether this localizer imports pre-built masks rather than extracting them."""
+        return self.type == "manual"
 
     @property
     def task_name(self) -> str:
@@ -593,7 +835,19 @@ class LocalizerConfig:
     def mask_names(self) -> list[str]:
         """Mask names this localizer produces."""
         if self.is_rest:
-            return list(self.yeo_targets)
+            return list(self.networks)
+        if self.is_manual:
+            # Derive names from filenames: strip extensions like .nii.gz / .nii
+            names: list[str] = []
+            for p in self.manual_mask_paths:
+                stem = Path(p).name
+                for suffix in (".nii.gz", ".nii"):
+                    if stem.endswith(suffix):
+                        stem = stem[: -len(suffix)]
+                        break
+                names.append(stem)
+            return names
+        # Task localizer: contrasts.keys() plus _reverse variants when enabled
         names = list(self.contrasts.keys())
         if self.include_reverse_contrasts:
             names += [f"{k}_reverse" for k in self.contrasts]
@@ -603,255 +857,11 @@ class LocalizerConfig:
         self.source_dicoms = [Path(p) for p in self.source_dicoms]
         if self.events_file is not None:
             self.events_file = Path(self.events_file)
-        if self.type != "rest" and not self.contrasts:
-            raise ValueError(f"contrasts must be provided for task localizer type='{self.type}'")
-
-
-@dataclass
-class ScanConfig:
-    """Scanner/acquisition parameters.
-
-    Parameters
-    ----------
-    localizer_tr : float
-        Repetition time in seconds for localizer runs
-    localizer_n_volumes : int
-        Number of volumes per localizer run
-    localizer_n_runs : int
-        Number of localizer runs
-    localizer_task_type : str
-        Task type for localizer: "rest" or a registered task identifier
-    feedback_tr : float
-        Repetition time in seconds for feedback runs
-    feedback_n_volumes : int
-        Number of volumes per feedback run
-    localizer_source_dicoms : list[Path]
-        Source DICOM folders for localizer runs (for simulator)
-    reference_initial_enabled : bool
-        Whether to collect initial reference scan (before localizer)
-    reference_initial_n_volumes : int
-        Number of volumes for initial reference acquisition
-    reference_realtime_enabled : bool
-        Whether to collect realtime reference scan (before feedback)
-    reference_realtime_n_volumes : int
-        Number of volumes for realtime reference acquisition
-    reference_dicoms : Path, optional
-        Default reference DICOM source
-    reference_initial_dicoms : Path, optional
-        Reference DICOM source for initial (pre-scan) acquisition
-    reference_realtime_dicoms : Path, optional
-        Reference DICOM source for real-time (day-of) acquisition
-    feedback_dicoms : Path, optional
-        Source DICOM folder for feedback runs (for simulator)
-    simulator_source_mapping : Path, optional
-        Path to CSV/TSV file mapping subjects to per-run DICOM source paths.
-        When set, this takes priority over individual DICOM source fields.
-    collection_speed : float
-        Speed multiplier for DICOM collection simulation (localizer/setup runs)
-    feedback_simulator_speed : float
-        Speed multiplier for feedback DICOM simulation
-    """
-
-    # Localizer parameters
-    localizer_tr: float = 1.2
-    localizer_n_volumes: int = 250
-    localizer_n_runs: int = 2
-    localizer_task_type: str = "rest"
-
-    # Feedback parameters
-    feedback_tr: float = 1.2
-    feedback_n_volumes: int = 150
-
-    # Reference scan parameters (independently optional)
-    reference_initial_enabled: bool = True
-    reference_initial_n_volumes: int = 2
-    reference_realtime_enabled: bool = True
-    reference_realtime_n_volumes: int = 2
-
-    # DICOM sources (for simulator)
-    localizer_source_dicoms: list[Path] = field(default_factory=list)
-    reference_dicoms: Path | None = None
-    reference_initial_dicoms: Path | None = None
-    reference_realtime_dicoms: Path | None = None
-    feedback_dicoms: Path | None = None
-    simulator_source_mapping: Path | None = None
-    collection_speed: float = 1.0
-    feedback_simulator_speed: float = 10.0
-    # "manual": user presses the trigger key during simulator runs (matches
-    # real-scan code path exactly). "os_key": simulator injects a synthetic
-    # OS-level keypress so testing is hands-off but still routes through the
-    # task's focus-dependent trigger detection. Default = manual.
-    simulator_trigger_mode: str = "manual"
-
-    # Legacy aliases
-    @property
-    def reference_n_volumes(self) -> int:
-        """Alias for reference_initial_n_volumes (backward compatibility)."""
-        return self.reference_initial_n_volumes
-
-    @property
-    def reference_max_runs(self) -> int:
-        """Legacy alias - returns 2 if both reference enabled, 1 if only one, 0 if none."""
-        return int(self.reference_initial_enabled) + int(self.reference_realtime_enabled)
-
-    # Legacy aliases (for backward compatibility)
-    @property
-    def tr(self) -> float:
-        """Alias for feedback_tr (backward compatibility)."""
-        return self.feedback_tr
-
-    @property
-    def n_volumes(self) -> int:
-        """Alias for feedback_n_volumes (backward compatibility)."""
-        return self.feedback_n_volumes
-
-    @property
-    def rest_source_dicoms(self) -> list[Path]:
-        """Alias for localizer_source_dicoms (backward compatibility)."""
-        return self.localizer_source_dicoms
-
-    @property
-    def rest_n_volumes(self) -> list[int]:
-        """Alias returning localizer volumes as list (backward compatibility)."""
-        return [self.localizer_n_volumes] * self.localizer_n_runs
-
-    @property
-    def rest_max_runs(self) -> int:
-        """Alias for localizer_n_runs (backward compatibility)."""
-        return self.localizer_n_runs
-
-    def __post_init__(self) -> None:
-        """Convert all DICOM source paths to Path objects."""
-        self.localizer_source_dicoms = [Path(p) for p in self.localizer_source_dicoms]
-        if self.reference_dicoms is not None:
-            self.reference_dicoms = Path(self.reference_dicoms)
-        if self.reference_initial_dicoms is not None:
-            self.reference_initial_dicoms = Path(self.reference_initial_dicoms)
-        if self.reference_realtime_dicoms is not None:
-            self.reference_realtime_dicoms = Path(self.reference_realtime_dicoms)
-        if self.feedback_dicoms is not None:
-            self.feedback_dicoms = Path(self.feedback_dicoms)
-        if self.simulator_source_mapping is not None:
-            self.simulator_source_mapping = Path(self.simulator_source_mapping)
-
-
-@dataclass
-class MaskConfig:
-    """Mask extraction parameters.
-
-    Parameters
-    ----------
-    n_yeo : int
-        Number of Yeo networks (7 or 17). Used for ICA-based extraction.
-        Ignored when ``network_atlas`` is explicitly set.
-    yeo_targets : list[str]
-        Target network names to extract. Used for ICA-based extraction.
-    network_atlas : str
-        Network atlas for ICA component identification in resting-state
-        extraction. Options: ``"yeo_7"``, ``"yeo_17"``,
-        ``"schaefer_100_7net"``, ``"schaefer_100_17net"``,
-        ``"schaefer_400_7net"``, ``"schaefer_400_17net"``.
-    smooth_fwhm : float
-        Spatial smoothing FWHM in mm
-    highpass : float
-        High-pass filter cutoff in Hz
-    lowpass : float, optional
-        Low-pass filter cutoff in Hz. Used for ICA-based extraction.
-    mask_names : list[str]
-        Names for masks in feedback output
-    localizer_type : str
-        "rest" for ICA-based extraction, "task" for GLM-based extraction.
-    contrasts : dict[str, str]
-        For task-based extraction: mapping of mask name to contrast expression.
-        Example: {"CEN": "nback - rest", "DMN": "rest - nback"}.
-        Ignored when localizer_type="rest".
-    include_reverse_contrasts : bool
-        When True, automatically generate a reverse (negated) mask for each
-        contrast. For example, if contrasts={"rnt": "rumination - distraction"},
-        a second mask "rnt_reverse" is created from the negated stat map.
-        This enables dual-network feedback from a single-contrast localizer.
-    events_file : Path, optional
-        For task-based extraction: path to BIDS events .tsv file.
-        Ignored when localizer_type="rest".
-    stat_type : str
-        Statistical map type for task-based extraction: "t" or "z".
-    hrf_model : str
-        HRF model for task-based extraction: "spm", "spm + derivative", "glover".
-    drift_model : str
-        Drift model for task-based extraction: "cosine", "polynomial", or "none".
-    threshold : int
-        Number of voxels per mask.
-    threshold_method : str
-        ``"top_n"`` (default) selects the top N voxels by stat value.
-        ``"cluster"`` uses atlas-guided iterative cluster thresholding.
-        ``"cluster_extent"`` applies a fixed stat threshold and keeps
-        clusters above ``min_cluster_size``.
-    atlas_mask : str, optional
-        Path to a binary atlas NIfTI in subject space. Used with
-        ``threshold_method="cluster"``. Mutually exclusive with ``atlas_name``
-        and ``atlas_source``.
-    atlas_name : str, optional
-        Legacy: name of a curated combined atlas entry (e.g., ``"harvard_oxford_stg"``).
-        Used with ``threshold_method="cluster"``. Mutually exclusive with ``atlas_mask``
-        and ``atlas_source``.
-    atlas_source : str, optional
-        Atlas source key (e.g., ``"harvard_oxford"``, ``"aal"``,
-        ``"schaefer_400_7net"``). Used with ``atlas_regions`` for cluster
-        thresholding. Mutually exclusive with ``atlas_mask`` and ``atlas_name``.
-    atlas_regions : list[str], optional
-        Region labels from the atlas to include in the cluster mask.
-        Required when ``atlas_source`` is provided.
-    cluster_start_threshold : float
-        Starting stat threshold for cluster search (default: 2.0).
-    cluster_step : float
-        Threshold increment per iteration (default: 0.1).
-    """
-
-    # ICA-based extraction fields
-    n_yeo: int = 17
-    yeo_targets: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
-    network_atlas: str = "yeo_17"
-    smooth_fwhm: float = 5.0
-    highpass: float = 0.01
-    lowpass: float | None = None
-    mask_names: list[str] = field(default_factory=lambda: ["ContA", "DefaultA"])
-
-    # Task-based extraction fields
-    localizer_type: str = "rest"
-    contrasts: dict[str, str] = field(default_factory=dict)
-    include_reverse_contrasts: bool = False
-    events_file: Path | None = None
-    stat_type: str = "t"
-    hrf_model: str = "spm"
-    drift_model: str = "cosine"
-    threshold: int = 2000
-
-    # Cluster-based thresholding fields
-    threshold_method: str = "top_n"
-    atlas_mask: str | None = None
-    atlas_name: str | None = None
-    atlas_source: str | None = None
-    atlas_regions: list[str] | None = None
-    cluster_start_threshold: float = 2.0
-    cluster_step: float = 0.1
-    cluster_return_all: bool = False
-    min_cluster_size: int = 50
-    max_total_voxels: int | None = None
-
-    # Manual ROI import fields
-    manual_mask_paths: list[Path] = field(default_factory=list)
-    manual_ref_file: Path | None = None
-    manual_anat_file: Path | None = None
-    manual_mask_space: str = "native"
-
-    def __post_init__(self) -> None:
-        if self.localizer_type not in ("rest", "task", "manual"):
-            raise ValueError(f"localizer_type must be 'rest', 'task', or 'manual', got '{self.localizer_type}'")
-        if self.localizer_type == "task" and not self.contrasts:
-            raise ValueError("contrasts must be provided when localizer_type='task'")
-        if self.localizer_type == "manual":
+        if not self.id:
+            self.id = self.type
+        if self.is_manual:
             if not self.manual_mask_paths:
-                raise ValueError("manual_mask_paths must be provided when localizer_type='manual'")
+                raise ValueError("manual_mask_paths must be provided when type='manual'")
             if self.manual_mask_space not in ("native", "anat", "mni"):
                 raise ValueError(
                     f"manual_mask_space must be 'native', 'anat', or 'mni', got '{self.manual_mask_space}'"
@@ -863,278 +873,8 @@ class MaskConfig:
                 self.manual_ref_file = Path(self.manual_ref_file)
             if self.manual_anat_file is not None:
                 self.manual_anat_file = Path(self.manual_anat_file)
-        if self.threshold_method not in ("top_n", "cluster", "cluster_extent"):
-            raise ValueError(
-                f"threshold_method must be 'top_n', 'cluster', or 'cluster_extent', got '{self.threshold_method}'"
-            )
-        if self.events_file is not None:
-            self.events_file = Path(self.events_file)
-
-
-@dataclass
-class FeedbackConfig:
-    """Feedback session parameters.
-
-    Parameters
-    ----------
-    n_baseline : int
-        Number of baseline volumes before task onset
-    n_volumes : int
-        Total number of volumes per feedback run
-    use_efficiency_weights : bool
-        Whether to use efficiency weights in activation estimation
-    motion_correction : str
-        Real-time motion correction mode. Controls how volumes are corrected
-        and how motion parameters are obtained:
-        - ``"siemens_moco"``: Parse motion from Siemens MoCo JSON sidecar
-          (``ImageComments`` field). Fast (~0 ms). Siemens scanners only.
-        - ``"software"``: ANTsPy frame-to-reference rigid registration
-          with warm-start. Works on any scanner (~300 ms per volume).
-        - ``"none"``: No motion correction. No motion parameters available.
-    include_drift : bool
-        Include linear drift regressor in the GLM nuisance model.
-    include_motion_regressors : bool
-        Include 6 motion parameters (differential, arc-length converted)
-        as nuisance regressors in the GLM. Requires motion_correction to
-        be ``"siemens_moco"`` or ``"software"`` (ignored when ``"none"``).
-        Motion parameters are still extracted for FD/QC even when this is
-        False, as long as motion_correction is not ``"none"``.
-    include_wm_regressor : bool
-        Include white matter mean signal as a nuisance regressor in the GLM.
-        Tissue mask created from MNI template priors (no T1 required).
-    include_csf_regressor : bool
-        Include CSF mean signal as a nuisance regressor in the GLM.
-        Tissue mask created from MNI template priors (no T1 required).
-    smooth_fwhm : float, optional
-        Gaussian spatial smoothing FWHM in mm applied to each volume before
-        voxel extraction. None (default) disables smoothing. Typical values
-        are 5.0-6.0 mm. Uses nilearn.image.smooth_img().
-    differential_pair : list of str, optional
-        Ordered pair [positive_mask, negative_mask] for differential signal
-        computation. The pipeline computes positive - negative and logs it
-        as a column in feedbacklog.tsv. None (default) disables differential.
-        Example: ["ContA", "DefaultA"] computes ContA - DefaultA.
-    feedback_interval : int, optional
-        Number of volumes between feedback deliveries. When set, activations
-        are accumulated and the mean is delivered to the task every N volumes.
-        None (default) delivers feedback every volume (continuous mode).
-        Only applies after baseline period. Example: 5 delivers feedback
-        every 5th volume.
-    connectivity_pairs : list of list of str, optional
-        Pairs of mask names for sliding-window Pearson correlation.
-        Each pair is [mask_a, mask_b]. None (default) disables connectivity.
-        Example: [["ContA", "DefaultA"]] computes correlation between
-        ContA and DefaultA. Values logged as corr_{mask_a}_{mask_b} columns.
-    connectivity_window : int
-        Sliding window size in volumes for connectivity computation.
-        Default is 15. Must be >= 3.
-    feedback_mode : str
-        Feedback signal type. "activation" (default) uses dual-network
-        activation comparison. "connectivity" uses sliding-window Pearson
-        correlation between the configured pair.
-    connectivity_target : str
-        Target direction for connectivity feedback. "increase" (default)
-        means higher correlation = better. "decrease" means stronger
-        anti-correlation = better (the correlation value is negated before
-        delivery to the task).
-    wm_mask_path : Path, optional
-        Path to eroded WM binary mask. Resolved automatically during
-        session setup (not set directly by user).
-    csf_mask_path : Path, optional
-        Path to eroded CSF binary mask. Resolved automatically during
-        session setup (not set directly by user).
-    """
-
-    VALID_MOTION_CORRECTION = {"siemens_moco", "software", "none"}
-
-    n_baseline: int = 25
-    n_volumes: int = 150
-    use_efficiency_weights: bool = True
-    motion_correction: str = "siemens_moco"
-    include_drift: bool = True
-    include_motion_regressors: bool = True
-    include_wm_regressor: bool = False
-    include_csf_regressor: bool = False
-    smooth_fwhm: float | None = None
-    differential_pair: list[str] | None = None
-    feedback_interval: int | None = None
-    connectivity_pairs: list[list[str]] | None = None
-    connectivity_window: int = 15
-    feedback_mode: str = "activation"
-    connectivity_target: str = "increase"
-    wm_mask_path: Path | None = None
-    csf_mask_path: Path | None = None
-
-    def __post_init__(self) -> None:
-        # Backward compatibility: migrate old config keys
-        if hasattr(self, "moco_enabled"):
-            self.motion_correction = "siemens_moco" if self.moco_enabled else "software"
-            del self.moco_enabled
-        if hasattr(self, "nuisance_regression"):
-            if self.nuisance_regression:
-                self.include_wm_regressor = True
-                self.include_csf_regressor = True
-            del self.nuisance_regression
-
-        if self.motion_correction not in self.VALID_MOTION_CORRECTION:
-            raise ValueError(
-                f"motion_correction must be one of {self.VALID_MOTION_CORRECTION}, got '{self.motion_correction}'"
-            )
-        if self.wm_mask_path is not None:
-            self.wm_mask_path = Path(self.wm_mask_path)
-        if self.csf_mask_path is not None:
-            self.csf_mask_path = Path(self.csf_mask_path)
-
-
-@dataclass
-class FeedbackRunConfig:
-    """Configuration for a single feedback task type in a session.
-
-    A session can have multiple feedback task types (e.g., triggered experience
-    sampling + ball task), each with independent scan parameters, GLM settings,
-    and feedback mode. Each ``FeedbackRunConfig`` is repeated for ``max_runs``
-    iterations during the session.
-
-    Parameters
-    ----------
-    task_type : str
-        Registered task identifier (e.g., ``"ball"``, ``"thermometer"``).
-    max_runs : int
-        Number of feedback runs for this task type.
-    tr : float
-        Repetition time in seconds.
-    n_volumes : int
-        Total volumes per run.
-    n_baseline : int
-        Number of baseline volumes before task onset.
-    motion_correction : str
-        Real-time motion correction mode (``"siemens_moco"``, ``"software"``, ``"none"``).
-    include_drift : bool
-        Include linear drift regressor in GLM.
-    include_motion_regressors : bool
-        Include 6 motion parameters as GLM nuisance regressors.
-    include_wm_regressor : bool
-        Include white matter mean signal regressor.
-    include_csf_regressor : bool
-        Include CSF mean signal regressor.
-    smooth_fwhm : float or None
-        Gaussian spatial smoothing FWHM in mm. None disables.
-    feedback_mode : str
-        ``"activation"`` or ``"connectivity"``.
-    target_mask : str or None
-        Target mask name for single-network tasks.
-    differential_pair : list of str or None
-        [positive, negative] mask names for differential activation.
-    connectivity_pairs : list of list of str or None
-        Mask pairs for sliding-window correlation.
-    connectivity_window : int
-        Sliding window size in volumes.
-    connectivity_target : str
-        ``"increase"`` or ``"decrease"``.
-    feedback_interval : int or None
-        Volumes between feedback deliveries. None = continuous.
-    fd_threshold : float
-        Framewise displacement threshold.
-    dvars_threshold : float
-        DVARS threshold.
-    tsnr_threshold : float
-        tSNR threshold.
-    use_transfer_runs : bool
-        Whether to include transfer runs for this task.
-    task_params : dict
-        Task-specific parameters passed to ``create_task()``.
-    network_assignment : dict
-        Maps network role keys to mask names.
-    sham : dict
-        Sham configuration for this feedback task.
-    source_dicoms : str
-        Simulator DICOM source for feedback runs.
-    transfer_source_dicoms : str
-        Simulator DICOM source for transfer runs.
-    reference_realtime_dicoms : str
-        Simulator DICOM source for realtime reference.
-    reference_realtime_enabled : bool
-        Whether to collect realtime reference scan.
-    reference_realtime_n_volumes : int
-        Volumes for realtime reference acquisition.
-    """
-
-    task_type: str = "ball"
-    max_runs: int = 1
-    tr: float = 1.2
-    n_volumes: int = 150
-    n_baseline: int = 25
-
-    # GLM settings
-    motion_correction: str = "siemens_moco"
-    include_drift: bool = True
-    include_motion_regressors: bool = True
-    include_wm_regressor: bool = False
-    include_csf_regressor: bool = False
-    smooth_fwhm: float | None = None
-
-    # Feedback signal
-    feedback_mode: str = "activation"
-    target_mask: str | None = None
-    differential_pair: list[str] | None = None
-    connectivity_pairs: list[list[str]] | None = None
-    connectivity_window: int = 15
-    connectivity_target: str = "increase"
-    feedback_interval: int | None = None
-
-    # QC thresholds
-    fd_threshold: float = 0.5
-    dvars_threshold: float = 1.5
-    tsnr_threshold: float = 20.0
-
-    # Transfer runs
-    use_transfer_runs: bool = True
-
-    # Task-specific
-    task_params: dict[str, Any] = field(default_factory=dict)
-    network_assignment: dict[str, str] = field(default_factory=dict)
-
-    # Sham
-    sham: dict[str, Any] = field(default_factory=dict)
-
-    # Simulator sources
-    source_dicoms: str = ""
-    transfer_source_dicoms: str = ""
-    reference_realtime_dicoms: str = ""
-    reference_realtime_enabled: bool = True
-    reference_realtime_n_volumes: int = 2
-
-    def __post_init__(self) -> None:
-        valid_moco = {"siemens_moco", "software", "none"}
-        if self.motion_correction not in valid_moco:
-            raise ValueError(f"motion_correction must be one of {valid_moco}, got '{self.motion_correction}'")
-
-
-@dataclass
-class TaskConfig:
-    """Generic task configuration.
-
-    Task-specific parameters are stored in task_params dict and passed to
-    the task factory. Network assignments map role keys (declared in
-    TaskMetadata.network_roles) to mask names.
-
-    Parameters
-    ----------
-    task_type : str
-        Registered task identifier (e.g., "ball", "thermometer")
-    max_feedback_runs : int
-        Number of feedback runs in session
-    task_params : dict
-        Task-specific parameters (passed to create_task())
-    network_assignment : dict
-        Maps network role keys to mask names.
-        E.g., {"top_network": "ContA", "bottom_network": "DefaultA"}
-    """
-
-    task_type: str = "ball"
-    max_feedback_runs: int = 2
-    task_params: dict[str, Any] = field(default_factory=dict)
-    network_assignment: dict[str, str] = field(default_factory=dict)
+        elif self.type != "rest" and not self.contrasts:
+            raise ValueError(f"contrasts must be provided for task localizer type='{self.type}'")
 
 
 def _path_to_str(obj: Any) -> Any:
@@ -1215,14 +955,20 @@ class SessionConfig:
     """
 
     paths: PathConfig
-    scan: ScanConfig = field(default_factory=ScanConfig)
-    mask: MaskConfig = field(default_factory=MaskConfig)
-    feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
-    task: TaskConfig = field(default_factory=TaskConfig)
+    study: StudyInfoConfig = field(default_factory=StudyInfoConfig)
+    simulator: SimulatorConfig = field(default_factory=SimulatorConfig)
+    scanner: ScannerConfig = field(default_factory=ScannerConfig)
+    reference: ReferenceConfig = field(default_factory=ReferenceConfig)
     visit: VisitConfig | None = None
     sham: ShamConfig | None = None
     localizers: list[LocalizerConfig] = field(default_factory=list)
     feedback_runs: list[FeedbackRunConfig] = field(default_factory=list)
+
+    # Runtime-only fields (not serialized to YAML). Set by coregister_before_first_transfer
+    # / tissue-mask resolution and consumed by run_feedback_session. Previously lived on
+    # FeedbackConfig.wm_mask_path / csf_mask_path; moved here so they don't appear in YAML.
+    _wm_mask_path: Path | None = field(default=None, repr=False)
+    _csf_mask_path: Path | None = field(default=None, repr=False)
 
     @classmethod
     def from_yaml(cls, path: Path) -> SessionConfig:
@@ -1243,23 +989,36 @@ class SessionConfig:
             data = json.load(f)
         return cls._from_dict(data)
 
+    # Legacy top-level YAML keys that no longer exist in the new schema.
+    # Their presence triggers an immediate ValueError in _from_dict so partial
+    # migrations fail loudly at load time rather than silently at runtime.
+    _LEGACY_TOP_LEVEL_KEYS = frozenset({"mask", "feedback", "task", "localizer_task", "scan"})
+
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> SessionConfig:
         """Create config from dictionary."""
+        found_legacy = cls._LEGACY_TOP_LEVEL_KEYS & set(data.keys())
+        if found_legacy:
+            raise ValueError(
+                f"Study config uses outdated schema (found legacy top-level keys: "
+                f"{sorted(found_legacy)}). This version of pineuro removed the legacy "
+                f"single-block schema; regenerate the YAML via the GUI study editor."
+            )
+
         paths_data = data.get("paths", {})
         paths = PathConfig(**paths_data)
 
-        scan_data = data.get("scan", {})
-        scan = ScanConfig(**scan_data) if scan_data else ScanConfig()
+        study_data = data.get("study", {})
+        study = StudyInfoConfig(**study_data) if study_data else StudyInfoConfig()
 
-        mask_data = data.get("mask", {})
-        mask = MaskConfig(**mask_data) if mask_data else MaskConfig()
+        simulator_data = data.get("simulator", {})
+        simulator = SimulatorConfig(**simulator_data) if simulator_data else SimulatorConfig()
 
-        feedback_data = data.get("feedback", {})
-        feedback = FeedbackConfig(**feedback_data) if feedback_data else FeedbackConfig()
+        scanner_data = data.get("scanner", {})
+        scanner = ScannerConfig(**scanner_data) if scanner_data else ScannerConfig()
 
-        task_data = data.get("task", {})
-        task = TaskConfig(**task_data) if task_data else TaskConfig()
+        reference_data = data.get("reference", {})
+        reference = ReferenceConfig(**reference_data) if reference_data else ReferenceConfig()
 
         visit_data = data.get("visit")
         visit = VisitConfig(**visit_data) if visit_data else None
@@ -1267,27 +1026,58 @@ class SessionConfig:
         sham_data = data.get("sham")
         sham = ShamConfig(**sham_data) if sham_data else None
 
-        # Parse localizers list
+        # Parse localizers list (each may carry a nested `extraction:` block)
         localizers_data = data.get("localizers", [])
-        localizers = [LocalizerConfig(**loc_data) for loc_data in localizers_data]
+        localizers = [cls._build_localizer(loc_data) for loc_data in localizers_data]
 
-        # Parse feedback_runs list
+        # Parse feedback_runs list (each may carry nested qc/glm/connectivity/intermittent blocks)
         feedback_runs_data = data.get("feedback_runs", [])
-        feedback_runs = [FeedbackRunConfig(**frc) for frc in feedback_runs_data]
+        feedback_runs = [cls._build_feedback_run(frc) for frc in feedback_runs_data]
 
-        config = cls(
+        # Validate cross-references: each feedback_runs[*].mask_source must match some localizer.id
+        localizer_ids = {loc.id for loc in localizers}
+        for i, frc in enumerate(feedback_runs):
+            if frc.mask_source and frc.mask_source not in localizer_ids:
+                raise ValueError(
+                    f"feedback_runs[{i}].mask_source={frc.mask_source!r} does not match any "
+                    f"localizer.id (available: {sorted(localizer_ids)})"
+                )
+
+        return cls(
             paths=paths,
-            scan=scan,
-            mask=mask,
-            feedback=feedback,
-            task=task,
+            study=study,
+            simulator=simulator,
+            scanner=scanner,
+            reference=reference,
             visit=visit,
             sham=sham,
             localizers=localizers,
             feedback_runs=feedback_runs,
         )
-        config.derive_combined_mask_names()
-        return config
+
+    @staticmethod
+    def _build_localizer(loc_data: dict[str, Any]) -> LocalizerConfig:
+        """Build a LocalizerConfig, unpacking the nested ``extraction:`` block."""
+        loc_data = dict(loc_data)  # don't mutate caller's dict
+        extraction_data = loc_data.pop("extraction", None)
+        if extraction_data:
+            loc_data["extraction"] = LocalizerExtractionConfig(**extraction_data)
+        return LocalizerConfig(**loc_data)
+
+    @staticmethod
+    def _build_feedback_run(frc_data: dict[str, Any]) -> FeedbackRunConfig:
+        """Build a FeedbackRunConfig, unpacking the nested qc/glm/connectivity/intermittent blocks."""
+        frc_data = dict(frc_data)  # don't mutate caller's dict
+        for key, klass in (
+            ("qc", QCConfig),
+            ("glm", GLMConfig),
+            ("connectivity", ConnectivityConfig),
+            ("intermittent", IntermittentConfig),
+        ):
+            block = frc_data.pop(key, None)
+            if block:
+                frc_data[key] = klass(**block)
+        return FeedbackRunConfig(**frc_data)
 
     def to_yaml(self, path: Path) -> None:
         """Save configuration to YAML file."""
@@ -1308,12 +1098,12 @@ class SessionConfig:
 
     def _to_dict(self) -> dict[str, Any]:
         """Convert to dictionary with Path objects as strings."""
-        result = {
+        result: dict[str, Any] = {
             "paths": _path_to_str(asdict(self.paths)),
-            "scan": _path_to_str(asdict(self.scan)),
-            "mask": _path_to_str(asdict(self.mask)),
-            "feedback": _path_to_str(asdict(self.feedback)),
-            "task": _path_to_str(asdict(self.task)),
+            "study": asdict(self.study),
+            "simulator": asdict(self.simulator),
+            "scanner": asdict(self.scanner),
+            "reference": _path_to_str(asdict(self.reference)),
         }
         if self.visit is not None:
             result["visit"] = asdict(self.visit)
@@ -1325,19 +1115,23 @@ class SessionConfig:
             result["feedback_runs"] = [_path_to_str(asdict(frc)) for frc in self.feedback_runs]
         return result
 
-    def derive_combined_mask_names(self) -> None:
-        """Set ``mask.mask_names`` from the union of all localizer mask names.
+    @property
+    def combined_mask_names(self) -> list[str]:
+        """De-duplicated union of every localizer's mask names.
 
-        Called automatically when loading from dict/YAML/JSON. When building
-        configs programmatically with a ``localizers`` list, call this after
-        construction to keep ``mask.mask_names`` in sync.
+        Replaces the legacy stored ``mask.mask_names`` field. Returns the
+        ordered union (first occurrence wins) so callers that previously
+        passed ``config.mask.mask_names`` to :func:`run_feedback_session`
+        get a stable, deterministic list.
         """
-        if not self.localizers:
-            return  # keep existing mask.mask_names (manual import or legacy)
-        combined: list[str] = []
+        seen: set[str] = set()
+        out: list[str] = []
         for loc in self.localizers:
-            combined.extend(loc.mask_names)
-        self.mask.mask_names = combined
+            for name in loc.mask_names:
+                if name not in seen:
+                    seen.add(name)
+                    out.append(name)
+        return out
 
     def validate(self) -> list[str]:
         """Validate configuration, returning list of error messages.
@@ -1352,17 +1146,19 @@ class SessionConfig:
         if not self.paths.participant_id:
             errors.append("paths.participant_id is required")
 
-        if self.scan.tr <= 0:
-            errors.append(f"scan.tr must be positive, got {self.scan.tr}")
+        if not self.feedback_runs:
+            errors.append("at least one feedback_runs entry is required")
+        for i, frc in enumerate(self.feedback_runs):
+            if frc.tr <= 0:
+                errors.append(f"feedback_runs[{i}].tr must be positive, got {frc.tr}")
+            if frc.n_volumes <= 0:
+                errors.append(f"feedback_runs[{i}].n_volumes must be positive, got {frc.n_volumes}")
+            if frc.max_runs <= 0:
+                errors.append(f"feedback_runs[{i}].max_runs must be positive, got {frc.max_runs}")
 
-        if self.scan.n_volumes <= 0:
-            errors.append(f"scan.n_volumes must be positive, got {self.scan.n_volumes}")
-
-        if self.mask.n_yeo not in (7, 17):
-            errors.append(f"mask.n_yeo must be 7 or 17, got {self.mask.n_yeo}")
-
-        if self.task.max_feedback_runs <= 0:
-            errors.append(f"task.max_feedback_runs must be positive, got {self.task.max_feedback_runs}")
+        for i, loc in enumerate(self.localizers):
+            if loc.is_rest and loc.extraction.n_yeo not in (7, 17):
+                errors.append(f"localizers[{i}].extraction.n_yeo must be 7 or 17, got {loc.extraction.n_yeo}")
 
         return errors
 
@@ -1393,9 +1189,9 @@ class SessionConfig:
         >>> source = config.resolve_simulator_source("feedback_run-01")
         """
         # Try mapping file first
-        if self.scan.simulator_source_mapping is not None:
+        if self.simulator.source_mapping:
             try:
-                mapping = SimulatorSourceMapping.from_file(self.scan.simulator_source_mapping)
+                mapping = SimulatorSourceMapping.from_file(Path(self.simulator.source_mapping))
                 source = mapping.get_source(self.paths.participant_id, run_type)
                 if source is not None:
                     logger.debug(f"Resolved {run_type} for {self.paths.participant_id} from mapping: {source}")
@@ -1404,41 +1200,37 @@ class SessionConfig:
                 logger.warning(f"Failed to load simulator source mapping: {e}")
 
         # Fall back to individual fields
+        primary_localizer = self.localizers[0] if self.localizers else None
         if run_type.startswith("rest"):
-            # Extract run number (1-indexed)
+            # Extract run number (1-indexed); resolve from the first localizer's source_dicoms
             try:
                 run_num = int(run_type[4:])
-                if 0 < run_num <= len(self.scan.localizer_source_dicoms):
-                    return self.scan.localizer_source_dicoms[run_num - 1]
+                if primary_localizer and 0 < run_num <= len(primary_localizer.source_dicoms):
+                    return primary_localizer.source_dicoms[run_num - 1]
             except (ValueError, IndexError):
                 pass
         elif run_type == "reference_initial":
-            return self.scan.reference_initial_dicoms or self.scan.reference_dicoms
+            return Path(self.reference.initial_dicoms) if self.reference.initial_dicoms else None
         elif run_type == "reference_realtime":
-            return self.scan.reference_realtime_dicoms or self.scan.reference_dicoms
+            return Path(self.reference.realtime_dicoms) if self.reference.realtime_dicoms else None
         elif run_type.startswith("feedback_run-") or run_type.startswith("transfer_run-"):
-            # All feedback/transfer runs fall back to feedback_dicoms
-            return self.scan.feedback_dicoms
+            # All feedback/transfer runs use the first feedback_run's source_dicoms
+            if self.feedback_runs:
+                frc = self.feedback_runs[0]
+                src = frc.transfer_source_dicoms if run_type.startswith("transfer_run-") else frc.source_dicoms
+                return Path(src) if src else None
+            return None
 
         return None
 
     def resolve_localizer_sources(self) -> list[Path]:
         """Resolve simulator DICOM sources for all localizer runs.
 
-        This method resolves sources for rest1, rest2, ..., restN based on
-        the configured number of localizer runs.
-
-        Returns
-        -------
-        list[Path]
-            List of resolved DICOM source paths for localizer runs
+        Returns the source DICOM paths for the first localizer's runs.
         """
-        sources = []
-        for i in range(self.scan.localizer_n_runs):
-            source = self.resolve_simulator_source(f"rest{i + 1}")
-            if source is not None:
-                sources.append(source)
-        return sources
+        if not self.localizers:
+            return []
+        return [Path(p) for p in self.localizers[0].source_dicoms]
 
 
 # =============================================================================
@@ -1839,7 +1631,8 @@ def run_dicom_collection(
     if source_dirs is None:
         source_dirs = config.resolve_localizer_sources()
     if n_volumes_list is None:
-        n_volumes_list = config.scan.rest_n_volumes
+        loc = config.localizers[0] if config.localizers else None
+        n_volumes_list = [loc.n_volumes] * loc.n_runs if loc else [250]
 
     if len(source_dirs) != len(n_volumes_list):
         raise ValueError(f"Mismatch: {len(source_dirs)} source dirs vs {len(n_volumes_list)} n_volumes entries")
@@ -1886,7 +1679,7 @@ def run_dicom_collection(
             from .collection_qc import CollectionQCMonitor
 
             qc_log_path = qc_log_dir / f"{task_name}_acq-{acq:02d}_run-{run_num:02d}_collectionlog.tsv"
-            motion_mode = getattr(config.scan, "motion_correction", "siemens_moco")
+            motion_mode = config.localizers[0].motion_correction if config.localizers else "siemens_moco"
             qc_mon = CollectionQCMonitor(
                 log_path=qc_log_path,
                 motion_correction=motion_mode,
@@ -1902,7 +1695,7 @@ def run_dicom_collection(
                 clear_watch_dir=True,
                 clear_output_dir=True,
                 simulator_source_dir=source_dir,
-                simulator_speed=config.scan.collection_speed,
+                simulator_speed=config.simulator.collection_speed,
                 qc_monitor=qc_mon,
             )
         else:
@@ -1959,7 +1752,7 @@ def run_preprocessing(
         rest_dicoms = config.resolve_localizer_sources()
 
     if task_name is None:
-        task_type = config.scan.localizer_task_type
+        task_type = config.localizers[0].type if config.localizers else "rest"
         task_name = task_type if task_type != "rest" else "rest"
 
     return preprocessing(
@@ -2003,25 +1796,29 @@ def run_mask_extraction(
     logger.info("MASK EXTRACTION")
     logger.info("=" * 60)
 
-    localizer_type = config.mask.localizer_type
+    if not config.localizers:
+        raise ValueError("config.localizers must contain at least one localizer for mask extraction")
+    loc = config.localizers[0]
+    localizer_type = loc.type
+    extraction = loc.extraction
 
     if localizer_type == "manual":
         from .mask_extraction import import_manual_masks
 
         logger.info("Using manual ROI import")
-        manual_ref = config.mask.manual_ref_file or ref_file
+        manual_ref = loc.manual_ref_file or ref_file
         assert manual_ref is not None, "ref_file or manual_ref_file is required for manual import"
         network_files = import_manual_masks(
             participant_id=config.paths.participant_id,
             root_dir=str(config.paths.mask_extraction_dir),
-            mask_paths=list(config.mask.manual_mask_paths),
-            mask_names=config.mask.mask_names,
+            mask_paths=list(loc.manual_mask_paths),
+            mask_names=loc.mask_names,
             ref_file=manual_ref,
-            mask_space=config.mask.manual_mask_space,
-            anat_file=config.mask.manual_anat_file,
+            mask_space=loc.manual_mask_space,
+            anat_file=loc.manual_anat_file,
             overwrite=overwrite,
         )
-    elif localizer_type == "task":
+    elif localizer_type != "rest":
         from .mask_extraction import mask_extraction_task
 
         assert preproc_file is not None and mask_file is not None and ref_file is not None
@@ -2031,27 +1828,27 @@ def run_mask_extraction(
             root_dir=str(config.paths.mask_extraction_dir),
             input_file=preproc_file,
             mask_file=mask_file,
-            events=config.mask.events_file,
-            contrasts=config.mask.contrasts,
-            tr=config.scan.localizer_tr,
-            threshold=config.mask.threshold,
-            threshold_method=config.mask.threshold_method,
-            atlas_mask=config.mask.atlas_mask,
-            atlas_name=config.mask.atlas_name,
-            atlas_source=config.mask.atlas_source,
-            atlas_regions=config.mask.atlas_regions,
+            events=loc.events_file,
+            contrasts=loc.contrasts,
+            tr=loc.tr,
+            threshold=extraction.threshold,
+            threshold_method=extraction.threshold_method,
+            atlas_mask=extraction.atlas_mask,
+            atlas_name=extraction.atlas_name,
+            atlas_source=extraction.atlas_source,
+            atlas_regions=extraction.atlas_regions,
             ref_file=ref_file,
-            cluster_start_threshold=config.mask.cluster_start_threshold,
-            cluster_step=config.mask.cluster_step,
-            cluster_return_all=config.mask.cluster_return_all,
-            min_cluster_size=config.mask.min_cluster_size,
-            max_total_voxels=config.mask.max_total_voxels,
-            stat_type=config.mask.stat_type,
-            smoothing_fwhm=config.mask.smooth_fwhm,
-            high_pass=config.mask.highpass,
-            drift_model=config.mask.drift_model,
-            hrf_model=config.mask.hrf_model,
-            include_reverse=config.mask.include_reverse_contrasts,
+            cluster_start_threshold=extraction.cluster_start_threshold,
+            cluster_step=extraction.cluster_step,
+            cluster_return_all=extraction.cluster_return_all,
+            min_cluster_size=extraction.min_cluster_size,
+            max_total_voxels=extraction.max_total_voxels,
+            stat_type=loc.stat_type,
+            smoothing_fwhm=extraction.smooth_fwhm,
+            high_pass=extraction.highpass,
+            drift_model=loc.drift_model,
+            hrf_model=loc.hrf_model,
+            include_reverse=loc.include_reverse_contrasts,
             overwrite=overwrite,
         )
     else:
@@ -2065,17 +1862,18 @@ def run_mask_extraction(
             input_file=preproc_file,
             mask_file=mask_file,
             ref_file=ref_file,
-            n_yeo=config.mask.n_yeo,
-            yeo_targets=config.mask.yeo_targets,
-            network_atlas=config.mask.network_atlas,
-            smooth_fwhm=config.mask.smooth_fwhm,
-            highpass=config.mask.highpass,
-            lowpass=config.mask.lowpass,
+            n_yeo=extraction.n_yeo,
+            yeo_targets=loc.networks,
+            network_atlas=extraction.network_atlas,
+            smooth_fwhm=extraction.smooth_fwhm,
+            highpass=extraction.highpass,
+            lowpass=extraction.lowpass,
             overwrite=overwrite,
         )
 
-    # Create WM/CSF tissue masks for nuisance regression (if either is enabled)
-    if config.feedback.include_wm_regressor or config.feedback.include_csf_regressor:
+    # Create WM/CSF tissue masks for nuisance regression (if either is enabled in any feedback run)
+    _any_tissue = any(frc.glm.include_wm_regressor or frc.glm.include_csf_regressor for frc in config.feedback_runs)
+    if _any_tissue:
         from .mask_extraction import create_tissue_masks
 
         assert config.paths.mask_extraction_dir is not None
@@ -2152,24 +1950,26 @@ def run_localizer_extraction(
         from .mask_extraction import mask_extraction_rest
 
         logger.info("Using ICA-based (resting-state) mask extraction")
+        ex = localizer.extraction
         network_files = mask_extraction_rest(
             participant_id=config.paths.participant_id,
             root_dir=str(loc_dir),
             input_file=preproc_file,
             mask_file=mask_file,
             ref_file=ref_file,
-            n_yeo=localizer.n_yeo,
-            yeo_targets=localizer.yeo_targets,
-            network_atlas=localizer.network_atlas,
-            smooth_fwhm=localizer.smooth_fwhm,
-            highpass=localizer.highpass,
-            lowpass=localizer.lowpass,
+            n_yeo=ex.n_yeo,
+            yeo_targets=localizer.networks,
+            network_atlas=ex.network_atlas,
+            smooth_fwhm=ex.smooth_fwhm,
+            highpass=ex.highpass,
+            lowpass=ex.lowpass,
             overwrite=overwrite,
         )
     else:
         from .mask_extraction import mask_extraction_task
 
         logger.info("Using task-based (GLM) mask extraction")
+        ex = localizer.extraction
         network_files = mask_extraction_task(
             participant_id=config.paths.participant_id,
             root_dir=str(loc_dir),
@@ -2178,21 +1978,21 @@ def run_localizer_extraction(
             events=localizer.events_file,
             contrasts=localizer.contrasts,
             tr=localizer.tr,
-            threshold=localizer.threshold,
-            threshold_method=localizer.threshold_method,
-            atlas_mask=localizer.atlas_mask,
-            atlas_name=localizer.atlas_name,
-            atlas_source=localizer.atlas_source,
-            atlas_regions=localizer.atlas_regions,
+            threshold=ex.threshold,
+            threshold_method=ex.threshold_method,
+            atlas_mask=ex.atlas_mask,
+            atlas_name=ex.atlas_name,
+            atlas_source=ex.atlas_source,
+            atlas_regions=ex.atlas_regions,
             ref_file=ref_file,
-            cluster_start_threshold=localizer.cluster_start_threshold,
-            cluster_step=localizer.cluster_step,
-            cluster_return_all=localizer.cluster_return_all,
-            min_cluster_size=localizer.min_cluster_size,
-            max_total_voxels=localizer.max_total_voxels,
+            cluster_start_threshold=ex.cluster_start_threshold,
+            cluster_step=ex.cluster_step,
+            cluster_return_all=ex.cluster_return_all,
+            min_cluster_size=ex.min_cluster_size,
+            max_total_voxels=ex.max_total_voxels,
             stat_type=localizer.stat_type,
-            smoothing_fwhm=localizer.smooth_fwhm,
-            high_pass=localizer.highpass,
+            smoothing_fwhm=ex.smooth_fwhm,
+            high_pass=ex.highpass,
             drift_model=localizer.drift_model,
             hrf_model=localizer.hrf_model,
             include_reverse=localizer.include_reverse_contrasts,
@@ -2259,7 +2059,9 @@ def run_coregistration(
     n_network = len(network_files)
     tissue_indices: dict[str, int] = {}
 
-    if include_tissue and (config.feedback.include_wm_regressor or config.feedback.include_csf_regressor):
+    if include_tissue and any(
+        frc.glm.include_wm_regressor or frc.glm.include_csf_regressor for frc in config.feedback_runs
+    ):
         assert config.paths.mask_extraction_dir is not None
         tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
         wm_src = tissue_dir / f"{config.paths.participant_id}_tissue_wm_mask.nii.gz"
@@ -2285,14 +2087,12 @@ def run_coregistration(
         output_subdir="04_reference",
     )
 
-    # Split results: network masks returned to caller, tissue paths stored in config
+    # Split results: network masks returned to caller, tissue paths stored on runtime config
     network_coreg = coreg_files[:n_network]
     if tissue_indices:
-        config.feedback.wm_mask_path = coreg_files[tissue_indices["wm"]]
-        config.feedback.csf_mask_path = coreg_files[tissue_indices["csf"]]
-        logger.info(
-            f"Tissue mask paths set: WM={config.feedback.wm_mask_path.name}, CSF={config.feedback.csf_mask_path.name}"
-        )
+        config._wm_mask_path = coreg_files[tissue_indices["wm"]]
+        config._csf_mask_path = coreg_files[tissue_indices["csf"]]
+        logger.info(f"Tissue mask paths set: WM={config._wm_mask_path.name}, CSF={config._csf_mask_path.name}")
 
     return network_coreg
 
@@ -2431,7 +2231,7 @@ def setup_session(
                 use_simulator=use_simulator,
                 task_name="reference",
                 source_dirs=[reference_source] if reference_source else [],
-                n_volumes_list=[config.scan.reference_n_volumes],
+                n_volumes_list=[config.reference.initial_n_volumes],
                 start_run=1,
                 max_runs=1,
             )
@@ -2440,7 +2240,7 @@ def setup_session(
         return setup_visit_with_reused_masks(config, reference_dicoms, overwrite=overwrite)
 
     # Manual ROI import: skip localizer + preprocessing, just import + coregister
-    if config.mask.localizer_type == "manual":
+    if config.localizers and config.localizers[0].type == "manual":
         if config.visit:
             logger.info(f"Visit {config.visit.visit_id}: Manual ROI import")
 
@@ -2456,14 +2256,14 @@ def setup_session(
                 use_simulator=use_simulator,
                 task_name="reference",
                 source_dirs=[initial_reference_source] if initial_reference_source else [],
-                n_volumes_list=[config.scan.reference_n_volumes],
+                n_volumes_list=[config.reference.initial_n_volumes],
                 start_run=None,
-                max_runs=config.scan.reference_max_runs,
+                max_runs=int(config.reference.initial_enabled) + int(config.reference.realtime_enabled),
             )
 
         # Step 1: Import manual masks (no localizer or preprocessing needed)
-        assert config.mask.manual_ref_file is not None, "manual_ref_file required for manual localizer"
-        ref_file = config.mask.manual_ref_file
+        assert config.localizers[0].manual_ref_file is not None, "manual_ref_file required for manual localizer"
+        ref_file = config.localizers[0].manual_ref_file
         network_files = run_mask_extraction(config, None, None, ref_file, overwrite)
 
         # Step 2: Coregistration to initial reference
@@ -2494,9 +2294,9 @@ def setup_session(
             use_simulator=use_simulator,
             task_name="reference",
             source_dirs=[initial_reference_source] if initial_reference_source else [],
-            n_volumes_list=[config.scan.reference_n_volumes],
+            n_volumes_list=[config.reference.initial_n_volumes],
             start_run=None,
-            max_runs=config.scan.reference_max_runs,
+            max_runs=int(config.reference.initial_enabled) + int(config.reference.realtime_enabled),
         )
 
     # Multi-localizer pipeline: collect, preprocess, extract for each localizer
@@ -2552,7 +2352,7 @@ def setup_session(
 
         # Create WM/CSF tissue masks (shared, using last ref_file)
         assert last_ref_file is not None
-        if config.feedback.include_wm_regressor or config.feedback.include_csf_regressor:
+        if any(frc.glm.include_wm_regressor or frc.glm.include_csf_regressor for frc in config.feedback_runs):
             from .mask_extraction import create_tissue_masks
 
             assert config.paths.mask_extraction_dir is not None
@@ -2609,9 +2409,11 @@ def setup_session(
                 use_simulator=use_simulator,
                 task_name="rest",
                 source_dirs=localizer_sources,
-                n_volumes_list=config.scan.rest_n_volumes,
+                n_volumes_list=(
+                    [config.localizers[0].n_volumes] * config.localizers[0].n_runs if config.localizers else [250]
+                ),
                 start_run=1,
-                max_runs=config.scan.rest_max_runs,
+                max_runs=config.localizers[0].n_runs if config.localizers else 1,
             )
 
         preproc_file, mask_file, ref_file = run_preprocessing(
@@ -2682,41 +2484,38 @@ def run_single_task(
     from .tasks.factory import create_task
     from .tasks.task_registry import get_task_metadata
 
-    # Resolve effective task type and parameters from run_config or flat config
-    if run_config is not None:
-        eff_task_type = run_config.task_type
-        eff_task_params = run_config.task_params
-        eff_network_assignment = run_config.network_assignment
-        eff_n_baseline = run_config.n_baseline
-        eff_n_volumes = run_config.n_volumes
-        eff_tr = run_config.tr
-        eff_motion_correction = run_config.motion_correction
-        eff_include_drift = run_config.include_drift
-        eff_include_motion_regressors = run_config.include_motion_regressors
-        eff_include_wm_regressor = run_config.include_wm_regressor
-        eff_include_csf_regressor = run_config.include_csf_regressor
-        eff_smooth_fwhm = run_config.smooth_fwhm
-        eff_differential_pair = run_config.differential_pair
-        eff_feedback_interval = run_config.feedback_interval
-        eff_connectivity_pairs = run_config.connectivity_pairs
-        eff_connectivity_window = run_config.connectivity_window
+    # run_config is now required (the flat config.task/config.feedback fallback was removed
+    # when the legacy MaskConfig/FeedbackConfig/TaskConfig/ScanConfig dataclasses were deleted).
+    if run_config is None:
+        raise ValueError(
+            "run_config is required; the legacy flat config.task/config.feedback "
+            "fallback was removed. Build configs with `feedback_runs=[...]` instead."
+        )
+
+    eff_task_type = run_config.task
+    eff_task_params = run_config.task_params
+    eff_network_assignment = run_config.network_assignment
+    eff_n_baseline = run_config.n_baseline
+    eff_n_volumes = run_config.n_volumes
+    eff_tr = run_config.tr
+    eff_motion_correction = run_config.glm.motion_correction
+    eff_include_drift = run_config.glm.include_drift
+    eff_include_motion_regressors = run_config.glm.include_motion_regressors
+    eff_include_wm_regressor = run_config.glm.include_wm_regressor
+    eff_include_csf_regressor = run_config.glm.include_csf_regressor
+    eff_smooth_fwhm = run_config.glm.smooth_fwhm
+    eff_feedback_interval = run_config.intermittent.interval
+    eff_connectivity_pairs = run_config.connectivity.pairs
+    eff_connectivity_window = run_config.connectivity.window
+    # Derive differential_pair at runtime from network_assignment + TaskMetadata.network_roles.
+    # For 2-network tasks, [role[0]→positive, role[1]→negative]. None for other arities.
+    _metadata_for_pair = get_task_metadata(eff_task_type)
+    if len(_metadata_for_pair.network_roles) == 2 and eff_network_assignment:
+        _pos = eff_network_assignment.get(_metadata_for_pair.network_roles[0].key)
+        _neg = eff_network_assignment.get(_metadata_for_pair.network_roles[1].key)
+        eff_differential_pair: list[str] | None = [_pos, _neg] if _pos and _neg else None
     else:
-        eff_task_type = config.task.task_type
-        eff_task_params = config.task.task_params
-        eff_network_assignment = config.task.network_assignment
-        eff_n_baseline = config.feedback.n_baseline
-        eff_n_volumes = config.feedback.n_volumes
-        eff_tr = config.scan.feedback_tr
-        eff_motion_correction = config.feedback.motion_correction
-        eff_include_drift = config.feedback.include_drift
-        eff_include_motion_regressors = config.feedback.include_motion_regressors
-        eff_include_wm_regressor = config.feedback.include_wm_regressor
-        eff_include_csf_regressor = config.feedback.include_csf_regressor
-        eff_smooth_fwhm = config.feedback.smooth_fwhm
-        eff_differential_pair = config.feedback.differential_pair
-        eff_feedback_interval = config.feedback.feedback_interval
-        eff_connectivity_pairs = config.feedback.connectivity_pairs
-        eff_connectivity_window = config.feedback.connectivity_window
+        eff_differential_pair = None
 
     run_number = session_state.next_run_number
     task_run_number = session_state.next_run_number_for_type(run_type)
@@ -2741,10 +2540,10 @@ def run_single_task(
         simulator_source = config.resolve_simulator_source(source_run_type)
         simulator_kwargs = {
             "simulator_source_dir": simulator_source,
-            "simulator_speed": config.scan.feedback_simulator_speed,
+            "simulator_speed": config.simulator.feedback_speed,
             "simulator_clear_target": True,
             "simulator_cleanup": False,
-            "simulator_trigger_mode": config.scan.simulator_trigger_mode,
+            "simulator_trigger_mode": config.simulator.trigger_mode,
         }
 
     # Resolve mask names from network assignment
@@ -2764,8 +2563,8 @@ def run_single_task(
         n_volumes=eff_n_volumes,
         tr=eff_tr,
         task_regressors=task_regressors,
-        mask_names=config.mask.mask_names,
-        use_efficiency_weights=config.feedback.use_efficiency_weights,
+        mask_names=config.combined_mask_names,
+        use_efficiency_weights=run_config.use_efficiency_weights,
         motion_correction=eff_motion_correction,
         include_drift=eff_include_drift,
         include_motion_regressors=eff_include_motion_regressors,
@@ -2774,8 +2573,8 @@ def run_single_task(
         smooth_fwhm=eff_smooth_fwhm,
         differential_pair=eff_differential_pair,
         feedback_interval=eff_feedback_interval,
-        wm_mask_path=config.feedback.wm_mask_path,
-        csf_mask_path=config.feedback.csf_mask_path,
+        wm_mask_path=config._wm_mask_path,
+        csf_mask_path=config._csf_mask_path,
         connectivity_pairs=eff_connectivity_pairs,
         connectivity_window=eff_connectivity_window,
         task_id=eff_task_type,
@@ -2851,9 +2650,13 @@ def _compute_regressors_for_task(
     """
     from .utils import compute_boxcar_task_regressor
 
-    n_baseline = run_config.n_baseline if run_config else config.feedback.n_baseline
-    n_volumes = run_config.n_volumes if run_config else config.feedback.n_volumes
-    tr = run_config.tr if run_config else config.scan.feedback_tr
+    if run_config is None:
+        if not config.feedback_runs:
+            raise ValueError("run_config or config.feedback_runs must be provided")
+        run_config = config.feedback_runs[0]
+    n_baseline = run_config.n_baseline
+    n_volumes = run_config.n_volumes
+    tr = run_config.tr
 
     if metadata.design_type == "nuisance_only":
         return None
@@ -2871,32 +2674,18 @@ def _compute_regressors_for_task(
 
 
 def _resolve_mask_names(config: SessionConfig, metadata: Any) -> list[str]:
-    """Resolve ordered mask names from network_assignment or defaults.
+    """Resolve ordered mask names from the first feedback_run's network_assignment.
 
     Parameters
     ----------
     config : SessionConfig
-        Session configuration with task.network_assignment and mask.mask_names
+        Session configuration. The first ``feedback_runs[0].network_assignment``
+        (if any) supplies the role-to-mask mapping.
     metadata : TaskMetadata
-        Task metadata with network_roles and n_networks
-
-    Returns
-    -------
-    list[str]
-        Ordered mask names for this task
+        Task metadata with network_roles and n_networks.
     """
-    if config.task.network_assignment and metadata.network_roles:
-        mask_names = []
-        for i, role in enumerate(metadata.network_roles):
-            name = config.task.network_assignment.get(role.key)
-            if name:
-                mask_names.append(name)
-            elif i < len(config.mask.mask_names):
-                mask_names.append(config.mask.mask_names[i])
-        if len(mask_names) == metadata.n_networks:
-            return mask_names
-    # Fall back to first N mask names from config
-    return config.mask.mask_names[: metadata.n_networks]
+    network_assignment = config.feedback_runs[0].network_assignment if config.feedback_runs else {}
+    return _resolve_mask_names_for_run(config, metadata, network_assignment)
 
 
 def _resolve_mask_names_for_run(
@@ -2906,21 +2695,22 @@ def _resolve_mask_names_for_run(
 ) -> list[str]:
     """Resolve ordered mask names using an explicit network assignment.
 
-    Like :func:`_resolve_mask_names` but uses *network_assignment* directly
-    instead of ``config.task.network_assignment``, so per-run overrides work.
+    Falls back to the combined mask-names list (union of every localizer's
+    mask names) when ``network_assignment`` doesn't cover every role.
     """
+    fallback = config.combined_mask_names
     if network_assignment and metadata.network_roles:
         mask_names = []
         for i, role in enumerate(metadata.network_roles):
             name = network_assignment.get(role.key)
             if name:
                 mask_names.append(name)
-            elif i < len(config.mask.mask_names):
-                mask_names.append(config.mask.mask_names[i])
+            elif i < len(fallback):
+                mask_names.append(fallback[i])
         if len(mask_names) == metadata.n_networks:
             return mask_names
-    # Fall back to first N mask names from config
-    return config.mask.mask_names[: metadata.n_networks]
+    # Fall back to first N mask names from the combined union
+    return fallback[: metadata.n_networks]
 
 
 def coregister_before_first_transfer(
@@ -2967,9 +2757,9 @@ def coregister_before_first_transfer(
         use_simulator=use_simulator,
         task_name="reference",
         source_dirs=[reference_realtime_source] if reference_realtime_source else [],
-        n_volumes_list=[config.scan.reference_n_volumes],
+        n_volumes_list=[config.reference.realtime_n_volumes],
         start_run=None,
-        max_runs=config.scan.reference_max_runs,
+        max_runs=int(config.reference.initial_enabled) + int(config.reference.realtime_enabled),
     )
 
     coreg_mask_files = run_coregistration(
@@ -2994,7 +2784,7 @@ def coregister_before_first_transfer(
             mask_extraction_dir=config.paths.mask_extraction_dir,
             network_coreg_files=coreg_mask_files,
             run_str=run_str,
-            n_yeo=config.mask.n_yeo,
+            n_yeo=config.localizers[0].extraction.n_yeo if config.localizers else 17,
             overwrite=True,
             reference_subdir="04_reference",  # Match the output_subdir used in coregister_reference
         )
@@ -3082,22 +2872,22 @@ def run_full_session(
     logger.info("=" * 60)
     logger.info("STARTING MULTI-RUN SESSION")
     logger.info("=" * 60)
-    if config.feedback_runs:
-        task_types = [frc.task_type for frc in config.feedback_runs]
-        logger.info(f"Tasks: {', '.join(task_types)}")
-    else:
-        logger.info(f"Task: {config.task.task_type}")
+    if not config.feedback_runs:
+        raise ValueError("config.feedback_runs must be non-empty; the legacy flat config.task block was removed.")
+    primary_task = config.feedback_runs[0].task
+    task_types = [frc.task for frc in config.feedback_runs]
+    logger.info(f"Tasks: {', '.join(task_types)}")
     workflow_labels = [rt.capitalize() for rt, _ in run_sequence]
     logger.info(f"Workflow: {' -> '.join(workflow_labels)}")
 
     assert config.paths.session_dir is not None
     session_dir = config.paths.session_dir
     if reset_session:
-        session_state = SessionState.reset(session_dir, task_id=config.task.task_type)
+        session_state = SessionState.reset(session_dir, task_id=primary_task)
         session_state.max_feedback_runs = total_feedback
         session_state.save()
     else:
-        session_state = SessionState.load(session_dir, task_id=config.task.task_type)
+        session_state = SessionState.load(session_dir, task_id=primary_task)
         if session_state.max_feedback_runs != total_feedback:
             session_state.max_feedback_runs = total_feedback
             session_state.save()
@@ -3133,7 +2923,7 @@ def run_full_session(
         )
         all_results.append(results)
 
-        session_state = SessionState.load(session_dir, task_id=config.task.task_type)
+        session_state = SessionState.load(session_dir, task_id=config.feedback_runs[0].task)
 
     logger.info("")
     logger.info("=" * 60)
@@ -3176,7 +2966,7 @@ def run_next_task(
 
     assert config.paths.session_dir is not None
     session_dir = config.paths.session_dir
-    session_state = SessionState.load(session_dir, task_id=config.task.task_type)
+    session_state = SessionState.load(session_dir, task_id=config.feedback_runs[0].task)
 
     mask_files = [Path(f) for f in mask_files]
 
@@ -3242,4 +3032,4 @@ def reset_session_state(config: SessionConfig) -> SessionState:
     from .tasks.session import SessionState
 
     assert config.paths.session_dir is not None
-    return SessionState.reset(config.paths.session_dir, task_id=config.task.task_type)
+    return SessionState.reset(config.paths.session_dir, task_id=config.feedback_runs[0].task)

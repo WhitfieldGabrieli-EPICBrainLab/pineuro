@@ -226,39 +226,41 @@ def validate_session_config(config_dict: dict) -> tuple[bool, str | None]:
         If is_valid is False, error_message contains the validation error
     """
     try:
-        # Validate scanner parameters
-        scan = config_dict.get("scan", {})
-        validate_positive_number(scan.get("tr", 0), "TR")
-        validate_positive_int(scan.get("n_volumes", 0), "n_volumes")
-        validate_positive_int(scan.get("n_baseline", 0), "n_baseline")
+        # Validate at least one localizer
+        localizers = config_dict.get("localizers", [])
+        if not localizers or not isinstance(localizers, list):
+            raise ValidationError("at least one localizers entry is required")
+        loc0 = localizers[0]
+        validate_positive_number(loc0.get("tr", 0), "localizers[0].tr")
+        validate_positive_int(loc0.get("n_volumes", 0), "localizers[0].n_volumes")
+        validate_positive_int(loc0.get("n_runs", 0), "localizers[0].n_runs")
+        if loc0.get("n_runs", 0) < 2:
+            raise ValidationError("localizers[0].n_runs must be at least 2")
 
-        # Validate rest runs
-        rest_n_volumes = scan.get("rest_n_volumes", [])
-        if not isinstance(rest_n_volumes, list) or len(rest_n_volumes) < 2:
-            raise ValidationError("rest_n_volumes must be a list with at least 2 values")
+        # Validate extraction sub-block for ICA (rest) localizers
+        if loc0.get("type", "rest") == "rest":
+            extraction = loc0.get("extraction", {})
+            n_yeo = extraction.get("n_yeo", 0)
+            networks = loc0.get("networks", [])
+            validate_yeo_networks(n_yeo, networks)
+            validate_positive_number(extraction.get("smooth_fwhm", 0), "extraction.smooth_fwhm")
+            validate_positive_number(extraction.get("highpass", 0), "extraction.highpass")
 
-        # Validate mask parameters
-        mask = config_dict.get("mask", {})
-        n_yeo = mask.get("n_yeo", 0)
-        yeo_targets = mask.get("yeo_targets", [])
-        validate_yeo_networks(n_yeo, yeo_targets)
-
-        validate_positive_number(mask.get("smooth_fwhm", 0), "smooth_fwhm")
-        validate_positive_number(mask.get("highpass", 0), "highpass")
-
-        # Validate feedback parameters
-        feedback = config_dict.get("feedback", {})
-        validate_positive_int(feedback.get("n_baseline", 0), "feedback.n_baseline")
-        validate_positive_int(feedback.get("n_volumes", 0), "feedback.n_volumes")
+        # Validate at least one feedback run
+        feedback_runs = config_dict.get("feedback_runs", [])
+        if not feedback_runs:
+            raise ValidationError("at least one feedback_runs entry is required")
+        for i, frc in enumerate(feedback_runs):
+            validate_positive_int(frc.get("n_baseline", 0), f"feedback_runs[{i}].n_baseline")
+            validate_positive_int(frc.get("n_volumes", 0), f"feedback_runs[{i}].n_volumes")
 
         # Validate task parameters via metadata (if task type is registered)
-        task = config_dict.get("task", {})
-        task_type = task.get("task_type", "ball")
+        task_type = feedback_runs[0].get("task", "ball")
         try:
             from ..tasks.task_registry import get_task_metadata
 
             metadata = get_task_metadata(task_type)
-            metadata.validate_config(task)
+            metadata.validate_config(feedback_runs[0])
         except (ValueError, ImportError):
             pass  # Task not registered, skip task-specific validation
 

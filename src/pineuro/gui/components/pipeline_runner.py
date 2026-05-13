@@ -126,6 +126,30 @@ class PipelineRunner:
 
         return step_to_frc.get(step_id)
 
+    @staticmethod
+    def _derive_differential_pair(frc: dict[str, Any] | None, task_type: str) -> list[str] | None:
+        """Compute the ``[positive, negative]`` mask pair from a run's network_assignment.
+
+        Returns None if the task is not a 2-network task or the assignment is incomplete.
+        Replaces the legacy ``feedback_runs[*].differential_pair`` field.
+        """
+        if not frc:
+            return None
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        try:
+            metadata = get_task_metadata(task_type)
+        except (KeyError, ValueError):
+            return None
+        if len(metadata.network_roles) != 2:
+            return None
+        assignment = frc.get("network_assignment", {}) or {}
+        pos = assignment.get(metadata.network_roles[0].key)
+        neg = assignment.get(metadata.network_roles[1].key)
+        if pos and neg:
+            return [pos, neg]
+        return None
+
     def set_selected_acqs(self, acqs: dict[int, list[int]] | None) -> None:
         """Set which acquisitions to use for each run.
 
@@ -357,7 +381,7 @@ class PipelineRunner:
         config = self.config
 
         # Check if reference initial is enabled
-        if not config["scan"].get("reference_initial_enabled", True):
+        if not config.get("reference", {}).get("initial_enabled", True):
             self._emit_progress("Reference initial collection is disabled, skipping...")
             return
 
@@ -365,7 +389,7 @@ class PipelineRunner:
         collection_dir = base_dir / "collection"
 
         # Get number of volumes (use new field, fall back to legacy)
-        n_volumes = config["scan"].get("reference_initial_n_volumes", config["scan"].get("reference_n_volumes", 2))
+        n_volumes = config.get("reference", {}).get("initial_n_volumes", 2)
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(
@@ -380,17 +404,17 @@ class PipelineRunner:
         output_dir = collection_dir / f"task-reference_acq-{acq:02d}_run-01"
 
         # Determine simulator vs real-time mode
-        simulator_enabled = config["scan"].get("simulator_enabled", True)
+        simulator_enabled = config.get("simulator", {}).get("enabled", True)
 
         if simulator_enabled:
             # Simulator mode: create temp watch dir and use source DICOMs
             watch_dir = base_dir / "tmp" / "incoming_reference_initial"
             watch_dir.mkdir(parents=True, exist_ok=True)
-            simulator_source_dir = config["scan"].get("reference_initial_dicoms", "")
+            simulator_source_dir = config.get("reference", {}).get("initial_dicoms", "")
 
             # Try mapping file if individual field is empty
             if not simulator_source_dir:
-                mapping_path = config["scan"].get("simulator_source_mapping", "")
+                mapping_path = config.get("simulator", {}).get("source_mapping", "")
                 if mapping_path and self.participant_id:
                     try:
                         from pineuro.session import SimulatorSourceMapping
@@ -403,10 +427,10 @@ class PipelineRunner:
                     except Exception as e:
                         logger.warning(f"Failed to resolve reference_initial from mapping: {e}")
 
-            simulator_speed = config["scan"].get("collection_speed", 1.0)
+            simulator_speed = config.get("simulator", {}).get("collection_speed", 1.0)
         else:
             # Real-time mode: watch scanner DICOM directory
-            watch_dir = Path(config["scan"]["scanner_dicom_dir"])
+            watch_dir = Path(config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM"))
             simulator_source_dir = None
             simulator_speed = 1.0
 
@@ -439,16 +463,20 @@ class PipelineRunner:
 
         config = self.config
         localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        localizer_task_type = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
         task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
 
         # Get expected volumes (use new localizer fields, fall back to legacy)
-        n_volumes = config["scan"].get("localizer_n_volumes")
+        n_volumes = config["localizers"][0].get("n_volumes") if config.get("localizers") else None
         if n_volumes is None:
-            rest_volumes = config["scan"].get("rest_n_volumes", [200])
+            rest_volumes = (
+                [config["localizers"][0].get("n_volumes", 200)] * config["localizers"][0].get("n_runs", 1)
+                if config.get("localizers")
+                else [200]
+            )
             if isinstance(rest_volumes, list):
                 if len(rest_volumes) >= run_num:
                     n_volumes = rest_volumes[run_num - 1]
@@ -467,8 +495,8 @@ class PipelineRunner:
 
             meta = get_task_metadata(localizer_task_type)
             if meta.compute_max_run_seconds is not None:
-                task_params = config.get("localizer_task", {}).get(localizer_task_type, {})
-                tr = config["scan"].get("localizer_tr", 1.2)
+                task_params = config["localizers"][0].get("task_params", {}) if config.get("localizers") else {}
+                tr = config["localizers"][0].get("tr", 1.2) if config.get("localizers") else 1.2
                 computed = math.ceil(meta.compute_max_run_seconds(task_params) / tr)
                 self._emit_progress(
                     f"{localizer_task_type}: auto-computed n_volumes={computed} "
@@ -489,14 +517,14 @@ class PipelineRunner:
         output_dir = collection_dir / f"task-{task_name}_acq-{acq:02d}_run-{run_num:02d}"
 
         # Determine simulator vs real-time mode
-        simulator_enabled = config["scan"].get("simulator_enabled", True)
+        simulator_enabled = config.get("simulator", {}).get("enabled", True)
 
         if simulator_enabled:
             # Simulator mode: get source directory and create temp watch dir
             source_dir = None
 
             # 1. Try simulator_source_mapping first (per-subject paths)
-            mapping_path = config["scan"].get("simulator_source_mapping", "")
+            mapping_path = config.get("simulator", {}).get("source_mapping", "")
             if mapping_path and self.participant_id:
                 try:
                     from pineuro.session import SimulatorSourceMapping
@@ -514,9 +542,11 @@ class PipelineRunner:
 
             # 2. Fall back to individual localizer_source_dicoms field
             if not source_dir:
-                localizer_sources = config["scan"].get("localizer_source_dicoms")
+                localizer_sources = config["localizers"][0].get("source_dicoms") if config.get("localizers") else None
                 if localizer_sources is None:
-                    localizer_sources = config["scan"].get("rest_source_dicoms", [])
+                    localizer_sources = (
+                        config["localizers"][0].get("source_dicoms", []) if config.get("localizers") else []
+                    )
 
                 if isinstance(localizer_sources, list):
                     if len(localizer_sources) >= run_num:
@@ -534,11 +564,11 @@ class PipelineRunner:
             for f in watch_dir.iterdir():
                 if f.is_file():
                     f.unlink()
-            simulator_speed = config["scan"].get("collection_speed", 1.0)
+            simulator_speed = config.get("simulator", {}).get("collection_speed", 1.0)
         else:
             # Real-time mode: watch scanner DICOM directory
             source_dir = None
-            watch_dir = Path(config["scan"]["scanner_dicom_dir"])
+            watch_dir = Path(config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM"))
             simulator_speed = 1.0
 
         # Create simulator if in simulator mode
@@ -549,10 +579,12 @@ class PipelineRunner:
             simulator = VolumeSimulator(
                 source_dir=source_dir,
                 target_dir=watch_dir,
-                tr=config["scan"].get("localizer_tr", 1.2),  # Use configured TR from study
+                tr=(
+                    config["localizers"][0].get("tr", 1.2) if config.get("localizers") else 1.2
+                ),  # Use configured TR from study
                 speed=simulator_speed,
                 clear_target=True,
-                trigger_mode=config["scan"].get("simulator_trigger_mode", "manual"),
+                trigger_mode=config.get("simulator", {}).get("trigger_mode", "manual"),
             )
 
         # Determine which localizer task to use
@@ -665,7 +697,8 @@ class PipelineRunner:
         if task_id == "fixation":
             # For fixation task, use scan parameters
             localizer_params = {
-                "duration": config["scan"].get("localizer_n_volumes", 250) * config["scan"].get("localizer_tr", 2.0)
+                "duration": (config["localizers"][0].get("n_volumes", 250) if config.get("localizers") else 250)
+                * (config["localizers"][0].get("tr", 2.0) if config.get("localizers") else 2.0)
             }
         else:
             # For other tasks, get from localizer_task config section
@@ -797,11 +830,15 @@ class PipelineRunner:
         preprocessing_dir = base_dir / "preprocessing"
 
         # Determine task name for localizer
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        localizer_task_type = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
         task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
         # Get expected volumes for finding complete collections
-        rest_volumes = config["scan"].get("rest_n_volumes", [200, 200])
+        rest_volumes = (
+            [config["localizers"][0].get("n_volumes", 200)] * config["localizers"][0].get("n_runs", 2)
+            if config.get("localizers")
+            else [200, 200]
+        )
         if not isinstance(rest_volumes, list):
             rest_volumes = [rest_volumes]
 
@@ -859,7 +896,7 @@ class PipelineRunner:
         mask_extraction_dir = base_dir / "mask_extraction"
 
         localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        localizer_task_type = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
         task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
         # Input files from preprocessing
@@ -882,7 +919,7 @@ class PipelineRunner:
             contrasts = config.get("mask", {}).get("contrasts", {})
 
             # Fall back to task metadata's default_contrasts if not in config
-            localizer_task_type = config["scan"].get("localizer_task_type", "")
+            localizer_task_type = config["localizers"][0].get("type", "") if config.get("localizers") else ""
             if not contrasts and localizer_task_type:
                 from pineuro.tasks.task_registry import get_task_metadata
 
@@ -921,10 +958,18 @@ class PipelineRunner:
                     f"Run the localizer task first to generate the events TSV."
                 )
 
-            tr = config["scan"].get("localizer_tr", 1.2)
+            tr = config["localizers"][0].get("tr", 1.2) if config.get("localizers") else 1.2
             threshold = config.get("mask", {}).get("threshold", 2000)
-            smooth_fwhm = config["mask"].get("smooth_fwhm", 5.0)
-            highpass = config["mask"].get("highpass", 0.01)
+            smooth_fwhm = (
+                config["localizers"][0].get("extraction", {}).get("smooth_fwhm", 5.0)
+                if config.get("localizers")
+                else 5.0
+            )
+            highpass = (
+                config["localizers"][0].get("extraction", {}).get("highpass", 0.01)
+                if config.get("localizers")
+                else 0.01
+            )
             threshold_method = config.get("mask", {}).get("threshold_method", "top_n")
             atlas_mask_cfg = config.get("mask", {}).get("atlas_mask")
             atlas_name_cfg = config.get("mask", {}).get("atlas_name")
@@ -967,14 +1012,18 @@ class PipelineRunner:
             )
         else:
             # ICA-based extraction (existing behavior)
-            n_yeo = config["mask"]["n_yeo"]
-            network_atlas = config["mask"].get("network_atlas", f"yeo_{n_yeo}")
-            yeo_targets = list(config["mask"]["yeo_targets"])  # Copy to avoid modifying original
-            n_components = config["mask"].get("n_components", 30)
+            n_yeo = config["localizers"][0]["extraction"]["n_yeo"]
+            network_atlas = config["localizers"][0].get("extraction", {}).get("network_atlas", f"yeo_{n_yeo}")
+            yeo_targets = list(config["localizers"][0].get("networks", []))  # Copy to avoid modifying original
+            n_components = (
+                config["localizers"][0].get("extraction", {}).get("n_components", 30)
+                if config.get("localizers")
+                else 30
+            )
             threshold = config.get("mask", {}).get("threshold", 2000)
-            smooth_fwhm = config["mask"]["smooth_fwhm"]
-            highpass = config["mask"]["highpass"]
-            lowpass = config["mask"].get("lowpass")
+            smooth_fwhm = config["localizers"][0]["extraction"]["smooth_fwhm"]
+            highpass = config["localizers"][0]["extraction"]["highpass"]
+            lowpass = config["localizers"][0].get("extraction", {}).get("lowpass")
 
             # If sham is enabled with alternative masks, include those networks too
             sham_config = config.get("sham", {})
@@ -1068,46 +1117,20 @@ class PipelineRunner:
         relevant config fields so the existing collection logic uses the
         correct parameters for this localizer.
         """
-        loc = self._get_localizer_config(loc_idx)
-        loc_type = loc.get("type", "rest")
-        task_name = "rest" if loc_type == "rest" else loc_type
-
-        # Temporarily patch config so _run_rest_run reads the right values
+        # Temporarily swap the active localizer to index 0 so the downstream
+        # logic (which reads `config["localizers"][0]`) sees the right localizer.
         config = self.config
-        orig_scan = config.get("scan", {})
-        orig_mask = config.get("mask", {})
+        localizers = config.get("localizers", [])
+        if loc_idx == 0 or loc_idx >= len(localizers):
+            # Nothing to swap — the active localizer is already index 0 (or invalid).
+            self._run_rest_run(run_num)
+            return
 
-        saved = {
-            "localizer_task_type": orig_scan.get("localizer_task_type"),
-            "localizer_tr": orig_scan.get("localizer_tr"),
-            "localizer_n_volumes": orig_scan.get("localizer_n_volumes"),
-            "localizer_n_runs": orig_scan.get("localizer_n_runs"),
-            "localizer_source_dicoms": orig_scan.get("localizer_source_dicoms"),
-            "localizer_motion_correction": orig_scan.get("localizer_motion_correction"),
-            "localizer_type": orig_mask.get("localizer_type"),
-        }
+        localizers[0], localizers[loc_idx] = localizers[loc_idx], localizers[0]
         try:
-            orig_scan["localizer_task_type"] = task_name
-            orig_scan["localizer_tr"] = loc.get("tr", 1.2)
-            orig_scan["localizer_n_volumes"] = loc.get("n_volumes", 250)
-            orig_scan["localizer_n_runs"] = loc.get("n_runs", 2)
-            orig_scan["localizer_source_dicoms"] = loc.get("source_dicoms", [])
-            orig_scan["localizer_motion_correction"] = loc.get("motion_correction", "siemens_moco")
-            orig_mask["localizer_type"] = "rest" if loc_type == "rest" else "task"
-
             self._run_rest_run(run_num)
         finally:
-            for k, v in saved.items():
-                if k in ("localizer_type",):
-                    if v is not None:
-                        orig_mask[k] = v
-                    elif k in orig_mask:
-                        del orig_mask[k]
-                else:
-                    if v is not None:
-                        orig_scan[k] = v
-                    elif k in orig_scan:
-                        del orig_scan[k]
+            localizers[0], localizers[loc_idx] = localizers[loc_idx], localizers[0]
 
     def _run_localizer_preprocessing(self, loc_idx: int) -> None:
         """Run preprocessing for a specific localizer."""
@@ -1324,7 +1347,7 @@ class PipelineRunner:
         """
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
+        localizer_task_type = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
         task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
 
         # Option 1: boldref from preprocessing
@@ -1502,11 +1525,11 @@ class PipelineRunner:
 
         # Check if reference is enabled for this run
         if run_id == 1:
-            if not config["scan"].get("reference_initial_enabled", True):
+            if not config.get("reference", {}).get("initial_enabled", True):
                 self._emit_progress("Reference initial coregistration is disabled, skipping...")
                 return
         else:
-            if not config["scan"].get("reference_realtime_enabled", True):
+            if not config.get("reference", {}).get("realtime_enabled", True):
                 self._emit_progress("Reference realtime coregistration is disabled, skipping...")
                 return
 
@@ -1545,7 +1568,7 @@ class PipelineRunner:
             source_preprocessing_dir = source_visit_dir / "preprocessing"
             source_mask_extraction_dir = source_visit_dir / "mask_extraction"
 
-            localizer_task = config.get("scan", {}).get("localizer_task_type", "rest")
+            localizer_task = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
             task_name = localizer_task if localizer_task != "rest" else "rest"
             ref_file = source_preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
             masks_dir = source_mask_extraction_dir / "03_masks"
@@ -1553,13 +1576,13 @@ class PipelineRunner:
             self._emit_progress(f"Using masks from source visit: {mask_source_visit}")
         else:
             # Standard mode: get masks and ref_file from current visit
-            localizer_task = config.get("scan", {}).get("localizer_task_type", "rest")
+            localizer_task = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
             task_name = localizer_task if localizer_task != "rest" else "rest"
             ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
             masks_dir = mask_extraction_dir / "03_masks"
 
         # Find the most recent complete reference collection for this run
-        n_volumes = config["scan"].get("reference_n_volumes", 2)
+        n_volumes = config.get("reference", {}).get("initial_n_volumes", 2)
         collections = self.find_available_collections(
             collection_dir=base_dir / "collection",
             task="task-reference",
@@ -1737,7 +1760,7 @@ class PipelineRunner:
                 mask_extraction_dir=qc_mask_extraction_dir,
                 network_coreg_files=coreg_masks,
                 run_str=str(actual_reference_run).zfill(2),
-                n_yeo=config["mask"]["n_yeo"],
+                n_yeo=config["localizers"][0]["extraction"]["n_yeo"],
                 overwrite=self.overwrite,
                 reference_subdir=reference_subdir,
             )
@@ -1754,7 +1777,7 @@ class PipelineRunner:
         config = self.config
 
         # Check if reference realtime is enabled
-        if not config["scan"].get("reference_realtime_enabled", True):
+        if not config.get("reference", {}).get("realtime_enabled", True):
             self._emit_progress("Reference realtime collection is disabled, skipping...")
             return
 
@@ -1768,7 +1791,7 @@ class PipelineRunner:
         run_id = 1 if is_mask_reuse else 2
 
         # Get number of volumes (use new field, fall back to legacy)
-        n_volumes = config["scan"].get("reference_realtime_n_volumes", config["scan"].get("reference_n_volumes", 2))
+        n_volumes = config.get("reference", {}).get("realtime_n_volumes", 2)
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(
@@ -1783,17 +1806,17 @@ class PipelineRunner:
         output_dir = collection_dir / f"task-reference_acq-{acq:02d}_run-{run_id:02d}"
 
         # Determine simulator vs real-time mode
-        simulator_enabled = config["scan"].get("simulator_enabled", True)
+        simulator_enabled = config.get("simulator", {}).get("enabled", True)
 
         if simulator_enabled:
             # Simulator mode: create temp watch dir and use source DICOMs
             watch_dir = base_dir / "tmp" / "incoming_reference_realtime"
             watch_dir.mkdir(parents=True, exist_ok=True)
-            simulator_source_dir = config["scan"].get("reference_realtime_dicoms", "")
+            simulator_source_dir = config.get("reference", {}).get("realtime_dicoms", "")
 
             # Try mapping file if individual field is empty
             if not simulator_source_dir:
-                mapping_path = config["scan"].get("simulator_source_mapping", "")
+                mapping_path = config.get("simulator", {}).get("source_mapping", "")
                 if mapping_path and self.participant_id:
                     try:
                         from pineuro.session import SimulatorSourceMapping
@@ -1806,10 +1829,10 @@ class PipelineRunner:
                     except Exception as e:
                         logger.warning(f"Failed to resolve reference_realtime from mapping: {e}")
 
-            simulator_speed = config["scan"].get("collection_speed", 1.0)
+            simulator_speed = config.get("simulator", {}).get("collection_speed", 1.0)
         else:
             # Real-time mode: watch scanner DICOM directory
-            watch_dir = Path(config["scan"]["scanner_dicom_dir"])
+            watch_dir = Path(config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM"))
             simulator_source_dir = None
             simulator_speed = 1.0
 
@@ -1856,14 +1879,39 @@ class PipelineRunner:
 
         # Resolve per-run config from feedback_runs if available
         frc = self._resolve_feedback_run_config(step_id)
-        # Helper to read per-run config with fallback to flat config
-        fb_cfg_flat = self.config.get("feedback", {})
+        # Map old-shape flat keys to the new nested sub-block they live in
+        # (qc / glm / connectivity / intermittent). For backwards compatibility
+        # within this helper, the legacy flat key is also checked at the top level
+        # of the per-run dict.
+        _NESTED_KEY_MAP = {
+            "fd_threshold": ("qc", "fd_threshold"),
+            "dvars_threshold": ("qc", "dvars_threshold"),
+            "tsnr_threshold": ("qc", "tsnr_threshold"),
+            "motion_correction": ("glm", "motion_correction"),
+            "include_drift": ("glm", "include_drift"),
+            "include_motion_regressors": ("glm", "include_motion_regressors"),
+            "include_wm_regressor": ("glm", "include_wm_regressor"),
+            "include_csf_regressor": ("glm", "include_csf_regressor"),
+            "smooth_fwhm": ("glm", "smooth_fwhm"),
+            "connectivity_pairs": ("connectivity", "pairs"),
+            "connectivity_window": ("connectivity", "window"),
+            "connectivity_target": ("connectivity", "target"),
+            "feedback_interval": ("intermittent", "interval"),
+        }
 
         def _fb(key: str, default: Any = None) -> Any:
-            """Read from per-run config first, then flat feedback config."""
-            if frc is not None and key in frc:
+            """Read a feedback-run setting from the per-run config (new nested schema)."""
+            if frc is None:
+                return default
+            # Direct top-level read (task, max_runs, tr, n_volumes, n_baseline, feedback_mode, etc.)
+            if key in frc:
                 return frc[key]
-            return fb_cfg_flat.get(key, default)
+            # Look up in nested sub-block
+            sub_key = _NESTED_KEY_MAP.get(key)
+            if sub_key is not None:
+                block, inner = sub_key
+                return frc.get(block, {}).get(inner, default)
+            return default
 
         # Get output directory for slot-based run info
         config = self.config
@@ -1887,23 +1935,24 @@ class PipelineRunner:
 
         # Get mask files - use reference-coregistered masks if realtime reference is enabled,
         # otherwise use boldref space masks from mask extraction
-        task_config = config.get("task", {})
         feedback_task_type = (
-            frc.get("task_type", task_config.get("task_type", "ball")) if frc else task_config.get("task_type", "ball")
+            frc.get("task", "ball")
+            if frc
+            else (config.get("feedback_runs", [{}])[0].get("task", "ball") if config.get("feedback_runs") else "ball")
         )
 
         # Determine mask names based on localizer type.
         # For task-based (GLM) extraction, mask names come from contrast keys.
         # For ICA-based (rest) extraction, mask names come from mask_names/yeo_targets.
-        localizer_type = config["mask"].get("localizer_type", "rest")
+        localizer_type = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
         signal_mode = _fb("feedback_mode", "activation")
         include_reverse = config.get("mask", {}).get("include_reverse_contrasts", False)
         if localizer_type == "task":
-            contrasts = config["mask"].get("contrasts", {})
+            contrasts = config["localizers"][0].get("contrasts", {}) if config.get("localizers") else {}
             real_mask_names = list(contrasts.keys())
             # Fallback to task metadata default_contrasts if config has none
             if not real_mask_names:
-                localizer_task_type = config["scan"].get("localizer_task_type")
+                localizer_task_type = config["localizers"][0].get("type") if config.get("localizers") else None
                 if localizer_task_type:
                     try:
                         loc_meta = get_task_metadata(localizer_task_type)
@@ -1914,42 +1963,30 @@ class PipelineRunner:
             if include_reverse:
                 real_mask_names = real_mask_names + [f"{n}_reverse" for n in real_mask_names]
         else:
-            real_mask_names = list(config["mask"]["mask_names"])
+            real_mask_names = [
+                name
+                for loc in config.get("localizers", [])
+                for name in (
+                    list(loc.get("networks", []))
+                    if loc.get("type") == "rest"
+                    else list(loc.get("contrasts", {}).keys())
+                )
+            ]
 
         # Resolve task mask names from network assignment in task config.
-        # Prefer per-run task_params from frc over the legacy global task config.
+        # Read per-run task_params from frc.
         metadata = get_task_metadata(feedback_task_type)
-        task_specific_config = task_config.get(feedback_task_type, {})
-        if frc and frc.get("task_params"):
-            task_specific_config = {**task_specific_config, **frc["task_params"]}
+        task_specific_config = dict(frc.get("task_params", {})) if frc else {}
 
         if metadata.network_roles:
-            # For feedback_runs, derive network roles from network_assignment,
-            # differential_pair, or task_params.
+            # network_assignment is the single source of truth for role-to-mask mapping.
+            # The legacy differential_pair / task_params[role.key] fallbacks were removed
+            # along with the old singular config blocks.
             assigned_names = []
             if frc:
                 net_assign = frc.get("network_assignment", {})
-                diff_pair = frc.get("differential_pair") or []
-                frc_params = frc.get("task_params", {})
-                if net_assign:
-                    # Explicit per-role assignment (e.g. trigger + ball networks)
-                    for role in metadata.network_roles:
-                        name = net_assign.get(role.key)
-                        if name:
-                            assigned_names.append(name)
-                elif any(frc_params.get(role.key) for role in metadata.network_roles):
-                    # Legacy: task_params explicitly set network role keys
-                    for role in metadata.network_roles:
-                        name = frc_params.get(role.key)
-                        if name:
-                            assigned_names.append(name)
-                elif len(diff_pair) >= 2:
-                    # Map differential_pair to network roles by position
-                    assigned_names = list(diff_pair[: len(metadata.network_roles)])
-            else:
-                # Legacy: use global task config
                 for role in metadata.network_roles:
-                    name = task_specific_config.get(role.key)
+                    name = net_assign.get(role.key)
                     if name:
                         assigned_names.append(name)
             if len(assigned_names) >= 2:
@@ -1957,7 +1994,7 @@ class PipelineRunner:
 
         self._emit_progress(f"Task networks: {real_mask_names}")
 
-        reference_realtime_enabled = config["scan"].get("reference_realtime_enabled", True)
+        reference_realtime_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
         # Determine reference run number for mask file pattern
         # In mask reuse mode, reference is run-01 (no initial reference)
@@ -2020,7 +2057,7 @@ class PipelineRunner:
         collection_dir = base_dir / "collection"
 
         # Determine simulator vs real-time mode
-        simulator_enabled = config["scan"].get("simulator_enabled", True)
+        simulator_enabled = config.get("simulator", {}).get("enabled", True)
 
         if simulator_enabled:
             # Simulator mode: create temp watch dir and use source DICOMs
@@ -2033,7 +2070,7 @@ class PipelineRunner:
             simulator_source_dir = None
 
             # 1. Try simulator_source_mapping first (per-subject paths)
-            mapping_path = config["scan"].get("simulator_source_mapping", "")
+            mapping_path = config.get("simulator", {}).get("source_mapping", "")
             if mapping_path and self.participant_id:
                 try:
                     from pineuro.session import SimulatorSourceMapping
@@ -2050,32 +2087,32 @@ class PipelineRunner:
             # 2. Fall back to individual source fields
             if not simulator_source_dir:
                 if task_type == "transfer":
-                    transfer_sources = config["scan"].get("transfer_source_dicoms", [])
+                    transfer_sources = [fr.get("transfer_source_dicoms", "") for fr in config.get("feedback_runs", [])]
                     if isinstance(transfer_sources, str):
                         transfer_sources = [transfer_sources, transfer_sources]
                     if run_num_in_step <= len(transfer_sources) and transfer_sources[run_num_in_step - 1]:
                         simulator_source_dir = transfer_sources[run_num_in_step - 1]
                     else:
-                        simulator_source_dir = config["scan"].get("feedback_dicoms", "")
+                        simulator_source_dir = ""
                         if not simulator_source_dir and transfer_sources:
                             simulator_source_dir = transfer_sources[0]
                 else:
-                    feedback_sources = config["scan"].get("feedback_source_dicoms", [])
+                    feedback_sources = [fr.get("source_dicoms", "") for fr in config.get("feedback_runs", [])]
                     if isinstance(feedback_sources, str):
                         feedback_sources = [feedback_sources, feedback_sources]
                     if run_num_in_step <= len(feedback_sources) and feedback_sources[run_num_in_step - 1]:
                         simulator_source_dir = feedback_sources[run_num_in_step - 1]
                     else:
-                        simulator_source_dir = config["scan"].get("feedback_dicoms", "")
+                        simulator_source_dir = ""
                         if not simulator_source_dir and feedback_sources:
                             simulator_source_dir = feedback_sources[0]
 
-            simulator_speed = config["scan"].get(
-                "feedback_simulator_speed", config["scan"].get("collection_speed", 1.0)
+            simulator_speed = config.get("simulator", {}).get(
+                "feedback_speed", config.get("simulator", {}).get("collection_speed", 1.0)
             )
         else:
             # Real-time mode: watch scanner DICOM directory
-            watch_dir = Path(config["scan"]["scanner_dicom_dir"])
+            watch_dir = Path(config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM"))
             simulator_source_dir = None
             simulator_speed = 1.0
 
@@ -2085,7 +2122,7 @@ class PipelineRunner:
         n_baseline = _fb("n_baseline", 25)
         n_volumes = _fb("n_volumes", 150)
         # Use per-run TR, fall back to scan config
-        tr = _fb("tr", config["scan"].get("feedback_tr") or config["scan"].get("tr", 1.2))
+        tr = _fb("tr", 1.2)
         metadata = get_task_metadata(feedback_task_type)
         design: NuisanceOnlyDesign | BlockDesign
         if metadata.design_type == "nuisance_only":
@@ -2275,7 +2312,7 @@ class PipelineRunner:
                 use_efficiency_weights=_fb("use_efficiency_weights", True),
                 simulator_source_dir=simulator_source_dir,
                 simulator_speed=simulator_speed,
-                simulator_trigger_mode=config.get("scan", {}).get("simulator_trigger_mode", "manual"),
+                simulator_trigger_mode=config.get("simulator", {}).get("trigger_mode", "manual"),
                 step_id=step_id,  # Use slot-based naming with acq entity
                 qc_enabled=True,
                 fd_threshold=_fb("fd_threshold", 0.5),
@@ -2289,7 +2326,7 @@ class PipelineRunner:
                 wm_mask_path=wm_mask_path,
                 csf_mask_path=csf_mask_path,
                 smooth_fwhm=_fb("smooth_fwhm"),  # Real-time spatial smoothing
-                differential_pair=_fb("differential_pair"),  # Configurable differential signal
+                differential_pair=self._derive_differential_pair(frc, feedback_task_type),
                 feedback_interval=_fb("feedback_interval"),  # Intermittent feedback mode
                 connectivity_pairs=connectivity_pairs,  # Sliding-window correlation pairs (may include sham pair)
                 connectivity_window=_fb("connectivity_window", 15),  # Correlation window size
@@ -2310,10 +2347,8 @@ class PipelineRunner:
             # Import task factory
             from pineuro.tasks import create_task
 
-            # Get task configuration — per-run config overrides flat task config
-            task_config = config.get("task", {})
-            # feedback_task_type already resolved at top of method (uses frc if available)
-            task_specific_config = frc.get("task_params", {}) if frc else task_config.get(feedback_task_type, {})
+            # Get task configuration — per-run from frc.
+            task_specific_config = frc.get("task_params", {}) if frc else {}
 
             # Get display configuration
             display_config = config.get("display", {})
@@ -2322,8 +2357,8 @@ class PipelineRunner:
             # Load session state for adaptive difficulty persistence across runs
             session_state = SessionState.load(output_dir, task_id=feedback_task_type)
 
-            # Update max_feedback_runs from config if different
-            max_feedback_runs = task_config.get("max_feedback_runs", 2)
+            # Update max_feedback_runs from config if different (sum across all feedback_runs)
+            max_feedback_runs = sum(fr.get("max_runs", 1) for fr in config.get("feedback_runs", [])) or 2
             if session_state.max_feedback_runs != max_feedback_runs:
                 session_state.max_feedback_runs = max_feedback_runs
                 session_state.save()

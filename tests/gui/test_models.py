@@ -60,7 +60,12 @@ class TestStudyMetadata:
 class TestStudyConfig:
     def _make_config(self, name="Test", session_config=None):
         if session_config is None:
-            session_config = {"scan": {"tr": 1.5, "n_volumes": 200}}
+            session_config = {
+                "paths": {"base_dir": "/data", "participant_id": ""},
+                "study": {"multi_visit_enabled": False},
+                "localizers": [{"id": "rest", "type": "rest", "networks": ["DefaultA", "ContA"]}],
+                "feedback_runs": [{"task": "ball", "mask_source": "rest"}],
+            }
         return StudyConfig(
             metadata=StudyMetadata(name=name),
             session_config=session_config,
@@ -75,8 +80,8 @@ class TestStudyConfig:
     def test_to_dict_contains_session_config_keys(self):
         config = self._make_config()
         d = config.to_dict()
-        assert "scan" in d
-        assert d["scan"]["tr"] == pytest.approx(1.5)
+        assert "localizers" in d
+        assert d["localizers"][0]["type"] == "rest"
 
     def test_from_dict_roundtrip(self):
         config = self._make_config()
@@ -87,16 +92,21 @@ class TestStudyConfig:
 
     def test_from_dict_does_not_mutate_input(self):
         """from_dict must not pop/delete the _metadata key from the caller's dict."""
-        d = {"_metadata": {"name": "Alpha"}, "scan": {"tr": 1.0}}
+        d = {"_metadata": {"name": "Alpha"}, "study": {"multi_visit_enabled": False}}
         original_keys = set(d.keys())
         StudyConfig.from_dict(d)
         assert set(d.keys()) == original_keys
 
     def test_from_dict_missing_metadata(self):
-        d = {"scan": {"tr": 2.0}}
+        d = {"study": {"multi_visit_enabled": True}}
         config = StudyConfig.from_dict(d)
         assert config.metadata.name == ""
-        assert config.session_config == {"scan": {"tr": 2.0}}
+        assert config.session_config == {"study": {"multi_visit_enabled": True}}
+
+    def test_from_dict_rejects_legacy_top_level_keys(self):
+        for legacy_key in ("mask", "feedback", "task", "localizer_task", "scan"):
+            with pytest.raises(ValueError, match="outdated schema"):
+                StudyConfig.from_dict({"_metadata": {"name": "X"}, legacy_key: {}})
 
     def test_from_dict_file_path_kwarg(self, tmp_path):
         config = self._make_config()
@@ -113,10 +123,10 @@ class TestStudyConfig:
         assert "file_path" not in d
 
     def test_session_config_excludes_metadata_key(self):
-        d = {"_metadata": {"name": "X"}, "feedback": {"n_volumes": 100}}
+        d = {"_metadata": {"name": "X"}, "study": {"multi_visit_enabled": False}}
         config = StudyConfig.from_dict(d)
         assert "_metadata" not in config.session_config
-        assert config.session_config == {"feedback": {"n_volumes": 100}}
+        assert config.session_config == {"study": {"multi_visit_enabled": False}}
 
     def test_empty_session_config(self):
         config = StudyConfig(
