@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-13
+
+### Breaking
+
+- **Study config schema restructured.** The legacy top-level blocks `mask`, `feedback`, `task`, `scan`, and `localizer_task` are removed. Per-run configuration now lives exclusively in `localizers[*]` and `feedback_runs[*]`; environment/setup config moves to dedicated top-level blocks (`simulator`, `scanner`, `reference`, `study`). YAMLs saved by 0.7.0 and earlier will not load — `SessionConfig.from_yaml` and the GUI's `StudyConfig.from_dict` both raise `ValueError` with a clear message instructing you to regenerate via the study editor.
+- **`network_assignment` is the single source of truth for role-to-mask mapping.** The YAML keys `differential_pair`, `target_mask`, `top_network`, `bottom_network`, and `mask_names` are gone. For 2-network tasks, `network_assignment[role[0]] = positive` and `network_assignment[role[1]] = negative`; the `differential_pair` passed to `run_feedback_session` is now derived from this at runtime.
+- **`task_type` → `task`** on `feedback_runs[*]`; **`yeo_targets` → `networks`** on `localizers[*]`.
+- **Dataclass API**: `MaskConfig`, `FeedbackConfig`, `TaskConfig`, and `ScanConfig` are deleted from `pineuro.session`. Replace with the new dataclasses: `LocalizerConfig` (with its `extraction: LocalizerExtractionConfig` sub-block), `FeedbackRunConfig` (with `qc: QCConfig`, `glm: GLMConfig`, `connectivity: ConnectivityConfig`, `intermittent: IntermittentConfig` sub-blocks), and the new top-level blocks `SimulatorConfig` / `ScannerConfig` / `ReferenceConfig` / `StudyInfoConfig`.
+- **Per-run `reference_realtime_*` overrides on `FeedbackRunConfig` are dropped.** The top-level `reference:` block applies to every run.
+
+### Fixed
+
+- **GUI positive/negative mask was silently inverted in saved YAML** when the localizer was rest and its `yeo_targets` order disagreed with the user's positive/negative selection in the feedback tab. The fallback that copied `yeo_targets` order into `top_network`/`bottom_network` is gone; `_feedback_tab.collect_config` now always emits `network_assignment` so the role mapping is explicit and round-trips correctly.
+
+### Added
+
+- New `combined_mask_names` property on `SessionConfig` (de-duplicated union of `localizers[*].mask_names`), replacing the legacy stored `mask.mask_names`.
+- Explicit `mask_source: <localizer_id>` cross-reference on each `feedback_runs[*]`; validated at load time.
+- `id` field on `LocalizerConfig` (defaults to `type`) so multiple localizers can be unambiguously referenced.
+- Manual ROI import is now a localizer type — `LocalizerConfig(type="manual", manual_mask_paths=...)` replaces the old `MaskConfig.manual_*` fields.
+- Fields previously consumed via raw-dict access are now first-class dataclass fields: `LocalizerConfig.motion_correction`, `PathConfig.example_participant_id`, `ShamConfig.blind_mode`.
+- `config_snapshot._deep_diff` recurses into lists of dicts, so per-localizer / per-feedback-run protocol diffs surface with element-indexed paths (e.g. `feedback_runs.0.glm.motion_correction`).
+
+### Changed
+
+- Default ICA `n_components`: 20 → 30.
+- Default ball-task `use_transfer_runs`: False → True.
+- `simulator.feedback_speed` renamed from `feedback_simulator_speed` (redundant prefix removed inside the new `simulator:` block).
+- `simulator`/`scanner`/`reference` blocks strip their old prefixes (e.g. `simulator_enabled` → `simulator.enabled`, `reference_initial_n_volumes` → `reference.initial_n_volumes`, `scanner_dicom_dir` → `scanner.dicom_dir`).
+
 ## [0.7.0] - 2026-05-12
 
 ### Added
