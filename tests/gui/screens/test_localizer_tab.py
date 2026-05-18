@@ -92,3 +92,54 @@ class TestRefreshNVolumesInfoEarlyReturns:
         builder.n_volumes_info_text.value = "(unchanged)"
         builder._refresh_n_volumes_info()
         assert builder.n_volumes_info_text.value == "(unchanged)"
+
+
+def _manual_builder(config):
+    """Construct a real LocalizerTabBuilder for a manual-mask localizer config."""
+    import flet as ft
+
+    from pineuro.gui.screens._localizer_tab import LocalizerTabBuilder
+
+    return LocalizerTabBuilder(
+        index=0,
+        config=config,
+        page=MagicMock(),
+        create_browse_button=lambda *a, **k: ft.IconButton(),
+        create_file_browse_button=lambda *a, **k: ft.IconButton(),
+    )
+
+
+class TestManualMaskImport:
+    def test_collect_config_emits_only_participant_agnostic_fields(self):
+        # The study config carries only the mask space + network names; the
+        # actual files are chosen per participant in the workflow.
+        builder = _manual_builder(
+            {
+                "type": "manual",
+                "id": "manual",
+                "manual_mask_space": "anat",
+                "manual_mask_names": ["DMN", "FPN"],
+            }
+        )
+        out = builder.collect_config()
+        assert out["type"] == "manual"
+        assert out["manual_mask_space"] == "anat"
+        assert out["manual_mask_names"] == ["DMN", "FPN"]
+        # No per-participant file paths and no ICA/extraction block in the study config
+        for key in ("manual_mask_paths", "manual_ref_file", "manual_anat_file", "extraction"):
+            assert key not in out
+
+    def test_get_mask_names_returns_row_names(self):
+        builder = _manual_builder({"type": "manual", "manual_mask_names": ["DMN", "FPN"]})
+        assert builder.get_mask_names() == ["DMN", "FPN"]
+
+    def test_collect_config_skips_blank_rows(self):
+        # An empty config still yields one (blank) row, which collect_config drops.
+        builder = _manual_builder({"type": "manual", "manual_mask_names": []})
+        out = builder.collect_config()
+        assert out["manual_mask_names"] == []
+
+    def test_build_returns_container(self):
+        builder = _manual_builder({"type": "manual", "manual_mask_names": ["DMN"]})
+        container = builder.build()
+        assert container is not None

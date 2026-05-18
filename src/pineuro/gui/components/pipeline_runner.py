@@ -886,8 +886,91 @@ class PipelineRunner:
             progress_callback=progress_callback,
         )
 
+    def _manual_reference_file(self, base_dir: Path, root_dir: Path, loc: dict) -> Path:
+        """Resolve a manual localizer's reference EPI for coregistration.
+
+        Prefers the reference recorded in the imported ``03_masks/mask_selections.json``
+        (the volume ``import_manual_masks`` actually registered against), falling back
+        to the per-participant ``manual_masks.json`` record.
+        """
+        import json
+
+        from pineuro.gui.components.manual_masks import read_manual_masks
+
+        sel = root_dir / "03_masks" / "mask_selections.json"
+        if sel.exists():
+            try:
+                ref = json.loads(sel.read_text()).get("ref_file")
+            except (json.JSONDecodeError, OSError):
+                ref = None
+            if ref and Path(ref).exists():
+                return Path(ref)
+        record = read_manual_masks(base_dir, loc.get("id", "manual"))
+        ref = (record or {}).get("reference")
+        if not ref:
+            raise ValueError(f"Manual localizer '{loc.get('id', 'manual')}' reference EPI is not configured")
+        return Path(ref)
+
+    def _run_manual_mask_import(
+        self,
+        loc: dict,
+        base_dir: Path,
+        root_dir: Path,
+        qc_dir: Path,
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> list[Path]:
+        """Import user-supplied masks for a manual localizer.
+
+        The mask / reference / T1 files are participant-specific and read from
+        ``base_dir/manual_masks.json``. Masks land in ``root_dir/03_masks/`` —
+        the same location ICA/GLM extraction writes to — so downstream
+        coregistration and feedback consume them unchanged.
+        """
+        from pineuro.gui.components.manual_masks import read_manual_masks
+        from pineuro.mask_extraction import import_manual_masks
+
+        loc_id = loc.get("id", "manual")
+        record = read_manual_masks(base_dir, loc_id)
+        if not record:
+            raise ValueError(
+                f"Manual mask files for localizer '{loc_id}' are not configured for this "
+                "participant — use 'Configure / edit mask files…' first."
+            )
+
+        masks = record.get("masks", {}) or {}
+        # Import in the network-name order from the study config (falls back to
+        # whatever the per-participant record contains).
+        names = list(loc.get("manual_mask_names") or []) or list(masks.keys())
+        mask_space = record.get("mask_space") or loc.get("manual_mask_space", "native")
+        ref_file = record.get("reference")
+        anat_file = record.get("anat")
+
+        missing = [n for n in names if n not in masks]
+        if missing:
+            raise ValueError(f"Manual mask file(s) not configured for: {', '.join(missing)}")
+        if not ref_file:
+            raise ValueError("Manual localizer requires a reference EPI file")
+        if mask_space == "anat" and not anat_file:
+            raise ValueError("Manual localizer with anatomical-space masks requires a T1 file")
+
+        mask_paths = [masks[n] for n in names]
+        self._emit_progress(f"Importing {len(mask_paths)} user-supplied mask(s) ({mask_space} space)")
+        return import_manual_masks(
+            participant_id=self.participant_id,
+            root_dir=root_dir,
+            mask_paths=mask_paths,
+            mask_names=names,
+            ref_file=ref_file,
+            mask_space=mask_space,
+            anat_file=anat_file,
+            overwrite=self.overwrite,
+            qc_enabled=True,
+            qc_dir=qc_dir,
+            progress_callback=progress_callback,
+        )
+
     def _run_mask_extraction(self) -> None:
-        """Extract network masks using ICA (rest) or GLM contrasts (task)."""
+        """Extract network masks using ICA (rest), GLM contrasts (task), or manual import."""
         from pineuro.mask_extraction import mask_extraction_rest
 
         config = self.config
@@ -910,6 +993,27 @@ class PipelineRunner:
                 self._emit_progress(f"{step}: {detail}")
             else:
                 self._emit_progress(step)
+
+        # Manual import — user-supplied masks; no preprocessing inputs needed.
+        loc0 = config["localizers"][0] if config.get("localizers") else {}
+        if loc0.get("type") == "manual":
+            from pineuro.gui.components.manual_masks import read_manual_masks
+
+            self._emit_progress("Using manual mask import")
+            self._run_manual_mask_import(
+                loc0,
+                base_dir=base_dir,
+                root_dir=mask_extraction_dir,
+                qc_dir=base_dir / "qc",
+                progress_callback=progress_callback,
+            )
+            manual_record = read_manual_masks(base_dir, loc0.get("id", "manual")) or {}
+            self._create_tissue_masks_if_enabled(
+                mask_extraction_dir,
+                manual_record.get("reference"),
+                progress_callback,
+            )
+            return
 
         if localizer_type == "task":
             from pineuro.mask_extraction import mask_extraction_task
@@ -1072,31 +1176,45 @@ class PipelineRunner:
             )
 
         # Create WM/CSF tissue masks for nuisance regression (if enabled)
-        fb_cfg = config.get("feedback", {})
-        if fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False):
-            from pineuro.mask_extraction import create_tissue_masks
+        self._create_tissue_masks_if_enabled(mask_extraction_dir, ref_file, progress_callback)
 
-            self._emit_progress("Creating WM/CSF tissue masks for nuisance regression...")
-            tissue_dir = mask_extraction_dir / "05_tissue"
+    def _create_tissue_masks_if_enabled(
+        self,
+        mask_extraction_dir: Path,
+        ref_file: str | Path | None,
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> None:
+        """Create WM/CSF tissue masks for nuisance regression when enabled."""
+        fb_cfg = self.config.get("feedback", {})
+        if not (fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False)):
+            return
+        if not ref_file:
+            self._emit_progress("WM/CSF regressors enabled but no reference volume available; skipping tissue masks")
+            return
 
-            # Try to reuse MNI inverse transforms from ICA pathway's 02_mnireg/
-            inv_xfm = None
-            mnireg_dir = mask_extraction_dir / "02_mnireg"
-            if mnireg_dir.exists():
-                inv_files = sorted(mnireg_dir.glob("*_inv_*"))
-                if inv_files:
-                    inv_xfm = [str(f) for f in inv_files]
-                    self._emit_progress(f"Reusing MNI inverse transforms from {mnireg_dir.name}/")
+        from pineuro.mask_extraction import create_tissue_masks
 
-            create_tissue_masks(
-                ref_file=str(ref_file),
-                output_dir=tissue_dir,
-                participant_id=self.participant_id,
-                inv_transform_files=inv_xfm,
-                overwrite=self.overwrite,
-                progress_callback=progress_callback,
-            )
-            self._emit_progress("WM/CSF tissue masks created")
+        self._emit_progress("Creating WM/CSF tissue masks for nuisance regression...")
+        tissue_dir = mask_extraction_dir / "05_tissue"
+
+        # Try to reuse MNI inverse transforms from the ICA/MNI pathway's 02_mnireg/
+        inv_xfm = None
+        mnireg_dir = mask_extraction_dir / "02_mnireg"
+        if mnireg_dir.exists():
+            inv_files = sorted(mnireg_dir.glob("*_inv_*"))
+            if inv_files:
+                inv_xfm = [str(f) for f in inv_files]
+                self._emit_progress(f"Reusing MNI inverse transforms from {mnireg_dir.name}/")
+
+        create_tissue_masks(
+            ref_file=str(ref_file),
+            output_dir=tissue_dir,
+            participant_id=self.participant_id,
+            inv_transform_files=inv_xfm,
+            overwrite=self.overwrite,
+            progress_callback=progress_callback,
+        )
+        self._emit_progress("WM/CSF tissue masks created")
 
     # ------------------------------------------------------------------
     # Multi-localizer pipeline methods
@@ -1222,7 +1340,15 @@ class PipelineRunner:
 
         self._emit_progress(f"Extracting masks for localizer {loc_idx}: {task_name}")
 
-        if loc_type == "rest":
+        if loc_type == "manual":
+            mask_files = self._run_manual_mask_import(
+                loc,
+                base_dir=base_dir,
+                root_dir=loc_dir,
+                qc_dir=base_dir / "qc" / f"loc_{loc_idx}_manual",
+                progress_callback=progress_callback,
+            )
+        elif loc_type == "rest":
             from pineuro.mask_extraction import mask_extraction_rest
 
             n_yeo = loc.get("n_yeo", 17)
@@ -1576,9 +1702,15 @@ class PipelineRunner:
             self._emit_progress(f"Using masks from source visit: {mask_source_visit}")
         else:
             # Standard mode: get masks and ref_file from current visit
-            localizer_task = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
-            task_name = localizer_task if localizer_task != "rest" else "rest"
-            ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+            loc0 = config["localizers"][0] if config.get("localizers") else {}
+            localizer_task = loc0.get("type", "rest")
+            if localizer_task == "manual":
+                # Manual localizer: masks were imported against the participant's
+                # user-supplied reference EPI — there is no preprocessing boldref.
+                ref_file = self._manual_reference_file(base_dir, mask_extraction_dir, loc0)
+            else:
+                task_name = localizer_task if localizer_task != "rest" else "rest"
+                ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
             masks_dir = mask_extraction_dir / "03_masks"
 
         # Find the most recent complete reference collection for this run
@@ -1621,6 +1753,9 @@ class PipelineRunner:
                 if loc_type == "rest":
                     for target in loc.get("yeo_targets", []):
                         mask_name_to_loc[target] = loc_idx
+                elif loc_type == "manual":
+                    for mask_name in loc.get("manual_mask_names", []):
+                        mask_name_to_loc[mask_name] = loc_idx
                 else:
                     for mask_name in loc.get("contrasts", {}):
                         mask_name_to_loc[mask_name] = loc_idx
@@ -1670,7 +1805,13 @@ class PipelineRunner:
                 loc = localizers[loc_idx]
                 loc_type = loc.get("type", "rest")
                 loc_task_name = "rest" if loc_type == "rest" else loc_type
-                loc_ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task_name}_boldref.nii.gz"
+                if loc_type == "manual":
+                    # Manual localizer has no preprocessing boldref — its masks
+                    # were imported against the user-supplied reference EPI.
+                    loc_dir = mask_extraction_dir / f"loc_{loc_idx}_manual"
+                    loc_ref_file = self._manual_reference_file(base_dir, loc_dir, loc)
+                else:
+                    loc_ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task_name}_boldref.nii.gz"
 
                 # Add tissue masks to the first group only
                 group_files = [str(f) for f in mask_files]
@@ -1760,7 +1901,9 @@ class PipelineRunner:
                 mask_extraction_dir=qc_mask_extraction_dir,
                 network_coreg_files=coreg_masks,
                 run_str=str(actual_reference_run).zfill(2),
-                n_yeo=config["localizers"][0]["extraction"]["n_yeo"],
+                n_yeo=(
+                    config["localizers"][0].get("extraction", {}).get("n_yeo", 17) if config.get("localizers") else 17
+                ),
                 overwrite=self.overwrite,
                 reference_subdir=reference_subdir,
             )

@@ -74,9 +74,22 @@ class TestLocalizerConfig:
         config = LocalizerConfig(type="rnt", contrasts={"rumination": "rum - dist"}, include_reverse_contrasts=True)
         assert config.mask_names == ["rumination", "rumination_reverse"]
 
-    def test_manual_requires_paths(self):
-        with pytest.raises(ValueError, match="manual_mask_paths"):
+    def test_manual_requires_names_when_no_paths(self):
+        # GUI study config carries only network names — neither names nor paths is invalid.
+        with pytest.raises(ValueError, match="manual_mask_names"):
             LocalizerConfig(type="manual")
+
+    def test_manual_names_only_valid(self):
+        # The GUI study config (names only; files chosen per participant) is valid.
+        config = LocalizerConfig(type="manual", manual_mask_names=["DMN", "FPN"])
+        assert config.is_manual
+        assert config.mask_names == ["DMN", "FPN"]
+
+    def test_manual_anat_space_names_only_ok(self):
+        # Anatomical space with names only does NOT require a T1 at study-config
+        # time — the T1 is a per-participant file chosen later.
+        config = LocalizerConfig(type="manual", manual_mask_space="anat", manual_mask_names=["DMN"])
+        assert config.manual_mask_space == "anat"
 
     def test_manual_mask_names(self, tmp_path):
         m1 = tmp_path / "roi_a.nii.gz"
@@ -85,6 +98,31 @@ class TestLocalizerConfig:
             p.touch()
         config = LocalizerConfig(type="manual", manual_mask_paths=[m1, m2])
         assert config.mask_names == ["roi_a", "roi_b"]
+
+    def test_manual_mask_names_explicit_preferred(self, tmp_path):
+        """Explicit manual_mask_names override the filename-derived defaults."""
+        m1 = tmp_path / "roi_a.nii.gz"
+        m2 = tmp_path / "roi_b.nii.gz"
+        for p in (m1, m2):
+            p.touch()
+        config = LocalizerConfig(
+            type="manual",
+            manual_mask_paths=[m1, m2],
+            manual_mask_names=["DMN", "FPN"],
+        )
+        assert config.mask_names == ["DMN", "FPN"]
+
+    def test_manual_mask_names_length_mismatch_raises(self, tmp_path):
+        m1 = tmp_path / "roi_a.nii.gz"
+        m1.touch()
+        with pytest.raises(ValueError, match="manual_mask_names"):
+            LocalizerConfig(type="manual", manual_mask_paths=[m1], manual_mask_names=["DMN", "FPN"])
+
+    def test_manual_anat_space_requires_anat_file(self, tmp_path):
+        m1 = tmp_path / "roi_a.nii.gz"
+        m1.touch()
+        with pytest.raises(ValueError, match="manual_anat_file"):
+            LocalizerConfig(type="manual", manual_mask_paths=[m1], manual_mask_space="anat")
 
 
 class TestLocalizerExtractionConfig:

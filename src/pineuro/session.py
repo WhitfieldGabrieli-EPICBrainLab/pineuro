@@ -812,6 +812,7 @@ class LocalizerConfig:
 
     # Manual-import fields (used when type == "manual")
     manual_mask_paths: list[Path] = field(default_factory=list)
+    manual_mask_names: list[str] = field(default_factory=list)
     manual_ref_file: Path | None = None
     manual_anat_file: Path | None = None
     manual_mask_space: str = "native"
@@ -837,7 +838,10 @@ class LocalizerConfig:
         if self.is_rest:
             return list(self.networks)
         if self.is_manual:
-            # Derive names from filenames: strip extensions like .nii.gz / .nii
+            # Prefer explicit names; otherwise derive from filenames (strip
+            # extensions like .nii.gz / .nii).
+            if self.manual_mask_names:
+                return list(self.manual_mask_names)
             names: list[str] = []
             for p in self.manual_mask_paths:
                 stem = Path(p).name
@@ -860,15 +864,28 @@ class LocalizerConfig:
         if not self.id:
             self.id = self.type
         if self.is_manual:
-            if not self.manual_mask_paths:
-                raise ValueError("manual_mask_paths must be provided when type='manual'")
             if self.manual_mask_space not in ("native", "anat", "mni"):
                 raise ValueError(
                     f"manual_mask_space must be 'native', 'anat', or 'mni', got '{self.manual_mask_space}'"
                 )
-            if self.manual_mask_space == "anat" and self.manual_anat_file is None:
-                raise ValueError("manual_anat_file is required when manual_mask_space='anat'")
-            self.manual_mask_paths = [Path(p) for p in self.manual_mask_paths]
+            if self.manual_mask_paths:
+                # Direct-path mode (Python API): mask files supplied up front —
+                # validate them fully.
+                if self.manual_mask_space == "anat" and self.manual_anat_file is None:
+                    raise ValueError("manual_anat_file is required when manual_mask_space='anat'")
+                if self.manual_mask_names and len(self.manual_mask_names) != len(self.manual_mask_paths):
+                    raise ValueError(
+                        f"manual_mask_names ({len(self.manual_mask_names)}) and manual_mask_paths "
+                        f"({len(self.manual_mask_paths)}) must have the same length"
+                    )
+                self.manual_mask_paths = [Path(p) for p in self.manual_mask_paths]
+            elif not self.manual_mask_names:
+                # Names-only mode (GUI study config): the per-participant mask
+                # files are chosen later in the workflow, but the network names
+                # are still required to define the masks.
+                raise ValueError(
+                    "type='manual' requires manual_mask_names (network names) when no manual_mask_paths are given"
+                )
             if self.manual_ref_file is not None:
                 self.manual_ref_file = Path(self.manual_ref_file)
             if self.manual_anat_file is not None:
@@ -1817,6 +1834,7 @@ def run_mask_extraction(
             mask_space=loc.manual_mask_space,
             anat_file=loc.manual_anat_file,
             overwrite=overwrite,
+            qc_enabled=True,
         )
     elif localizer_type != "rest":
         from .mask_extraction import mask_extraction_task

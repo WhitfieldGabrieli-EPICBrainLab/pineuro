@@ -3707,6 +3707,8 @@ def import_manual_masks(
     mask_space: str = "native",
     anat_file: Union[str, Path] | None = None,
     overwrite: bool = False,
+    qc_enabled: bool = False,
+    qc_dir: Union[str, Path] | None = None,
     progress_callback: Callable[[str, str], None] | None = None,
 ) -> list[Path]:
     """Import pre-existing NIfTI masks into the feedback pipeline.
@@ -3747,6 +3749,12 @@ def import_manual_masks(
         the masks were drawn.
     overwrite : bool
         If ``True``, re-import even when output files already exist.
+    qc_enabled : bool
+        If ``True``, generate a mask-extraction QC report (overlays + HTML)
+        via :func:`pineuro.qc.generate_mask_extraction_report` after import.
+    qc_dir : str or Path, optional
+        QC output directory. Defaults to ``root_dir.parent / "qc"`` when
+        ``qc_enabled`` is set.
     progress_callback : callable, optional
         ``(step: str, detail: str) -> None`` for progress reporting.
 
@@ -3774,8 +3782,14 @@ def import_manual_masks(
             progress_callback(step, detail)
 
     # ---- Validation ----
+    if not mask_paths:
+        raise ValueError("mask_paths must contain at least one mask")
     if len(mask_paths) != len(mask_names):
         raise ValueError(f"mask_paths ({len(mask_paths)}) and mask_names ({len(mask_names)}) must have the same length")
+    if len(set(mask_names)) != len(mask_names):
+        raise ValueError(f"mask_names must be unique (they become output filenames); got {mask_names}")
+    if any(not str(n).strip() for n in mask_names):
+        raise ValueError(f"mask_names must all be non-empty; got {mask_names}")
     if mask_space not in ("native", "anat", "mni"):
         raise ValueError(f"mask_space must be 'native', 'anat', or 'mni', got '{mask_space}'")
     if mask_space == "anat" and anat_file is None:
@@ -3854,6 +3868,10 @@ def import_manual_masks(
                     f"Shape mismatch for {mask_name}: mask {data.shape} vs "
                     f"ref {ref_img.shape[:3]}. Resampling to reference grid."
                 )
+                emit_progress(
+                    f"Mask {i}/{len(mask_paths)}",
+                    f"{mask_name}: shape {data.shape} != reference {ref_img.shape[:3]}, resampling to reference grid",
+                )
                 img = resample_to_img(img, ref_img, interpolation="nearest")
                 data = np.asarray(img.get_fdata())
 
@@ -3890,18 +3908,22 @@ def import_manual_masks(
         emit_progress(f"Mask {i}/{len(mask_paths)}", f"{mask_name}: {n_voxels} voxels")
         output_files.append(out_file)
 
-    # Save selections JSON for review dialog and persistence
+    # Save selections JSON for review dialog and persistence.
+    # Per-mask dicts are written at the top level (matching the MNI-atlas
+    # convention) so qc.generate_mask_extraction_report and the GUI mask
+    # review dialog detect them via ``source_type``; scalar metadata keys
+    # sit alongside and are skipped by ``isinstance(v, dict)`` guards.
     selections_data: dict[str, Any] = {
         "type": "manual",
         "ref_file": str(ref_file),
         "mask_space": mask_space,
-        "selections": {},
     }
     for mask_name, out_file in zip(mask_names, output_files, strict=False):
         n_vox = int(np.sum(cast(Nifti1Image, nib.load(out_file)).get_fdata() > 0))
-        selections_data["selections"][mask_name] = {
+        selections_data[mask_name] = {
             "n_voxels_thresholded": n_vox,
             "source": "manual_import",
+            "source_type": "manual_import",
             "mask_space": mask_space,
         }
     selections_file = masks_dir / "mask_selections.json"
@@ -3910,6 +3932,24 @@ def import_manual_masks(
     logger.info(f"Saved manual mask selections to {selections_file}")
 
     emit_progress("Complete", f"Imported {len(output_files)} masks to {masks_dir}")
+
+    if qc_enabled:
+        try:
+            emit_progress("QC", "Generating mask extraction QC report...")
+            report_path = qc.generate_mask_extraction_report(
+                mask_extraction_dir=root_dir,
+                participant_id=participant_id,
+                network_names=list(mask_names),
+                output_dir=Path(qc_dir) if qc_dir is not None else None,
+                overwrite=overwrite,
+                open_browser=False,
+                ref_file=ref_file,
+            )
+            emit_progress("QC", f"QC report saved to {report_path}")
+        except Exception as exc:  # QC failure must not abort a successful import
+            logger.warning(f"Manual mask QC report generation failed: {exc}")
+            emit_progress("QC", f"QC report generation failed: {exc}")
+
     return output_files
 
 

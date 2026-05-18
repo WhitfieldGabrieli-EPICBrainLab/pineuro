@@ -351,3 +351,59 @@ def build_placeholder(text: str, height: float | None = None) -> ft.Container:
         height=height,
         alignment=ft.Alignment(0, 0),
     )
+
+
+def pick_file(
+    title: str = "Select file",
+    *,
+    filetypes: list[tuple[str, str]] | None = None,
+    initial_path: str | None = None,
+) -> str | None:
+    """Open a native file-open dialog on the main thread and return the chosen path.
+
+    Wraps the tkinter ``filedialog.askopenfilename`` + :class:`MainThreadDispatcher`
+    pattern so any GUI screen can prompt for a file without duplicating it.
+
+    Args:
+        title: Dialog window title.
+        filetypes: tkinter file-type filters as ``(label, pattern)`` tuples.
+        initial_path: A file or directory used to seed the dialog's starting folder.
+
+    Returns:
+        The selected absolute path, or ``None`` if the dialog was cancelled or
+        could not be opened.
+    """
+    if filetypes is None:
+        filetypes = [("All Files", "*.*")]
+
+    try:
+        import os
+        import tkinter as tk
+        from tkinter import filedialog
+
+        from pineuro.gui.dispatch import get_dispatcher
+    except ImportError:
+        logger.error("tkinter is not available — cannot open file picker")
+        return None
+
+    def _show_dialog() -> str:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        initial_dir = None
+        if initial_path:
+            if os.path.isfile(initial_path):
+                initial_dir = os.path.dirname(initial_path)
+            elif os.path.isdir(initial_path):
+                initial_dir = initial_path
+        result = filedialog.askopenfilename(title=title, initialdir=initial_dir, filetypes=filetypes)
+        root.destroy()
+        return result
+
+    try:
+        path = get_dispatcher().submit(_show_dialog).result()
+    except Exception as exc:
+        logger.error(f"Error opening file picker: {exc}")
+        return None
+
+    return path or None

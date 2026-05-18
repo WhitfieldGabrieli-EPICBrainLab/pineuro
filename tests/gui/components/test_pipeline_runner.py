@@ -1,6 +1,8 @@
 """Tests for pineuro.gui.components.pipeline_runner pure helpers."""
 
-from pineuro.gui.components.pipeline_runner import _select_sham_task_mask_names
+import pytest
+
+from pineuro.gui.components.pipeline_runner import PipelineRunner, _select_sham_task_mask_names
 
 
 class TestSelectShamTaskMaskNames:
@@ -41,3 +43,22 @@ class TestSelectShamTaskMaskNames:
         task = _select_sham_task_mask_names(sham, ["SomMotA", "DefaultA"])
         task.append("extra")
         assert sham == ["SomMotA_right", "SomMotA_left"]
+
+
+class TestRunManualMaskImport:
+    def test_raises_when_not_configured(self, tmp_path):
+        # A manual localizer whose per-participant files were never chosen
+        # must fail with a clear, actionable message — not a cryptic error.
+        runner = PipelineRunner.__new__(PipelineRunner)
+        runner.participant_id = "sub-01"
+        runner.overwrite = False
+        runner._emit_progress = lambda *a, **k: None  # type: ignore[method-assign]
+
+        loc = {"id": "manual", "manual_mask_names": ["DMN"], "manual_mask_space": "native"}
+        with pytest.raises(ValueError, match="not configured"):
+            runner._run_manual_mask_import(
+                loc,
+                base_dir=tmp_path,
+                root_dir=tmp_path / "mask_extraction",
+                qc_dir=tmp_path / "qc",
+            )

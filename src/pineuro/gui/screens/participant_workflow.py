@@ -55,6 +55,9 @@ from ..utils import truncate_text
 
 logger = logging.getLogger(__name__)
 
+# File-type filter for NIfTI file pickers (manual mask configuration).
+NIFTI_FILETYPES = [("NIfTI files", "*.nii *.nii.gz"), ("All Files", "*.*")]
+
 
 class StepStatus(Enum):
     """Status of a pipeline step."""
@@ -604,10 +607,22 @@ class ParticipantWorkflowScreen:
 
             try:
                 _sel_data = _json.loads(selections_file.read_text())
-                if any(isinstance(v, dict) and v.get("source_type") == "mni_atlas" for v in _sel_data.values()):
+                _sel_dicts = [v for v in _sel_data.values() if isinstance(v, dict)]
+                if any(v.get("source_type") == "mni_atlas" for v in _sel_dicts):
                     # Ensure instance state is consistent
                     self._is_mni_atlas_mode = True
                     self._show_mni_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir)
+                    return
+                if any(v.get("source_type") == "manual_import" for v in _sel_dicts):
+                    # Manual import reuses the simple card/overlay review dialog
+                    self._show_mni_mask_review_dialog(
+                        config,
+                        base_dir,
+                        mask_extraction_dir,
+                        qc_dir,
+                        loc_idx=loc_idx,
+                        source_label="Manual import",
+                    )
                     return
             except (ValueError, AttributeError):
                 pass
@@ -1477,22 +1492,29 @@ class ParticipantWorkflowScreen:
         self.page.update()
 
     def _show_mni_mask_review_dialog(
-        self, config: dict, base_dir: Path, mask_extraction_dir: Path, qc_dir: Path, loc_idx: int | None = None
+        self,
+        config: dict,
+        base_dir: Path,
+        mask_extraction_dir: Path,
+        qc_dir: Path,
+        loc_idx: int | None = None,
+        source_label: str = "MNI Atlas",
     ):
-        """Show mask review dialog for MNI atlas masks.
+        """Show mask review dialog for atlas-derived or imported masks.
 
-        MNI atlas masks don't have ICA components or GLM contrasts — the user
-        reviews the atlas-derived mask overlays on the reference and approves.
+        MNI atlas masks and manually imported masks don't have ICA components
+        or GLM contrasts — the user reviews the mask overlays on the reference
+        and approves. ``source_label`` distinguishes the two in the UI.
         """
         import base64
 
         from pineuro.gui.components.qc_viewer import open_qc_report
 
+        _step_hint = "mask import" if source_label == "Manual import" else "MNI mask extraction"
+
         masks_dir = mask_extraction_dir / "03_masks"
         if not masks_dir.exists():
-            _snack = ft.SnackBar(
-                ft.Text("MNI atlas masks not found. Run MNI mask extraction first."), bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text(f"Masks not found. Run {_step_hint} first."), bgcolor=ft.Colors.ORANGE)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1501,14 +1523,23 @@ class ParticipantWorkflowScreen:
         mask_files = sorted(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
         if not mask_files:
             _snack = ft.SnackBar(
-                ft.Text("No thresholded masks found. Run MNI mask extraction first."), bgcolor=ft.Colors.ORANGE
+                ft.Text(f"No thresholded masks found. Run {_step_hint} first."), bgcolor=ft.Colors.ORANGE
             )
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
             return
 
-        # Find reference file (boldref or MNI ref)
+        # Load mask selections for stats (also records the manual reference path)
+        import json
+
+        selections_data = {}
+        selections_file = masks_dir / "mask_selections.json"
+        if selections_file.exists():
+            with open(selections_file) as f:
+                selections_data = json.load(f)
+
+        # Find reference file (boldref, MNI ref, or the manual import's reference)
         from glob import glob
 
         preprocessing_dir = base_dir / "preprocessing"
@@ -1518,6 +1549,11 @@ class ParticipantWorkflowScreen:
             if mni_ref_dir.exists():
                 ref_files = sorted(glob(str(mni_ref_dir / "*.nii.gz")))
         ref_file = Path(ref_files[0]) if ref_files else None
+        if ref_file is None:
+            # Manual imports record the reference EPI in mask_selections.json
+            manual_ref = selections_data.get("ref_file")
+            if manual_ref and Path(manual_ref).exists():
+                ref_file = Path(manual_ref)
 
         # Find QC report
         qc_report_path = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
@@ -1525,15 +1561,6 @@ class ParticipantWorkflowScreen:
         if not qc_report_path.exists():
             matches = list(qc_dir.glob("*mask_extraction_qc.html"))
             qc_report = matches[0] if matches else None
-
-        # Load mask selections for stats
-        import json
-
-        selections_data = {}
-        selections_file = masks_dir / "mask_selections.json"
-        if selections_file.exists():
-            with open(selections_file) as f:
-                selections_data = json.load(f)
 
         atlas_name = config.get("mask", {}).get("network_atlas", "yeo_17")
 
@@ -1549,7 +1576,11 @@ class ParticipantWorkflowScreen:
             # Get stats from selections
             sel = selections_data.get(mask_name, {})
             n_voxels = sel.get("n_voxels_thresholded", "?")
-            stat_text = f"{n_voxels} voxels  |  Atlas: {atlas_name}"
+            if source_label == "Manual import":
+                space = sel.get("mask_space", selections_data.get("mask_space", "native"))
+                stat_text = f"{n_voxels} voxels  |  imported ({space} space)"
+            else:
+                stat_text = f"{n_voxels} voxels  |  Atlas: {atlas_name}"
 
             # Find or generate overlay (regenerate if mask is newer than existing overlay)
             overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
@@ -1575,7 +1606,7 @@ class ParticipantWorkflowScreen:
                         ref_path=ref_file,
                         out_path=overlay_path,
                         slices=atlas_slices,
-                        title=f"{mask_name} (MNI Atlas, {summary.voxels} voxels)",
+                        title=f"{mask_name} ({source_label}, {summary.voxels} voxels)",
                     )
                 except Exception as ex:
                     logger.warning(f"Failed to generate overlay for {mask_name}: {ex}")
@@ -1627,19 +1658,21 @@ class ParticipantWorkflowScreen:
 
         def on_approve(e, _loc_idx=loc_idx):
             self._set_qc_approved("initial", True, loc_idx=_loc_idx)
-            self._add_log("[SUCCESS] MNI atlas masks reviewed and approved")
+            self._add_log(f"[SUCCESS] {source_label} masks reviewed and approved")
             dialog.open = False
             self.page.update()
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(ft.Text("MNI atlas masks approved! You can now proceed."), bgcolor=ft.Colors.GREEN)
+            _snack = ft.SnackBar(
+                ft.Text(f"{source_label} masks approved! You can now proceed."), bgcolor=ft.Colors.GREEN
+            )
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
 
         def on_reject(e):
             _close_dialog(dialog)
-            self._add_log("[INFO] MNI atlas masks rejected — re-run with different atlas/network settings")
+            self._add_log(f"[INFO] {source_label} masks rejected — re-run the mask step with different settings")
 
         def on_open_qc(e):
             if qc_report and qc_report.exists():
@@ -1653,12 +1686,26 @@ class ParticipantWorkflowScreen:
         def on_close(e):
             _close_dialog(dialog)
 
+        is_manual_source = source_label == "Manual import"
+        if is_manual_source:
+            intro_text = (
+                f"Imported {len(mask_files)} user-supplied mask(s), registered to the "
+                "participant's functional space. Review the overlays below, then approve or reject."
+            )
+        else:
+            intro_text = (
+                f"Extracted {len(mask_files)} mask(s) from {atlas_name} atlas "
+                "registered to subject space. Review the overlays below, then approve or reject."
+            )
         dialog = ft.AlertDialog(
             modal=True,
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.MAP, color=ft.Colors.TEAL),
-                    ft.Text("Review MNI Atlas Masks", expand=True),
+                    ft.Icon(ft.Icons.UPLOAD_FILE if is_manual_source else ft.Icons.MAP, color=ft.Colors.TEAL),
+                    ft.Text(
+                        "Review Imported Masks" if is_manual_source else "Review MNI Atlas Masks",
+                        expand=True,
+                    ),
                     ft.IconButton(
                         icon=ft.Icons.CLOSE,
                         on_click=on_close,
@@ -1670,8 +1717,7 @@ class ParticipantWorkflowScreen:
                 content=ft.Column(
                     [
                         ft.Text(
-                            f"Extracted {len(mask_files)} mask(s) from {atlas_name} atlas "
-                            "registered to subject space. Review the overlays below, then approve or reject.",
+                            intro_text,
                             size=13,
                             color=ft.Colors.GREY_700,
                         ),
@@ -1698,6 +1744,189 @@ class ParticipantWorkflowScreen:
                     "Approve",
                     icon=ft.Icons.CHECK,
                     on_click=on_approve,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        self.page.update()
+
+    # ------------------------------------------------------------------
+    # Manual mask import — per-participant file configuration
+    # ------------------------------------------------------------------
+
+    def _manual_localizer_for_step(self, step_id: str) -> int | None:
+        """Return the localizer index if step_id is a manual-mask import step.
+
+        Handles the single-localizer ``mask_extraction`` step and the
+        multi-localizer ``localizer_{idx}_extraction`` steps; returns None
+        for any other step or non-manual localizer.
+        """
+        localizers = self.study_config.session_config.get("localizers", [])
+        if not localizers:
+            return None
+        if step_id == "mask_extraction":
+            return 0 if localizers[0].get("type") == "manual" else None
+        if step_id.startswith("localizer_") and step_id.endswith("_extraction"):
+            try:
+                idx = int(step_id.split("_")[1])
+            except (ValueError, IndexError):
+                return None
+            if 0 <= idx < len(localizers) and localizers[idx].get("type") == "manual":
+                return idx
+        return None
+
+    def _show_manual_mask_config_dialog(self, loc_idx: int = 0, on_saved: Callable[[], None] | None = None):
+        """Collect THIS participant's manual mask / reference / T1 files.
+
+        The study config only carries the mask space and network names; the
+        actual files differ per participant and are persisted here to
+        ``base_dir/manual_masks.json`` (keyed by localizer id).
+
+        Args:
+            loc_idx: Index of the manual localizer being configured.
+            on_saved: Called after a successful save (e.g. to start the import
+                step). When None, the dialog only persists the selections.
+        """
+        from pineuro.gui.components.manual_masks import read_manual_masks, write_manual_masks
+        from pineuro.gui.utils import pick_file
+
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        localizers = config.get("localizers", [])
+        if loc_idx >= len(localizers):
+            return
+        loc = localizers[loc_idx]
+        loc_id = loc.get("id", "manual")
+        mask_space = loc.get("manual_mask_space", "native")
+        names = list(loc.get("manual_mask_names", []) or [])
+
+        record = read_manual_masks(base_dir, loc_id) or {}
+        existing_masks = record.get("masks", {}) or {}
+
+        def _file_row(field: ft.TextField, title: str) -> ft.Row:
+            def _pick(_e, _f: ft.TextField = field, _t: str = title) -> None:
+                picked = pick_file(title=_t, filetypes=NIFTI_FILETYPES, initial_path=_f.value or None)
+                if picked:
+                    _f.value = picked
+                    _f.update()
+
+            return ft.Row([field, ft.IconButton(icon=ft.Icons.FILE_OPEN, tooltip="Browse", on_click=_pick)])
+
+        # One file picker per network name
+        mask_fields: dict[str, ft.TextField] = {}
+        mask_rows: list[ft.Control] = []
+        for name in names:
+            field = ft.TextField(
+                label=name,
+                width=470,
+                value=existing_masks.get(name, "") or "",
+                read_only=True,
+                hint_text="NIfTI mask file for this network",
+            )
+            mask_fields[name] = field
+            mask_rows.append(_file_row(field, f"Select mask for {name}"))
+
+        ref_field = ft.TextField(
+            label="Reference EPI volume",
+            width=470,
+            value=record.get("reference", "") or "",
+            read_only=True,
+            hint_text="Native-space BOLD/EPI reference in this participant's scan space",
+        )
+        anat_field = ft.TextField(
+            label="Anatomical (T1) image",
+            width=470,
+            value=record.get("anat", "") or "",
+            read_only=True,
+            hint_text="T1 the masks were drawn on",
+        )
+        error_text = ft.Text("", color=ft.Colors.RED, size=12, visible=False)
+
+        content_items: list[ft.Control] = [
+            ft.Text(
+                f"Select this participant's mask files ({mask_space} space). They are saved "
+                "with this participant and not shared across the study.",
+                size=12,
+                color=ft.Colors.GREY_700,
+            ),
+            ft.Divider(),
+            ft.Text("Network masks", size=13, weight=ft.FontWeight.BOLD),
+            *mask_rows,
+            ft.Divider(),
+            ft.Text("Reference EPI", size=13, weight=ft.FontWeight.BOLD),
+            _file_row(ref_field, "Select reference EPI"),
+        ]
+        if mask_space == "anat":
+            content_items += [
+                ft.Divider(),
+                ft.Text("Anatomical (T1)", size=13, weight=ft.FontWeight.BOLD),
+                _file_row(anat_field, "Select T1 image"),
+            ]
+        content_items.append(error_text)
+
+        def _close() -> None:
+            dialog.open = False
+            self.page.update()
+
+        def _on_save(_e) -> None:
+            missing: list[str] = []
+            masks_out: dict[str, str] = {}
+            for name in names:
+                value = (mask_fields[name].value or "").strip()
+                if not value or not Path(value).is_file():
+                    missing.append(f"mask '{name}'")
+                else:
+                    masks_out[name] = value
+            ref_value = (ref_field.value or "").strip()
+            if not ref_value or not Path(ref_value).is_file():
+                missing.append("reference EPI")
+            anat_value = (anat_field.value or "").strip()
+            if mask_space == "anat" and (not anat_value or not Path(anat_value).is_file()):
+                missing.append("T1 image")
+
+            if missing:
+                error_text.value = "Select a valid existing file for: " + ", ".join(missing)
+                error_text.visible = True
+                error_text.update()
+                return
+
+            write_manual_masks(
+                base_dir,
+                loc_id,
+                {
+                    "mask_space": mask_space,
+                    "masks": masks_out,
+                    "reference": ref_value,
+                    "anat": anat_value if mask_space == "anat" else None,
+                },
+            )
+            self._add_log(f"[INFO] Manual mask files configured for localizer '{loc_id}'")
+            _close()
+            if on_saved is not None:
+                on_saved()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row(
+                [
+                    ft.Icon(ft.Icons.UPLOAD_FILE, color=ft.Colors.TEAL),
+                    ft.Text(f"Manual Mask Files — {self.participant_id}", expand=True),
+                ]
+            ),
+            content=ft.Container(
+                content=ft.Column(content_items, spacing=10, scroll=ft.ScrollMode.AUTO),
+                width=660,
+                height=480,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: _close()),
+                ft.FilledButton(
+                    "Save & Import" if on_saved is not None else "Save",
+                    icon=ft.Icons.SAVE,
+                    on_click=_on_save,
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
@@ -1997,6 +2226,8 @@ class ParticipantWorkflowScreen:
                 steps.append("reference_initial")
             if localizers and len(localizers) > 1:
                 for loc_idx, loc in enumerate(localizers):
+                    if loc.get("type") == "manual":
+                        continue
                     loc_n_runs = loc.get("n_runs", 2)
                     for run in range(1, loc_n_runs + 1):
                         steps.append(f"localizer_{loc_idx}_run_{run}")
@@ -2009,15 +2240,22 @@ class ParticipantWorkflowScreen:
                 steps.append("reference_initial")
 
             if localizers and len(localizers) > 1:
-                # Multi-localizer: collect ALL runs first, then per-localizer preprocess→extract→approve
+                # Multi-localizer: collect ALL runs first, then per-localizer preprocess→extract→approve.
+                # Manual localizers import pre-built masks — no collection or preprocessing.
                 for loc_idx, loc in enumerate(localizers):
+                    if loc.get("type") == "manual":
+                        continue
                     loc_n_runs = loc.get("n_runs", 2)
                     for run in range(1, loc_n_runs + 1):
                         steps.append(f"localizer_{loc_idx}_run_{run}")
                 for loc_idx, loc in enumerate(localizers):
-                    steps.append(f"localizer_{loc_idx}_preprocessing")
+                    if loc.get("type") != "manual":
+                        steps.append(f"localizer_{loc_idx}_preprocessing")
                     steps.append(f"localizer_{loc_idx}_extraction")
                     steps.append(f"localizer_{loc_idx}_approval")
+            elif config.get("localizers") and config["localizers"][0].get("type") == "manual":
+                # Single manual localizer: import masks only, no collection/preprocessing
+                steps.append("mask_extraction")
             else:
                 # Single localizer (legacy or 1-element list)
                 for i in range(1, n_localizer_runs + 1):
@@ -2054,31 +2292,34 @@ class ParticipantWorkflowScreen:
                 for loc_idx, loc in enumerate(localizers):
                     loc_type = loc.get("type", "rest")
                     loc_task_name = "rest" if loc_type == "rest" else loc_type
-                    loc_n_runs = loc.get("n_runs", 2)
-                    loc_n_vols = loc.get("n_volumes", 250)
+                    loc_dir = mask_extraction_dir / f"loc_{loc_idx}_{loc_task_name}"
 
-                    # Check collection steps
-                    for run_num in range(1, loc_n_runs + 1):
-                        step_id = f"localizer_{loc_idx}_run_{run_num}"
-                        status = self._check_acq_collection_status(
-                            collection_dir,
-                            f"task-{loc_task_name}",
-                            run_num,
-                            loc_n_vols,
-                        )
-                        self.step_statuses[step_id] = status
+                    # Manual localizers have no collection or preprocessing steps.
+                    if loc_type != "manual":
+                        loc_n_runs = loc.get("n_runs", 2)
+                        loc_n_vols = loc.get("n_volumes", 250)
 
-                    # Check preprocessing
-                    step_id = f"localizer_{loc_idx}_preprocessing"
-                    preproc_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz"
-                    mask_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc_mask.nii.gz"
-                    ref_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_boldref.nii.gz"
-                    if preproc_f.exists() and mask_f.exists() and ref_f.exists():
-                        self.step_statuses[step_id] = StepStatus.COMPLETE
+                        # Check collection steps
+                        for run_num in range(1, loc_n_runs + 1):
+                            step_id = f"localizer_{loc_idx}_run_{run_num}"
+                            status = self._check_acq_collection_status(
+                                collection_dir,
+                                f"task-{loc_task_name}",
+                                run_num,
+                                loc_n_vols,
+                            )
+                            self.step_statuses[step_id] = status
+
+                        # Check preprocessing
+                        step_id = f"localizer_{loc_idx}_preprocessing"
+                        preproc_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz"
+                        mask_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc_mask.nii.gz"
+                        ref_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_boldref.nii.gz"
+                        if preproc_f.exists() and mask_f.exists() and ref_f.exists():
+                            self.step_statuses[step_id] = StepStatus.COMPLETE
 
                     # Check extraction (per-localizer subdirectory)
                     step_id = f"localizer_{loc_idx}_extraction"
-                    loc_dir = mask_extraction_dir / f"loc_{loc_idx}_{loc_task_name}"
                     loc_masks = loc_dir / "03_masks"
                     if loc_masks.exists() and len(list(loc_masks.glob(f"{participant_id}_*.nii.gz"))) > 0:
                         self.step_statuses[step_id] = StepStatus.COMPLETE
@@ -2087,6 +2328,10 @@ class ParticipantWorkflowScreen:
                     approval_marker = loc_dir / ".masks_approved"
                     if approval_marker.exists():
                         self.step_statuses[f"localizer_{loc_idx}_approval"] = StepStatus.COMPLETE
+            elif config.get("localizers") and config["localizers"][0].get("type") == "manual":
+                # Single manual localizer: only the import (mask_extraction) step.
+                if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
+                    self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
             else:
                 # Single localizer (legacy)
                 expected_vols = config["localizers"][0].get("n_volumes") if config.get("localizers") else None
@@ -2528,7 +2773,13 @@ class ParticipantWorkflowScreen:
             # Gate 1: Preprocessing must be complete before mask extraction and subsequent steps
             config = self.study_config.session_config
             localizers = config.get("localizers", [])
-            if localizers and len(localizers) > 1:
+            # Manual localizers import pre-built masks — they have no preprocessing
+            # step, so the preprocessing gate must not lock their pipeline.
+            non_manual = [loc for loc in localizers if loc.get("type") != "manual"]
+            if not non_manual:
+                # All-manual study: nothing to preprocess.
+                preprocessing_complete = True
+            elif len(localizers) > 1:
                 preprocessing_complete = any(
                     self.step_statuses.get(f"localizer_{i}_preprocessing") == StepStatus.COMPLETE
                     for i in range(len(localizers))
@@ -2611,6 +2862,9 @@ class ParticipantWorkflowScreen:
             # Multi-localizer: show each localizer with its runs
             for loc_idx, loc in enumerate(localizers):
                 loc_type = loc.get("type", "rest")
+                # Manual localizers import pre-built masks — no collection runs.
+                if loc_type == "manual":
+                    continue
                 loc_n_runs = loc.get("n_runs", 2)
 
                 # Get display name for this localizer
@@ -2638,6 +2892,16 @@ class ParticipantWorkflowScreen:
                             lambda e, sid=step_id: self._on_step_clicked(sid),
                         )
                     )
+        elif config.get("localizers") and config["localizers"][0].get("type") == "manual":
+            # Single manual localizer: no collection runs to show.
+            controls.append(
+                ft.Text(
+                    "Manual mask import — no localizer scan is collected.",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                )
+            )
         else:
             # Single localizer
             n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
@@ -2814,8 +3078,11 @@ class ParticipantWorkflowScreen:
             # Multi-localizer: per-localizer preprocessing + extraction + approval
             for loc_idx, loc in enumerate(localizers):
                 loc_type = loc.get("type", "rest")
+                is_manual = loc_type == "manual"
                 if loc_type == "rest":
                     loc_label = "Rest"
+                elif is_manual:
+                    loc_label = "Manual"
                 else:
                     try:
                         from pineuro.tasks import get_task_metadata
@@ -2831,21 +3098,34 @@ class ParticipantWorkflowScreen:
                 preproc_id = f"localizer_{loc_idx}_preprocessing"
                 extract_id = f"localizer_{loc_idx}_extraction"
                 approval_id = f"localizer_{loc_idx}_approval"
-                controls.extend(
-                    [
-                        ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500),
+                controls.append(ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500))
+                # Manual localizers skip preprocessing — they import pre-built masks.
+                if not is_manual:
+                    controls.append(
                         self._create_step_button(
                             preproc_id,
                             "Preprocess",
                             lambda e, sid=preproc_id: self._on_step_clicked(sid),
-                        ),
-                        self._create_step_button(
-                            extract_id,
-                            "Extract Masks",
-                            lambda e, sid=extract_id: self._on_step_clicked(sid),
-                        ),
-                    ]
+                        )
+                    )
+                controls.append(
+                    self._create_step_button(
+                        extract_id,
+                        "Import Masks" if is_manual else "Extract Masks",
+                        lambda e, sid=extract_id: self._on_step_clicked(sid),
+                    )
                 )
+                if is_manual:
+                    controls.append(
+                        ft.Container(
+                            content=ft.TextButton(
+                                "Configure / edit mask files…",
+                                icon=ft.Icons.FOLDER_OPEN,
+                                on_click=lambda e, idx=loc_idx: self._show_manual_mask_config_dialog(loc_idx=idx),
+                            ),
+                            padding=ft.padding.only(left=10),
+                        )
+                    )
 
                 # Per-localizer approval button (shown after extraction completes)
                 extraction_complete = self.step_statuses.get(extract_id) == StepStatus.COMPLETE
@@ -2880,6 +3160,59 @@ class ParticipantWorkflowScreen:
                                 padding=ft.padding.only(left=10, top=5),
                             )
                         )
+        elif config.get("localizers") and config["localizers"][0].get("type") == "manual":
+            # Single manual localizer: import masks only — no preprocessing.
+            controls.extend(
+                [
+                    ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
+                    self._create_step_button(
+                        "mask_extraction",
+                        "Import Masks",
+                        lambda e: self._on_step_clicked("mask_extraction"),
+                    ),
+                    ft.Container(
+                        content=ft.TextButton(
+                            "Configure / edit mask files…",
+                            icon=ft.Icons.FOLDER_OPEN,
+                            on_click=lambda e: self._show_manual_mask_config_dialog(loc_idx=0),
+                        ),
+                        padding=ft.padding.only(left=10),
+                    ),
+                ]
+            )
+
+            # Review / approve the imported masks (shown once import completes)
+            if self.step_statuses.get("mask_extraction") == StepStatus.COMPLETE:
+                if self._initial_qc_approved:
+                    controls.append(
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    ft.TextButton(
+                                        "Review Masks",
+                                        icon=ft.Icons.TUNE,
+                                        on_click=lambda e: self._show_mask_review_dialog(),
+                                    ),
+                                    ft.Text("(Manual import)", size=12, color=ft.Colors.GREY_600),
+                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                ],
+                                spacing=5,
+                            ),
+                            padding=ft.padding.only(left=10),
+                        )
+                    )
+                else:
+                    controls.append(
+                        ft.Container(
+                            content=ft.FilledButton(
+                                "Review & Approve Masks",
+                                icon=ft.Icons.APPROVAL,
+                                bgcolor=ft.Colors.ORANGE,
+                                on_click=lambda e: self._show_mask_review_dialog(),
+                            ),
+                            padding=ft.padding.only(left=10, top=5),
+                        )
+                    )
         else:
             # Single localizer
             controls.extend(
@@ -2908,7 +3241,13 @@ class ParticipantWorkflowScreen:
                     masks_customized = self._has_custom_mask_selections()
                     _cfg = self.study_config.session_config
                     localizer_type = _cfg.get("mask", {}).get("localizer_type", "rest")
-                    method_label = "GLM" if localizer_type == "task" else "ICA"
+                    _loc0 = _cfg.get("localizers", [{}])[0] if _cfg.get("localizers") else {}
+                    if _loc0.get("type") == "manual":
+                        method_label = "Manual"
+                    elif localizer_type == "task":
+                        method_label = "GLM"
+                    else:
+                        method_label = "ICA"
                     status_text = "Customized" if masks_customized else method_label
                     status_color = ft.Colors.BLUE if masks_customized else ft.Colors.GREY_600
 
@@ -4590,6 +4929,26 @@ class ParticipantWorkflowScreen:
             Dictionary with step information
         """
         localizer_type = config.get("mask", {}).get("localizer_type", "rest")
+        loc0 = config["localizers"][0] if config.get("localizers") else {}
+
+        if loc0.get("type") == "manual":
+            from pineuro.gui.components.manual_masks import read_manual_masks
+
+            names = loc0.get("manual_mask_names", []) or []
+            record = read_manual_masks(base_dir, loc0.get("id", "manual"))
+            reference = (record or {}).get("reference") or "(select per participant)"
+            return {
+                "label": "Import Network Masks",
+                "description": f"Import {len(names)} user-supplied mask(s) into the feedback pipeline.",
+                "parameters": {
+                    "Masks": ", ".join(names) or "(none)",
+                    "Mask space": loc0.get("manual_mask_space", "native"),
+                    "Reference": str(reference),
+                    "Output": base_dir / "mask_extraction",
+                },
+                "output_path": base_dir / "mask_extraction",
+                "output_pattern": "0*",
+            }
 
         if localizer_type == "task":
             contrasts = config.get("mask", {}).get("contrasts", {})
@@ -5062,6 +5421,18 @@ class ParticipantWorkflowScreen:
                     "Highpass": f"{loc.get('highpass', 0.01)} Hz",
                     "Threshold": f"{loc.get('threshold', 2000)} ({loc.get('threshold_method', 'top_n')})",
                 }
+            elif loc_type == "manual":
+                from pineuro.gui.components.manual_masks import read_manual_masks
+
+                loc_display = "Manual Import"
+                method = "Manual"
+                _record = read_manual_masks(base_dir, loc.get("id", "manual"))
+                params = {
+                    "Method": "Manual import (user-supplied masks)",
+                    "Mask space": loc.get("manual_mask_space", "native"),
+                    "Masks": ", ".join(loc.get("manual_mask_names", []) or []) or "(none)",
+                    "Reference": str((_record or {}).get("reference") or "(select per participant)"),
+                }
             else:
                 try:
                     from pineuro.tasks import get_task_metadata
@@ -5504,6 +5875,22 @@ class ParticipantWorkflowScreen:
         """
         # Store overwrite choice to pass to pipeline runner
         self._pending_overwrite = overwrite
+
+        # Manual-mask import steps need this participant's files chosen first.
+        manual_loc_idx = self._manual_localizer_for_step(step_id)
+        if manual_loc_idx is not None:
+            from pineuro.gui.components.manual_masks import manual_masks_complete
+
+            base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+            loc = self.study_config.session_config["localizers"][manual_loc_idx]
+            if not manual_masks_complete(base_dir, loc):
+                self._selected_rest_runs = None
+                self._selected_acqs = None
+                self._show_manual_mask_config_dialog(
+                    loc_idx=manual_loc_idx,
+                    on_saved=lambda: self._start_step(step_id),
+                )
+                return
 
         # For preprocessing, show unified acq selection dialog if needed
         if step_id == "preprocessing":
@@ -6403,6 +6790,8 @@ class ParticipantWorkflowScreen:
             config = self.study_config.session_config
             localizers = config.get("localizers", [])
             loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
+            if loc_type == "manual":
+                return f"Import Masks (Loc {loc_idx + 1})"
             label = "Rest" if loc_type == "rest" else loc_type.upper()
             return f"Extract {label} Masks (Loc {loc_idx + 1})"
         if step_id.startswith("localizer_") and step_id.endswith("_approval"):
@@ -6410,7 +6799,7 @@ class ParticipantWorkflowScreen:
             config = self.study_config.session_config
             localizers = config.get("localizers", [])
             loc_type = localizers[loc_idx].get("type", "rest") if loc_idx < len(localizers) else "rest"
-            label = "Rest" if loc_type == "rest" else loc_type.upper()
+            label = "Manual" if loc_type == "manual" else ("Rest" if loc_type == "rest" else loc_type.upper())
             return f"Review & Approve {label} Masks (Loc {loc_idx + 1})"
 
         # Handle dynamic rest_run_* steps (single-localizer / legacy)
@@ -7053,21 +7442,27 @@ class ParticipantWorkflowScreen:
 
             localizers = config.get("localizers", [])
             if localizers and len(localizers) > 1:
-                # Multi-localizer: collect ALL runs first, then per-localizer preprocess→extract→approve
+                # Multi-localizer: collect ALL runs first, then per-localizer preprocess→extract→approve.
+                # Manual localizers import pre-built masks — no collection or preprocessing.
                 for loc_idx, loc in enumerate(localizers):
+                    if loc.get("type") == "manual":
+                        continue
                     loc_n_runs = loc.get("n_runs", 2)
                     for run_num in range(1, loc_n_runs + 1):
                         step_id = f"localizer_{loc_idx}_run_{run_num}"
                         workflow.append((step_id, self._get_step_label(step_id)))
                 for loc_idx, loc in enumerate(localizers):
                     loc_type = loc.get("type", "rest")
-                    loc_label = loc_type.upper() if loc_type != "rest" else "Rest"
-                    workflow.append(
-                        (
-                            f"localizer_{loc_idx}_preprocessing",
-                            self._get_step_label(f"localizer_{loc_idx}_preprocessing"),
-                        )
+                    loc_label = (
+                        "Manual" if loc_type == "manual" else (loc_type.upper() if loc_type != "rest" else "Rest")
                     )
+                    if loc_type != "manual":
+                        workflow.append(
+                            (
+                                f"localizer_{loc_idx}_preprocessing",
+                                self._get_step_label(f"localizer_{loc_idx}_preprocessing"),
+                            )
+                        )
                     workflow.append(
                         (
                             f"localizer_{loc_idx}_extraction",
@@ -7082,17 +7477,23 @@ class ParticipantWorkflowScreen:
                     )
             else:
                 # Single localizer
-                n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
-                for run_num in range(1, n_localizer_runs + 1):
-                    step_id = f"rest_run_{run_num}"
-                    workflow.append((step_id, self._get_step_label(step_id)))
-                workflow.extend(
-                    [
-                        ("preprocessing", "Run Preprocessing"),
-                        ("mask_extraction", "Extract Masks"),
-                    ]
-                )
-                workflow.append(("mask_approval", "Review & Approve Masks"))
+                loc0 = config["localizers"][0] if config.get("localizers") else {}
+                if loc0.get("type") == "manual":
+                    # Manual import — no collection or preprocessing
+                    workflow.append(("mask_extraction", "Import Masks"))
+                    workflow.append(("mask_approval", "Review & Approve Masks"))
+                else:
+                    n_localizer_runs = loc0.get("n_runs", 2) if config.get("localizers") else 2
+                    for run_num in range(1, n_localizer_runs + 1):
+                        step_id = f"rest_run_{run_num}"
+                        workflow.append((step_id, self._get_step_label(step_id)))
+                    workflow.extend(
+                        [
+                            ("preprocessing", "Run Preprocessing"),
+                            ("mask_extraction", "Extract Masks"),
+                        ]
+                    )
+                    workflow.append(("mask_approval", "Review & Approve Masks"))
 
             # Add coregistration only if initial reference is enabled
             if reference_initial_enabled:

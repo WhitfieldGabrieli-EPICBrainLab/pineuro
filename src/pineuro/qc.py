@@ -1449,12 +1449,14 @@ def generate_mask_extraction_report(
 
     # Detect mask source type from mask_selections.json
     is_mni_atlas = False
+    is_manual = False
     selections_file = masks_dir / "mask_selections.json"
     if selections_file.exists():
         import json
 
         sel_data = json.loads(selections_file.read_text())
         is_mni_atlas = any(isinstance(v, dict) and v.get("source_type") == "mni_atlas" for v in sel_data.values())
+        is_manual = any(isinstance(v, dict) and v.get("source_type") == "manual_import" for v in sel_data.values())
 
     # Find ICA components and reference
     components_file = ica_dir / f"{participant_id}_components.nii.gz"
@@ -1503,6 +1505,12 @@ def generate_mask_extraction_report(
         summary_data = {
             "Participant": participant_id,
             "Mask source": "MNI Atlas (no localizer)",
+            "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
+        }
+    elif is_manual:
+        summary_data = {
+            "Participant": participant_id,
+            "Mask source": "Manual import (user-supplied masks)",
             "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
         }
     else:
@@ -1724,7 +1732,7 @@ def generate_mask_extraction_report(
     if network_masks:
         sections.append({"type": "heading", "content": "Mask Summary"})
         table_rows = []
-        if is_mni_atlas:
+        if is_mni_atlas or is_manual:
             for network, mask_path in network_masks.items():
                 summary = summarize_mask(mask_path, name=network)
                 table_rows.append(

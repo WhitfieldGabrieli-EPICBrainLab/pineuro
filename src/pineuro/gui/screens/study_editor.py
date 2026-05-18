@@ -7,6 +7,7 @@ Localizer and feedback tabs are created dynamically based on user-specified coun
 import contextlib
 import copy
 import logging
+from collections.abc import Callable
 
 import flet as ft
 
@@ -340,7 +341,10 @@ class StudyEditorScreen:
     @property
     def _localizer_type_options(self) -> list[ft.dropdown.Option]:
         if self._localizer_type_options_cache is None:
-            opts = [ft.dropdown.Option(key="rest", text="Rest (ICA Network Extraction)")]
+            opts = [
+                ft.dropdown.Option(key="rest", text="Rest (ICA Network Extraction)"),
+                ft.dropdown.Option(key="manual", text="Manual Mask Import"),
+            ]
             available_loc_tasks = list_available_tasks(role="localizer")
             opts.extend(
                 ft.dropdown.Option(key=task_id, text=f"{meta.display_name} (GLM Contrast)")
@@ -521,6 +525,11 @@ class StudyEditorScreen:
             cfg.setdefault("smooth_fwhm", 5.0)
             cfg.setdefault("highpass", 0.01)
             cfg.setdefault("yeo_targets", ["DefaultA", "ContA"])
+        elif new_type == "manual":
+            # Switching to manual import: seed the participant-agnostic fields.
+            # The actual mask files are chosen per participant in the workflow.
+            cfg.setdefault("manual_mask_space", "native")
+            cfg.setdefault("manual_mask_names", [])
         elif new_type != "rest":
             # Switching to task: set contrast defaults from task metadata
             try:
@@ -643,6 +652,8 @@ class StudyEditorScreen:
         loc_type = cfg.get("type", "rest")
         if loc_type == "rest":
             short = "Rest"
+        elif loc_type == "manual":
+            short = "Manual"
         else:
             try:
                 meta = get_task_metadata(loc_type)
@@ -987,6 +998,11 @@ class StudyEditorScreen:
         # --- Localizer sources ---
         for loc_idx, cfg in enumerate(self._localizer_configs):
             loc_type = cfg.get("type", "rest")
+            # Manual localizers import pre-built masks — no localizer scan, so
+            # no source DICOMs. Keep index alignment with an empty field list.
+            if loc_type == "manual":
+                self._sim_loc_source_fields.append([])
+                continue
             if loc_type == "rest":
                 label = f"Localizer {loc_idx + 1} (Rest)"
             else:
@@ -1232,8 +1248,20 @@ class StudyEditorScreen:
         self,
         field: ft.TextField,
         filetypes: list[tuple[str, str]] | None = None,
+        on_pick: Callable[[str], None] | None = None,
     ) -> ft.IconButton:
-        """Create a browse button for file selection."""
+        """Create a browse button for file selection.
+
+        Parameters
+        ----------
+        field : ft.TextField
+            Field whose value is set to the picked path.
+        filetypes : list of (label, pattern), optional
+            tkinter file-type filters.
+        on_pick : callable, optional
+            Called with the picked path after ``field.value`` is set, e.g. to
+            auto-populate a sibling field.
+        """
         if filetypes is None:
             filetypes = [("All Files", "*.*")]
 
@@ -1271,6 +1299,8 @@ class StudyEditorScreen:
                 if path:
                     field.value = path
                     field.update()
+                    if on_pick is not None:
+                        on_pick(path)
             except Exception as ex:
                 logger.error(f"Error opening file picker: {ex}")
 

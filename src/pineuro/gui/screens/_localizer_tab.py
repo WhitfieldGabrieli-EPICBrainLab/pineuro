@@ -377,6 +377,9 @@ class LocalizerTabBuilder:
         # live refresh on TR / task-param changes.
         self._configure_computed_n_volumes()
 
+        # Manual mask import fields (used when type == "manual")
+        self._create_manual_mask_fields()
+
     # ------------------------------------------------------------------
     # Build
     # ------------------------------------------------------------------
@@ -384,6 +387,7 @@ class LocalizerTabBuilder:
     def build(self) -> ft.Container:
         """Build the tab content."""
         is_rest = self._loc_type == "rest"
+        is_manual = self._loc_type == "manual"
 
         # Network dropdowns row (shows only visible ones)
         visible_dropdowns: list[ft.Control] = [dd for dd in self._network_dropdowns if dd.visible]
@@ -437,41 +441,53 @@ class LocalizerTabBuilder:
         task_params = self._build_task_specific_params()
         self.task_params_section = ft.Column(task_params)
 
-        # Assemble
-        controls: list[ft.Control] = [
-            ft.Text("Localizer Type", size=16, weight=ft.FontWeight.BOLD),
-            self.type_display_text,
-            self.contrast_info_text,
-            ft.Divider(),
-            ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
-            ft.Text(
-                "Configure the localizer scan that identifies participant-specific brain networks.",
-                size=11,
-                color=ft.Colors.GREY_600,
-                italic=True,
-            ),
-            _f(self.tr_field),
-            self.n_volumes_field,
-            self.n_volumes_info_text,
-            self.n_runs_field,
-            self.motion_correction_dropdown,
-            ft.Divider(),
-            self.target_networks_section,
-            self.networks_section,
-            self.task_params_section,
-            self.include_reverse_contrasts_checkbox,
-            ft.Text("Mask Extraction", size=16, weight=ft.FontWeight.BOLD),
-            ft.Text(
-                "Configure how network masks are extracted from the stat maps.",
-                size=11,
-                color=ft.Colors.GREY_600,
-                italic=True,
-            ),
-            self.threshold_field,
-            self.threshold_method_dropdown,
-            self.cluster_settings_section,
-            self.cluster_extent_settings_section,
-        ]
+        # Manual mask import section
+        self.manual_section = self._build_manual_section()
+
+        # Assemble — a manual localizer imports pre-built masks and has no
+        # scan, ICA/GLM extraction, or task parameters.
+        if is_manual:
+            controls: list[ft.Control] = [
+                ft.Text("Localizer Type", size=16, weight=ft.FontWeight.BOLD),
+                self.type_display_text,
+                ft.Divider(),
+                self.manual_section,
+            ]
+        else:
+            controls = [
+                ft.Text("Localizer Type", size=16, weight=ft.FontWeight.BOLD),
+                self.type_display_text,
+                self.contrast_info_text,
+                ft.Divider(),
+                ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    "Configure the localizer scan that identifies participant-specific brain networks.",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+                _f(self.tr_field),
+                self.n_volumes_field,
+                self.n_volumes_info_text,
+                self.n_runs_field,
+                self.motion_correction_dropdown,
+                ft.Divider(),
+                self.target_networks_section,
+                self.networks_section,
+                self.task_params_section,
+                self.include_reverse_contrasts_checkbox,
+                ft.Text("Mask Extraction", size=16, weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    "Configure how network masks are extracted from the stat maps.",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+                self.threshold_field,
+                self.threshold_method_dropdown,
+                self.cluster_settings_section,
+                self.cluster_extent_settings_section,
+            ]
 
         return ft.Container(
             content=ft.Column(controls, scroll=ft.ScrollMode.AUTO),
@@ -487,6 +503,10 @@ class LocalizerTabBuilder:
         from pineuro.mask_extraction import ATLAS_SOURCES
 
         loc_type = self._loc_type or "rest"
+
+        if loc_type == "manual":
+            return self._collect_manual_config()
+
         is_rest = loc_type == "rest"
 
         extraction: dict[str, Any] = {
@@ -571,6 +591,8 @@ class LocalizerTabBuilder:
     def get_mask_names(self) -> list[str]:
         """Return the mask names this localizer will produce."""
         loc_type = self._loc_type or "rest"
+        if loc_type == "manual":
+            return [name for row in self._manual_mask_rows if (name := (row["name"].value or "").strip())]
         if loc_type == "rest":
             names = []
             for i, dd in enumerate(self._network_dropdowns):
@@ -592,6 +614,107 @@ class LocalizerTabBuilder:
             if self.include_reverse_contrasts_checkbox.value:
                 names = names + [f"{n}_reverse" for n in names]
             return names
+
+    # ------------------------------------------------------------------
+    # Manual mask import
+    # ------------------------------------------------------------------
+
+    def _create_manual_mask_fields(self) -> None:
+        """Create the controls backing the Manual Mask Import section.
+
+        Only participant-agnostic data lives in the study config: the mask
+        space and the network names. Each participant's actual mask /
+        reference EPI / T1 files are selected later in the participant
+        workflow.
+        """
+        c = self.config
+
+        self.manual_mask_space_dropdown = ft.Dropdown(
+            width=600,
+            label="Mask space",
+            value=c.get("manual_mask_space", "native"),
+            options=[
+                ft.dropdown.Option(key="native", text="Native (EPI / functional space)"),
+                ft.dropdown.Option(key="anat", text="Anatomical (T1 space)"),
+                ft.dropdown.Option(key="mni", text="MNI152 standard space"),
+            ],
+        )
+
+        # One row per network name. Seed from saved config.
+        self._manual_mask_rows: list[dict[str, Any]] = []
+        for name in c.get("manual_mask_names", []) or []:
+            self._manual_mask_rows.append(self._make_manual_mask_row(str(name)))
+        if not self._manual_mask_rows:
+            self._manual_mask_rows.append(self._make_manual_mask_row(""))
+
+        self.manual_masks_column = ft.Column([row["row"] for row in self._manual_mask_rows])
+
+    def _make_manual_mask_row(self, name: str) -> dict[str, Any]:
+        """Build one network-name row (name field + remove button)."""
+        name_field = ft.TextField(
+            width=300,
+            label="Network name",
+            value=name,
+            hint_text="e.g. DefaultA",
+            on_change=lambda _: self._notify_change(),
+        )
+        row_data: dict[str, Any] = {"name": name_field}
+        row_data["row"] = ft.Row(
+            [
+                name_field,
+                ft.IconButton(
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    tooltip="Remove this network",
+                    on_click=lambda _, rd=row_data: self._on_remove_mask_row(rd),
+                ),
+            ]
+        )
+        return row_data
+
+    def _build_manual_section(self) -> ft.Container:
+        """Build the Manual Mask Import section container."""
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Manual Mask Import", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Use pre-built masks instead of extracting them. The mask files, "
+                        "reference EPI, and T1 differ per participant — they are selected in "
+                        "each participant's workflow at the Import Masks step. Here you only "
+                        "set the mask space and the network names.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    ft.Divider(),
+                    self.manual_mask_space_dropdown,
+                    ft.Text("Network names", size=14, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "Each network becomes a feedback mask; the name wires it to feedback runs.",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                        italic=True,
+                    ),
+                    self.manual_masks_column,
+                    ft.TextButton("Add network", icon=ft.Icons.ADD, on_click=self._on_add_mask_row),
+                ]
+            ),
+        )
+
+    def _collect_manual_config(self) -> dict[str, Any]:
+        """Gather manual-mask study-config values (participant-agnostic only)."""
+        names = [n for row in self._manual_mask_rows if (n := (row["name"].value or "").strip())]
+        return {
+            "type": "manual",
+            "id": self.config.get("id", "manual"),
+            "manual_mask_space": self.manual_mask_space_dropdown.value or "native",
+            "manual_mask_names": names,
+        }
+
+    def _notify_change(self) -> None:
+        """Fire the on_change callback if one is registered."""
+        if self._on_change:
+            self._on_change()
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -702,6 +825,29 @@ class LocalizerTabBuilder:
         self._validate_field("n_runs", self.n_runs_field, validate_positive_int)
         if self._on_change:
             self._on_change()
+
+    def _on_add_mask_row(self, e):
+        """Append a blank network-name row."""
+        row_data = self._make_manual_mask_row("")
+        self._manual_mask_rows.append(row_data)
+        self.manual_masks_column.controls.append(row_data["row"])
+        with contextlib.suppress(Exception):
+            self.manual_masks_column.update()
+        self._notify_change()
+
+    def _on_remove_mask_row(self, row_data: dict[str, Any]):
+        """Remove a network-name row, keeping at least one."""
+        if row_data in self._manual_mask_rows:
+            self._manual_mask_rows.remove(row_data)
+        if row_data["row"] in self.manual_masks_column.controls:
+            self.manual_masks_column.controls.remove(row_data["row"])
+        if not self._manual_mask_rows:
+            new_row = self._make_manual_mask_row("")
+            self._manual_mask_rows.append(new_row)
+            self.manual_masks_column.controls.append(new_row["row"])
+        with contextlib.suppress(Exception):
+            self.manual_masks_column.update()
+        self._notify_change()
 
     # ------------------------------------------------------------------
     # Helpers
