@@ -84,9 +84,14 @@ By default, feedback is delivered every TR. For intermittent feedback, set `feed
 
 When set, activations are accumulated and the mean is delivered to the task every N volumes. Per-volume data is still logged in the feedbacklog at full temporal resolution.
 
-## Efficiency Weighting
+## ROI Combining
 
-When `use_efficiency_weights` is enabled (default), voxels within each mask are weighted by their t-statistic magnitude from the mask extraction step. This gives more influence to voxels that were more strongly associated with the target network, rather than treating all mask voxels equally.
+Per-voxel activations within each mask are combined into a single feedback value per volume. Set `roi_combine_method` on a feedback run to choose how:
+
+| Method | Description |
+|--------|-------------|
+| `inverse_sd` (default) | Voxel efficiency weighting (Hinds et al., 2011): each voxel is weighted by `1/σ`, the inverse of its residual standard deviation, so noisier voxels contribute less. |
+| `mean` | Unweighted mean — every mask voxel contributes equally. |
 
 ## QC Thresholds
 

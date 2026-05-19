@@ -174,7 +174,7 @@ class StudyEditorScreen:
                     "n_volumes": 150,
                     "n_baseline": 25,
                     "feedback_mode": "activation",
-                    "use_efficiency_weights": True,
+                    "roi_combine_method": "inverse_sd",
                     "use_transfer_runs": True,
                     "network_assignment": {"top_network": "ContA", "bottom_network": "DefaultA"},
                     "qc": {"fd_threshold": 0.5, "dvars_threshold": 1.5, "tsnr_threshold": 20.0},

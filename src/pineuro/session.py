@@ -663,8 +663,9 @@ class FeedbackRunConfig:
         Number of baseline volumes before task onset.
     feedback_mode : str
         ``"activation"`` or ``"connectivity"``.
-    use_efficiency_weights : bool
-        Use efficiency weights in activation estimation.
+    roi_combine_method : str
+        How per-voxel activations are combined per ROI: ``"inverse_sd"``
+        (Hinds 2011 efficiency weighting, w = 1/sigma; the default) or ``"mean"``.
     qc : QCConfig
         Per-run QC thresholds (fd, dvars, tsnr).
     glm : GLMConfig
@@ -688,6 +689,8 @@ class FeedbackRunConfig:
         Simulator DICOM source for transfer runs.
     """
 
+    VALID_ROI_COMBINE_METHODS = {"mean", "inverse_sd"}
+
     task: str = "ball"
     mask_source: str = ""
     max_runs: int = 1
@@ -697,7 +700,7 @@ class FeedbackRunConfig:
 
     # Feedback signal
     feedback_mode: str = "activation"
-    use_efficiency_weights: bool = True
+    roi_combine_method: str = "inverse_sd"
 
     # Grouped sub-blocks
     qc: QCConfig = field(default_factory=QCConfig)
@@ -718,6 +721,12 @@ class FeedbackRunConfig:
     # Simulator sources
     source_dicoms: str = ""
     transfer_source_dicoms: str = ""
+
+    def __post_init__(self) -> None:
+        if self.roi_combine_method not in self.VALID_ROI_COMBINE_METHODS:
+            raise ValueError(
+                f"roi_combine_method must be one of {self.VALID_ROI_COMBINE_METHODS}, got '{self.roi_combine_method}'"
+            )
 
 
 @dataclass
@@ -1094,6 +1103,12 @@ class SessionConfig:
             block = frc_data.pop(key, None)
             if block:
                 frc_data[key] = klass(**block)
+        # Back-compat: the old boolean use_efficiency_weights became the
+        # roi_combine_method choice -- True meant weighting was on (now the
+        # corrected 1/sigma), False meant a plain unweighted mean.
+        legacy = frc_data.pop("use_efficiency_weights", None)
+        if legacy is not None and "roi_combine_method" not in frc_data:
+            frc_data["roi_combine_method"] = "inverse_sd" if legacy else "mean"
         return FeedbackRunConfig(**frc_data)
 
     def to_yaml(self, path: Path) -> None:
@@ -2582,7 +2597,7 @@ def run_single_task(
         tr=eff_tr,
         task_regressors=task_regressors,
         mask_names=config.combined_mask_names,
-        use_efficiency_weights=run_config.use_efficiency_weights,
+        roi_combine_method=run_config.roi_combine_method,
         motion_correction=eff_motion_correction,
         include_drift=eff_include_drift,
         include_motion_regressors=eff_include_motion_regressors,

@@ -4,7 +4,53 @@ import nibabel as nib
 import numpy as np
 import pytest
 
-from pineuro.feedback import IncrementalGLM
+from pineuro.feedback import IncrementalGLM, _combine_roi
+
+# =============================================================================
+# _combine_roi — ROI combining
+# =============================================================================
+
+
+class TestCombineRoi:
+    """Per-voxel -> ROI feedback aggregation (mean vs inverse-SD weighting)."""
+
+    def test_mean(self):
+        a = np.array([1.0, 5.0])
+        assert _combine_roi(a, np.array([1.0, 100.0]), "mean") == 3.0
+
+    def test_inverse_sd_downweights_noisy_voxel(self):
+        # Clean voxel (RSS 1) and noisy voxel (RSS 100) carrying activations
+        # 1.0 and 5.0. Inverse-SD weights are 1/1 and 1/10, so the clean
+        # voxel dominates: (1*1 + 0.1*5) / (1 + 0.1) = 1.5 / 1.1.
+        a = np.array([1.0, 5.0])
+        rss = np.array([1.0, 100.0])
+        result = _combine_roi(a, rss, "inverse_sd")
+        assert result == pytest.approx(1.5 / 1.1)
+        # Far closer to the clean voxel than the unweighted mean (3.0) -- and
+        # nothing like the old RSS-weighting, which gave ~4.96.
+        assert result < _combine_roi(a, rss, "mean")
+
+    def test_inverse_sd_equals_mean_for_uniform_noise(self):
+        # Equal RSS -> equal weights -> the weighted average is the mean.
+        a = np.array([2.0, 4.0, 9.0])
+        rss = np.array([7.0, 7.0, 7.0])
+        assert _combine_roi(a, rss, "inverse_sd") == pytest.approx(np.mean(a))
+
+    def test_inverse_sd_skips_nonpositive_rss(self):
+        # A voxel with zero RSS has no usable noise estimate and is dropped;
+        # only the second voxel (RSS 4, weight 0.5) contributes.
+        a = np.array([1.0, 5.0])
+        result = _combine_roi(a, np.array([0.0, 4.0]), "inverse_sd")
+        assert result == pytest.approx(5.0)
+
+    def test_inverse_sd_falls_back_to_mean_when_no_valid_voxel(self):
+        a = np.array([1.0, 2.0])
+        assert _combine_roi(a, np.array([0.0, 0.0]), "inverse_sd") == pytest.approx(1.5)
+
+    def test_unknown_method_rejected(self):
+        with pytest.raises(ValueError, match="roi_combine_method"):
+            _combine_roi(np.array([1.0]), np.array([1.0]), "bogus")
+
 
 # =============================================================================
 # IncrementalGLM — Core Algorithm Tests

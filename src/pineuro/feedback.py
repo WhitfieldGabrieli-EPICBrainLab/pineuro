@@ -1035,9 +1035,52 @@ class IncrementalGLM:
 #    normalize continuously using running variance estimates. After baseline
 #    completes, we "freeze" the variance to prevent drift.
 #
-# 3. Optional efficiency weighting: For ROI aggregation, users can choose
-#    inverse-variance weighting (more reliable voxels contribute more) or
-#    simple averaging.
+# 3. Configurable ROI combining: per-voxel activations are reduced to one
+#    feedback value per mask by _combine_roi -- an unweighted mean or the
+#    Hinds et al. 2011 efficiency weighting (w = 1/sigma).
+
+
+ROI_COMBINE_METHODS = ("mean", "inverse_sd")
+
+
+def _combine_roi(
+    activations: NDArray[np.float64],
+    rss: NDArray[np.float64],
+    method: str,
+) -> float:
+    """Combine per-voxel ROI activations into a single feedback value.
+
+    Parameters
+    ----------
+    activations : ndarray
+        Per-voxel normalized activations (z-scored error) for one ROI.
+    rss : ndarray
+        Per-voxel residual sum of squares for the same voxels. RSS is
+        proportional to the noise variance (sigma**2).
+    method : str
+        ``"mean"`` -- unweighted mean of the per-voxel activations.
+        ``"inverse_sd"`` -- Hinds et al. 2011 voxel efficiency weighting:
+        weight ``w_i = 1 / sigma_i`` with ``sigma_i = sqrt(RSS_i)``, giving
+        the weighted average ``sum(w_i * z_i) / sum(w_i)``. Noisier voxels
+        (larger sigma) contribute less.
+
+    Returns
+    -------
+    float
+        The combined ROI feedback value.
+    """
+    if method == "mean":
+        return float(np.mean(activations))
+    if method != "inverse_sd":
+        raise ValueError(f"roi_combine_method must be one of {ROI_COMBINE_METHODS}, got '{method}'")
+    sigma = np.sqrt(rss)
+    ok = np.isfinite(sigma) & (sigma > 0) & np.isfinite(activations)
+    if not np.any(ok):
+        # No usable noise estimate yet (e.g. before the GLM has data) --
+        # fall back to an unweighted mean.
+        return float(np.mean(activations))
+    weights = 1.0 / sigma[ok]
+    return float(np.sum(weights * activations[ok]) / np.sum(weights))
 
 
 class FeedbackEstimator:
@@ -1064,9 +1107,10 @@ class FeedbackEstimator:
         - None: No task regressors (nuisance-only model)
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
-    use_efficiency_weights : bool, optional
-        If True, use inverse-variance weighting for ROI aggregation (computed
-        from residual MSE). If False, use simple mean. Default is True.
+    roi_combine_method : str, optional
+        How per-voxel activations are combined into one ROI value:
+        ``"inverse_sd"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
+        the default) or ``"mean"`` (unweighted average).
 
     Attributes
     ----------
@@ -1103,7 +1147,7 @@ class FeedbackEstimator:
         tr: float,
         task_regressors: NDArray[np.float64] | None = None,
         mask_names: list[str] | None = None,
-        use_efficiency_weights: bool = True,
+        roi_combine_method: str = "inverse_sd",
         sham_provider: Optional["ShamActivationProvider"] = None,
         dump_algo_vars_path: Path | str | None = None,
         smooth_fwhm: float | None = None,
@@ -1128,7 +1172,7 @@ class FeedbackEstimator:
         self._n_volumes_expected = n_volumes
         self._tr = tr
         self.n_volumes = 0
-        self.use_efficiency_weights = use_efficiency_weights
+        self.roi_combine_method = roi_combine_method
         self._smooth_fwhm = smooth_fwhm
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
         self._algo_dump_fh: IO[Any] | None = None
@@ -1266,10 +1310,6 @@ class FeedbackEstimator:
         self._welford_mean: NDArray[np.float64] | None = None
         self._welford_m2: NDArray[np.float64] | None = None
 
-        # Dict to store efficiency weights per mask: {mask_name: weights_array}
-        # Weights are computed from residual MSE for inverse-variance weighting
-        self._weights: dict[str, NDArray[np.float64]] = {}
-
         # Timeseries storage
         self.timeseries: dict[str, list[float]] = {name: [] for name in mask_names}
 
@@ -1284,7 +1324,7 @@ class FeedbackEstimator:
             f"{self._n_voxels} total voxels, "
             f"n_baseline={n_baseline}, n_volumes={n_volumes}, tr={tr:.3f}s, "
             f"task_regressors={self._n_task_regressors}, "
-            f"efficiency_weights={'enabled' if use_efficiency_weights else 'disabled'}, "
+            f"roi_combine={roi_combine_method}, "
             f"sham={sham_status}"
         )
 
@@ -1640,40 +1680,6 @@ class FeedbackEstimator:
 
         return X
 
-    def _compute_weights(self) -> None:
-        """Compute voxel efficiency weights from residual MSE.
-
-        Uses direct MSE weighting to match MURFI behavior.
-        Note: This gives more weight to higher-variance voxels.
-        """
-        if not self.use_efficiency_weights:
-            return
-
-        # Get residual MSE from GLM
-        residual_mse = self._glm.get_residual_mse()
-
-        # Compute weights for each mask
-        for name, idx in self._mask_voxel_idx.items():
-            mask_mse = residual_mse[idx]
-
-            # Direct MSE weighting (to match MURFI behavior)
-            # MURFI uses residual_mse directly as weights
-            weights = mask_mse.copy()
-            weights[~np.isfinite(weights)] = 0.0
-
-            # Normalize to sum to 1
-            weight_sum = np.sum(weights)
-            if weight_sum > 0:
-                weights /= weight_sum
-            else:
-                # Fallback to uniform weights
-                weights = np.ones_like(weights) / len(weights)
-                logger.warning(f"Mask '{name}': using uniform weights (zero MSE)")
-
-            self._weights[name] = weights
-
-        logger.info("Voxel efficiency weights computed from residual MSE")
-
     def _dump_algo_vars_to_file(
         self,
         X: NDArray[np.float64],
@@ -1834,33 +1840,16 @@ class FeedbackEstimator:
             # Freeze RSS, MSE, and timepoint for stable normalization
             self._glm.freeze_steady_state()
 
-        # ===== 4. Compute weighted activations per mask =====
-        # MURFI uses dynamic weights (current RSS at each timepoint)
-        # so we compute weights fresh each volume to match
+        # ===== 4. Combine per-voxel activations into one value per mask =====
+        # Per-voxel RSS is read fresh each volume so inverse-SD weighting
+        # tracks the current noise estimate; see _combine_roi.
         real_activations: dict[str, float] = {}
-
-        if self.use_efficiency_weights:
-            # Get current RSS for dynamic weighting (matches MURFI behavior)
-            current_rss = self._glm.get_rss()
+        current_rss = self._glm.get_rss()
 
         for name, idx in self._mask_voxel_idx.items():
-            mask_values = result[idx]
-
-            if self.use_efficiency_weights:
-                # Dynamic weights using current RSS (matches MURFI roi-combine)
-                mask_rss = current_rss[idx]
-                mask_rss = np.where(np.isfinite(mask_rss), mask_rss, 0.0)
-                weight_sum = np.sum(mask_rss)
-                if weight_sum > 0:
-                    weighted_mean = float(np.sum(mask_rss * mask_values) / weight_sum)
-                else:
-                    weighted_mean = float(np.mean(mask_values))
-            else:
-                # Use simple mean
-                weighted_mean = float(np.mean(mask_values))
-
-            real_activations[name] = weighted_mean
-            self.timeseries[name].append(weighted_mean)
+            combined = _combine_roi(result[idx], current_rss[idx], self.roi_combine_method)
+            real_activations[name] = combined
+            self.timeseries[name].append(combined)
 
         # Store real activations for logging (used by coordinator)
         self._last_real_activations = real_activations.copy()
@@ -2456,9 +2445,10 @@ class NeurofeedbackCoordinator:
         externally and passed here.
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
-    use_efficiency_weights : bool, optional
-        If True, use inverse-variance weighting for ROI aggregation (computed
-        from residual MSE). If False, use simple mean. Default is True.
+    roi_combine_method : str, optional
+        How per-voxel activations are combined into one ROI value:
+        ``"inverse_sd"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
+        the default) or ``"mean"`` (unweighted average).
 
     Attributes
     ----------
@@ -2504,7 +2494,7 @@ class NeurofeedbackCoordinator:
         tr: float,
         task_regressors: NDArray[np.float64] | None = None,
         mask_names: list[str] | None = None,
-        use_efficiency_weights: bool = True,
+        roi_combine_method: str = "inverse_sd",
         activation_callback: Callable[[dict[str, float], int, float, bool, bool], None] | None = None,
         error_callback: Callable[[Exception], None] | None = None,
         qc_enabled: bool = True,  # Generate QC report after session completes
@@ -2667,7 +2657,7 @@ class NeurofeedbackCoordinator:
             tr=tr,
             task_regressors=task_regressors,
             mask_names=mask_names,
-            use_efficiency_weights=use_efficiency_weights,
+            roi_combine_method=roi_combine_method,
             sham_provider=sham_provider,
             dump_algo_vars_path=self._dump_algo_vars_path,
             smooth_fwhm=smooth_fwhm,
@@ -3771,7 +3761,7 @@ def run_feedback_session(
     task_regressors: NDArray[np.float64] | None = None,
     incoming_dir: Path | str | None = None,
     mask_names: list[str] | None = None,
-    use_efficiency_weights: bool = True,
+    roi_combine_method: str = "inverse_sd",
     simulator_source_dir: Path | str | None = None,
     simulator_speed: float = 1.0,
     simulator_clear_target: bool = True,
@@ -3837,9 +3827,10 @@ def run_feedback_session(
         writes volumes.
     mask_names : list of str, optional
         Names for each mask. If not provided, uses mask filenames.
-    use_efficiency_weights : bool, optional
-        If True, use inverse-variance weighting for ROI aggregation (computed
-        from residual MSE). If False, use simple mean. Default is True.
+    roi_combine_method : str, optional
+        How per-voxel activations are combined into one ROI value:
+        ``"inverse_sd"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
+        the default) or ``"mean"`` (unweighted average).
     simulator_source_dir : Path or str, optional
         If provided, runs in simulation mode. Directory containing source volume
         files (DICOM or NIfTI) to simulate scanner acquisition. If None, runs in
@@ -4109,7 +4100,7 @@ def run_feedback_session(
         tr=tr,
         task_regressors=task_regressors,
         mask_names=mask_names,
-        use_efficiency_weights=use_efficiency_weights,
+        roi_combine_method=roi_combine_method,
         activation_callback=activation_callback,
         error_callback=error_callback,
         qc_enabled=qc_enabled,

@@ -259,6 +259,17 @@ class FeedbackTabBuilder:
             visible=needs_multi_network,
         )
 
+        # ROI combine method — how per-voxel activations are aggregated per mask.
+        self.roi_combine_dropdown = ft.Dropdown(
+            width=600,
+            label="ROI combine method",
+            options=[
+                ft.dropdown.Option("inverse_sd", "Inverse-SD weighting (Hinds 2011)"),
+                ft.dropdown.Option("mean", "Unweighted mean"),
+            ],
+            value=c.get("roi_combine_method", "inverse_sd"),
+        )
+
         # network_assignment is the single source of truth for role-to-mask mapping.
         network_assignment = c.get("network_assignment", {}) or {}
 
@@ -569,6 +580,7 @@ class FeedbackTabBuilder:
                     self.single_mask_dropdown,
                     self._extra_roles_column,
                     self.feedback_mode_dropdown,
+                    self.roi_combine_dropdown,
                     self.differential_row,
                     self.connectivity_section,
                     self.intermittent_enabled_checkbox,
@@ -641,6 +653,9 @@ class FeedbackTabBuilder:
         # Feedback mode
         feedback_mode = self.feedback_mode_dropdown.value or "activation"
         cfg["feedback_mode"] = feedback_mode
+
+        # ROI combine method
+        cfg["roi_combine_method"] = self.roi_combine_dropdown.value or "inverse_sd"
 
         # Network assignment — single source of truth for role-to-mask mapping.
         # Always emit it (no more 3+ network gating; differential_pair / target_mask

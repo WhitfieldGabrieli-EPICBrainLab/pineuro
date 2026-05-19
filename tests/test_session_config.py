@@ -148,7 +148,7 @@ class TestFeedbackRunConfig:
         assert frc.task == "ball"
         assert frc.mask_source == ""
         assert frc.max_runs == 1
-        assert frc.use_efficiency_weights is True
+        assert frc.roi_combine_method == "inverse_sd"
         assert frc.qc.fd_threshold == 0.5
         assert frc.glm.motion_correction == "siemens_moco"
         assert frc.glm.include_drift is True
@@ -166,6 +166,18 @@ class TestFeedbackRunConfig:
         assert frc.glm.motion_correction == "software"
         assert frc.connectivity.pairs == [["a", "b"]]
         assert frc.intermittent.interval == 5
+
+    def test_invalid_roi_combine_method_rejected(self):
+        with pytest.raises(ValueError, match="roi_combine_method"):
+            FeedbackRunConfig(roi_combine_method="bogus")
+
+    def test_legacy_use_efficiency_weights_migrates(self):
+        # Old modern-schema YAMLs may still carry the boolean; _build_feedback_run
+        # translates it to the roi_combine_method choice.
+        true_run = SessionConfig._build_feedback_run({"use_efficiency_weights": True})
+        false_run = SessionConfig._build_feedback_run({"use_efficiency_weights": False})
+        assert true_run.roi_combine_method == "inverse_sd"
+        assert false_run.roi_combine_method == "mean"
 
     def test_invalid_motion_correction_rejected(self):
         with pytest.raises(ValueError, match="motion_correction"):
