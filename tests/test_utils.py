@@ -9,9 +9,12 @@ import numpy as np
 import pytest
 
 from pineuro.utils import (
+    HEAD_RADIUS_MM,
     Timer,
     apply_mask,
     compute_boxcar_task_regressor,
+    compute_dvars,
+    compute_fd,
     compute_hrf,
     compute_mean,
     disable_timing,
@@ -22,6 +25,7 @@ from pineuro.utils import (
     get_volume_files,
     is_nifti_file,
     outputs_exist,
+    parse_siemens_motion_comment,
     save_timing_report,
 )
 
@@ -400,3 +404,81 @@ class TestRunCommand:
             patch("pineuro.utils._check_command_installation"),
         ):
             run_command("echo", ["echo"], "test", inputs=[tmp_path / "nonexistent.txt"])
+
+
+# =============================================================================
+# compute_fd
+# =============================================================================
+
+
+class TestComputeFD:
+    def test_first_volume_returns_zero(self):
+        motion = np.array([0.1, 0.2, 0.3, 1.0, 2.0, 3.0])
+        assert compute_fd(motion, None) == 0.0
+
+    def test_no_motion_returns_zero(self):
+        motion = np.zeros(6)
+        prev = np.zeros(6)
+        assert compute_fd(motion, prev) == 0.0
+
+    def test_pure_translation(self):
+        motion = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        prev = np.zeros(6)
+        # Translation of 1 mm in x -> FD = 1.0 mm.
+        assert compute_fd(motion, prev) == pytest.approx(1.0)
+
+    def test_rotation_uses_head_radius(self):
+        prev = np.zeros(6)
+        motion_with_rot = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+        # 1 deg rotation -> arc length HEAD_RADIUS_MM * pi/180.
+        expected_arc = HEAD_RADIUS_MM * np.pi / 180.0
+        assert compute_fd(motion_with_rot, prev) == pytest.approx(expected_arc)
+
+    def test_combined_translation_and_rotation(self):
+        motion = np.array([1.0, 1.0, 1.0, 0.5, 0.5, 0.5])
+        prev = np.zeros(6)
+        assert compute_fd(motion, prev) > 0
+
+
+# =============================================================================
+# compute_dvars
+# =============================================================================
+
+
+class TestComputeDVARS:
+    def test_first_volume_returns_zero(self):
+        voxels = np.array([100.0, 200.0, 300.0])
+        assert compute_dvars(voxels, None) == 0.0
+
+    def test_no_change_returns_zero(self):
+        voxels = np.array([100.0, 200.0, 300.0])
+        assert compute_dvars(voxels, voxels) == 0.0
+
+    def test_uniform_change(self):
+        prev = np.array([100.0, 100.0, 100.0])
+        curr = np.array([110.0, 110.0, 110.0])
+        # RMS of [10, 10, 10] = 10.0.
+        assert compute_dvars(curr, prev) == pytest.approx(10.0)
+
+
+# =============================================================================
+# parse_siemens_motion_comment
+# =============================================================================
+
+
+class TestParseSiemensMotionComment:
+    def test_reference_volume_returns_zeros(self):
+        motion = parse_siemens_motion_comment("Reference volume for motion correction")
+        assert motion is not None
+        np.testing.assert_array_equal(motion, np.zeros(6))
+
+    def test_motion_params_parsed(self):
+        motion = parse_siemens_motion_comment("Motion: 0.1,-0.2,0.3,1.0,-2.0,3.0")
+        assert motion is not None
+        np.testing.assert_allclose(motion, [0.1, -0.2, 0.3, 1.0, -2.0, 3.0])
+
+    def test_no_pattern_returns_none(self):
+        assert parse_siemens_motion_comment("some other comment") is None
+
+    def test_empty_string_returns_none(self):
+        assert parse_siemens_motion_comment("") is None

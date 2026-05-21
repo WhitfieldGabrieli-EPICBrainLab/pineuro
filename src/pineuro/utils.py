@@ -115,6 +115,7 @@ References
 # --- Standard Library ---
 import json
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -131,6 +132,7 @@ import numpy as np
 import pydicom  # DICOM header reading
 from nibabel.loadsave import save
 from nibabel.nifti1 import Nifti1Image
+from numpy.typing import NDArray
 from scipy.ndimage import binary_erosion, generate_binary_structure
 
 # --- Module Logger ---
@@ -550,6 +552,110 @@ def compute_boxcar_task_regressor(
             regressor[i] = convolved_hires[hires_idx]
 
     return regressor
+
+
+# ==============================================================
+# Motion Quality Control (FD, DVARS, Siemens MoCo parsing)
+# ==============================================================
+# Shared head-motion and image-stability metrics used by both the real-time
+# feedback estimator (feedback.py) and the live collection-QC monitor
+# (collection_qc.py). Kept here as pure functions so the two paths cannot
+# silently diverge.
+
+# Assumed head radius (mm) for framewise-displacement arc-length conversion.
+# Standard assumption from Power et al. (2012).
+HEAD_RADIUS_MM = 50.0
+
+# Pre-compiled regex for Siemens MoCo motion params in DICOM/JSON ImageComments.
+_MOTION_PATTERN = re.compile(r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)")
+
+
+def compute_fd(
+    motion_params: NDArray[np.float64],
+    prev_motion: NDArray[np.float64] | None,
+) -> float:
+    """Compute framewise displacement between two motion parameter vectors.
+
+    FD (Power et al., 2012) is the sum of absolute frame-to-frame differences
+    across all 6 motion parameters. Rotations (indices 3:6, in degrees) are
+    converted to mm of arc at HEAD_RADIUS_MM.
+
+    Parameters
+    ----------
+    motion_params : ndarray, shape (6,)
+        Current motion params [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z].
+        Translations in mm, rotations in degrees.
+    prev_motion : ndarray, shape (6,) or None
+        Previous volume's motion params. Returns 0.0 when None (first volume).
+
+    Returns
+    -------
+    float
+        Framewise displacement in mm.
+    """
+    if prev_motion is None:
+        return 0.0
+    # Translations (0-2) are already in mm; rotations (3-5) become arc length:
+    # arc = radius * angle_radians = HEAD_RADIUS_MM * (angle_degrees * pi/180).
+    diff_mm = (motion_params - prev_motion).copy()
+    diff_mm[3:6] *= HEAD_RADIUS_MM * np.pi / 180.0
+    return float(np.sum(np.abs(diff_mm)))
+
+
+def compute_dvars(
+    voxel_values: NDArray[np.float64],
+    prev_voxel_values: NDArray[np.float64] | None,
+) -> float:
+    """Compute DVARS: the spatial root mean square of the temporal derivative.
+
+    DVARS (Power et al., 2012) is sqrt(mean((I_t - I_{t-1})^2)) across the
+    supplied voxels.
+
+    Parameters
+    ----------
+    voxel_values : ndarray
+        Voxel intensities for the current volume.
+    prev_voxel_values : ndarray or None
+        Previous volume's voxel intensities. Returns 0.0 when None (first
+        volume).
+
+    Returns
+    -------
+    float
+        DVARS value for this volume.
+    """
+    if prev_voxel_values is None:
+        return 0.0
+    diff = voxel_values - prev_voxel_values
+    return float(np.sqrt(np.mean(diff**2)))
+
+
+def parse_siemens_motion_comment(comments: str) -> NDArray[np.float64] | None:
+    """Parse Siemens MoCo motion params from an ImageComments string.
+
+    The dcm2niix JSON sidecar and the DICOM ImageComments field carry motion
+    params as either:
+    - "Reference volume for motion correction." for reference volumes (zeros)
+    - "Motion: -0.01,-0.00,-0.05,0.01,0.05,0.00" for motion-corrected volumes
+
+    Parameters
+    ----------
+    comments : str
+        The ImageComments text.
+
+    Returns
+    -------
+    ndarray, shape (6,) or None
+        zeros(6) for the reference-volume sentinel, the 6 parsed floats on a
+        ``Motion:`` match, or None when neither matches. Callers apply their
+        own no-match policy.
+    """
+    if "Reference volume for motion correction" in comments:
+        return np.zeros(6, dtype=np.float64)
+    match = _MOTION_PATTERN.search(comments)
+    if match:
+        return np.array([float(m) for m in match.groups()], dtype=np.float64)
+    return None
 
 
 # ==============================================================

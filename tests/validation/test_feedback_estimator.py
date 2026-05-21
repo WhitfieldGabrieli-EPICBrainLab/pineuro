@@ -320,36 +320,6 @@ def test_motion_json_parsed_correctly(tmp_path):
     np.testing.assert_array_equal(parsed, motion)
 
 
-# Hand-calculated FD test vectors. Each (prev, curr, expected_fd_mm) is derived
-# *from the definition* — FD = sum of absolute frame-to-frame differences across the
-# 6 motion parameters, with rotations converted to mm of arc at HEAD_RADIUS_MM=50 —
-# without re-running pineuro's algorithm. A bug in pineuro (wrong head radius, wrong
-# sign convention, wrong axis ordering, dropped abs/sum) flips at least one expected
-# value below to a different number, and the corresponding case fails.
-#
-# The factor 50.0 * np.pi / 180.0 ≈ 0.8727 mm/deg is the standard arc-length conversion
-# at a 50 mm head radius; written here as an inert expression so the test anchors to
-# the definition, not to pineuro's compiled formula.
-_DEG_TO_MM = 50.0 * np.pi / 180.0
-_FD_CASES = [
-    # Pure translation along one axis. FD = |Δ| for that axis, zero elsewhere.
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1.0),
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0, 0.0], 1.0),
-    # Multi-axis translation. FD = sum of per-axis |Δ|.
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [3.0, -2.0, 1.0, 0.0, 0.0, 0.0], 6.0),
-    # Pure rotation about each axis (degrees → mm arc).
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 0.0, 0.0], _DEG_TO_MM),
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 1.0, 0.0], _DEG_TO_MM),
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 2.0], 2.0 * _DEG_TO_MM),
-    # Mixed translation + rotation.
-    ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1.0 + _DEG_TO_MM),
-    # Nonzero prev: only the *difference* contributes.
-    ([1.0, 2.0, 3.0, 0.0, 0.0, 0.0], [2.0, 2.0, 3.0, 0.0, 0.0, 0.0], 1.0),
-    # No motion -> FD == 0.
-    ([0.5, -0.5, 0.5, 0.1, -0.1, 0.0], [0.5, -0.5, 0.5, 0.1, -0.1, 0.0], 0.0),
-]
-
-
 def _make_bare_estimator(tmp_path, gt):
     """Return a FeedbackEstimator whose _prev_motion / _prev_voxel_values are unset."""
     mask_path = tmp_path / "roi_mask.nii.gz"
@@ -363,6 +333,12 @@ def _make_bare_estimator(tmp_path, gt):
     )
 
 
+# The FD/DVARS math itself is validated exhaustively against hand calculations in
+# tests/validation/test_utils.py (the shared utils.compute_fd / compute_dvars). The
+# two tests below only confirm the FeedbackEstimator shims thread their instance
+# state (_prev_motion / _prev_voxel_values) into those shared functions.
+
+
 def test_fd_first_volume_returns_zero(tmp_path):
     """_compute_fd returns 0.0 when there is no previous frame (contract)."""
     _, gt = build_phantom(PhantomSpec(vol_shape=(16, 16, 12), n_volumes=30, n_baseline=10, seed=9))
@@ -371,59 +347,14 @@ def test_fd_first_volume_returns_zero(tmp_path):
     assert estimator._compute_fd(np.array([0.25, -0.05, 0.40, -0.01, 0.04, -0.02])) == 0.0
 
 
-@pytest.mark.parametrize("prev, curr, expected_fd", _FD_CASES)
-def test_fd_hand_calculated(tmp_path, record, prev, curr, expected_fd):
-    """Head-motion (FD) matches a hand calculation.
-
-    Each expected value is derived from the FD definition (sum of |Δ| with rotations
-    at HEAD_RADIUS_MM=50 mm arc length) without running pineuro's algorithm. A bug in
-    pineuro -- wrong head radius, wrong rotation→arc factor, wrong sign/abs/sum --
-    moves the produced value off the expected literal and the case fails. The 1e-12
-    tolerance bounds floating-point ulp noise from the dot-product reduction, not the
-    algorithmic correctness (a real bug would deviate by orders of magnitude).
-    """
+def test_fd_shim_threads_prev_motion(tmp_path):
+    """_compute_fd feeds self._prev_motion into the shared compute_fd."""
     _, gt = build_phantom(PhantomSpec(vol_shape=(16, 16, 12), n_volumes=30, n_baseline=10, seed=9))
     estimator = _make_bare_estimator(tmp_path, gt)
-    estimator._prev_motion = np.asarray(prev, dtype=np.float64)
-    produced = estimator._compute_fd(np.asarray(curr, dtype=np.float64))
-    err = abs(produced - expected_fd)
-    case = f"prev{prev}_curr{curr}".replace(" ", "")
-    assert (
-        record(
-            "feedback",
-            f"fd_error_{case}",
-            err,
-            threshold=1e-12,
-            op="<",
-            description=(
-                "Framewise displacement (FD) is how far the head moved between two "
-                "volumes. pineuro's FD is compared against values worked out by hand "
-                "for each test case."
-            ),
-        )
-        < 1e-12
-    )
-
-
-# Hand-calculated DVARS test vectors. DVARS = sqrt(mean((I_t - I_{t-1})^2)) by
-# definition (Power et al. 2012). Each (prev, curr, expected_dvars) below is
-# derived from that definition for a small voxel set whose mean-of-squared-diffs
-# is trivially known. A bug in pineuro (mean vs sum, dropped square, dropped sqrt,
-# wrong reduction axis) flips at least one expected value.
-_DVARS_CASES = [
-    # All voxels move by the same amount k -> mean(k^2) = k^2 -> sqrt = |k|.
-    ([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], 1.0),
-    ([0.0, 0.0, 0.0], [2.0, 2.0, 2.0], 2.0),
-    ([100.0, 100.0], [102.0, 102.0], 2.0),
-    # No motion -> dvars exactly 0.
-    ([10.0, 20.0, 30.0], [10.0, 20.0, 30.0], 0.0),
-    # Asymmetric diff [3, 4] -> mean(9, 16) = 12.5 -> sqrt(12.5).
-    ([0.0, 0.0], [3.0, 4.0], float(np.sqrt(12.5))),
-    # Mixed sign diff: |[-1, 1]| both contribute -> mean(1, 1) = 1 -> sqrt = 1.0.
-    ([5.0, 5.0], [4.0, 6.0], 1.0),
-    # Single voxel -> dvars == |diff|.
-    ([7.0], [10.0], 3.0),
-]
+    estimator._prev_motion = np.array([1.0, 2.0, 3.0, 0.0, 0.0, 0.0])
+    # Only the trans_x difference contributes: |2.0 - 1.0| = 1.0 mm.
+    produced = estimator._compute_fd(np.array([2.0, 2.0, 3.0, 0.0, 0.0, 0.0]))
+    assert produced == pytest.approx(1.0)
 
 
 def test_dvars_first_volume_returns_zero(tmp_path):
@@ -434,37 +365,14 @@ def test_dvars_first_volume_returns_zero(tmp_path):
     assert estimator._compute_dvars(np.array([1.0, 2.0, 3.0])) == 0.0
 
 
-@pytest.mark.parametrize("prev, curr, expected_dvars", _DVARS_CASES)
-def test_dvars_hand_calculated(tmp_path, record, prev, curr, expected_dvars):
-    """Image-stability (DVARS) matches a hand calculation.
-
-    Each expected value is derived from the DVARS definition (sqrt of the mean of
-    squared frame-to-frame differences) without running pineuro's algorithm. A bug
-    in pineuro -- dropped sqrt, sum vs mean, wrong reduction -- moves the produced
-    value off the expected literal and the case fails. The 1e-12 tolerance bounds
-    one-ulp sqrt rounding; a real algorithmic bug deviates by orders of magnitude.
-    """
+def test_dvars_shim_threads_prev_voxels(tmp_path):
+    """_compute_dvars feeds self._prev_voxel_values into the shared compute_dvars."""
     _, gt = build_phantom(PhantomSpec(vol_shape=(16, 16, 12), n_volumes=30, n_baseline=10, seed=10))
     estimator = _make_bare_estimator(tmp_path, gt)
-    estimator._prev_voxel_values = np.asarray(prev, dtype=np.float64)
-    produced = estimator._compute_dvars(np.asarray(curr, dtype=np.float64))
-    err = abs(produced - expected_dvars)
-    case = f"prev{prev}_curr{curr}".replace(" ", "")
-    assert (
-        record(
-            "feedback",
-            f"dvars_error_{case}",
-            err,
-            threshold=1e-12,
-            op="<",
-            description=(
-                "DVARS measures how much the image changed between two volumes. "
-                "pineuro's DVARS is compared against values worked out by hand for "
-                "each test case."
-            ),
-        )
-        < 1e-12
-    )
+    estimator._prev_voxel_values = np.array([100.0, 100.0])
+    # Uniform change of 2.0 across both voxels -> DVARS = 2.0.
+    produced = estimator._compute_dvars(np.array([102.0, 102.0]))
+    assert produced == pytest.approx(2.0)
 
 
 # =============================================================================

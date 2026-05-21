@@ -31,7 +31,7 @@ from .phantom import (
 
 pytestmark = pytest.mark.validation
 
-# pineuro's own motion-parsing regex (feedback.py: IncrementalGLM._MOTION_PATTERN).
+# pineuro's own motion-parsing regex (utils.py: _MOTION_PATTERN).
 _MOTION_RE = re.compile(r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)")
 
 

@@ -4,8 +4,9 @@ Computes framewise displacement (FD), DVARS, and tSNR for each volume
 as it is collected, and writes a collectionlog.tsv for GUI polling.
 Also generates brain slice images for display.
 
-The QC computations reuse the same algorithms as the feedback module's
-FeedbackEstimator, but without any GLM/design-matrix/mask machinery.
+FD, DVARS, and Siemens MoCo motion parsing are delegated to the shared helpers
+in pineuro.utils, so this monitor and the feedback estimator cannot silently
+diverge. No GLM/design-matrix/mask machinery is involved here.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ import base64
 import csv
 import io
 import logging
-import re
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -23,46 +23,9 @@ from typing import IO, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from .utils import compute_dvars, compute_fd, parse_siemens_motion_comment
+
 logger = logging.getLogger(__name__)
-
-# Same constant as feedback.py — head radius for FD arc-length conversion
-HEAD_RADIUS_MM = 50.0
-
-# Regex for Siemens MoCo motion parameters in DICOM ImageComments
-_MOTION_PATTERN = re.compile(r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)")
-
-
-def _compute_fd(
-    motion_params: NDArray[np.float64],
-    prev_motion: NDArray[np.float64] | None,
-) -> float:
-    """Compute framewise displacement from current and previous motion params.
-
-    Parameters
-    ----------
-    motion_params : ndarray, shape (6,)
-        [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z].
-        Translations in mm, rotations in degrees.
-    prev_motion : ndarray or None
-        Previous volume's motion params. Returns 0.0 if None.
-    """
-    if prev_motion is None:
-        return 0.0
-    diff = motion_params - prev_motion
-    diff_mm = diff.copy()
-    diff_mm[3:6] *= HEAD_RADIUS_MM * np.pi / 180.0
-    return float(np.sum(np.abs(diff_mm)))
-
-
-def _compute_dvars(
-    voxel_values: NDArray[np.float64],
-    prev_voxel_values: NDArray[np.float64] | None,
-) -> float:
-    """Compute DVARS: spatial RMS of temporal derivative."""
-    if prev_voxel_values is None:
-        return 0.0
-    diff = voxel_values - prev_voxel_values
-    return float(np.sqrt(np.mean(diff**2)))
 
 
 def _extract_motion_from_dicom_header(dcm) -> NDArray[np.float64] | None:
@@ -76,12 +39,7 @@ def _extract_motion_from_dicom_header(dcm) -> NDArray[np.float64] | None:
     comments = getattr(dcm, "ImageComments", None)
     if comments is None:
         return None
-    if "Reference volume for motion correction" in comments:
-        return np.zeros(6, dtype=np.float64)
-    match = _MOTION_PATTERN.search(comments)
-    if match:
-        return np.array([float(m) for m in match.groups()], dtype=np.float64)
-    return None
+    return parse_siemens_motion_comment(comments)
 
 
 def _dicom_middle_slice_png(pixel_array: np.ndarray) -> str | None:
@@ -281,12 +239,9 @@ class CollectionQCMonitor:
                         with open(json_path) as f:
                             meta = json.load(f)
                         comments = meta.get("ImageComments", "")
-                        if "Reference volume for motion correction" in comments:
-                            motion_params = np.zeros(6, dtype=np.float64)
-                        else:
-                            match = _MOTION_PATTERN.search(comments)
-                            if match:
-                                motion_params = np.array([float(m) for m in match.groups()], dtype=np.float64)
+                        parsed = parse_siemens_motion_comment(comments)
+                        if parsed is not None:
+                            motion_params = parsed
                 elif self._motion_correction == "software" and data.ndim >= 3:
                     vol_3d = data
                     spacing = list(img.header.get_zooms()[:3])  # type: ignore[union-attr,attr-defined]
@@ -327,10 +282,10 @@ class CollectionQCMonitor:
 
             # Compute QC metrics
             if motion_params is not None:
-                fd = _compute_fd(motion_params, self._prev_motion)
+                fd = compute_fd(motion_params, self._prev_motion)
                 self._prev_motion = motion_params
 
-            dvars_val = _compute_dvars(voxels, self._prev_voxel_values)
+            dvars_val = compute_dvars(voxels, self._prev_voxel_values)
             self._prev_voxel_values = voxels
 
             tsnr_val = self._update_tsnr(voxels)

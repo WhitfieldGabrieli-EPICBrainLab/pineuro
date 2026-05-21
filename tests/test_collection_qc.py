@@ -1,75 +1,11 @@
 """Tests for pineuro.collection_qc — real-time QC monitoring during collection."""
 
 import numpy as np
-import pytest
 
-from pineuro.collection_qc import (
-    HEAD_RADIUS_MM,
-    CollectionQCMonitor,
-    _compute_dvars,
-    _compute_fd,
-    _extract_motion_from_dicom_header,
-)
+from pineuro.collection_qc import CollectionQCMonitor, _extract_motion_from_dicom_header
 
-# =============================================================================
-# _compute_fd
-# =============================================================================
-
-
-class TestComputeFD:
-    def test_first_volume_returns_zero(self):
-        motion = np.array([0.1, 0.2, 0.3, 1.0, 2.0, 3.0])
-        assert _compute_fd(motion, None) == 0.0
-
-    def test_no_motion_returns_zero(self):
-        motion = np.zeros(6)
-        prev = np.zeros(6)
-        assert _compute_fd(motion, prev) == 0.0
-
-    def test_pure_translation(self):
-        motion = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        prev = np.zeros(6)
-        fd = _compute_fd(motion, prev)
-        # Translation of 1mm in x → FD = 1.0mm
-        assert fd == pytest.approx(1.0)
-
-    def test_rotation_uses_head_radius(self):
-        # 1 degree rotation in x
-        prev = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        motion_with_rot = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0])
-        fd = _compute_fd(motion_with_rot, prev)
-        # FD should include arc-length conversion: 1deg * HEAD_RADIUS_MM * pi/180
-        expected_arc = HEAD_RADIUS_MM * np.pi / 180.0
-        assert fd == pytest.approx(expected_arc)
-
-    def test_combined_translation_and_rotation(self):
-        motion = np.array([1.0, 1.0, 1.0, 0.5, 0.5, 0.5])
-        prev = np.zeros(6)
-        fd = _compute_fd(motion, prev)
-        assert fd > 0
-
-
-# =============================================================================
-# _compute_dvars
-# =============================================================================
-
-
-class TestComputeDVARS:
-    def test_first_volume_returns_zero(self):
-        voxels = np.array([100.0, 200.0, 300.0])
-        assert _compute_dvars(voxels, None) == 0.0
-
-    def test_no_change_returns_zero(self):
-        voxels = np.array([100.0, 200.0, 300.0])
-        assert _compute_dvars(voxels, voxels) == 0.0
-
-    def test_uniform_change(self):
-        prev = np.array([100.0, 100.0, 100.0])
-        curr = np.array([110.0, 110.0, 110.0])
-        dvars = _compute_dvars(curr, prev)
-        # RMS of [10, 10, 10] = 10.0
-        assert dvars == pytest.approx(10.0)
-
+# FD and DVARS math is exercised in tests/test_utils.py (the shared
+# utils.compute_fd / compute_dvars that collection_qc now delegates to).
 
 # =============================================================================
 # _extract_motion_from_dicom_header

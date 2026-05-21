@@ -163,11 +163,15 @@ from watchdog.observers import Observer
 
 # --- Local Imports ---
 from .utils import (
+    HEAD_RADIUS_MM,  # Head radius for FD arc-length conversion
+    compute_dvars,  # Shared DVARS computation
+    compute_fd,  # Shared framewise-displacement computation
     get_json_sidecar_path,  # Get path to JSON sidecar
     get_tr_from_volume,  # Extract TR from volume metadata
     is_moco_series,  # Detect Siemens MoCo-derived DICOM series
     is_nifti_file,  # Check if file is NIfTI format
     is_valid_volume,  # Validate DICOM/NIfTI files
+    parse_siemens_motion_comment,  # Parse Siemens MoCo motion string
 )
 
 # --- Module Logger ---
@@ -184,10 +188,6 @@ logger = logging.getLogger(__name__)
 # (motion, drift, intercept) but retains the task regressor contribution.
 # After the baseline period the standard deviation is frozen to prevent drift.
 ACTIVATION_UNITS = "z-score"
-
-# Assumed head radius (mm) used for framewise displacement (FD) computation.
-# Standard assumption from Power et al. (2012).
-HEAD_RADIUS_MM = 50.0
 
 
 # =============================================================================
@@ -1136,9 +1136,6 @@ class FeedbackEstimator:
     rigid registration for other scanners.
     """
 
-    # Pre-compiled regex for motion parameter extraction (avoids re-compilation per volume)
-    _MOTION_PATTERN = re.compile(r"Motion:\s*([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+)")
-
     def __init__(
         self,
         mask_paths: Sequence[Path | str],
@@ -1504,17 +1501,10 @@ class FeedbackEstimator:
 
             image_comments = metadata.get("ImageComments", "")
 
-            # Check if this is the reference volume (all zeros)
-            if "Reference volume for motion correction" in image_comments:
-                logger.debug(f"Reference volume detected in {json_path}")
-                return np.zeros(6, dtype=np.float64)
-
-            # Use pre-compiled pattern for motion extraction
-            match = self._MOTION_PATTERN.search(image_comments)
-
-            if match:
-                values = [float(m) for m in match.groups()]
-                return np.array(values, dtype=np.float64)
+            # Reference-volume sentinel -> zeros; "Motion: ..." -> 6 params.
+            parsed = parse_siemens_motion_comment(image_comments)
+            if parsed is not None:
+                return parsed
 
             logger.warning(f"No motion parameters found in {json_path}, using zeros")
             return np.zeros(6, dtype=np.float64)
@@ -1541,23 +1531,7 @@ class FeedbackEstimator:
         fd : float
             Framewise displacement in mm.
         """
-        if self._prev_motion is None:
-            # First volume - no previous frame to compare
-            return 0.0
-
-        # Compute frame-to-frame difference
-        diff = motion_params - self._prev_motion
-
-        # Format: [trans_x, trans_y, trans_z, rot_x, rot_y, rot_z]
-        # Translations (indices 0-2) are already in mm
-        # Rotations (indices 3-5) are in degrees - convert to mm arc length
-        # Arc length = radius * angle_in_radians = HEAD_RADIUS_MM * (angle_degrees * pi/180)
-        diff_mm = diff.copy()
-        diff_mm[3:6] *= HEAD_RADIUS_MM * np.pi / 180.0
-
-        # FD is sum of absolute values
-        fd = float(np.sum(np.abs(diff_mm)))
-        return fd
+        return compute_fd(motion_params, self._prev_motion)
 
     def _compute_dvars(self, voxel_values: NDArray[np.float64]) -> float:
         """Compute DVARS from current and previous volume's voxel values.
@@ -1576,10 +1550,7 @@ class FeedbackEstimator:
         float
             DVARS value for this volume.
         """
-        if self._prev_voxel_values is None:
-            return 0.0
-        diff = voxel_values - self._prev_voxel_values
-        return float(np.sqrt(np.mean(diff**2)))
+        return compute_dvars(voxel_values, self._prev_voxel_values)
 
     def _update_tsnr(self, voxel_values: NDArray[np.float64]) -> float:
         """Update running tSNR estimate using Welford's online algorithm.
@@ -3197,17 +3168,14 @@ class NeurofeedbackCoordinator:
                     motion_source = json_path
                 elif dicom_image_comments is not None:
                     # DICOM input: parse motion params directly from ImageComments
-                    if "Reference volume for motion correction" in dicom_image_comments:
-                        motion_source = np.zeros(6, dtype=np.float64)
+                    parsed = parse_siemens_motion_comment(dicom_image_comments)
+                    if parsed is not None:
+                        motion_source = parsed
                     else:
-                        match = self._estimator._MOTION_PATTERN.search(dicom_image_comments)
-                        if match:
-                            motion_source = np.array([float(m) for m in match.groups()], dtype=np.float64)
-                        else:
-                            logger.warning(
-                                f"No motion parameters in DICOM ImageComments for volume {volume_num}, using zeros"
-                            )
-                            motion_source = np.zeros(6, dtype=np.float64)
+                        logger.warning(
+                            f"No motion parameters in DICOM ImageComments for volume {volume_num}, using zeros"
+                        )
+                        motion_source = np.zeros(6, dtype=np.float64)
                 else:
                     motion_source = np.zeros(6, dtype=np.float64)
 
