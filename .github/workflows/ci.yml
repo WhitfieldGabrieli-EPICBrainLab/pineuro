@@ -79,3 +79,38 @@ jobs:
       - run: pip install -e ".[dev]"
 
       - run: pytest
+
+  validation:
+    # Scientific-correctness gate: runs synthetic data through the real
+    # pipeline (ANTsPy, nilearn) and asserts pineuro recovers known ground
+    # truth. Slow by design; single OS since the science libraries are
+    # platform-independent.
+    runs-on: ubuntu-latest
+    env:
+      # Single-threaded ITK/BLAS so the iterative optimizers (ANTs, CanICA) are
+      # reproducible -- the band checks in tests/validation/baselines.py rely on
+      # it. conftest.py sets these too; this makes the pinning explicit in CI.
+      ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install wxPython from pre-built wheel (Linux)
+        run: pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
+
+      - run: pip install -e ".[dev]"
+
+      - name: Run validation suite
+        run: pytest -m validation -v --durations=20
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-report
+          path: tests/validation/_report/

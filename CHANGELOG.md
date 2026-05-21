@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Validation suite** (`tests/validation/`) — a scientific-correctness test layer, separate from the regression suite, that runs synthetic phantoms with known ground truth through the real pipeline (real ANTsPy/nilearn, no mocking) and asserts the outputs recover that ground truth: HRF/design math, the incremental-GLM solver, ANTs motion correction & brain extraction, nilearn ICA & GLM task-mask extraction, real-time feedback signal recovery, and an end-to-end chained pipeline test. Includes a self-contained synthetic-data phantom library and a markdown/HTML metrics report. Opt-in locally (`pytest -m validation`); runs as a hard correctness gate on every push in CI. See `tests/validation/README.md`.
+
 ## [0.8.0] - 2026-05-13
 
 ### Breaking

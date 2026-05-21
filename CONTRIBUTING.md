@@ -186,6 +186,7 @@ All PRs are checked by CI (GitHub Actions). The following must pass before merge
 - **Lint**: `ruff check .` + `ruff format . --check`
 - **Type check**: `mypy src/pineuro/`
 - **Tests**: `pytest` on Ubuntu/Windows/macOS × Python 3.10/3.11
+- **Validation**: `pytest -m validation` — scientific-correctness gate (synthetic data, real ANTs/nilearn)
 - **Build**: package builds successfully
 
 ## Versioning
@@ -246,6 +247,7 @@ pytest -v                        # Verbose output
 pytest tests/test_feedback.py    # Run a specific file
 pytest -k "test_glm"            # Run tests matching a keyword
 pytest -m integration            # Integration tests (requires Rockland_NFB data)
+pytest -m validation             # Validation suite (scientific correctness)
 pytest -m "integration and slow" # All integration tests
 ```
 
@@ -253,6 +255,7 @@ pytest -m "integration and slow" # All integration tests
 
 - `@pytest.mark.slow` — tests taking >10 seconds
 - `@pytest.mark.integration` — requires Rockland_NFB data in `sourcedata/`
+- `@pytest.mark.validation` — scientific-correctness suite (see below)
 
 ### Writing tests
 
@@ -265,6 +268,10 @@ pytest -m "integration and slow" # All integration tests
 ### Integration test data
 
 Integration tests use [NKI Rockland Sample](https://fcon_1000.projects.nitrc.org/indi/pro/nki.html) DICOM data placed in `sourcedata/Rockland_NFB/`. This data is excluded from git (access is controlled by Rockland). Tests auto-skip when data is absent.
+
+### Validation suite
+
+`tests/validation/` is a separate, correctness-focused suite: it runs synthetic data with known ground truth through the *real* pipeline (real ANTsPy/nilearn, no mocking) and asserts pineuro recovers it within documented tolerances. Opt-in locally (`pytest -m validation`); runs on every push in CI as a hard correctness gate. See `tests/validation/README.md` for details.
 
 ### Validation comparison scripts
 

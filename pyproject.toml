@@ -21,13 +21,17 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "antspyx>=0.6.1",
+    # antspyx/nilearn are exact-pinned: the validation suite asserts their
+    # (iterative-optimizer) output against recorded baselines. A version bump
+    # changes that output, so it must be a deliberate, re-baselined change --
+    # see tests/validation/baselines.py.
+    "antspyx==0.6.2",
     "dcm2niix",
     "flet==0.80.5",
     "flet-charts>=0.1.0",
     "matplotlib",
     "nibabel>=5.3.0",
-    "nilearn>=0.12.0",
+    "nilearn==0.13.1",  # exact-pinned -- see the antspyx note above
     "numpy>=2.0.0",
     "pandas>=2.0.0",
     "psychopy>=2025.2.0",
@@ -108,8 +112,9 @@ testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow (>10s)",
     "integration: requires Rockland_NFB test data",
+    "validation: scientific-correctness validation (real ANTs/nilearn/dcm2niix, synthetic ground truth)",
 ]
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration and not validation'"
 
 # ---------------------------------------------------------------------------
 # mypy — basic type checking
