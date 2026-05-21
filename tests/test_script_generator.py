@@ -16,9 +16,6 @@ from pineuro.script_generator import (
 
 
 class TestGenerateMaskExtractionScript:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="Windows backslash paths cause escape errors in generated scripts"
-    )
     def test_returns_valid_python(self, tmp_path):
         script = generate_mask_extraction_script(
             participant_id="sub-01",
@@ -125,9 +122,6 @@ class TestGenerateMaskExtractionScript:
 
 
 class TestGenerateTaskMaskExtractionScript:
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="Windows backslash paths cause escape errors in generated scripts"
-    )
     def test_returns_valid_python(self, tmp_path):
         script = generate_task_mask_extraction_script(
             participant_id="sub-01",

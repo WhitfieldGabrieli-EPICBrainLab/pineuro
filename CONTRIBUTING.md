@@ -231,12 +231,7 @@ tests/
 ├── test_gui_config_snapshot.py       # GUI config snapshots
 ├── test_gui_csv_poller.py            # GUI CSV polling component
 ├── test_gui_models.py                # GUI data models
-├── test_gui_utils.py                 # GUI utilities
-└── integration/                      # Real-data tests (require Rockland_NFB)
-    ├── conftest.py                   # Data path fixtures (auto-skip if absent)
-    ├── test_preprocessing_integration.py
-    ├── test_mask_extraction_integration.py
-    └── test_feedback_integration.py
+└── test_gui_utils.py                 # GUI utilities
 ```
 
 ### Running tests
@@ -246,15 +241,12 @@ pytest                           # Unit tests only (default, CI-safe)
 pytest -v                        # Verbose output
 pytest tests/test_feedback.py    # Run a specific file
 pytest -k "test_glm"            # Run tests matching a keyword
-pytest -m integration            # Integration tests (requires Rockland_NFB data)
 pytest -m validation             # Validation suite (scientific correctness)
-pytest -m "integration and slow" # All integration tests
 ```
 
 ### Markers
 
 - `@pytest.mark.slow` — tests taking >10 seconds
-- `@pytest.mark.integration` — requires Rockland_NFB data in `sourcedata/`
 - `@pytest.mark.validation` — scientific-correctness suite (see below)
 
 ### Writing tests
@@ -262,12 +254,8 @@ pytest -m "integration and slow" # All integration tests
 - Place unit tests in `tests/test_<module>.py`
 - Import from submodules directly: `from pineuro.feedback import IncrementalGLM`
 - Use conftest fixtures for synthetic NIfTI data (e.g., `synthetic_nifti_4d`, `sample_mask`)
-- Mock heavy dependencies (ANTsPy, nilearn ICA) for unit tests; test them for real in `integration/`
+- Mock heavy dependencies (ANTsPy, nilearn ICA) for unit tests; test them for real in `tests/validation/`
 - Use `assert` freely (ruff S101 is ignored in test files)
-
-### Integration test data
-
-Integration tests use [NKI Rockland Sample](https://fcon_1000.projects.nitrc.org/indi/pro/nki.html) DICOM data placed in `sourcedata/Rockland_NFB/`. This data is excluded from git (access is controlled by Rockland). Tests auto-skip when data is absent.
 
 ### Validation suite
 

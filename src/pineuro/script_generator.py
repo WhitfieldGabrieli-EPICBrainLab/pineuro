@@ -182,11 +182,11 @@ def clean_stale_outputs(root_dir: Path):
 # =============================================================================
 # INPUT FILES
 # =============================================================================
-participant_id = "{participant_id}"
-root_dir = Path("{mask_extraction_dir}")
-input_file = Path("{input_file}")
-mask_file = Path("{mask_file}")
-ref_file = Path("{ref_file}")
+participant_id = {repr(participant_id)}
+root_dir = Path({repr(str(mask_extraction_dir))})
+input_file = Path({repr(str(input_file))})
+mask_file = Path({repr(str(mask_file))})
+ref_file = Path({repr(str(ref_file))})
 
 
 # =============================================================================
@@ -601,11 +601,11 @@ def clean_stale_outputs(root_dir: Path):
 # =============================================================================
 # INPUT FILES
 # =============================================================================
-participant_id = "{participant_id}"
-root_dir = Path("{mask_extraction_dir}")
-input_file = Path("{input_file}")
-mask_file = Path("{mask_file}")
-events_file = Path("{events_file}")
+participant_id = {repr(participant_id)}
+root_dir = Path({repr(str(mask_extraction_dir))})
+input_file = Path({repr(str(input_file))})
+mask_file = Path({repr(str(mask_file))})
+events_file = Path({repr(str(events_file))})
 
 
 # =============================================================================

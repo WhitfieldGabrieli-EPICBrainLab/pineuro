@@ -49,10 +49,9 @@ pytest -m validation -k feedback         # one stage
 pytest                                   # plain pytest SKIPS validation (opt-in)
 ```
 
-`pyproject.toml` sets `addopts = "-m 'not integration and not validation'"`, so a
-plain `pytest` excludes this suite (exactly as it excludes `integration`). It is
-**opt-in locally** but runs on **every push/PR** via the `validation` job in
-`.github/workflows/ci.yml` — a hard correctness gate.
+`pyproject.toml` sets `addopts = "-m 'not validation'"`, so a plain `pytest`
+excludes this suite. It is **opt-in locally** but runs on **every push/PR** via
+the `validation` job in `.github/workflows/ci.yml` — a hard correctness gate.
 
 ## The report
 

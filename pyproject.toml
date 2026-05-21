@@ -111,10 +111,9 @@ docstring-code-format = false
 testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow (>10s)",
-    "integration: requires Rockland_NFB test data",
     "validation: scientific-correctness validation (real ANTs/nilearn/dcm2niix, synthetic ground truth)",
 ]
-addopts = "-m 'not integration and not validation'"
+addopts = "-m 'not validation'"
 
 # ---------------------------------------------------------------------------
 # mypy — basic type checking
