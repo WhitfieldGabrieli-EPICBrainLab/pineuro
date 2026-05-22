@@ -48,7 +48,11 @@ class StudyEditorScreen:
         self.on_save_callback = on_save
         self.on_start_session_callback = on_start_session
 
-        self.study_config: StudyConfig = study_config if study_config is not None else self._create_default_config()
+        # Work on a deep copy so in-progress edits do not mutate the caller's
+        # StudyConfig; changes are persisted only via the save callback.
+        self.study_config: StudyConfig = (
+            copy.deepcopy(study_config) if study_config is not None else self._create_default_config()
+        )
         self.validation_errors: dict[str, str] = {}
 
         # Initialize localizer and feedback configs from session_config

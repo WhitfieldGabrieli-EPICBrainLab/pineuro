@@ -39,6 +39,9 @@ FIXATION_METADATA = TaskMetadata(
             hint="Total duration of fixation display (matches scan duration)",
         ),
     ],
+    # Duration comes from the scan parameters (n_volumes * tr), not a
+    # per-task localizer_task config section.
+    localizer_params_from_scan=True,
 )
 
 
@@ -84,6 +87,8 @@ class FixationTask(BaseLocalizerTask):
             simulator=simulator,
             **kwargs,
         )
+        if duration <= 0:
+            raise ValueError(f"duration must be > 0, got {duration}")
         self.duration = duration
 
     def setup(self) -> None:

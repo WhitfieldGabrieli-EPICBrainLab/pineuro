@@ -1332,7 +1332,9 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
     """
     max_run = 0
     if collection_dir.exists():
-        pattern = re.compile(rf"{re.escape(task_name)}_run-(\d+)$")
+        # Collection folders are named either "{task}_run-NN" or, with retry
+        # detection, "{task}_acq-NN_run-NN" -- match both forms.
+        pattern = re.compile(rf"{re.escape(task_name)}(?:_acq-\d+)?_run-(\d+)$")
         for entry in collection_dir.iterdir():
             if entry.is_dir():
                 match = pattern.match(entry.name)
@@ -1341,7 +1343,7 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
     return max_run + 1
 
 
-def get_localizer_run_info(collection_dir: Path, task: str, run: int, expected_volumes: int) -> dict[str, Any]:
+def get_localizer_run_info(collection_dir: Path, task: str, run: int) -> dict[str, Any]:
     """Get run info for localizer/reference with retry detection using acq entity.
 
     Scans for existing {task}_acq-*_run-{run:02d} folders and determines
@@ -1355,8 +1357,6 @@ def get_localizer_run_info(collection_dir: Path, task: str, run: int, expected_v
         Task name (e.g., 'rest', 'reference', 'self_other')
     run : int
         Run number
-    expected_volumes : int
-        Expected number of volume files for a complete collection
 
     Returns
     -------
@@ -1369,11 +1369,11 @@ def get_localizer_run_info(collection_dir: Path, task: str, run: int, expected_v
 
     Examples
     --------
-    >>> info = get_localizer_run_info(collection_dir, 'task-rest', 1, 200)
+    >>> info = get_localizer_run_info(collection_dir, 'task-rest', 1)
     >>> info
     {'run': 1, 'acq': 1, 'run_acq_string': 'acq-01_run-01', 'existing_acqs': []}
     >>> # After one collection:
-    >>> info = get_localizer_run_info(collection_dir, 'task-rest', 1, 200)
+    >>> info = get_localizer_run_info(collection_dir, 'task-rest', 1)
     >>> info
     {'run': 1, 'acq': 2, 'run_acq_string': 'acq-02_run-01', 'existing_acqs': [1]}
     """
@@ -1440,14 +1440,16 @@ def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
     """
     if config.visit is None or config.visit.mask_source == "compute":
         # Masks computed in this visit
-        assert config.paths.mask_extraction_dir is not None
+        if config.paths.mask_extraction_dir is None:
+            raise ValueError("config.paths.mask_extraction_dir must be set when mask_source='compute'")
         mask_dir = config.paths.mask_extraction_dir / "03_masks"
         mask_files = sorted(mask_dir.glob("*_thr.nii.gz")) if mask_dir.exists() else []
         ref = ref_file_path(config)
         return (mask_files, ref)
     elif config.visit.mask_source == "reuse":
         # Masks from another visit
-        assert config.visit.mask_source_visit is not None
+        if config.visit.mask_source_visit is None:
+            raise ValueError("config.visit.mask_source_visit must be set when mask_source='reuse'")
         source_visit = config.visit.mask_source_visit
         source_base = config.paths.base_dir / config.paths.participant_id / source_visit / "mask_extraction"
         source_mask_dir = source_base / "03_masks"
@@ -1554,10 +1556,13 @@ def next_visit_id(base_dir: Path, participant_id: str) -> str:
     visits = detect_existing_visits(base_dir, participant_id)
     # Filter to only multi-visit entries (those with actual visit_id)
     multi_visits = [v for v in visits if v["visit_id"] is not None]
-    if multi_visits:
-        next_num = max(int(v["visit_id"].split("-")[1]) for v in multi_visits) + 1
-    else:
-        next_num = 1
+    # Defensively parse "ses-NN" IDs; ignore any malformed visit directory names.
+    visit_nums: list[int] = []
+    for v in multi_visits:
+        parts = str(v["visit_id"]).split("-")
+        if len(parts) == 2 and parts[1].isdigit():
+            visit_nums.append(int(parts[1]))
+    next_num = max(visit_nums) + 1 if visit_nums else 1
     return f"ses-{next_num:02d}"
 
 
@@ -1683,9 +1688,7 @@ def run_dicom_collection(
             break
 
         # Get run info with retry detection
-        run_info = get_localizer_run_info(
-            collection_dir=collection_dir, task=task_name, run=run_num, expected_volumes=n_volumes
-        )
+        run_info = get_localizer_run_info(collection_dir=collection_dir, task=task_name, run=run_num)
         acq = run_info["acq"]
 
         logger.info(f"Collecting {task_name} run {run_num} (acq-{acq:02d})...")
@@ -2084,7 +2087,8 @@ def run_coregistration(
     logger.info("COREGISTER MASKS TO FEEDBACK SPACE")
     logger.info("=" * 60)
 
-    assert config.paths.mask_extraction_dir is not None
+    if config.paths.mask_extraction_dir is None:
+        raise RuntimeError("config.paths.mask_extraction_dir must be set before coregistration")
     reference_dir = reference_dicom_dir or config.resolve_simulator_source("reference_realtime")
 
     # Append tissue masks to the coregistration list if nuisance regression enabled
@@ -2095,7 +2099,8 @@ def run_coregistration(
     if include_tissue and any(
         frc.glm.include_wm_regressor or frc.glm.include_csf_regressor for frc in config.feedback_runs
     ):
-        assert config.paths.mask_extraction_dir is not None
+        if config.paths.mask_extraction_dir is None:
+            raise RuntimeError("config.paths.mask_extraction_dir must be set to locate tissue masks")
         tissue_dir = config.paths.mask_extraction_dir / "05_tissue"
         wm_src = tissue_dir / f"{config.paths.participant_id}_tissue_wm_mask.nii.gz"
         csf_src = tissue_dir / f"{config.paths.participant_id}_tissue_csf_mask.nii.gz"
@@ -2165,7 +2170,8 @@ def setup_visit_with_reused_masks(
     if config.visit is None or config.visit.mask_source != "reuse":
         raise ValueError("setup_visit_with_reused_masks requires config.visit.mask_source='reuse'")
 
-    assert config.visit.mask_source_visit is not None
+    if config.visit.mask_source_visit is None:
+        raise ValueError("config.visit.mask_source_visit must be set when mask_source='reuse'")
     source_visit = config.visit.mask_source_visit
     logger.info(f"Source visit: {source_visit}")
 
@@ -2186,7 +2192,8 @@ def setup_visit_with_reused_masks(
 
     # Coregister source masks to current visit's reference
     # Output goes to session_dir (feedback/) instead of mask_extraction_dir
-    assert config.paths.session_dir is not None
+    if config.paths.session_dir is None:
+        raise RuntimeError("config.paths.session_dir must be set before coregistration")
     coreg_masks = coregister_reference(
         participant_id=config.paths.participant_id,
         root_dir=str(config.paths.session_dir),  # feedback/ directory
@@ -2582,8 +2589,10 @@ def run_single_task(
     # Resolve mask names from network assignment
     task_mask_names = _resolve_mask_names_for_run(config, metadata, eff_network_assignment)
 
-    assert config.paths.feedback_output_dir is not None
-    assert config.paths.collection_dir is not None
+    if config.paths.feedback_output_dir is None:
+        raise RuntimeError("config.paths.feedback_output_dir must be set before starting a feedback session")
+    if config.paths.collection_dir is None:
+        raise RuntimeError("config.paths.collection_dir must be set before starting a feedback session")
     # Start feedback session
     session_info = run_feedback_session(
         mask_paths=list(mask_files),
@@ -2913,7 +2922,8 @@ def run_full_session(
     workflow_labels = [rt.capitalize() for rt, _ in run_sequence]
     logger.info(f"Workflow: {' -> '.join(workflow_labels)}")
 
-    assert config.paths.session_dir is not None
+    if config.paths.session_dir is None:
+        raise RuntimeError("config.paths.session_dir must be set before running a session")
     session_dir = config.paths.session_dir
     if reset_session:
         session_state = SessionState.reset(session_dir, task_id=primary_task)
@@ -2956,7 +2966,7 @@ def run_full_session(
         )
         all_results.append(results)
 
-        session_state = SessionState.load(session_dir, task_id=config.feedback_runs[0].task)
+        session_state = SessionState.load(session_dir, task_id=config.feedback_runs[frc_idx].task)
 
     logger.info("")
     logger.info("=" * 60)
@@ -2997,7 +3007,10 @@ def run_next_task(
     """
     from .tasks.session import SessionState
 
-    assert config.paths.session_dir is not None
+    if not config.feedback_runs:
+        raise ValueError("config.feedback_runs must be non-empty")
+    if config.paths.session_dir is None:
+        raise RuntimeError("config.paths.session_dir must be set before running a task")
     session_dir = config.paths.session_dir
     session_state = SessionState.load(session_dir, task_id=config.feedback_runs[0].task)
 
@@ -3064,5 +3077,8 @@ def reset_session_state(config: SessionConfig) -> SessionState:
     """
     from .tasks.session import SessionState
 
-    assert config.paths.session_dir is not None
+    if not config.feedback_runs:
+        raise ValueError("config.feedback_runs must be non-empty")
+    if config.paths.session_dir is None:
+        raise RuntimeError("config.paths.session_dir must be set to reset session state")
     return SessionState.reset(config.paths.session_dir, task_id=config.feedback_runs[0].task)

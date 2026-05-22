@@ -107,6 +107,8 @@ def create_task(
         raise ValueError(f"Task class not registered for '{task_id}'. Ensure the task module is imported.")
 
     task_class = _TASK_CLASSES[task_id]
+    if not (isinstance(task_class, type) and issubclass(task_class, BaseTask)):
+        raise TypeError(f"Registered task class for '{task_id}' is not a BaseTask subclass: {task_class!r}")
 
     # Validate network count
     mask_names = config.get("mask_names", coordinator.mask_names)

@@ -1069,6 +1069,8 @@ def _combine_roi(
     float
         The combined ROI feedback value.
     """
+    if activations.size == 0:
+        return 0.0
     if method == "mean":
         return float(np.mean(activations))
     if method != "inverse_sd":
@@ -1361,6 +1363,8 @@ class FeedbackEstimator:
         # Get indices where mask > 0
         indices = np.where(data > 0)
         coords = set(zip(indices[0], indices[1], indices[2], strict=False))
+        if not coords:
+            raise ValueError(f"Mask '{name}' is empty (no voxels > 0): {path}")
 
         # Store flat indices for this mask
         flat_indices = np.ravel_multi_index(indices, self._shape)

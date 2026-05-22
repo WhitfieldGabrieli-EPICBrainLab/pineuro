@@ -118,6 +118,11 @@ class BlockDesign(TaskDesign):
         """
         from pineuro.utils import compute_boxcar_task_regressor
 
+        if self.n_baseline >= n_volumes:
+            raise ValueError(
+                f"n_baseline ({self.n_baseline}) must be < n_volumes ({n_volumes}); the task block would never start."
+            )
+
         regressor = compute_boxcar_task_regressor(self.n_baseline, n_volumes, tr)
         return regressor.reshape(-1, 1)
 

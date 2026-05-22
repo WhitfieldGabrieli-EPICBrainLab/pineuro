@@ -37,6 +37,7 @@ Example YAML structure:
           ...
 """
 
+import copy
 import hashlib
 import logging
 import shutil
@@ -416,7 +417,9 @@ class ConfigManager:
         # Create new config
         new_study = StudyConfig(
             metadata=new_metadata,
-            session_config=source_study.session_config.copy(),
+            # Deep copy: a shallow copy would leave nested dicts/lists shared,
+            # so editing the duplicate would mutate the source study.
+            session_config=copy.deepcopy(source_study.session_config),
             file_path=None,  # Will be assigned on save
         )
 

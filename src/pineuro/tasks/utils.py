@@ -191,13 +191,16 @@ class ActivationNormalizer:
         """
         self.window.append(value)
 
-        # Return neutral value until we have enough data
-        if len(self.window) < 3:
+        # Ignore non-finite samples (NaN/Inf) so they cannot poison the
+        # percentile estimates or produce a NaN feedback value.
+        finite = np.array([v for v in self.window if np.isfinite(v)], dtype=float)
+
+        # Return neutral value until we have enough usable data
+        if finite.size < 3 or not np.isfinite(value):
             return 0.5
 
-        values = np.array(self.window)
-        lower = np.percentile(values, self.lower_percentile)
-        upper = np.percentile(values, self.upper_percentile)
+        lower = np.percentile(finite, self.lower_percentile)
+        upper = np.percentile(finite, self.upper_percentile)
 
         # Handle edge case where all values are identical
         if upper <= lower:

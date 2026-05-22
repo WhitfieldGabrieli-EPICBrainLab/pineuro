@@ -357,6 +357,7 @@ class RNTTriggeredBallTask(BaseTask):
                     f"{elapsed:.4f}",
                     volume,
                     self._trigger_state.n_episodes_triggered,
+                    self._trigger_state.n_episodes_timeout,
                 ]
             )
             self._psychopy_log_file.flush()
@@ -640,7 +641,7 @@ class RNTTriggeredBallTask(BaseTask):
             self._psychopy_log_path, "w", newline="", encoding="utf-8"
         )
         self._psychopy_log_writer = csv.writer(self._psychopy_log_file, delimiter="\t")
-        self._psychopy_log_writer.writerow(["frame", "time", "volume", "triggers"])
+        self._psychopy_log_writer.writerow(["frame", "time", "volume", "triggers", "timeouts"])
         self._psychopy_log_file.flush()
 
         self.create_window(

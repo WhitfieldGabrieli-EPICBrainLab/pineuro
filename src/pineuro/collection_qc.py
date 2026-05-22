@@ -66,7 +66,8 @@ def _dicom_middle_slice_png(pixel_array: np.ndarray) -> str | None:
             arr = np.zeros_like(arr)
         arr = (arr * 255).astype(np.uint8)
 
-        img = Image.fromarray(arr, mode="L")
+        # arr is a 2-D uint8 array; PIL infers the "L" (8-bit grayscale) mode.
+        img = Image.fromarray(arr)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
@@ -134,11 +135,13 @@ class CollectionQCMonitor:
         self._start_time = time.monotonic()
 
     def close(self) -> None:
-        """Close the log file."""
+        """Close the log file and release cached resources."""
         if self._csv_file is not None:
             self._csv_file.close()
             self._csv_file = None
             self._csv_writer = None
+        # Release the cached ANTs reference image so its buffers can be freed.
+        self._ref_ants = None
 
     def _software_motion_correct(self, vol_3d: NDArray[np.float64], spacing: list[float]) -> NDArray[np.float64]:
         """Run ANTsPy rigid registration and return motion parameters.

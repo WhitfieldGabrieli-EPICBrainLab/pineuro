@@ -53,6 +53,7 @@ Dependencies
 PsychoPy (visual, event, core), pandas, json
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -392,9 +393,10 @@ class RNTTask(BaseLocalizerTask):
 
         all_memories = self._parse_keywords_file(keywords_path)
 
-        # Deterministic per-participant RNG (same pattern as the existing
-        # rumination/distraction shuffles below).
-        seed = hash(self.participant_id) & 0xFFFFFFFF
+        # Deterministic per-participant RNG. Use a stable hash (hashlib) rather
+        # than the builtin hash(), which is salted per process (PYTHONHASHSEED)
+        # and would give a different randomization on every run.
+        seed = int(hashlib.sha256(str(self.participant_id).encode()).hexdigest(), 16) & 0xFFFFFFFF
         rng = random.Random(seed)
 
         # 1. Randomize which pass this run draws from.

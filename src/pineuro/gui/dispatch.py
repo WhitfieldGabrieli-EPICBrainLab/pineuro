@@ -12,6 +12,7 @@ and receive a :class:`~concurrent.futures.Future` for the result.
 
 from __future__ import annotations
 
+import logging
 import queue
 from concurrent.futures import Future
 from typing import Any
@@ -100,4 +101,4 @@ def _flush_cocoa_events() -> None:
         # Process pending events for up to 0.5 s (returns earlier if idle).
         cf.CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.5, False)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("Cocoa event flush skipped", exc_info=True)

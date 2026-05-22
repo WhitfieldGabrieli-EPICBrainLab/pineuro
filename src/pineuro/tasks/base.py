@@ -163,6 +163,9 @@ class BaseTask(TaskBase):
         self._accumulating: bool = False
         self._block_activations: list[float] = []
 
+        # Volume counter for run results (subclasses may overwrite it).
+        self._volumes_processed: int = 0
+
     def get_task_metadata(self):
         """Get metadata for this task type.
 
@@ -578,7 +581,8 @@ class BaseTask(TaskBase):
 
     def _on_trigger(self) -> None:
         """Notify coordinator that trigger has been received."""
-        self.coordinator.send_trigger()
+        if self.coordinator is not None:
+            self.coordinator.send_trigger()
 
     # =========================================================================
     # Lifecycle

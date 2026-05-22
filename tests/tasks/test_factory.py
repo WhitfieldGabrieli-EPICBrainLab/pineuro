@@ -16,6 +16,7 @@ class TestTaskFactory:
         from unittest.mock import MagicMock
 
         from pineuro.tasks import factory as factory_mod
+        from pineuro.tasks.base import BaseTask
         from pineuro.tasks.factory import get_registered_task_ids
 
         ids = get_registered_task_ids()
@@ -24,9 +25,21 @@ class TestTaskFactory:
 
         task_id = ids[0]
 
-        # Substitute a mock task class so we don't need PsychoPy running
+        # Substitute a minimal BaseTask subclass so we don't need PsychoPy
+        # running. create_task validates that the registered class is a
+        # BaseTask subclass, so a bare MagicMock cannot be used here.
+        class _StubTask(BaseTask):
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def setup(self):
+                pass
+
+            def update(self, data):
+                pass
+
         original_classes = dict(factory_mod._TASK_CLASSES)
-        factory_mod._TASK_CLASSES[task_id] = MagicMock(return_value=MagicMock())
+        factory_mod._TASK_CLASSES[task_id] = _StubTask
 
         mock_coordinator = MagicMock()
         mock_coordinator.mask_names = ["ContA", "DefaultA"]

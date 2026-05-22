@@ -1165,7 +1165,7 @@ def run_command(
                 f"{description} failed:\n"
                 f"Command: {' '.join(cmd)}\n"
                 f"Return code: {e.returncode}\n"
-                f"stdout: {e.stdout}"
+                f"stdout: {e.stdout}\n"
                 f"stderr: {e.stderr}"
             )
             logger.error(error_msg)

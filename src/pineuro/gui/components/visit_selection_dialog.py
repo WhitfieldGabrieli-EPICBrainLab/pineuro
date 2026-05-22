@@ -6,13 +6,18 @@ This dialog allows users to:
 - Create a new visit (with mask compute or reuse options)
 """
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import flet as ft
 
-from pineuro.session import VisitConfig, detect_existing_visits, next_visit_id
+if TYPE_CHECKING:
+    # pineuro.session is a heavy module; import it lazily inside methods.
+    from pineuro.session import VisitConfig
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +47,8 @@ class VisitSelectionDialog:
         self.participant_id = participant_id
         self.base_dir = Path(base_dir)
         self.on_select = on_select
+        from pineuro.session import detect_existing_visits
+
         self.existing_visits = detect_existing_visits(self.base_dir, participant_id)
         self.dialog: ft.AlertDialog | None = None
 
@@ -87,6 +94,8 @@ class VisitSelectionDialog:
         )
 
         def start_new(e):
+            from pineuro.session import VisitConfig
+
             self.page.pop_dialog()
             visit_config = VisitConfig(
                 visit_id=default_visit_id,
@@ -205,6 +214,8 @@ class VisitSelectionDialog:
             )
 
         # Add "New Visit" option
+        from pineuro.session import next_visit_id
+
         new_visit_id = next_visit_id(self.base_dir, self.participant_id)
 
         content = ft.Column(
@@ -321,6 +332,8 @@ class VisitSelectionDialog:
         )
 
         def create_visit(e):
+            from pineuro.session import VisitConfig
+
             self.page.pop_dialog()
 
             mask_value = mask_source_dropdown.value or ""

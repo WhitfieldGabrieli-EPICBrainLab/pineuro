@@ -1203,7 +1203,19 @@ def spatial_correlation(
         num = X_dm.T @ Y_dm.T
 
         # Broadcast division: (n, 1) * (1, m) = (n, m)
-        correlation_matrix = num / (x_norm[:, None] * Y_norm[None, :])
+        denom = x_norm[:, None] * Y_norm[None, :]
+        # A zero norm means an ICA component has no variance within the mask, or a
+        # network has no voxels in the mask -> the correlation is undefined. Report
+        # those cases and treat the correlation as 0 so downstream component
+        # selection (idxmax) cannot pick a NaN.
+        if not np.all(x_norm > 0):
+            logger.warning(f"{int(np.sum(x_norm == 0))} ICA component(s) have zero variance within the mask")
+        if not np.all(Y_norm > 0):
+            zero_nets = [labels[j] for j in np.where(Y_norm == 0)[0]]
+            logger.warning(f"Network(s) with no voxels in the mask: {zero_nets}")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            correlation_matrix = num / denom
+        correlation_matrix = np.nan_to_num(correlation_matrix, nan=0.0, posinf=0.0, neginf=0.0)
 
     # Create DataFrame and save
     logger.info(f"Saving correlations to {output_file}")
@@ -2495,6 +2507,16 @@ def cluster_threshold_stat_map(
             above_threshold = masked_stat >= threshold
             labeled, n_clusters = ndimage_label(above_threshold.astype(np.int32))
             cluster_sizes = np.bincount(labeled.ravel())[1:]
+            if cluster_sizes.size == 0:
+                # Defensive: the stepped-back threshold yielded no clusters either.
+                return np.zeros(stat_data.shape, dtype=np.uint8), {
+                    "outcome": "no_clusters_found",
+                    "final_threshold": float(threshold),
+                    "n_iterations": iteration + 1,
+                    "n_clusters_at_final": 0,
+                    "cluster_size": 0,
+                    "atlas_voxel_count": atlas_voxel_count,
+                }
             largest_label = int(cluster_sizes.argmax()) + 1
             largest_size = int(cluster_sizes.max())
             if return_all_clusters:
@@ -3222,11 +3244,16 @@ def mask_extraction_task(
             for mask_name, contrast_expr in contrasts.items():
                 emit_progress(f"Step 1/{n_steps}", f"Computing contrast: {mask_name} = {contrast_expr}")
 
-                stat_map = model.compute_contrast(
-                    contrast_expr,
-                    stat_type=stat_type,
-                    output_type="stat",
-                )
+                # nilearn's contrast stat computation evaluates 1.0 / variance
+                # over every voxel (including zero-variance voxels it masks out
+                # afterwards), emitting a benign divide-by-zero RuntimeWarning.
+                # Suppress it here -- the masked result is unaffected.
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    stat_map = model.compute_contrast(
+                        contrast_expr,
+                        stat_type=stat_type,
+                        output_type="stat",
+                    )
                 nib.save(stat_map, str(stat_map_paths[mask_name]))
 
             # Save GLM metadata
@@ -3503,7 +3530,7 @@ def mask_extraction_task(
                     positive_values = flat[positive_indices]
                     top_n = np.argpartition(positive_values, -threshold)[-threshold:]
                     result = np.zeros(flat.shape, dtype=bool)
-                    result.ravel()[positive_indices[top_n]] = True
+                    result[positive_indices[top_n]] = True
                     binary_mask = result.astype(np.uint8).reshape(stat_data.shape)
                     n_kept = int(binary_mask.sum())
 

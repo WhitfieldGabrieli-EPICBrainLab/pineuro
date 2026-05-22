@@ -163,7 +163,12 @@ logger = logging.getLogger(__name__)
 #   - Return output paths
 
 
-def motion_correction(input_file: Union[str, Path], output_file: Union[str, Path], overwrite: bool = False) -> None:
+def motion_correction(
+    input_file: Union[str, Path],
+    output_file: Union[str, Path],
+    overwrite: bool = False,
+    random_seed: int = 0,
+) -> None:
     """
     Perform motion correction on fMRI data using ANTsPy rigid registration.
 
@@ -182,6 +187,10 @@ def motion_correction(input_file: Union[str, Path], output_file: Union[str, Path
     overwrite : bool, default=False
         If True, always run and overwrite existing outputs.
         If False, skip if output file already exists.
+    random_seed : int, default=0
+        Seed for ANTs registration's metric sampling. A fixed seed makes
+        motion correction reproducible: re-running on identical input yields
+        identical motion parameters.
 
     Returns
     -------
@@ -252,6 +261,7 @@ def motion_correction(input_file: Union[str, Path], output_file: Union[str, Path
                 aff_iterations=(5, 2),
                 aff_shrink_factors=(2, 1),
                 aff_smoothing_sigmas=(1, 0),
+                random_seed=random_seed,
                 verbose=False,
             )
 
@@ -501,7 +511,13 @@ def temporal_filtering(
     data = img.get_fdata()
 
     # Extract TR from NIfTI header (4th element of zooms is temporal spacing)
-    tr = img.header.get_zooms()[3]
+    zooms = img.header.get_zooms()
+    if len(zooms) < 4:
+        raise ValueError(
+            f"Temporal filtering requires a 4-D NIfTI with a temporal zoom; "
+            f"got {len(zooms)}-D header zooms: {input_file}"
+        )
+    tr = zooms[3]
     fs = 1.0 / tr  # Sampling frequency in Hz
     nyquist = fs / 2.0  # Nyquist frequency (max representable frequency)
 

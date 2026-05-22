@@ -295,11 +295,17 @@ class SelfOtherTask(BaseLocalizerTask):
             block_type = "other" if "other" in first_path.lower() else "self"
             self._voice_block_types.append(block_type)
 
-        # Question images: one per block from column 3 of first n_blocks rows
+        # Question images: one per voice block, taken from column 3 of that
+        # block's first stimulus row. rows[] holds only voice-block rows
+        # (5 per voice block), so index by voice-block position; rest blocks
+        # have no stimulus rows and get an empty (fixation) question.
         n_blocks = len(self.block_order)
-        for i in range(n_blocks):
-            if i < len(rows):
-                q = rows[i][3].strip()
+        voice_idx = 0
+        for block_entry in self.block_order:
+            if block_entry != "rest":
+                first_row = voice_idx * 5
+                q = rows[first_row][3].strip() if first_row < len(rows) else ""
+                voice_idx += 1
             else:
                 q = ""
             self._questions.append(q)
@@ -463,7 +469,7 @@ class SelfOtherTask(BaseLocalizerTask):
         Returns
         -------
         tuple of (str, str)
-            (response_key, response_time) or ("", "") if no response.
+            (response_key, response_time), or ("n/a", "n/a") if no response.
         """
         from psychopy import core, event, visual
 
@@ -506,7 +512,9 @@ class SelfOtherTask(BaseLocalizerTask):
             core.wait(0.01)
 
         logger.debug(f"Question {block_num + 1}: response={response or 'none'}, rt={rt or 'n/a'}")
-        return response, rt
+        # Record BIDS "n/a" when no key was pressed, so a timeout is
+        # distinguishable from an empty value downstream.
+        return (response or "n/a", rt or "n/a")
 
     def cleanup(self) -> None:
         """Release resources after task completes."""

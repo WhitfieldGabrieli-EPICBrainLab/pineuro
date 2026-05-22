@@ -7,6 +7,7 @@ run tab (Feedback 1, Feedback 2, etc.).
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -69,7 +70,9 @@ class FeedbackTabBuilder:
             Factory for file browse buttons
         """
         self.index = index
-        self.config = dict(config)
+        # Deep copy so editing this tab cannot mutate the caller's config
+        # (nested dicts/lists would otherwise stay shared references).
+        self.config = copy.deepcopy(config)
         self.page = page
         self._on_change = on_change
         self._available_mask_names = available_mask_names or []

@@ -1332,8 +1332,9 @@ class ParticipantWorkflowScreen:
 
             def on_back(e):
                 _close_dialog(stage2_dialog)
-                # Re-show Stage 1
-                self.page.overlay.append(dialog)
+                # Re-show Stage 1 (avoid appending a duplicate if still present)
+                if dialog not in self.page.overlay:
+                    self.page.overlay.append(dialog)
                 dialog.open = True
                 self.page.update()
 
@@ -5055,7 +5056,6 @@ class ParticipantWorkflowScreen:
             collection_dir=collection_dir,
             task="task-reference",
             run=1,
-            expected_volumes=n_vols,
         )
 
         description = "Collect 2 volumes for initial positioning verification before localizer acquisition."
@@ -5120,7 +5120,6 @@ class ParticipantWorkflowScreen:
             collection_dir=collection_dir,
             task="task-reference",
             run=run_num,
-            expected_volumes=n_vols,
         )
 
         description = "Collect 2 volumes immediately before feedback session for real-time registration verification."
@@ -5326,7 +5325,6 @@ class ParticipantWorkflowScreen:
                 collection_dir=collection_dir,
                 task=f"task-{loc_task_name}",
                 run=run_num,
-                expected_volumes=loc_n_vols,
             )
 
             description = f"Collect {loc_display} data (run {run_num}) for network mask extraction."
@@ -5480,7 +5478,6 @@ class ParticipantWorkflowScreen:
                 collection_dir=collection_dir,
                 task=f"task-{loc_name}",
                 run=run_num,
-                expected_volumes=expected_vols,
             )
 
             description = f"Collect localizer fMRI data (run {run_num}) for network mask extraction."
@@ -6177,6 +6174,9 @@ class ParticipantWorkflowScreen:
         """
         failed_step = self._current_step_id
 
+        # Stop any feedback monitoring thread so it does not outlive a failed run.
+        self._stop_feedback_monitoring()
+
         # This callback runs in the background thread
         async def update_ui():
             self._add_log(f"[ERROR] {str(error)}")
@@ -6270,8 +6270,21 @@ class ParticipantWorkflowScreen:
                 self.log_listview.controls.pop(0)
             self.log_listview.update()
 
+    def _teardown_file_logging(self):
+        """Remove and close the session log file handler if one is active."""
+        if self._log_file_handler is not None:
+            logging.getLogger("pineuro").removeHandler(self._log_file_handler)
+            try:
+                self._log_file_handler.close()
+            except Exception:
+                logger.debug("Failed to close session log file handler", exc_info=True)
+            self._log_file_handler = None
+
     def _setup_file_logging(self):
         """Set up file-based logging to capture full debug output for export."""
+        # Drop any handler from a previous session so handlers do not
+        # accumulate on the shared "pineuro" logger across sessions.
+        self._teardown_file_logging()
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
         logs_dir = base_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)

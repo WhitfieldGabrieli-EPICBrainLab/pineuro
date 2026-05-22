@@ -257,16 +257,18 @@ class VolumeSimulator:
         sleep_duration = deadline - now
         if sleep_duration > 0:
             if stop_event is not None:
-                # Sleep in short intervals to check stop_event
+                # Sleep in short intervals so we can react to stop_event.
                 interval = 0.1  # Check every 100ms
+                slept = 0.0
                 while sleep_duration > 0:
                     if stop_event.is_set():
-                        return 0.0
+                        return slept
                     chunk = min(interval, sleep_duration)
                     time.sleep(chunk)
+                    slept += chunk
                     sleep_duration -= chunk
-            else:
-                time.sleep(sleep_duration)
+                return slept
+            time.sleep(sleep_duration)
             return sleep_duration
         else:
             # Deadline already passed - we're running behind

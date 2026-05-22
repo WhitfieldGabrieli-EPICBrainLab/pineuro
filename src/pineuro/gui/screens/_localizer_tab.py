@@ -7,6 +7,7 @@ tab (Localizer 1, Localizer 2, etc.).
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import math
 from collections.abc import Callable
@@ -69,7 +70,9 @@ class LocalizerTabBuilder:
             Factory for file browse buttons
         """
         self.index = index
-        self.config = dict(config)  # working copy
+        # Deep copy so editing this tab cannot mutate the caller's config
+        # (nested dicts/lists would otherwise stay shared references).
+        self.config = copy.deepcopy(config)  # working copy
         self.page = page
         self._on_change = on_change
         self._create_browse_button = create_browse_button

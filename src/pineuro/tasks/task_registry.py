@@ -330,6 +330,10 @@ class TaskMetadata:
             columns to a labeled display (e.g., "Hits: ContA: 5"). Tasks that
             do not write per-frame logs or have nothing meaningful to surface
             leave this empty -- the GUI hides the row entirely.
+        localizer_params_from_scan: When True, the localizer's runtime
+            parameters are derived from the scan parameters (n_volumes * tr)
+            rather than read from a per-task ``localizer_task`` config section.
+            Used by fixed-duration localizers such as the fixation task.
     """
 
     task_id: str
@@ -346,6 +350,7 @@ class TaskMetadata:
     design_type: str = "block"
     compute_max_run_seconds: Callable[[dict[str, Any]], float] | None = None
     live_metrics: list[LiveMetric] = field(default_factory=list)
+    localizer_params_from_scan: bool = False
 
     def validate_config(self, config: dict[str, Any]) -> None:
         """Validate a complete task configuration.

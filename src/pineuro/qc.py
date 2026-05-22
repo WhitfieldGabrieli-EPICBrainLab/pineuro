@@ -297,7 +297,7 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
                     else:
                         logger.debug(f"Could not detect screen {screen} geometry")
 
-            except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
+            except Exception as e:
                 # xrandr or wmctrl not available - browser still opened successfully
                 logger.debug(f"Window positioning unavailable: {type(e).__name__}")
         elif screen != 0:
@@ -923,7 +923,6 @@ def plot_registration_overlay(ref_path: Path, moving_path: Path, out_path: Path,
     y_negative = ref_img.affine[1, 1] < 0  # True for A orientation
 
     # Detect edges using Sobel filter
-    _ref_edges = ndimage.sobel(ref)
     moving_edges = ndimage.sobel(moving)
 
     # Select middle slices
@@ -1025,10 +1024,7 @@ def generate_preprocessing_report(
     ... )
     >>> print(f"QC report: {report}")
     """
-    import logging
     from glob import glob
-
-    logger = logging.getLogger(__name__)
 
     preprocessing_dir = Path(preprocessing_dir)
     output_dir = Path(output_dir) if output_dir is not None else preprocessing_dir / "qc"
@@ -1250,14 +1246,15 @@ def plot_ica_component_grid(
 
     # Check orientation
     x_negative = ref_img.affine[0, 0] < 0
-    _y_negative = ref_img.affine[1, 1] < 0
 
     # Determine grid layout
     n_cols = 2
     n_rows = (n_components + n_cols - 1) // n_cols  # Ceiling division
 
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(10, n_rows * 2.5), constrained_layout=True)
-    axes = axes.flatten() if n_components > 1 else [axes]
+    # plt.subplots returns a 0-d/1-d/2-d array depending on grid shape; always
+    # normalize to a flat 1-d array so axes[idx] yields a single Axes.
+    axes = np.atleast_1d(axes).flatten()
 
     # Get middle axial slice
     z_mid = ref_data.shape[2] // 2
@@ -2897,11 +2894,8 @@ def plot_connectivity_timeseries(
         Number of baseline volumes (will be shaded differently)
     title : str, optional
         Figure title
-
-    Returns
-    -------
-    bool
-        True if a plot was generated, False if no connectivity columns found.
+    display_names : dict, optional
+        Optional mapping of raw connectivity column names to display labels.
     """
     df = pd.read_csv(feedback_log_path, sep="\t")
 
@@ -3321,10 +3315,6 @@ def generate_feedback_report(
     ... )
     >>> print(f"QC report: {report}")
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     feedback_dir = Path(feedback_dir)
     output_dir = Path(output_dir) if output_dir is not None else feedback_dir / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3387,12 +3377,11 @@ def generate_feedback_report(
         # Compute FD statistics
         if "fd" in df.columns:
             fd_values = pd.to_numeric(df["fd"], errors="coerce").values
-            fd_mean = np.nanmean(fd_values)
-            fd_max = np.nanmax(fd_values)
-            fd_above = np.sum(fd_values > fd_threshold)
+            fd_above = int(np.sum(fd_values > fd_threshold))
             fd_pct = (fd_above / len(fd_values)) * 100 if len(fd_values) > 0 else 0
-            summary_data["Mean FD"] = f"{fd_mean:.3f} mm"
-            summary_data["Max FD"] = f"{fd_max:.3f} mm"
+            if np.any(np.isfinite(fd_values)):
+                summary_data["Mean FD"] = f"{np.nanmean(fd_values):.3f} mm"
+                summary_data["Max FD"] = f"{np.nanmax(fd_values):.3f} mm"
             summary_data[f"Volumes > {fd_threshold}mm"] = f"{fd_above} ({fd_pct:.1f}%)"
             # Motion quality rating
             if fd_pct < 5:
@@ -3403,17 +3392,18 @@ def generate_feedback_report(
                 summary_data["Motion quality"] = "High motion"
 
         # DVARS statistics
-        dvars_values = pd.to_numeric(df["dvars"], errors="coerce").values
-        dvars_mean = np.nanmean(dvars_values)
-        dvars_max = np.nanmax(dvars_values)
-        summary_data["Mean DVARS"] = f"{dvars_mean:.1f}"
-        summary_data["Max DVARS"] = f"{dvars_max:.1f}"
+        if "dvars" in df.columns:
+            dvars_values = pd.to_numeric(df["dvars"], errors="coerce").values
+            if np.any(np.isfinite(dvars_values)):
+                summary_data["Mean DVARS"] = f"{np.nanmean(dvars_values):.1f}"
+                summary_data["Max DVARS"] = f"{np.nanmax(dvars_values):.1f}"
 
         # tSNR: use last value (most stable estimate)
-        tsnr_values = pd.to_numeric(df["tsnr"], errors="coerce").values
-        valid_tsnr = tsnr_values[np.isfinite(tsnr_values) & (tsnr_values > 0)]
-        if len(valid_tsnr) > 0:
-            summary_data["Final tSNR"] = f"{valid_tsnr[-1]:.1f}"
+        if "tsnr" in df.columns:
+            tsnr_values = pd.to_numeric(df["tsnr"], errors="coerce").values
+            valid_tsnr = tsnr_values[np.isfinite(tsnr_values) & (tsnr_values > 0)]
+            if len(valid_tsnr) > 0:
+                summary_data["Final tSNR"] = f"{valid_tsnr[-1]:.1f}"
     else:
         summary_data["Status"] = "NO DATA"
 

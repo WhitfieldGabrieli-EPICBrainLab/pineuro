@@ -93,6 +93,9 @@ class PipelineRunner:
         self._current_coordinator = None  # Track coordinator for feedback tasks
         self._current_feedback_task: Any = None  # Track feedback task for stop support
         self._current_localizer_task = None  # Track localizer task for stop support
+        # Guards the three _current_* refs above: written by the worker
+        # thread, read by stop() on the UI thread.
+        self._task_lock = threading.Lock()
         self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
         self.overwrite: bool = False
         self._selected_rest_runs: list | None = None  # Selected runs for preprocessing
@@ -281,17 +284,22 @@ class PipelineRunner:
 
         # Stop thread-based steps
         if self._thread is not None and self._thread.is_alive():
+            # Snapshot the shared refs under the lock, then act outside it.
+            with self._task_lock:
+                coordinator = self._current_coordinator
+                feedback_task = self._current_feedback_task
+                localizer_task = self._current_localizer_task
             # If a feedback task is running, stop the coordinator and the task
-            if self._current_coordinator is not None:
+            if coordinator is not None:
                 logger.info("Stopping feedback coordinator")
-                self._current_coordinator.stop(show_questions=show_questions)
-            if self._current_feedback_task is not None:
+                coordinator.stop(show_questions=show_questions)
+            if feedback_task is not None:
                 logger.info("Stopping feedback task (PsychoPy)")
-                self._current_feedback_task.stop()
+                feedback_task.stop()
             # If a localizer task is running, stop it
-            if self._current_localizer_task is not None:
+            if localizer_task is not None:
                 logger.info("Stopping localizer task")
-                self._current_localizer_task.stop()
+                localizer_task.stop()
 
     def _run_step_impl(self, step_id: str) -> None:
         """Implementation of step execution (runs in background thread).
@@ -392,9 +400,7 @@ class PipelineRunner:
         n_volumes = config.get("reference", {}).get("initial_n_volumes", 2)
 
         # Get run info with retry detection
-        run_info = get_localizer_run_info(
-            collection_dir=collection_dir, task="task-reference", run=1, expected_volumes=n_volumes
-        )
+        run_info = get_localizer_run_info(collection_dir=collection_dir, task="task-reference", run=1)
         acq = run_info["acq"]
 
         self._emit_progress(f"Collecting initial reference DICOMs (acq-{acq:02d})...")
@@ -505,9 +511,7 @@ class PipelineRunner:
                 n_volumes = computed
 
         # Get run info with retry detection
-        run_info = get_localizer_run_info(
-            collection_dir=collection_dir, task=f"task-{task_name}", run=run_num, expected_volumes=n_volumes
-        )
+        run_info = get_localizer_run_info(collection_dir=collection_dir, task=f"task-{task_name}", run=run_num)
         acq = run_info["acq"]
 
         self._emit_progress(f"Collecting {task_name} run {run_num} (acq-{acq:02d}) DICOMs...")
@@ -656,7 +660,8 @@ class PipelineRunner:
         if localizer_thread is not None and localizer_thread.is_alive():
             self._emit_progress("Waiting for localizer task to complete...")
             localizer_thread.join(timeout=10)
-            self._current_localizer_task = None
+            with self._task_lock:
+                self._current_localizer_task = None
 
     def _launch_localizer_task(
         self,
@@ -693,13 +698,20 @@ class PipelineRunner:
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
 
-        # Get task-specific parameters from config
-        if task_id == "fixation":
-            # For fixation task, use scan parameters
-            localizer_params = {
-                "duration": (config["localizers"][0].get("n_volumes", 250) if config.get("localizers") else 250)
-                * (config["localizers"][0].get("tr", 2.0) if config.get("localizers") else 2.0)
-            }
+        # Get task-specific parameters from config. Fixed-duration localizers
+        # (flagged via TaskMetadata.localizer_params_from_scan) derive their
+        # params from the scan parameters; others read from the per-task
+        # localizer_task config section.
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        try:
+            params_from_scan = get_task_metadata(task_id).localizer_params_from_scan
+        except Exception:
+            params_from_scan = False
+
+        if params_from_scan:
+            localizers = config.get("localizers") or [{}]
+            localizer_params = {"duration": localizers[0].get("n_volumes", 250) * localizers[0].get("tr", 2.0)}
         else:
             # For other tasks, get from localizer_task config section
             localizer_params = config.get("localizer_task", {}).get(task_id, {})
@@ -736,7 +748,8 @@ class PipelineRunner:
         if self._task_mirror_callback is not None:
             task.set_mirror_callback(self._task_mirror_callback)
 
-        self._current_localizer_task = task
+        with self._task_lock:
+            self._current_localizer_task = task
 
         def run_localizer():
             try:
@@ -1937,9 +1950,7 @@ class PipelineRunner:
         n_volumes = config.get("reference", {}).get("realtime_n_volumes", 2)
 
         # Get run info with retry detection
-        run_info = get_localizer_run_info(
-            collection_dir=collection_dir, task="task-reference", run=run_id, expected_volumes=n_volumes
-        )
+        run_info = get_localizer_run_info(collection_dir=collection_dir, task="task-reference", run=run_id)
         acq = run_info["acq"]
 
         self._emit_progress(f"Collecting real-time reference DICOMs (acq-{acq:02d}, run-{run_id:02d})...")
@@ -2482,7 +2493,8 @@ class PipelineRunner:
             coordinator_thread = session_info["thread"]
 
             # Track coordinator for stop signal
-            self._current_coordinator = coordinator
+            with self._task_lock:
+                self._current_coordinator = coordinator
 
             # Launch PsychoPy task in separate thread
             self._emit_progress("Launching PsychoPy task...")
@@ -2537,7 +2549,8 @@ class PipelineRunner:
             coordinator._activation_callback = task._update_data
 
             # Track task for stop support
-            self._current_feedback_task = task
+            with self._task_lock:
+                self._current_feedback_task = task
 
             # Connect GUI mirror callback if set
             if self._task_mirror_callback is not None:
@@ -2580,5 +2593,6 @@ class PipelineRunner:
             self._emit_progress(result_msg)
         finally:
             # Clear coordinator and task references
-            self._current_coordinator = None
-            self._current_feedback_task = None
+            with self._task_lock:
+                self._current_coordinator = None
+                self._current_feedback_task = None

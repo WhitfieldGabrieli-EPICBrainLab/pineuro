@@ -851,7 +851,7 @@ class ThermometerTask(BaseTask):
 
             # Progressive reveal: show up to frame_n segments (max 30)
             max_idx = min(frame_n, n_segments)
-            if max_idx > 1:
+            if max_idx >= 1:
                 for idx in range(max_idx):
                     recs[idx].draw()
 
