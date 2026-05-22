@@ -13,6 +13,7 @@ concurrency:
 jobs:
   lint-and-typecheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -27,8 +28,32 @@ jobs:
 
       - run: ruff format . --check
 
-      - name: Install wxPython from pre-built wheel (Linux)
-        run: pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
+      # wxPython publishes no Linux wheels on PyPI; the only source is the
+      # extras.wxpython.org server, which is occasionally slow/unreachable.
+      # Cache the wheel so CI contacts that host only on a cache miss, and
+      # never let pip fall back to a (multi-hour) source build.
+      - name: Restore cached wxPython wheel (Linux)
+        id: wx-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: wx-wheels
+          key: wxpython-wheel-${{ runner.os }}-py3.11-v1
+      - name: Download wxPython wheel (Linux)
+        if: steps.wx-cache.outputs.cache-hit != 'true'
+        run: >-
+          pip download --only-binary=:all: --no-deps --timeout 60 --retries 5
+          -d wx-wheels
+          -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
+      - name: Install wxPython (Linux)
+        run: pip install --no-index --no-deps --find-links wx-wheels wxPython
+      # Save only after a successful download + install, so a failed
+      # download (e.g. the host being down) can never poison the cache.
+      - name: Save wxPython wheel to cache (Linux)
+        if: steps.wx-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: wx-wheels
+          key: wxpython-wheel-${{ runner.os }}-py3.11-v1
 
       - run: pip install -e ".[dev]"
 
@@ -36,6 +61,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -60,6 +86,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -68,9 +95,30 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install wxPython from pre-built wheel (Linux)
+      - name: Restore cached wxPython wheel (Linux)
+        id: wx-cache
         if: runner.os == 'Linux'
-        run: pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
+        uses: actions/cache/restore@v4
+        with:
+          path: wx-wheels
+          key: wxpython-wheel-${{ runner.os }}-py${{ matrix.python-version }}-v1
+      - name: Download wxPython wheel (Linux)
+        if: runner.os == 'Linux' && steps.wx-cache.outputs.cache-hit != 'true'
+        run: >-
+          pip download --only-binary=:all: --no-deps --timeout 60 --retries 5
+          -d wx-wheels
+          -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
+      - name: Install wxPython (Linux)
+        if: runner.os == 'Linux'
+        run: pip install --no-index --no-deps --find-links wx-wheels wxPython
+      # Save only after a successful download + install, so a failed
+      # download (e.g. the host being down) can never poison the cache.
+      - name: Save wxPython wheel to cache (Linux)
+        if: runner.os == 'Linux' && steps.wx-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: wx-wheels
+          key: wxpython-wheel-${{ runner.os }}-py${{ matrix.python-version }}-v1
 
       - name: Pre-install build deps to avoid setuptools upgrade during editable install
         if: runner.os == 'Windows'
@@ -86,6 +134,7 @@ jobs:
     # truth. Slow by design; single OS since the science libraries are
     # platform-independent.
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
       # Single-threaded ITK/BLAS so the iterative optimizers (ANTs, CanICA) are
       # reproducible -- the band checks in tests/validation/baselines.py rely on
@@ -101,8 +150,28 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install wxPython from pre-built wheel (Linux)
-        run: pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
+      - name: Restore cached wxPython wheel (Linux)
+        id: wx-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: wx-wheels
+          key: wxpython-wheel-${{ runner.os }}-py3.11-v1
+      - name: Download wxPython wheel (Linux)
+        if: steps.wx-cache.outputs.cache-hit != 'true'
+        run: >-
+          pip download --only-binary=:all: --no-deps --timeout 60 --retries 5
+          -d wx-wheels
+          -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
+      - name: Install wxPython (Linux)
+        run: pip install --no-index --no-deps --find-links wx-wheels wxPython
+      # Save only after a successful download + install, so a failed
+      # download (e.g. the host being down) can never poison the cache.
+      - name: Save wxPython wheel to cache (Linux)
+        if: steps.wx-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: wx-wheels
+          key: wxpython-wheel-${{ runner.os }}-py3.11-v1
 
       - run: pip install -e ".[dev]"
 
