@@ -63,8 +63,15 @@ Examples
 """
 
 import importlib as _importlib
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
-__version__ = "0.2.0"
+try:
+    # Single source of truth: the version declared in pyproject.toml and
+    # recorded in the installed package metadata.
+    __version__ = _pkg_version("pineuro")
+except _PackageNotFoundError:  # pragma: no cover - package not installed
+    __version__ = "unknown"
 
 # ---------------------------------------------------------------------------
 # Lazy import system (PEP 562)

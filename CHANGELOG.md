@@ -7,17 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-22
+
 ### Added
 
 - **Validation suite** (`tests/validation/`) — a scientific-correctness test layer, separate from the regression suite, that runs synthetic phantoms with known ground truth through the real pipeline (real ANTsPy/nilearn, no mocking) and asserts the outputs recover that ground truth: HRF/design math, the incremental-GLM solver, ANTs motion correction & brain extraction, nilearn ICA & GLM task-mask extraction, real-time feedback signal recovery, and an end-to-end chained pipeline test. Includes a self-contained synthetic-data phantom library and a markdown/HTML metrics report. Opt-in locally (`pytest -m validation`); runs as a hard correctness gate on every push in CI. See `tests/validation/README.md`.
 
-### Fixed
+### Changed
 
-- **`script_generator` produced invalid Python on Windows.** Generated mask-extraction scripts embedded file paths via raw f-string interpolation (`Path("{path}")`), so a Windows path like `C:\Users\...` became a string literal where `\U` raised a `SyntaxError` and `\t`/`\m` etc. silently corrupted the path. Paths and the participant ID are now embedded with `repr()`, so generated scripts are valid on every platform.
+- **Motion correction is now deterministic.** `motion_correction()` seeds ANTs' rigid-registration metric sampling (new `random_seed` parameter, default `0`), so re-running preprocessing on identical input yields identical motion parameters. Previously the metric's random sampling was unseeded, giving small run-to-run variation.
+- **The RNT localizer's per-participant randomization is now reproducible.** It seeded its RNG with the builtin `hash()`, which is salted per process (`PYTHONHASHSEED`) — the same participant got a different trial order on every run. It now derives the seed from a stable `hashlib` digest.
+- **`pineuro.__version__` now reflects the installed package metadata** (via `importlib.metadata`) instead of a hardcoded string, which had drifted to `0.2.0`. It can no longer go stale.
+- **`pipeline_runner` no longer special-cases task IDs.** The fixation localizer's parameter handling branched on `task_id == "fixation"`; that decision now reads a `TaskMetadata.localizer_params_from_scan` flag, so fixed-duration localizers work without editing shared GUI code.
 
 ### Removed
 
 - **`tests/integration/` (Rockland_NFB real-data suite) and the `integration` pytest marker.** The preprocessing-pipeline, ICA mask-extraction, and feedback-estimation paths it exercised are covered by the synthetic-phantom validation suite; the marker and the `sourcedata/Rockland_NFB/` data dependency are gone. Note: real DICOM→NIfTI (`dcm2niix`) conversion no longer has dedicated test coverage.
+
+### Fixed
+
+- **`script_generator` produced invalid Python on Windows.** Generated mask-extraction scripts embedded file paths via raw f-string interpolation (`Path("{path}")`), so a Windows path like `C:\Users\...` became a string literal where `\U` raised a `SyntaxError` and `\t`/`\m` etc. silently corrupted the path. Paths and the participant ID are now embedded with `repr()`, so generated scripts are valid on every platform.
+- **The Self/Other localizer showed the wrong comprehension-question image** when the block order contained `rest` blocks. Questions were indexed by absolute block position, but the stimulus file holds only voice-block rows (5 per block); they are now indexed per voice block, so each voice block shows its own question.
+- **GUI study-editor edits could mutate the source configuration.** The study editor and the localizer/feedback tab builders copied configs shallowly (`dict(config)`), so edits to nested blocks — including edits to a *duplicated* study — leaked back into the original. All config copies are now deep copies.
+- **The feedback QC report crashed on logs missing optional columns.** It raised a `KeyError` when a feedback log lacked `dvars`/`tsnr` columns, and the ICA component-grid plot raised an `AttributeError` for a single component. Both are guarded, and reports no longer print `nan` for all-missing motion metrics.
+- **Task-mask extraction could select a network from a `NaN` correlation.** The ICA spatial-correlation step divided by zero for a zero-variance component or an empty network mask; those cases are now detected and handled explicitly.
+- **Resource leaks in the participant-workflow GUI.** The per-session log file handler was never removed or closed (handlers accumulated on the `pineuro` logger across sessions), and the feedback-monitor thread was not stopped when a pipeline step failed. Both are now cleaned up.
+- **Numerous robustness fixes.** Runtime `assert`s used for input validation (silently stripped under `python -O`) are replaced with explicit errors; guards were added for empty `feedback_runs`, malformed visit IDs, 3-D inputs to temporal filtering, empty ROI masks, and non-finite activation values; the task factory now verifies a registered task class subclasses `BaseTask`. The collection-run-number helper now matches the actual `acq-NN_run-NN` directory naming.
 
 ## [0.8.0] - 2026-05-13
 
