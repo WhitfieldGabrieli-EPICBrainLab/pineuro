@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Manual Mask Import localizer type.** Researchers can supply pre-built, participant-specific NIfTI masks (native/EPI, T1, or MNI space) for neurofeedback instead of running ICA (rest) or GLM (task) extraction. The study config holds only participant-agnostic data (mask space, network names); each participant's mask / reference-EPI / T1 files are selected in their workflow and persisted per-participant to `manual_masks.json`. `import_manual_masks` supports opt-in QC reporting, and the pipeline runner imports the masks into `03_masks/`, generates QC, and coregisters them.
 - **Validation suite** (`tests/validation/`) — a scientific-correctness test layer, separate from the regression suite, that runs synthetic phantoms with known ground truth through the real pipeline (real ANTsPy/nilearn, no mocking) and asserts the outputs recover that ground truth: HRF/design math, the incremental-GLM solver, ANTs motion correction & brain extraction, nilearn ICA & GLM task-mask extraction, real-time feedback signal recovery, and an end-to-end chained pipeline test. Includes a self-contained synthetic-data phantom library and a markdown/HTML metrics report. Opt-in locally (`pytest -m validation`); runs as a hard correctness gate on every push in CI. See `tests/validation/README.md`.
 
 ### Changed
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The RNT localizer's per-participant randomization is now reproducible.** It seeded its RNG with the builtin `hash()`, which is salted per process (`PYTHONHASHSEED`) — the same participant got a different trial order on every run. It now derives the seed from a stable `hashlib` digest.
 - **`pineuro.__version__` now reflects the installed package metadata** (via `importlib.metadata`) instead of a hardcoded string, which had drifted to `0.2.0`. It can no longer go stale.
 - **`pipeline_runner` no longer special-cases task IDs.** The fixation localizer's parameter handling branched on `task_id == "fixation"`; that decision now reads a `TaskMetadata.localizer_params_from_scan` flag, so fixed-duration localizers work without editing shared GUI code.
+- **FD/DVARS/Siemens-MoCo motion parsing deduplicated.** Framewise displacement, DVARS, and Siemens MoCo motion-string parsing were copy-pasted between `feedback.py` and `collection_qc.py`, so a fix to one copy would silently not reach the other. `compute_fd`, `compute_dvars`, and `parse_siemens_motion_comment` now live once in `pineuro.utils`; both modules delegate to them.
 
 ### Removed
 
@@ -26,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ROI feedback weighting was inverted.** `FeedbackEstimator` weighted ROI voxels by their residual sum of squares (proportional to variance), *up*-weighting noisy voxels — a faithful copy of MURFI's `RtRoiCombine`, but the opposite of the Hinds et al. (2011) 1/σ efficiency weighting it was meant to implement. The `use_efficiency_weights` boolean is replaced by a `roi_combine_method` choice — `inverse_sd` (the corrected 1/σ weighting, now the default) or `mean` (unweighted) — routed through a single `_combine_roi` helper, with a study-editor dropdown and a migration shim for the old config key.
 - **`script_generator` produced invalid Python on Windows.** Generated mask-extraction scripts embedded file paths via raw f-string interpolation (`Path("{path}")`), so a Windows path like `C:\Users\...` became a string literal where `\U` raised a `SyntaxError` and `\t`/`\m` etc. silently corrupted the path. Paths and the participant ID are now embedded with `repr()`, so generated scripts are valid on every platform.
 - **The Self/Other localizer showed the wrong comprehension-question image** when the block order contained `rest` blocks. Questions were indexed by absolute block position, but the stimulus file holds only voice-block rows (5 per block); they are now indexed per voice block, so each voice block shows its own question.
 - **GUI study-editor edits could mutate the source configuration.** The study editor and the localizer/feedback tab builders copied configs shallowly (`dict(config)`), so edits to nested blocks — including edits to a *duplicated* study — leaked back into the original. All config copies are now deep copies.
