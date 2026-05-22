@@ -7,28 +7,28 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 ## Features
 
 **Core pipeline**
-- **DICOM processing** — Watch for incoming scanner DICOMs and process volumes as they arrive
-- **Preprocessing** — Motion correction, brain extraction, and multi-run coregistration (ANTsPy)
-- **ICA mask extraction** — Participant-specific network masks via ICA and Yeo atlas
-- **GLM mask extraction** — Network masks from task localizer contrasts
-- **MNI atlas masks** — Atlas-based ROIs without a localizer run
-- **Incremental GLM** — Online activation estimation using Gentleman's algorithm
-- **Connectivity feedback** — Real-time functional connectivity between network pairs
+- **DICOM processing**: Watch for incoming scanner DICOMs and process volumes as they arrive
+- **Preprocessing**: Motion correction, brain extraction, and multi-run coregistration (ANTsPy)
+- **ICA mask extraction**: Participant-specific network masks via ICA and Yeo atlas
+- **GLM mask extraction**: Network masks from task localizer contrasts
+- **MNI atlas masks**: Atlas-based ROIs without a localizer run
+- **Incremental GLM**: Online activation estimation using Gentleman's algorithm
+- **Connectivity feedback**: Real-time functional connectivity between network pairs
 
 **Study management**
-- **Desktop GUI** — Study configuration and participant workflows (`pineuro-gui`)
-- **Session orchestration** — Multi-run and multi-visit protocols
-- **Sham / control conditions** — Sham feedback, replay providers, and randomization
-- **QC reports** — HTML quality reports for each pipeline stage
+- **Desktop GUI**: Study configuration and participant workflows (`pineuro-gui`)
+- **Session orchestration**: Multi-run and multi-visit protocols
+- **Sham / control conditions**: Sham feedback, replay providers, and randomization
+- **QC reports**: HTML quality reports for each pipeline stage
 
 **Task framework**
-- **Built-in tasks** — Gauge (dual-network block design), ball (dual-network adaptive), thermometer (single-network), and RNT variants
-- **Task plugin system** — `@pineuro_task` decorator and entry-point registration
-- **Simulation mode** — Offline DICOM replay at configurable speed
+- **Built-in tasks**: Gauge (dual-network block design), ball (dual-network adaptive), thermometer (single-network), and RNT variants
+- **Task plugin system**: `@pineuro_task` decorator and entry-point registration
+- **Simulation mode**: Offline DICOM replay at configurable speed
 
 ## Installation
 
-**Requires Python 3.10 or 3.11** (`>=3.10,<3.12`). All dependencies are pure pip — no external tools required.
+**Requires Python 3.10 or 3.11** (`>=3.10,<3.12`). All dependencies are pure pip; no external tools required.
 
 ```bash
 git clone https://github.com/marlvan/pineuro.git
@@ -49,11 +49,11 @@ The desktop GUI provides study configuration, participant workflows, live activa
 ## Documentation
 
 **Getting started**
-- [Installation](docs/getting-started/installation.md) — Setup and dependencies
-- [Quick Start](docs/getting-started/quickstart.md) — Python API quick start
-- [First Session](docs/getting-started/first-session.md) — End-to-end GUI walkthrough
+- [Installation](docs/getting-started/installation.md): Setup and dependencies
+- [Quick Start](docs/getting-started/quickstart.md): Python API quick start
+- [First Session](docs/getting-started/first-session.md): End-to-end GUI walkthrough
 
-**User guide** — [Full index](docs/index.md)
+**User guide**: [Full index](docs/index.md)
 
 [Pipeline Overview](docs/user-guide/pipeline-overview.md) · [Study Configuration](docs/user-guide/study-configuration.md) · [Preprocessing](docs/user-guide/preprocessing.md) · [Mask Extraction](docs/user-guide/mask-extraction.md) · [Feedback Sessions](docs/user-guide/feedback-sessions.md) · [Tasks](docs/user-guide/tasks.md) · [Sham & Blinding](docs/user-guide/sham-and-blinding.md) · [Multi-Visit](docs/user-guide/multi-visit.md) · [Display Setup](docs/user-guide/display-setup.md) · [Simulation Mode](docs/user-guide/simulation-mode.md) · [QC Reports](docs/user-guide/qc-reports.md) · [Network Testing](docs/user-guide/network-testing.md)
 
@@ -73,5 +73,5 @@ Key references:
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) for details.
+Apache License 2.0. See [LICENSE](LICENSE) for details.
 
