@@ -12,18 +12,11 @@ from pineuro.tasks.utils import (
 
 
 class TestMakeBidsRunPrefix:
-    def test_without_acq(self):
-        assert make_bids_run_prefix("sub-01", "ball", run=1) == "sub-01_task-ball_run-01"
-
-    def test_pads_run_to_two_digits(self):
-        assert make_bids_run_prefix("sub-01", "ball", run=2).endswith("run-02")
-
-    def test_with_int_acq_pads(self):
+    def test_pads_run_and_acq_to_two_digits(self):
         assert make_bids_run_prefix("sub-01", "ball", run=2, acq=3) == "sub-01_task-ball_acq-03_run-02"
 
-    def test_with_str_acq_preserved(self):
-        # Strings pass through unmodified — only ints get zero-padded.
-        assert make_bids_run_prefix("sub-01", "ball", run=1, acq="late") == "sub-01_task-ball_acq-late_run-01"
+    def test_run_padding(self):
+        assert make_bids_run_prefix("sub-01", "ball", run=1, acq=1).endswith("acq-01_run-01")
 
 
 class TestIsActivationOutlier:

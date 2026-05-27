@@ -31,7 +31,7 @@ def mock_coordinator():
             "subject": "sub-01",
             "task": "ball",
             "run_number": 1,
-            "acq": None,
+            "acq": 1,
             "n_volumes": 100,
             "mask_names": ["ContA", "DefaultA"],
         }

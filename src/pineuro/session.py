@@ -83,7 +83,7 @@ import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1333,9 +1333,8 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
     """
     max_run = 0
     if collection_dir.exists():
-        # Collection folders are named either "{task}_run-NN" or, with retry
-        # detection, "{task}_acq-NN_run-NN" -- match both forms.
-        pattern = re.compile(rf"{re.escape(task_name)}(?:_acq-\d+)?_run-(\d+)$")
+        # Collection folders are named "{task}_acq-NN_run-NN".
+        pattern = re.compile(rf"{re.escape(task_name)}_acq-\d+_run-(\d+)$")
         for entry in collection_dir.iterdir():
             if entry.is_dir():
                 match = pattern.match(entry.name)
@@ -1414,6 +1413,104 @@ def get_localizer_run_info(collection_dir: Path, task: str, run: int) -> dict[st
         "run_acq_string": f"acq-{acq:02d}_run-{run:02d}",
         "existing_acqs": existing_acqs,
     }
+
+
+def discard_attempt(
+    base_dir: Path,
+    *,
+    subject: str,
+    task: str,
+    acq: int,
+    run: int,
+    kind: Literal["localizer", "feedback"],
+) -> list[Path]:
+    """Delete all artifacts for one ``acq-NN_run-NN`` attempt.
+
+    Used after the operator stops a run mid-acquisition and chooses to discard
+    the partial data so the next attempt reuses the same ``acq`` number (rather
+    than having the failed try permanently occupy an ``acq`` slot).
+
+    For ``kind="localizer"``, deletes the entire
+    ``base_dir/collection/task-{task}_acq-NN_run-NN/`` directory plus any
+    per-attempt files the localizer task wrote into ``base_dir/preprocessing/``
+    matching ``{subject}_task-{task}_acq-NN_run-NN_*`` (e.g. events.tsv).
+
+    For ``kind="feedback"``, deletes every file under
+    ``base_dir/feedback/02_feedback_output/`` whose name starts with
+    ``{subject}_task-{task}_acq-NN_run-NN`` plus the sibling
+    ``nifti_task-{task}_acq-NN_run-NN/`` directory.
+
+    Parameters
+    ----------
+    base_dir : Path
+        Participant base directory (the one containing ``collection/`` and
+        ``feedback/02_feedback_output/`` subtrees).
+    subject : str
+        Subject identifier (e.g. ``"sub-01"``). Only used for the feedback kind.
+    task : str
+        Task name (e.g. ``"rest"``, ``"feedback"``, ``"transfer"``).
+    acq : int
+        Acquisition number (1, 2, 3, ...) of the attempt to discard.
+    run : int
+        Run number (1, 2, ...) of the attempt to discard.
+    kind : {"localizer", "feedback"}
+        Which output convention to clean up.
+
+    Returns
+    -------
+    list[Path]
+        The paths that were actually removed (empty if nothing matched).
+
+    Raises
+    ------
+    OSError
+        If one or more matched paths failed to delete. The error message
+        aggregates every failure. Files that were successfully removed remain
+        removed.
+    """
+    base_dir = Path(base_dir)
+    acq_run = f"acq-{acq:02d}_run-{run:02d}"
+
+    if kind == "localizer":
+        targets = [base_dir / "collection" / f"task-{task}_{acq_run}"]
+        # Localizer tasks also write an events TSV (and any per-attempt
+        # outputs the task subclass adds) into preprocessing/.
+        preprocessing_dir = base_dir / "preprocessing"
+        if preprocessing_dir.exists():
+            targets.extend(preprocessing_dir.glob(f"{subject}_task-{task}_{acq_run}_*"))
+    elif kind == "feedback":
+        feedback_dir = base_dir / "feedback" / "02_feedback_output"
+        if not feedback_dir.exists():
+            return []
+        prefix = f"{subject}_task-{task}_{acq_run}"
+        targets = list(feedback_dir.glob(f"{prefix}*"))
+        nifti_dir = feedback_dir / f"nifti_task-{task}_{acq_run}"
+        if nifti_dir.exists() and nifti_dir not in targets:
+            targets.append(nifti_dir)
+    else:
+        raise ValueError(f"Unknown kind: {kind!r}")
+
+    removed: list[Path] = []
+    failures: list[tuple[Path, Exception]] = []
+    for target in targets:
+        if not target.exists():
+            continue
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            removed.append(target)
+            logger.info(f"Discarded attempt artifact: {target}")
+        except OSError as exc:
+            failures.append((target, exc))
+            logger.error(f"Failed to remove {target}: {exc}")
+
+    if failures:
+        msg = "; ".join(f"{path}: {exc}" for path, exc in failures)
+        raise OSError(f"Failed to discard {len(failures)} path(s): {msg}")
+
+    return removed
 
 
 # =============================================================================

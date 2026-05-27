@@ -681,5 +681,7 @@ class BaseTask(TaskBase):
         self._session_state.record_run(
             run_type="feedback" if self.feedback_mode else "transfer",
             volumes_processed=getattr(self, "_volumes_processed", 0),
+            acq=self.coordinator.acq,
+            slot_run_number=self.coordinator.run_number,
             task_state_snapshot=getattr(self, "_task_state_snapshot", {}),
         )

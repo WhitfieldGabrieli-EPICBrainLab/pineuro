@@ -265,6 +265,10 @@ class ParticipantWorkflowScreen:
         # Overwrite flag — set to True to re-run already-complete steps
         self._pending_overwrite: bool = False
 
+        # In-flight attempt captured at stop time so on_complete can offer
+        # Keep vs Discard once the worker thread actually finishes.
+        self._pending_discard_attempt: dict[str, Any] | None = None
+
         # Last failed step (for error recovery panel)
         self._last_failed_step: str | None = None
 
@@ -2142,12 +2146,6 @@ class ParticipantWorkflowScreen:
         # Search for any acq-* files for this slot's run number
         pattern = f"{participant_id}_task-{task_type}_acq-*_run-{run_num:02d}_feedbacklog.tsv"
         log_files = list(output_dir.glob(pattern))
-
-        # Also check legacy naming (without acq) for backward compatibility
-        legacy_pattern = f"{participant_id}_task-{task_type}_run-{run_num:02d}_feedbacklog.tsv"
-        legacy_file = output_dir / legacy_pattern
-        if legacy_file.exists() and legacy_file not in log_files:
-            log_files.append(legacy_file)
 
         if not log_files:
             return StepStatus.PENDING
@@ -4158,7 +4156,10 @@ class ParticipantWorkflowScreen:
         import re
 
         acq_match = re.search(r"_acq-(\d+)_", feedbacklog_path.name)
-        acq: str | None = acq_match.group(1) if acq_match else None
+        if acq_match is None:
+            logger.error(f"Feedbacklog {feedbacklog_path.name} has no acq entity; cannot generate summary")
+            return
+        acq: int = int(acq_match.group(1))
 
         # Compute summary data
         try:
@@ -4264,9 +4265,7 @@ class ParticipantWorkflowScreen:
         dialog.show()
 
     def _find_latest_feedback_file(self, output_dir: Path, task: str, run: int, suffix: str) -> Path | None:
-        """Find the most recent feedback file matching the pattern.
-
-        Handles both legacy (run-only) and new (acq-based) naming conventions.
+        """Find the most recent acq-NN_run-NN feedback file for this task/run.
 
         Args:
             output_dir: Directory containing feedback output files
@@ -4277,17 +4276,10 @@ class ParticipantWorkflowScreen:
         Returns:
             Path to the most recent matching file, or None if not found
         """
-        # Try glob pattern to find all matching files
-        pattern = f"{self.participant_id}_task-{task}*run-{run:02d}_{suffix}"
+        pattern = f"{self.participant_id}_task-{task}_acq-*_run-{run:02d}_{suffix}"
         matches = list(output_dir.glob(pattern))
 
-        if not matches:
-            # Try in subdirectory (nifti_task-X_run-Y format)
-            pattern = f"*/{self.participant_id}_task-{task}*run-{run:02d}_{suffix}"
-            matches = list(output_dir.glob(pattern))
-
         if matches:
-            # Return most recent by modification time
             return sorted(matches, key=lambda p: p.stat().st_mtime, reverse=True)[0]
 
         return None
@@ -6048,11 +6040,84 @@ class ParticipantWorkflowScreen:
                 if is_feedback_transfer:
                     self._show_feedback_summary(completed_step_id)
 
+            # If this completion was a user-initiated stop with an in-flight
+            # attempt on disk, offer Keep vs Discard now that the worker has
+            # joined (so final flushes are done).
+            if stopped_by_user and self._pending_discard_attempt is not None:
+                attempt = self._pending_discard_attempt
+                self._pending_discard_attempt = None
+                self._show_discard_dialog(attempt)
+
         # Schedule the UI update on the main thread
         try:
             self.page.run_task(update_ui)
         except Exception as e:
             logger.error(f"Failed to schedule UI update: {e}")
+
+    def _show_discard_dialog(self, attempt: dict[str, Any]) -> None:
+        """Prompt the operator to keep or discard a just-stopped attempt's files.
+
+        Default is Keep (no-op). Discard runs ``discard_attempt`` and logs the
+        count; failures surface as an error dialog.
+        """
+        kind = attempt["kind"]
+        subject = attempt["subject"]
+        task = attempt["task"]
+        acq = attempt["acq"]
+        run = attempt["run"]
+
+        def on_keep(_e):
+            self.page.pop_dialog()
+            self._add_log(f"[INFO] Kept partial files for {kind} acq-{acq:02d} run-{run:02d}")
+
+        def on_discard(_e):
+            self.page.pop_dialog()
+            # Lazy import: pineuro.session is a heavy module per the GUI lazy-import rule.
+            from pineuro.session import discard_attempt
+
+            base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+            try:
+                removed = discard_attempt(
+                    base_dir,
+                    subject=subject,
+                    task=task,
+                    acq=acq,
+                    run=run,
+                    kind=kind,
+                )
+            except OSError as exc:
+                self._add_log(f"[ERROR] Discard failed: {exc}")
+                self.page.show_dialog(
+                    ft.AlertDialog(
+                        title=ft.Text("Discard Failed"),
+                        content=ft.Text(str(exc)),
+                        actions=[ft.TextButton("OK", on_click=lambda _e: self.page.pop_dialog())],
+                    )
+                )
+                return
+            self._add_log(f"[INFO] Discarded {len(removed)} artifact(s) for {kind} acq-{acq:02d} run-{run:02d}")
+
+        body = ft.Text(
+            f"{kind.capitalize()} stopped at acq-{acq:02d} run-{run:02d}.\n\n"
+            f"Keep the partial files (next attempt will be acq-{acq + 1:02d}), or "
+            f"discard them (next attempt reuses acq-{acq:02d})?",
+            size=14,
+        )
+        dialog = ft.AlertDialog(
+            title=ft.Text("Discard this attempt?"),
+            content=ft.Container(content=body, width=420),
+            actions=[
+                ft.TextButton("Keep", on_click=on_keep),
+                ft.FilledButton(
+                    "Discard",
+                    icon=ft.Icons.DELETE_FOREVER,
+                    color=ft.Colors.WHITE,
+                    bgcolor=ft.Colors.RED_700,
+                    on_click=on_discard,
+                ),
+            ],
+        )
+        self.page.show_dialog(dialog)
 
     def _build_error_recovery_panel(self, error: Exception, step_id: str) -> ft.Container:
         """Build an interactive error recovery panel shown in the right panel area.
@@ -7352,7 +7417,9 @@ class ParticipantWorkflowScreen:
             self._stop_feedback_monitoring()
 
             if self.pipeline_runner is not None:
-                self.pipeline_runner.stop(show_questions=show_questions)
+                # Capture the in-flight attempt so _on_pipeline_complete can
+                # prompt Keep vs Discard once the worker thread has joined.
+                self._pending_discard_attempt = self.pipeline_runner.stop(show_questions=show_questions)
                 if show_questions:
                     self._add_log("[WARNING] Stop requested - showing questions first")
                 else:

@@ -74,8 +74,8 @@ class BaseLocalizerTask(TaskBase):
         self,
         output_dir: Union[str, Path],
         participant_id: str,
+        acq: int,
         run: int = 1,
-        acq: int | None = None,
         trigger_keys: list[str] | None = None,
         monitor_position: str = "right",
         simulator=None,
@@ -165,7 +165,7 @@ class BaseLocalizerTask(TaskBase):
         Parameters
         ----------
         path : Path, optional
-            Output path. Defaults to {output_dir}/{participant}_task-{task_id}_run-{run}_events.tsv.
+            Output path. Defaults to {output_dir}/{participant}_task-{task_id}_acq-{acq}_run-{run}_events.tsv.
 
         Returns
         -------

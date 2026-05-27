@@ -273,20 +273,15 @@ class BallTask(BaseTask):
         self.circle_colors = ["yellow", "#1E90FF"]
 
         # Store slot info from coordinator for session state tracking
-        self._slot_run_number = getattr(coordinator, "run_number", None)
-        self._acq = getattr(coordinator, "acq", None)
+        self._slot_run_number = coordinator.run_number
+        self._acq = coordinator.acq
 
         if session_state is not None:
-            # Use slot-aware state lookup for retries
-            if self._slot_run_number is not None and self._acq is not None:
-                slot_state = session_state.get_state_for_slot(self._slot_run_number, self._acq)
-                self.scale_factor = slot_state.get("scale_factor", self.scale_factor)
-                logger.info(
-                    f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, acq={self._acq})"
-                )
-            else:
-                self.scale_factor = session_state.get("scale_factor", self.scale_factor)
-                logger.info(f"Restored scale_factor from session: {self.scale_factor}")
+            slot_state = session_state.get_state_for_slot(self._slot_run_number, self._acq)
+            self.scale_factor = slot_state.get("scale_factor", self.scale_factor)
+            logger.info(
+                f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, acq={self._acq})"
+            )
 
         self.network_directions = np.array([1, -1])  # +1 = up, -1 = down
 
@@ -302,7 +297,7 @@ class BallTask(BaseTask):
             coordinator.subject,
             coordinator.task,
             coordinator.run_number,
-            acq=getattr(coordinator, "acq", None),
+            acq=coordinator.acq,
         )
         self._psychopy_log_path = output_dir / f"{prefix}_psychopylog.tsv"
         self._psychopy_log_file = None
@@ -425,14 +420,9 @@ class BallTask(BaseTask):
             anchorVert="center",
         )
 
-        # Setup questions CSV file with BIDS-style naming (use acq if available)
+        # Setup questions CSV file with BIDS-style naming
         output_dir = Path(self.coordinator.output_dir)
-        if hasattr(self.coordinator, "acq") and self.coordinator.acq is not None:
-            # Format acq as 2-digit number if int
-            acq_str = f"{self.coordinator.acq:02d}" if isinstance(self.coordinator.acq, int) else self.coordinator.acq
-            run_acq_str = f"acq-{acq_str}_run-{self.coordinator.run_number:02d}"
-        else:
-            run_acq_str = f"run-{self.coordinator.run_number:02d}"
+        run_acq_str = f"acq-{self.coordinator.acq:02d}_run-{self.coordinator.run_number:02d}"
         self._questions_file_path = (
             output_dir / f"{self.coordinator.subject}_task-{self.coordinator.task}_{run_acq_str}_questions.tsv"
         )

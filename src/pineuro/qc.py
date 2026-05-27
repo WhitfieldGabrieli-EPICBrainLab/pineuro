@@ -3256,7 +3256,7 @@ def generate_feedback_report(
     overwrite: bool = False,
     open_browser: bool = False,
     expected_volumes: int | None = None,
-    acq: str | None = None,
+    acq: int = 1,
     fd_threshold: float = 0.5,
     display_names: dict[str, str] | None = None,
     live_metrics: "list[LiveMetric] | None" = None,
@@ -3287,9 +3287,9 @@ def generate_feedback_report(
         Expected number of volumes for a complete run. If provided, used to
         determine COMPLETE vs PARTIAL status. If None, status shows as PARTIAL
         with a note that target is unknown.
-    acq : str, optional
-        Acquisition letter (e.g., 'a', 'b'). If provided, uses BIDS acq entity
-        in file naming pattern. If None, uses legacy naming without acq.
+    acq : int, default=1
+        Acquisition number (1, 2, 3, ...) used in BIDS acq entity for the
+        report's input filenames.
     fd_threshold : float, default=0.5
         Framewise displacement threshold in mm for highlighting excessive motion
         in the FD timeseries plot.
@@ -3319,17 +3319,10 @@ def generate_feedback_report(
     output_dir = Path(output_dir) if output_dir is not None else feedback_dir / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Generating feedback QC report for {subject}, task={task}, run={run}, acq={acq}")
+    logger.info(f"Generating feedback QC report for {subject}, task={task}, run={run}, acq={acq:02d}")
 
-    # Auto-discover outputs - use acq-based naming if acq provided
-    if acq is not None:
-        # Format acq as 2-digit number if int
-        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
-        feedback_log_pattern = f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_feedbacklog.tsv"
-        design_pattern = f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_design.tsv"
-    else:
-        feedback_log_pattern = f"{subject}_task-{task}_run-{run:02d}_feedbacklog.tsv"
-        design_pattern = f"{subject}_task-{task}_run-{run:02d}_design.tsv"
+    feedback_log_pattern = f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedbacklog.tsv"
+    design_pattern = f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}_design.tsv"
 
     feedback_log = feedback_dir / feedback_log_pattern
     design_file = feedback_dir / design_pattern
@@ -3408,11 +3401,7 @@ def generate_feedback_report(
         summary_data["Status"] = "NO DATA"
 
     # Locate the matching PsychoPy log for declared live metrics.
-    if acq is not None:
-        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
-        psychopy_pattern = f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_psychopylog.tsv"
-    else:
-        psychopy_pattern = f"{subject}_task-{task}_run-{run:02d}_psychopylog.tsv"
+    psychopy_pattern = f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}_psychopylog.tsv"
     psychopy_log = feedback_dir / psychopy_pattern
 
     if live_metrics and psychopy_log.exists():
@@ -3590,14 +3579,9 @@ def generate_feedback_report(
             {"type": "single_image", "path": design_out.relative_to(output_dir).as_posix(), "alt": "Design matrix"}
         )
 
-    # Generate HTML report with acq entity if provided
-    if acq is not None:
-        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
-        html_report = output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}_feedback_qc.html"
-        stage_str = f"Feedback (task: {task}, run: {run}, acq: {acq_str})"
-    else:
-        html_report = output_dir / f"{subject}_task-{task}_run-{run:02d}_feedback_qc.html"
-        stage_str = f"Feedback (task: {task}, run: {run})"
+    # Generate HTML report with acq entity
+    html_report = output_dir / f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedback_qc.html"
+    stage_str = f"Feedback (task: {task}, run: {run}, acq: {acq:02d})"
     html = _generate_html_template(
         title=f"Feedback QC - {subject}", participant_id=subject, stage=stage_str, sections=sections
     )

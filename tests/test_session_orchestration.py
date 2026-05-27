@@ -200,7 +200,7 @@ class TestRunNextTaskComplete:
         state = SessionState.reset(session_dir, task_id="ball")
         state.max_feedback_runs = 1
         # Manually add completed run
-        state.completed_runs.append(RunInfo(run_number=1, run_type="feedback", volumes_processed=0))
+        state.completed_runs.append(RunInfo(run_number=1, run_type="feedback", volumes_processed=0, acq=1))
         state.save()
 
         mask_files = [tmp_path / "mask.nii.gz"]

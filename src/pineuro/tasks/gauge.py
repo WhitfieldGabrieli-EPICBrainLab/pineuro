@@ -167,11 +167,7 @@ class GaugeTask(BaseTask):
 
         # Output paths
         output_dir = Path(coordinator.output_dir)
-        if hasattr(coordinator, "acq") and coordinator.acq is not None:
-            acq_str = f"{coordinator.acq:02d}" if isinstance(coordinator.acq, int) else coordinator.acq
-            run_acq_str = f"acq-{acq_str}_run-{coordinator.run_number:02d}"
-        else:
-            run_acq_str = f"run-{coordinator.run_number:02d}"
+        run_acq_str = f"acq-{coordinator.acq:02d}_run-{coordinator.run_number:02d}"
         self._events_path = output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_events.tsv"
         self._psychopy_log_path = (
             output_dir / f"{coordinator.subject}_task-{coordinator.task}_{run_acq_str}_psychopylog.tsv"

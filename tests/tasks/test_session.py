@@ -24,7 +24,7 @@ class TestSessionState:
         from pineuro.tasks.session import SessionState
 
         state = SessionState.create_for_task(tmp_path, "ball")
-        state.record_run(run_type="feedback", volumes_processed=100)
+        state.record_run(run_type="feedback", volumes_processed=100, acq=1)
 
         assert state.feedback_run_count == 1
         assert state.next_run_number == 2
@@ -35,7 +35,7 @@ class TestSessionState:
         from pineuro.tasks.session import SessionState
 
         state = SessionState.create_for_task(tmp_path, "ball")
-        state.record_run(run_type="feedback", volumes_processed=50)
+        state.record_run(run_type="feedback", volumes_processed=50, acq=1)
         state.save()
 
         reset = SessionState.reset(tmp_path, "ball")
@@ -47,9 +47,10 @@ class TestRunInfo:
     def test_construction(self):
         from pineuro.tasks.session import RunInfo
 
-        info = RunInfo(run_number=1, run_type="feedback", volumes_processed=200)
+        info = RunInfo(run_number=1, run_type="feedback", volumes_processed=200, acq=1)
         assert info.run_number == 1
         assert info.run_type == "feedback"
+        assert info.acq == 1
 
     def test_to_dict_roundtrip(self):
         from pineuro.tasks.session import RunInfo
@@ -58,6 +59,7 @@ class TestRunInfo:
             run_number=2,
             run_type="transfer",
             volumes_processed=150,
+            acq=1,
             task_state_snapshot={"score": 0.75},
         )
         d = info.to_dict()
@@ -65,4 +67,5 @@ class TestRunInfo:
 
         assert restored.run_number == 2
         assert restored.run_type == "transfer"
+        assert restored.acq == 1
         assert restored.task_state_snapshot["score"] == 0.75

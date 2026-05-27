@@ -233,7 +233,7 @@ class RNTExperienceSamplingTask(BaseTask):
             coordinator.subject,
             coordinator.task,
             coordinator.run_number,
-            acq=getattr(coordinator, "acq", None),
+            acq=coordinator.acq,
         )
         self._psychopy_log_path = Path(coordinator.output_dir) / f"{prefix}_psychopylog.tsv"
         self._psychopy_log_file: Any = None

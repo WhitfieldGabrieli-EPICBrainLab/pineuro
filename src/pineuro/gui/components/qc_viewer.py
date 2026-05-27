@@ -192,12 +192,7 @@ class QCReportManager:
             if report_path.exists():
                 return report_path
 
-        # Try without acq
-        report_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_feedback_qc.html"
-        if report_path.exists():
-            return report_path
-
-        # Try glob pattern to find any matching report
+        # Glob to find the matching report when acq isn't specified
         pattern = f"*task-{task}*run-{run:02d}*qc.html"
         matches = list(qc_dir.glob(pattern))
         if matches:

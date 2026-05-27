@@ -72,22 +72,22 @@ def test_round_trip_task_state_values(tmp_path):
 def test_round_trip_completed_runs(tmp_path):
     """A list of RunInfo entries round-trips field-by-field (including optional slot)."""
     runs = [
-        RunInfo(run_number=1, run_type="transfer", volumes_processed=100, task_state_snapshot={"x": 1}),
+        RunInfo(run_number=1, run_type="transfer", volumes_processed=100, acq=1, task_state_snapshot={"x": 1}),
         RunInfo(
             run_number=2,
             run_type="feedback",
             volumes_processed=200,
+            acq=1,
             task_state_snapshot={"x": 5, "y": "abc"},
             slot_run_number=1,
-            acq=1,
         ),
         RunInfo(
             run_number=3,
             run_type="feedback",
             volumes_processed=200,
+            acq=2,
             task_state_snapshot={"x": 8, "y": "abc"},
             slot_run_number=2,
-            acq=2,
         ),
     ]
     state = SessionState(
@@ -167,7 +167,7 @@ def test_save_then_reload_then_save_is_stable(tmp_path):
         session_dir=tmp_path,
         task_id="ball",
         task_state={"a": 1, "b": [2, 3]},
-        completed_runs=[RunInfo(1, "transfer", 50)],
+        completed_runs=[RunInfo(1, "transfer", 50, acq=1)],
         max_feedback_runs=3,
     )
     state1.save()
@@ -181,14 +181,14 @@ def test_save_then_reload_then_save_is_stable(tmp_path):
 
 
 def test_run_info_dict_round_trip():
-    """RunInfo.to_dict / from_dict is a lossless round-trip for both optional slot fields."""
+    """RunInfo.to_dict / from_dict is a lossless round-trip including the optional slot field."""
     original = RunInfo(
         run_number=4,
         run_type="feedback",
         volumes_processed=180,
+        acq=3,
         task_state_snapshot={"scale": 14.0},
         slot_run_number=2,
-        acq=3,
     )
     restored = RunInfo.from_dict(original.to_dict())
     assert restored.run_number == original.run_number
@@ -199,9 +199,9 @@ def test_run_info_dict_round_trip():
     assert restored.acq == original.acq
 
 
-def test_run_info_without_slot_fields():
-    """A RunInfo with no slot info round-trips with None for slot_run_number / acq."""
-    original = RunInfo(run_number=1, run_type="transfer", volumes_processed=80)
+def test_run_info_without_slot_field():
+    """A RunInfo with no slot info round-trips with None for slot_run_number."""
+    original = RunInfo(run_number=1, run_type="transfer", volumes_processed=80, acq=1)
     restored = RunInfo.from_dict(original.to_dict())
     assert restored.slot_run_number is None
-    assert restored.acq is None
+    assert restored.acq == 1

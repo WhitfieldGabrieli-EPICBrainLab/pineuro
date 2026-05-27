@@ -93,7 +93,10 @@ class PipelineRunner:
         self._current_coordinator = None  # Track coordinator for feedback tasks
         self._current_feedback_task: Any = None  # Track feedback task for stop support
         self._current_localizer_task = None  # Track localizer task for stop support
-        # Guards the three _current_* refs above: written by the worker
+        # Tracks the in-flight acq/run attempt so stop() can return enough info
+        # for the workflow to offer Keep/Discard. Cleared when the step finishes.
+        self._current_attempt: dict[str, Any] | None = None
+        # Guards the four _current_* refs above: written by the worker
         # thread, read by stop() on the UI thread.
         self._task_lock = threading.Lock()
         self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
@@ -270,7 +273,7 @@ class PipelineRunner:
         self._thread.start()
         logger.info(f"Started background thread for step: {step_id}")
 
-    def stop(self, show_questions: bool = False) -> None:
+    def stop(self, show_questions: bool = False) -> dict[str, Any] | None:
         """Signal the current step to stop (if running).
 
         Parameters
@@ -278,17 +281,28 @@ class PipelineRunner:
         show_questions : bool, optional
             If True and a feedback task is running, show post-run questions
             to the participant before stopping. Default is False.
+
+        Returns
+        -------
+        dict or None
+            Snapshot of the in-flight attempt with keys ``kind``
+            (``"localizer"`` | ``"feedback"``), ``subject``, ``task``, ``acq``,
+            ``run`` — for the workflow to offer a Keep/Discard prompt. Returns
+            ``None`` if no attempt was active or if the localizer's collection
+            directory hasn't been created yet (nothing to discard).
         """
         logger.info(f"Signaling pipeline step to stop (show_questions={show_questions})")
         self._stop_event.set()
 
+        # Snapshot the shared refs under the lock, then act outside it.
+        with self._task_lock:
+            coordinator = self._current_coordinator
+            feedback_task = self._current_feedback_task
+            localizer_task = self._current_localizer_task
+            attempt = dict(self._current_attempt) if self._current_attempt else None
+
         # Stop thread-based steps
         if self._thread is not None and self._thread.is_alive():
-            # Snapshot the shared refs under the lock, then act outside it.
-            with self._task_lock:
-                coordinator = self._current_coordinator
-                feedback_task = self._current_feedback_task
-                localizer_task = self._current_localizer_task
             # If a feedback task is running, stop the coordinator and the task
             if coordinator is not None:
                 logger.info("Stopping feedback coordinator")
@@ -300,6 +314,18 @@ class PipelineRunner:
             if localizer_task is not None:
                 logger.info("Stopping localizer task")
                 localizer_task.stop()
+
+        # Suppress the discard prompt for localizer stops that happened before
+        # the collection dir was created (nothing on disk to discard yet).
+        if attempt is not None and attempt["kind"] == "localizer":
+            base_dir = Path(self.config["paths"]["base_dir"])
+            collection_dir = (
+                base_dir / "collection" / f"task-{attempt['task']}_acq-{attempt['acq']:02d}_run-{attempt['run']:02d}"
+            )
+            if not collection_dir.exists():
+                return None
+
+        return attempt
 
     def _run_step_impl(self, step_id: str) -> None:
         """Implementation of step execution (runs in background thread).
@@ -361,6 +387,22 @@ class PipelineRunner:
                 self.on_error(e)
             if self.on_complete:
                 self.on_complete(False, str(e))
+        finally:
+            # Clear the in-flight attempt so a later stop() (e.g. on the next
+            # step) doesn't return stale info for a step that's already done.
+            with self._task_lock:
+                self._current_attempt = None
+
+    def _set_current_attempt(self, *, kind: str, subject: str, task: str, acq: int, run: int) -> None:
+        """Record the in-flight acq/run attempt so stop() can offer Keep/Discard."""
+        with self._task_lock:
+            self._current_attempt = {
+                "kind": kind,
+                "subject": subject,
+                "task": task,
+                "acq": acq,
+                "run": run,
+            }
 
     def _emit_progress(self, message: str) -> None:
         """Emit progress update to callback.
@@ -402,6 +444,7 @@ class PipelineRunner:
         # Get run info with retry detection
         run_info = get_localizer_run_info(collection_dir=collection_dir, task="task-reference", run=1)
         acq = run_info["acq"]
+        self._set_current_attempt(kind="localizer", subject=self.participant_id, task="reference", acq=acq, run=1)
 
         self._emit_progress(f"Collecting initial reference DICOMs (acq-{acq:02d})...")
         if run_info["existing_acqs"]:
@@ -513,6 +556,7 @@ class PipelineRunner:
         # Get run info with retry detection
         run_info = get_localizer_run_info(collection_dir=collection_dir, task=f"task-{task_name}", run=run_num)
         acq = run_info["acq"]
+        self._set_current_attempt(kind="localizer", subject=self.participant_id, task=task_name, acq=acq, run=run_num)
 
         self._emit_progress(f"Collecting {task_name} run {run_num} (acq-{acq:02d}) DICOMs...")
         if run_info["existing_acqs"]:
@@ -1956,6 +2000,7 @@ class PipelineRunner:
         # Get run info with retry detection
         run_info = get_localizer_run_info(collection_dir=collection_dir, task="task-reference", run=run_id)
         acq = run_info["acq"]
+        self._set_current_attempt(kind="localizer", subject=self.participant_id, task="reference", acq=acq, run=run_id)
 
         self._emit_progress(f"Collecting real-time reference DICOMs (acq-{acq:02d}, run-{run_id:02d})...")
         if run_info["existing_acqs"]:
@@ -2088,6 +2133,13 @@ class PipelineRunner:
         )
         task_run_number = run_info["run"]
         task_acq = run_info["acq"]
+        self._set_current_attempt(
+            kind="feedback",
+            subject=self.participant_id,
+            task=task_type,
+            acq=task_acq,
+            run=task_run_number,
+        )
 
         self._emit_progress(f"Starting {task_type} run-{task_run_number:02d} acq-{task_acq:02d}...")
 

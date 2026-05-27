@@ -155,6 +155,8 @@ class TestRecordRunCompletion:
         session.record_run.assert_called_once_with(
             run_type="feedback",
             volumes_processed=100,
+            acq=1,
+            slot_run_number=1,
             task_state_snapshot={"hits": 5},
         )
 

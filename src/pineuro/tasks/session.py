@@ -43,13 +43,12 @@ class RunInfo:
     run_number: int
     run_type: str  # 'transfer' or 'feedback'
     volumes_processed: int
+    acq: int
     # Task-specific state at end of run (e.g., hit_counters, scale_factor)
     task_state_snapshot: dict[str, Any] = field(default_factory=dict)
 
-    # Slot-based tracking: slot_run_number is the fixed run slot (1 or 2),
-    # acq is the acquisition number for retries (1, 2, 3, ...)
+    # Slot-based tracking: slot_run_number is the fixed run slot (1 or 2).
     slot_run_number: int | None = None
-    acq: int | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -58,11 +57,10 @@ class RunInfo:
             "run_type": self.run_type,
             "volumes_processed": self.volumes_processed,
             "task_state_snapshot": self.task_state_snapshot,
+            "acq": self.acq,
         }
         if self.slot_run_number is not None:
             data["slot_run_number"] = self.slot_run_number
-        if self.acq is not None:
-            data["acq"] = self.acq
         return data
 
     @classmethod
@@ -72,9 +70,9 @@ class RunInfo:
             run_number=data["run_number"],
             run_type=data["run_type"],
             volumes_processed=data.get("volumes_processed", 0),
+            acq=data["acq"],
             task_state_snapshot=data.get("task_state_snapshot", {}),
             slot_run_number=data.get("slot_run_number"),
-            acq=data.get("acq"),
         )
 
 
@@ -445,10 +443,10 @@ class SessionState:
         self,
         run_type: str,
         volumes_processed: int,
+        acq: int,
         task_state_snapshot: dict[str, Any] | None = None,
         # Slot-based tracking parameters
         slot_run_number: int | None = None,
-        acq: int | None = None,
     ) -> None:
         """Record a completed run and update task state.
 
@@ -463,13 +461,13 @@ class SessionState:
             'transfer' or 'feedback'
         volumes_processed : int
             Number of volumes processed in this run
+        acq : int
+            The acquisition number (1, 2, 3, ...). Used for retry tracking.
         task_state_snapshot : dict, optional
             Snapshot of task state at end of run. All keys in this dict
             will be merged into the persistent task_state.
         slot_run_number : int, optional
             The run slot number (1 or 2). If provided, tracks runs by slot.
-        acq : int, optional
-            The acquisition number (1, 2, 3, ...). Used for retry tracking.
         """
         if task_state_snapshot is None:
             task_state_snapshot = {}

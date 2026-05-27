@@ -1968,7 +1968,7 @@ def _detect_interrupted_run(
     task: str,
     run: int,
     n_volumes: int,
-    acq: str | None = None,
+    acq: int,
 ) -> dict | None:
     """Check if a previous interrupted run exists for this task/run combination.
 
@@ -1987,9 +1987,8 @@ def _detect_interrupted_run(
         Run number to check
     n_volumes : int
         Expected number of volumes for a complete run
-    acq : str, optional
-        Acquisition letter (e.g., 'a', 'b'). If provided, uses new acq-based naming.
-        If None, uses legacy run-only naming for backward compatibility.
+    acq : int
+        Acquisition number (1, 2, 3, ...) for retry tracking.
 
     Returns
     -------
@@ -2002,18 +2001,10 @@ def _detect_interrupted_run(
         Returns None if no incomplete run found.
     """
     run_str = f"{run:02d}"
-
-    # Use acq-based naming if acq provided, otherwise legacy naming
-    if acq is not None:
-        # Format acq as 2-digit number if int
-        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
-        feedbacklog_path = output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run_str}_feedbacklog.tsv"
-        design_path = output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run_str}_design.tsv"
-        nifti_dir = output_dir / f"nifti_task-{task}_acq-{acq_str}_run-{run_str}"
-    else:
-        feedbacklog_path = output_dir / f"{subject}_task-{task}_run-{run_str}_feedbacklog.tsv"
-        design_path = output_dir / f"{subject}_task-{task}_run-{run_str}_design.tsv"
-        nifti_dir = output_dir / f"nifti_task-{task}_run-{run_str}"
+    acq_str = f"{acq:02d}"
+    feedbacklog_path = output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run_str}_feedbacklog.tsv"
+    design_path = output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run_str}_design.tsv"
+    nifti_dir = output_dir / f"nifti_task-{task}_acq-{acq_str}_run-{run_str}"
 
     if not feedbacklog_path.exists():
         return None
@@ -2047,7 +2038,7 @@ def _archive_interrupted_run(
     subject: str,
     task: str,
     run: int,
-    acq: str | None = None,
+    acq: int,
 ) -> Path:
     """Move interrupted run files to an archive subfolder with timestamp.
 
@@ -2064,9 +2055,8 @@ def _archive_interrupted_run(
         Task name
     run : int
         Run number
-    acq : str, optional
-        Acquisition letter (e.g., 'a', 'b'). If provided, uses new acq-based naming.
-        If None, uses legacy run-only naming for backward compatibility.
+    acq : int
+        Acquisition number (1, 2, 3, ...) for retry tracking.
 
     Returns
     -------
@@ -2074,25 +2064,16 @@ def _archive_interrupted_run(
         Path to the created archive directory
     """
     run_str = f"{run:02d}"
+    acq_str = f"{acq:02d}"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_dir = output_dir / f"interrupted_{timestamp}"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
-    # Files/directories to archive - use acq-based naming if acq provided
-    if acq is not None:
-        # Format acq as 2-digit number if int
-        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
-        items_to_move = [
-            output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run_str}_feedbacklog.tsv",
-            output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run_str}_design.tsv",
-            output_dir / f"nifti_task-{task}_acq-{acq_str}_run-{run_str}",
-        ]
-    else:
-        items_to_move = [
-            output_dir / f"{subject}_task-{task}_run-{run_str}_feedbacklog.tsv",
-            output_dir / f"{subject}_task-{task}_run-{run_str}_design.tsv",
-            output_dir / f"nifti_task-{task}_run-{run_str}",
-        ]
+    items_to_move = [
+        output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run_str}_feedbacklog.tsv",
+        output_dir / f"{subject}_task-{task}_acq-{acq_str}_run-{run_str}_design.tsv",
+        output_dir / f"nifti_task-{task}_acq-{acq_str}_run-{run_str}",
+    ]
 
     # Also check for QC directory
     qc_dir = output_dir / "qc"
@@ -2114,7 +2095,7 @@ def _generate_partial_qc(
     subject: str,
     task: str,
     run: int,
-    acq: str | None = None,
+    acq: int,
     task_id: str | None = None,
 ) -> Path | None:
     """Generate QC report for interrupted session before archiving.
@@ -2131,8 +2112,8 @@ def _generate_partial_qc(
         Task name
     run : int
         Run number
-    acq : str, optional
-        Acquisition letter (e.g., 'a', 'b'). If provided, uses new acq-based naming.
+    acq : int
+        Acquisition number (1, 2, 3, ...) for retry tracking.
     task_id : str, optional
         Registered task identifier (e.g., "ball", "gauge"). When provided, the
         QC report surfaces the task's declared live metrics in its summary.
@@ -2464,6 +2445,7 @@ class NeurofeedbackCoordinator:
         subject: str,
         task: str,
         run: int,
+        acq: int,
         n_baseline: int,
         n_volumes: int,
         tr: float,
@@ -2474,7 +2456,6 @@ class NeurofeedbackCoordinator:
         error_callback: Callable[[Exception], None] | None = None,
         qc_enabled: bool = True,  # Generate QC report after session completes
         fd_threshold: float = 0.5,  # FD threshold in mm for QC plots
-        acq: str | None = None,  # Acquisition letter for BIDS-compatible naming (e.g., 'a', 'b')
         sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
         condition: str = "real",  # Participant condition: "real" or "sham"
         motion_correction: str = "siemens_moco",  # "siemens_moco", "software", "none"
@@ -2498,7 +2479,7 @@ class NeurofeedbackCoordinator:
         self.subject = subject
         self.task = task
         self.run_number = run
-        self.acq = acq  # Acquisition letter for retry tracking
+        self.acq = acq  # Acquisition number for retry tracking (1, 2, 3, ...)
         self._task_id = task_id
         self.n_baseline = n_baseline
         self.n_volumes = n_volumes
@@ -2542,16 +2523,9 @@ class NeurofeedbackCoordinator:
         if not self.watch_dir.is_dir():
             raise ValueError(f"Watch path is not a directory: {self.watch_dir}")
 
-        # Create output directories - use acq-based naming if acq provided
-        run_str = f"{self.run_number:02d}"
-        if self.acq is not None:
-            # acq can be int or str, format as 2-digit number if int
-            acq_str = f"{self.acq:02d}" if isinstance(self.acq, int) else self.acq
-            self._run_acq_str = f"acq-{acq_str}_run-{run_str}"
-            self.nifti_dir = self.output_dir / f"nifti_task-{self.task}_{self._run_acq_str}"
-        else:
-            self._run_acq_str = f"run-{run_str}"
-            self.nifti_dir = self.output_dir / f"nifti_task-{self.task}_run-{run_str}"
+        # Create output directories using acq-based naming
+        self._run_acq_str = f"acq-{self.acq:02d}_run-{self.run_number:02d}"
+        self.nifti_dir = self.output_dir / f"nifti_task-{self.task}_{self._run_acq_str}"
         self.nifti_dir.mkdir(parents=True, exist_ok=True)
         # Multi-run handling: Current implementation processes a single continuous
         # acquisition. For multi-run sessions, run separate NeurofeedbackCoordinator
@@ -3964,21 +3938,19 @@ def run_feedback_session(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine run number and acquisition letter based on step_id or run parameter
-    if step_id is not None:
-        # Use slot-based run numbering with acq entity for retries
-        run_info = get_slot_run_info(output_dir, subject, task, step_id)
-        run = run_info["run"]  # Override run parameter with slot-determined value
-        acq = run_info["acq"]
-        logger.info(f"Using slot-based naming for {step_id}: run-{run:02d}, acq-{acq}")
-    else:
-        # Legacy mode: no acq entity, just run number
-        acq = None
+    # Determine run number and acquisition number based on step_id.
+    # step_id is required: it selects the workflow slot ("feedback_1", "transfer_2", ...)
+    # which `get_slot_run_info` uses to derive run-NN and the next acq-NN attempt.
+    if step_id is None:
+        raise ValueError("step_id is required: it selects the workflow slot for slot-based acq tracking.")
+    run_info = get_slot_run_info(output_dir, subject, task, step_id)
+    run = run_info["run"]  # Override run parameter with slot-determined value
+    acq = run_info["acq"]
+    logger.info(f"Using slot-based naming for {step_id}: run-{run:02d}, acq-{acq:02d}")
 
-    # Check for and archive any interrupted run before starting fresh
-    # Note: with acq-based naming, we don't archive the *same* acq - the new acq letter
-    # means this is a fresh attempt. But we should archive if there's an interrupted run
-    # at the *same* acq (shouldn't normally happen, but handle edge cases).
+    # Check for and archive any interrupted run before starting fresh.
+    # With acq-based naming, a new acq means a fresh attempt; we only archive if
+    # there's a partial file already at the *same* acq (shouldn't normally happen).
     interrupted = _detect_interrupted_run(
         output_dir=output_dir,
         subject=subject,
@@ -3995,16 +3967,10 @@ def run_feedback_session(
         archive_path = _archive_interrupted_run(output_dir, subject, task, run, acq=acq)
         logger.info(f"Archived interrupted run to: {archive_path}")
 
-    # Create DICOM collection folder for this run (e.g., collection/feedback_run-01 or feedback_acq-01_run-01)
+    # Create DICOM collection folder for this attempt (e.g., collection/feedback_acq-01_run-01)
     collection_dir = Path(collection_dir)
     collection_dir.mkdir(parents=True, exist_ok=True)
-    run_str = f"{run:02d}"
-    if acq is not None:
-        # Format acq as 2-digit number if int
-        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
-        dicom_collection_dir = collection_dir / f"{task}_acq-{acq_str}_run-{run_str}"
-    else:
-        dicom_collection_dir = collection_dir / f"{task}_run-{run_str}"
+    dicom_collection_dir = collection_dir / f"{task}_acq-{acq:02d}_run-{run:02d}"
     dicom_collection_dir.mkdir(parents=True, exist_ok=True)
 
     # Default incoming_dir to collection_dir/incoming if not specified

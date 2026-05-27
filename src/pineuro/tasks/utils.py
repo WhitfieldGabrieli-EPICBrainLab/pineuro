@@ -45,7 +45,7 @@ def make_bids_run_prefix(
     subject: str,
     task: str,
     run: int,
-    acq: int | str | None = None,
+    acq: int,
 ) -> str:
     """Build a BIDS-compliant filename prefix for task output files.
 
@@ -57,27 +57,21 @@ def make_bids_run_prefix(
         Task label (e.g., 'ball', 'thermometer')
     run : int
         Run number (formatted as zero-padded 2-digit string)
-    acq : int or str or None, optional
-        Acquisition label. If int, formatted as zero-padded 2-digit string.
-        If None, omitted from prefix.
+    acq : int
+        Acquisition number for retry tracking (1, 2, 3, ...). Formatted as
+        zero-padded 2-digit string.
 
     Returns
     -------
     str
-        Filename prefix like ``{subject}_task-{task}_run-01`` or
-        ``{subject}_task-{task}_acq-01_run-01`` when acq is provided.
+        Filename prefix like ``{subject}_task-{task}_acq-01_run-01``.
 
     Examples
     --------
-    >>> make_bids_run_prefix("sub-01", "ball", run=1)
-    'sub-01_task-ball_run-01'
     >>> make_bids_run_prefix("sub-01", "ball", run=2, acq=3)
     'sub-01_task-ball_acq-03_run-02'
     """
-    if acq is not None:
-        acq_str = f"{acq:02d}" if isinstance(acq, int) else acq
-        return f"{subject}_task-{task}_acq-{acq_str}_run-{run:02d}"
-    return f"{subject}_task-{task}_run-{run:02d}"
+    return f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}"
 
 
 def is_activation_outlier(acts: list[float] | float, threshold: float) -> bool:

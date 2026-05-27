@@ -382,16 +382,13 @@ class ThermometerTask(BaseTask):
         if not self._events:
             return
 
-        output_dir = getattr(self.coordinator, "output_dir", None)
-        if output_dir is None:
-            logger.warning("No output_dir on coordinator, cannot save events TSV")
-            return
-
-        output_dir = Path(output_dir)
-        subject = getattr(self.coordinator, "subject", "unknown")
-        task = getattr(self.coordinator, "task", "thermometer")
-        run_number = getattr(self.coordinator, "run_number", 1)
-        prefix = make_bids_run_prefix(subject, task, run_number)
+        output_dir = Path(self.coordinator.output_dir)
+        prefix = make_bids_run_prefix(
+            self.coordinator.subject,
+            self.coordinator.task,
+            self.coordinator.run_number,
+            acq=self.coordinator.acq,
+        )
 
         path = output_dir / f"{prefix}_events.tsv"
 
