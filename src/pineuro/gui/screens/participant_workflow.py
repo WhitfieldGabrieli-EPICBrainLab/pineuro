@@ -59,6 +59,18 @@ logger = logging.getLogger(__name__)
 NIFTI_FILETYPES = [("NIfTI files", "*.nii *.nii.gz"), ("All Files", "*.*")]
 
 
+def _loc(config: dict, idx: int = 0) -> dict:
+    """Return ``config["localizers"][idx]`` as a dict, or ``{}`` if missing."""
+    locs = config.get("localizers") or []
+    return locs[idx] if idx < len(locs) else {}
+
+
+def _frc(config: dict, idx: int = 0) -> dict:
+    """Return ``config["feedback_runs"][idx]`` as a dict, or ``{}`` if missing."""
+    frcs = config.get("feedback_runs") or []
+    return frcs[idx] if idx < len(frcs) else {}
+
+
 class StepStatus(Enum):
     """Status of a pipeline step."""
 
@@ -373,8 +385,7 @@ class ParticipantWorkflowScreen:
         """
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+        task_name = _loc(config).get("type", "rest")
 
         # Check boldref from preprocessing
         preprocessing_dir = base_dir / "preprocessing"
@@ -421,7 +432,7 @@ class ParticipantWorkflowScreen:
             return
 
         config = self.study_config.session_config
-        atlas_name = config.get("mask", {}).get("network_atlas", "yeo_17")
+        atlas_name = _loc(config).get("extraction", {}).get("network_atlas", "yeo_17")
         targets = (
             config["localizers"][0].get("networks", ["DefaultA", "ContA"])
             if config.get("localizers")
@@ -541,8 +552,8 @@ class ParticipantWorkflowScreen:
         mask_extraction_dir = base_dir / "mask_extraction"
 
         # Check that ICA/GLM outputs exist to revert to
-        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        if localizer_type == "rest":
+        loc_type = _loc(config).get("type", "rest")
+        if loc_type == "rest":
             ica_dir = mask_extraction_dir / "01_ica"
             has_original = ica_dir.exists() and any(ica_dir.glob("*_components.nii.gz"))
         else:
@@ -637,13 +648,9 @@ class ParticipantWorkflowScreen:
             return
 
         # Task-based localizers use a simpler review flow (no ICA component selection)
-        # For multi-localizer, determine type from the specific localizer
-        if loc_idx is not None and localizers and len(localizers) > 1:
-            localizer_type = localizers[loc_idx].get("type", "rest")
-            is_task_localizer = localizer_type != "rest"
-        else:
-            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-            is_task_localizer = localizer_type == "task"
+        idx = loc_idx if (loc_idx is not None and len(localizers) > 1) else 0
+        loc_type = _loc(config, idx).get("type", "rest")
+        is_task_localizer = loc_type not in ("rest", "manual")
         if is_task_localizer:
             self._show_task_mask_review_dialog(config, base_dir, mask_extraction_dir, qc_dir, loc_idx=loc_idx)
             return
@@ -740,12 +747,8 @@ class ParticipantWorkflowScreen:
 
         # Resolve ref_file early (needed for overlay generation and script context)
         preprocessing_dir = base_dir / "preprocessing"
-        if loc_idx is not None and localizers and len(localizers) > 1:
-            _loc_type = localizers[loc_idx].get("type", "rest")
-            loc_task = "rest" if _loc_type == "rest" else _loc_type
-        else:
-            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-            loc_task = localizer_task_type if localizer_task_type != "rest" else "rest"
+        idx = loc_idx if (loc_idx is not None and len(localizers) > 1) else 0
+        loc_task = _loc(config, idx).get("type", "rest")
         ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
 
         # Generate overlays only for RECOMMENDED (best) components initially
@@ -952,12 +955,8 @@ class ParticipantWorkflowScreen:
 
         # Get reference file for mask viewer
         localizers = config.get("localizers", [])
-        if loc_idx is not None and localizers and len(localizers) > 1:
-            loc_type = localizers[loc_idx].get("type", "rest")
-            loc_task = "rest" if loc_type == "rest" else loc_type
-        else:
-            localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-            loc_task = localizer_task_type if localizer_task_type != "rest" else "rest"
+        idx = loc_idx if (loc_idx is not None and len(localizers) > 1) else 0
+        loc_task = _loc(config, idx).get("type", "rest")
         preprocessing_dir = base_dir / "preprocessing"
         ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
 
@@ -1282,8 +1281,9 @@ class ParticipantWorkflowScreen:
             """Stage 2: show atlas region overlay as alternative (like Yeo in ICA)."""
             _close_dialog(dialog)
 
-            atlas_name = config.get("mask", {}).get("atlas_name")
-            threshold_method = config.get("mask", {}).get("threshold_method", "top_n")
+            extraction = _loc(config).get("extraction", {})
+            atlas_name = extraction.get("atlas_name")
+            threshold_method = extraction.get("threshold_method", "top_n")
             if threshold_method != "cluster" or not atlas_name:
                 self._add_log("[INFO] Masks rejected — re-run mask extraction with different parameters")
                 return
@@ -1567,7 +1567,7 @@ class ParticipantWorkflowScreen:
             matches = list(qc_dir.glob("*mask_extraction_qc.html"))
             qc_report = matches[0] if matches else None
 
-        atlas_name = config.get("mask", {}).get("network_atlas", "yeo_17")
+        atlas_name = _loc(config).get("extraction", {}).get("network_atlas", "yeo_17")
 
         # Build mask cards with overlay images
         overlays_dir = qc_dir / "overlays" / "subject"
@@ -2007,9 +2007,8 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
-        n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
-        localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+        n_localizer_runs = _loc(config).get("n_runs", 2)
+        task_name = _loc(config).get("type", "rest")
 
         expected_vols = config["localizers"][0].get("n_volumes") if config.get("localizers") else None
         if expected_vols is None:
@@ -2342,8 +2341,7 @@ class ParticipantWorkflowScreen:
                     )
                     expected_vols = rest_n_volumes[0] if isinstance(rest_n_volumes, list) else rest_n_volumes
 
-                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "rest")
-                loc_task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+                loc_task_name = _loc(config).get("type", "rest")
 
                 for run_num in range(1, n_localizer_runs + 1):
                     step_id = f"rest_run_{run_num}"
@@ -2429,16 +2427,15 @@ class ParticipantWorkflowScreen:
         # Check feedback runs (transfer and feedback) using slot-based naming
         feedback_output_dir = feedback_dir / "02_feedback_output"
         feedback_runs = config.get("feedback_runs", [])
-        default_feedback_vols = config.get("feedback", {}).get("n_volumes", 150)
 
         # Check each feedback/transfer step using the shared step builder
         for step_id, _label in fb_steps:
             # Resolve per-FRC n_volumes for this step
             frc_idx = self._get_feedback_step_frc_index(step_id)
             if frc_idx is not None and frc_idx < len(feedback_runs):
-                expected_vols = feedback_runs[frc_idx].get("n_volumes", default_feedback_vols)
+                expected_vols = feedback_runs[frc_idx].get("n_volumes", 150)
             else:
-                expected_vols = default_feedback_vols
+                expected_vols = 150
 
             status = self._check_feedback_slot_status(
                 step_id=step_id,
@@ -2903,19 +2900,20 @@ class ParticipantWorkflowScreen:
             )
         else:
             # Single localizer
-            n_localizer_runs = config["localizers"][0].get("n_runs", 2) if config.get("localizers") else 2
-            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-            if localizer_type == "task":
-                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "unknown")
+            n_localizer_runs = _loc(config).get("n_runs", 2)
+            loc_type = _loc(config).get("type", "rest")
+            if loc_type == "rest":
+                localizer_label = "Resting State"
+            elif loc_type == "manual":
+                localizer_label = "Manual Masks"
+            else:
                 try:
                     from pineuro.tasks import get_task_metadata
 
-                    task_meta = get_task_metadata(localizer_task_type)
+                    task_meta = get_task_metadata(loc_type)
                     localizer_label = task_meta.display_name
                 except (ValueError, ImportError):
-                    localizer_label = f"Localizer Task ({localizer_task_type})"
-            else:
-                localizer_label = "Resting State"
+                    localizer_label = f"Localizer Task ({loc_type})"
 
             controls.append(ft.Text(localizer_label, size=14, weight=ft.FontWeight.W_500))
 
@@ -2968,7 +2966,7 @@ class ParticipantWorkflowScreen:
             ]
             mni_status = self.step_statuses.get("mni_mask_extraction", StepStatus.PENDING)
             if mni_status == StepStatus.COMPLETE:
-                atlas_name = config.get("mask", {}).get("network_atlas", "yeo_17")
+                atlas_name = _loc(config).get("extraction", {}).get("network_atlas", "yeo_17")
                 controls.append(
                     ft.Container(
                         content=ft.Row(
@@ -4123,9 +4121,11 @@ class ParticipantWorkflowScreen:
         frc = feedback_runs[frc_idx] if frc_idx is not None and frc_idx < len(feedback_runs) else None
 
         def _fv(key, default=None):
-            if frc and key in frc:
-                return frc[key]
-            return config.get("feedback", {}).get(key, default)
+            if frc is None:
+                return default
+            if key in ("fd_threshold", "dvars_threshold", "tsnr_threshold"):
+                return frc.get("qc", {}).get(key, default)
+            return frc.get(key, default)
 
         n_baseline = _fv("n_baseline", 25)
         n_volumes = _fv("n_volumes", 150)
@@ -4515,8 +4515,8 @@ class ParticipantWorkflowScreen:
         Returns:
             A styled container, or None if simulator mode is disabled.
         """
-        scan_cfg = self.study_config.session_config.get("scan", {})
-        if not scan_cfg.get("simulator_enabled", True):
+        simulator_cfg = self.study_config.session_config.get("simulator", {})
+        if not simulator_cfg.get("enabled", True):
             return None
 
         return ft.Container(
@@ -4853,26 +4853,25 @@ class ParticipantWorkflowScreen:
         return network_names
 
     def _resolve_mask_names(self, config: dict) -> list[str]:
-        """Resolve mask names from config, falling back to task metadata for GLM localizers."""
-        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        if localizer_type == "task":
-            contrasts = config.get("mask", {}).get("contrasts", {})
-            if not contrasts:
-                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "")
-                if localizer_task_type:
-                    from pineuro.tasks.task_registry import get_task_metadata
+        """Resolve mask names from the first localizer.
 
-                    try:
-                        metadata = get_task_metadata(localizer_task_type)
-                        contrasts = metadata.default_contrasts or {}
-                    except KeyError:
-                        pass
-            if contrasts:
-                names = list(contrasts.keys())
-                if config.get("mask", {}).get("include_reverse_contrasts", False):
-                    names = names + [f"{n}_reverse" for n in names]
-                return names
-        return list(config.get("mask", {}).get("mask_names", []))
+        Mirrors :pyattr:`LocalizerConfig.mask_names`: rest uses ``networks``,
+        manual uses ``manual_mask_names``, task uses ``contrasts`` keys (with
+        optional ``_reverse`` variants).
+        """
+        loc = _loc(config)
+        if not loc:
+            return []
+        loc_type = loc.get("type", "rest")
+        if loc_type == "manual":
+            return list(loc.get("manual_mask_names", []))
+        if loc_type == "rest":
+            return list(loc.get("networks", []))
+        contrasts = loc.get("contrasts", {})
+        names = list(contrasts.keys())
+        if loc.get("include_reverse_contrasts", False):
+            names += [f"{n}_reverse" for n in names]
+        return names
 
     def _get_blind_display_names(self, mask_names: list[str]) -> list[str] | None:
         """Get blinded display names if blind mode is enabled.
@@ -4921,10 +4920,10 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step information
         """
-        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        loc0 = config["localizers"][0] if config.get("localizers") else {}
+        loc0 = _loc(config)
+        loc_type = loc0.get("type", "rest")
 
-        if loc0.get("type") == "manual":
+        if loc_type == "manual":
             from pineuro.gui.components.manual_masks import read_manual_masks
 
             names = loc0.get("manual_mask_names", []) or []
@@ -4943,15 +4942,16 @@ class ParticipantWorkflowScreen:
                 "output_pattern": "0*",
             }
 
-        if localizer_type == "task":
-            contrasts = config.get("mask", {}).get("contrasts", {})
+        if loc_type != "rest":
+            contrasts = loc0.get("contrasts", {})
+            extraction = loc0.get("extraction", {})
             return {
                 "label": "Extract Network Masks (GLM)",
                 "description": f"GLM contrast-based extraction of {len(contrasts)} masks from task localizer.",
                 "parameters": {
                     "Contrasts": ", ".join(f"{k}: {v}" for k, v in contrasts.items()),
-                    "Threshold": f"{(config['localizers'][0].get('extraction', {}).get('threshold', 2000) if config.get('localizers') else 2000)} voxels",
-                    "Smoothing": f"{(config['localizers'][0].get('extraction', {}).get('smooth_fwhm', 5.0) if config.get('localizers') else 5.0)} mm FWHM",
+                    "Threshold": f"{extraction.get('threshold', 2000)} voxels",
+                    "Smoothing": f"{extraction.get('smooth_fwhm', 5.0)} mm FWHM",
                     "Output": base_dir / "mask_extraction",
                 },
                 "output_path": base_dir / "mask_extraction",
@@ -5147,9 +5147,20 @@ class ParticipantWorkflowScreen:
         frc = feedback_runs[frc_idx] if frc_idx is not None and frc_idx < len(feedback_runs) else None
 
         def _val(key, default=None):
-            if frc and key in frc:
-                return frc[key]
-            return config.get("feedback", {}).get(key, default)
+            if frc is None:
+                return default
+            if key in ("fd_threshold", "dvars_threshold", "tsnr_threshold"):
+                return frc.get("qc", {}).get(key, default)
+            if key in (
+                "motion_correction",
+                "include_drift",
+                "include_motion_regressors",
+                "include_wm_regressor",
+                "include_csf_regressor",
+                "smooth_fwhm",
+            ):
+                return frc.get("glm", {}).get(key, default)
+            return frc.get(key, default)
 
         description = (
             "Practice run without neurofeedback to establish baseline performance."
@@ -5256,7 +5267,7 @@ class ParticipantWorkflowScreen:
                 "label": "Extract MNI Atlas Masks",
                 "description": "Register MNI atlas to subject space and extract network masks directly from atlas parcellation.",
                 "parameters": {
-                    "Atlas": config.get("mask", {}).get("network_atlas", "yeo_17"),
+                    "Atlas": _loc(config).get("extraction", {}).get("network_atlas", "yeo_17"),
                     "Networks": ", ".join(
                         config["localizers"][0].get("networks", ["DefaultA", "ContA"])
                         if config.get("localizers")
@@ -5644,7 +5655,7 @@ class ParticipantWorkflowScreen:
         Also refreshes the left-panel Scanner Connection status indicator.
         """
         config = self.study_config.session_config
-        is_simulator = config.get("scan", {}).get("simulator_enabled", True)
+        is_simulator = config.get("simulator", {}).get("enabled", True)
         if is_simulator:
             on_proceed()
             return
@@ -6885,19 +6896,17 @@ class ParticipantWorkflowScreen:
             run_num = step_id.split("_")[-1]
             # Dynamic label based on localizer type
             config = self.study_config.session_config
-            localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-            if localizer_type == "task":
-                localizer_task_type = config.get("scan", {}).get("localizer_task_type", "localizer")
-                try:
-                    from pineuro.tasks import get_task_metadata
-
-                    task_meta = get_task_metadata(localizer_task_type)
-                    task_name = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
-                except (ValueError, ImportError):
-                    task_name = localizer_task_type.title()
-                return f"Collect {task_name} Run {run_num}"
-            else:
+            loc_type = _loc(config).get("type", "rest")
+            if loc_type == "rest":
                 return f"Collect Rest Run {run_num}"
+            try:
+                from pineuro.tasks import get_task_metadata
+
+                task_meta = get_task_metadata(loc_type)
+                task_name = task_meta.display_name.replace(" Localizer", "").replace(" Task", "")
+            except (ValueError, ImportError):
+                task_name = loc_type.title()
+            return f"Collect {task_name} Run {run_num}"
 
         labels = {
             "reference_initial": "Collect Initial Reference",
@@ -7686,7 +7695,7 @@ class ParticipantWorkflowScreen:
 
         # Rebuild the expansion panel list with updated statuses
         panels = []
-        is_simulator = self.study_config.session_config.get("scan", {}).get("simulator_enabled", True)
+        is_simulator = self.study_config.session_config.get("simulator", {}).get("enabled", True)
         if not is_simulator:
             panels.append(self._build_scanner_connection_section())
         has_localizers = getattr(self, "_has_localizers", True)
@@ -7720,7 +7729,7 @@ class ParticipantWorkflowScreen:
             Flet control for the workflow screen
         """
         # Header
-        is_simulator = self.study_config.session_config.get("scan", {}).get("simulator_enabled", True)
+        is_simulator = self.study_config.session_config.get("simulator", {}).get("enabled", True)
         simulator_text = " | Simulator Mode" if is_simulator else ""
 
         # Store simulator text for header rebuilding
@@ -7782,7 +7791,7 @@ class ParticipantWorkflowScreen:
         # Store reference for dynamic updates
         panels = []
         # Show scanner connection section when NOT in simulator mode
-        is_simulator = self.study_config.session_config.get("scan", {}).get("simulator_enabled", True)
+        is_simulator = self.study_config.session_config.get("simulator", {}).get("enabled", True)
         if not is_simulator:
             panels.append(self._build_scanner_connection_section())
         # Only show sections relevant to the session mode

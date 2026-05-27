@@ -18,6 +18,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _loc(config: dict, idx: int = 0) -> dict:
+    """Return ``config["localizers"][idx]`` as a dict, or ``{}`` if missing."""
+    locs = config.get("localizers") or []
+    return locs[idx] if idx < len(locs) else {}
+
+
+def _frc(config: dict, idx: int = 0) -> dict:
+    """Return ``config["feedback_runs"][idx]`` as a dict, or ``{}`` if missing."""
+    frcs = config.get("feedback_runs") or []
+    return frcs[idx] if idx < len(frcs) else {}
+
+
 def _select_sham_task_mask_names(
     sham_mask_names: list[str],
     real_mask_names: list[str],
@@ -511,44 +523,31 @@ class PipelineRunner:
         from pineuro.session import get_localizer_run_info
 
         config = self.config
-        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        localizer_task_type = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
-        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+        loc = _loc(config)
+        task_name = loc.get("type", "rest")
+        is_task_localizer = task_name not in ("rest", "manual")
 
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
 
-        # Get expected volumes (use new localizer fields, fall back to legacy)
-        n_volumes = config["localizers"][0].get("n_volumes") if config.get("localizers") else None
-        if n_volumes is None:
-            rest_volumes = (
-                [config["localizers"][0].get("n_volumes", 200)] * config["localizers"][0].get("n_runs", 1)
-                if config.get("localizers")
-                else [200]
-            )
-            if isinstance(rest_volumes, list):
-                if len(rest_volumes) >= run_num:
-                    n_volumes = rest_volumes[run_num - 1]
-                else:
-                    n_volumes = rest_volumes[0] if rest_volumes else 200
-            else:
-                n_volumes = rest_volumes
+        # Get expected volumes from the localizer entry
+        n_volumes = loc.get("n_volumes", 200)
 
         # If the localizer task declares its own worst-case duration, override
         # the user-configured n_volumes with the computed ceiling. The existing
         # task_done_event mechanism still lets collect_dicoms stop early when
         # the task finishes, so this only caps collection — it never forces it
         # to run longer than the task actually does.
-        if localizer_type == "task" and localizer_task_type != "rest":
+        if is_task_localizer:
             from pineuro.tasks.task_registry import get_task_metadata
 
-            meta = get_task_metadata(localizer_task_type)
+            meta = get_task_metadata(task_name)
             if meta.compute_max_run_seconds is not None:
-                task_params = config["localizers"][0].get("task_params", {}) if config.get("localizers") else {}
-                tr = config["localizers"][0].get("tr", 1.2) if config.get("localizers") else 1.2
+                task_params = loc.get("task_params", {})
+                tr = loc.get("tr", 1.2)
                 computed = math.ceil(meta.compute_max_run_seconds(task_params) / tr)
                 self._emit_progress(
-                    f"{localizer_task_type}: auto-computed n_volumes={computed} "
+                    f"{task_name}: auto-computed n_volumes={computed} "
                     f"(worst-case ceiling; collection ends early on task_done_event)"
                 )
                 n_volumes = computed
@@ -636,11 +635,7 @@ class PipelineRunner:
             )
 
         # Determine which localizer task to use
-        if localizer_type == "task" and localizer_task_type != "rest":
-            # Task-based localizer (e.g., self/other)
-            actual_task_id = localizer_task_type
-        else:
-            actual_task_id = "rest"
+        actual_task_id = task_name if is_task_localizer else "rest"
 
         # Shared event so collect_dicoms knows when acquisition actually starts
         trigger_event = threading.Event()
@@ -667,10 +662,7 @@ class PipelineRunner:
         # Create QC monitor for real-time motion/quality metrics during collection
         from pineuro.collection_qc import CollectionQCMonitor
 
-        motion_mode = config.get("scan", {}).get(
-            "localizer_motion_correction",
-            config.get("feedback", {}).get("motion_correction", "siemens_moco"),
-        )
+        motion_mode = loc.get("motion_correction", "siemens_moco")
         qc_monitor = CollectionQCMonitor(
             log_path=output_dir / "collectionlog.tsv",
             motion_correction=motion_mode,
@@ -752,12 +744,12 @@ class PipelineRunner:
         except Exception:
             params_from_scan = False
 
+        loc = _loc(config)
         if params_from_scan:
-            localizers = config.get("localizers") or [{}]
-            localizer_params = {"duration": localizers[0].get("n_volumes", 250) * localizers[0].get("tr", 2.0)}
+            localizer_params = {"duration": loc.get("n_volumes", 250) * loc.get("tr", 2.0)}
         else:
-            # For other tasks, get from localizer_task config section
-            localizer_params = config.get("localizer_task", {}).get(task_id, {})
+            # Task-localizer parameters live on the localizer entry itself
+            localizer_params = loc.get("task_params", {})
 
         # Debug: log the parameters being passed
         logger.debug(f"Localizer task ID: {task_id}")
@@ -1038,9 +1030,10 @@ class PipelineRunner:
         preprocessing_dir = base_dir / "preprocessing"
         mask_extraction_dir = base_dir / "mask_extraction"
 
-        localizer_type = config.get("mask", {}).get("localizer_type", "rest")
-        localizer_task_type = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
-        task_name = localizer_task_type if localizer_task_type != "rest" else "rest"
+        loc0 = _loc(config)
+        loc_type = loc0.get("type", "rest")
+        task_name = loc_type
+        extraction = loc0.get("extraction", {})
 
         # Input files from preprocessing
         preproc_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc.nii.gz"
@@ -1055,8 +1048,7 @@ class PipelineRunner:
                 self._emit_progress(step)
 
         # Manual import — user-supplied masks; no preprocessing inputs needed.
-        loc0 = config["localizers"][0] if config.get("localizers") else {}
-        if loc0.get("type") == "manual":
+        if loc_type == "manual":
             from pineuro.gui.components.manual_masks import read_manual_masks
 
             self._emit_progress("Using manual mask import")
@@ -1075,29 +1067,16 @@ class PipelineRunner:
             )
             return
 
-        if localizer_type == "task":
+        if loc_type != "rest":
             from pineuro.mask_extraction import mask_extraction_task
 
             self._emit_progress("Using task-based (GLM) mask extraction")
 
-            contrasts = config.get("mask", {}).get("contrasts", {})
-
-            # Fall back to task metadata's default_contrasts if not in config
-            localizer_task_type = config["localizers"][0].get("type", "") if config.get("localizers") else ""
-            if not contrasts and localizer_task_type:
-                from pineuro.tasks.task_registry import get_task_metadata
-
-                try:
-                    metadata = get_task_metadata(localizer_task_type)
-                    contrasts = metadata.default_contrasts or {}
-                    if contrasts:
-                        self._emit_progress(f"Using default contrasts from {metadata.display_name}: {contrasts}")
-                except KeyError:
-                    pass
+            contrasts = loc0.get("contrasts", {})
 
             # Auto-resolve events file from localizer task output
             events_dir = base_dir / "preprocessing"
-            events_glob = sorted(events_dir.glob(f"*_task-{localizer_task_type}_*_events.tsv"))
+            events_glob = sorted(events_dir.glob(f"*_task-{loc_type}_*_events.tsv"))
             if events_glob:
                 # If acqs were selected, prefer events file matching selected acq
                 events_file = None
@@ -1118,34 +1097,26 @@ class PipelineRunner:
                 self._emit_progress(f"Found events file: {Path(events_file).name}")
             else:
                 raise FileNotFoundError(
-                    f"No events file found in {events_dir} for task '{localizer_task_type}'. "
+                    f"No events file found in {events_dir} for task '{loc_type}'. "
                     f"Run the localizer task first to generate the events TSV."
                 )
 
-            tr = config["localizers"][0].get("tr", 1.2) if config.get("localizers") else 1.2
-            threshold = config.get("mask", {}).get("threshold", 2000)
-            smooth_fwhm = (
-                config["localizers"][0].get("extraction", {}).get("smooth_fwhm", 5.0)
-                if config.get("localizers")
-                else 5.0
-            )
-            highpass = (
-                config["localizers"][0].get("extraction", {}).get("highpass", 0.01)
-                if config.get("localizers")
-                else 0.01
-            )
-            threshold_method = config.get("mask", {}).get("threshold_method", "top_n")
-            atlas_mask_cfg = config.get("mask", {}).get("atlas_mask")
-            atlas_name_cfg = config.get("mask", {}).get("atlas_name")
-            atlas_source_cfg = config.get("mask", {}).get("atlas_source")
-            atlas_regions_cfg = config.get("mask", {}).get("atlas_regions")
-            cluster_start_threshold = config.get("mask", {}).get("cluster_start_threshold", 2.0)
-            cluster_step = config.get("mask", {}).get("cluster_step", 0.1)
-            cluster_return_all = config.get("mask", {}).get("cluster_return_all", False)
-            min_cluster_size = config.get("mask", {}).get("min_cluster_size", 50)
-            max_total_voxels = config.get("mask", {}).get("max_total_voxels")
+            tr = loc0.get("tr", 1.2)
+            threshold = extraction.get("threshold", 2000)
+            smooth_fwhm = extraction.get("smooth_fwhm", 5.0)
+            highpass = extraction.get("highpass", 0.01)
+            threshold_method = extraction.get("threshold_method", "top_n")
+            atlas_mask_cfg = extraction.get("atlas_mask")
+            atlas_name_cfg = extraction.get("atlas_name")
+            atlas_source_cfg = extraction.get("atlas_source")
+            atlas_regions_cfg = extraction.get("atlas_regions")
+            cluster_start_threshold = extraction.get("cluster_start_threshold", 2.0)
+            cluster_step = extraction.get("cluster_step", 0.1)
+            cluster_return_all = extraction.get("cluster_return_all", False)
+            min_cluster_size = extraction.get("min_cluster_size", 50)
+            max_total_voxels = extraction.get("max_total_voxels")
 
-            include_reverse = config.get("mask", {}).get("include_reverse_contrasts", False)
+            include_reverse = loc0.get("include_reverse_contrasts", False)
 
             _mask_files = mask_extraction_task(
                 participant_id=self.participant_id,
@@ -1176,18 +1147,14 @@ class PipelineRunner:
             )
         else:
             # ICA-based extraction (existing behavior)
-            n_yeo = config["localizers"][0]["extraction"]["n_yeo"]
-            network_atlas = config["localizers"][0].get("extraction", {}).get("network_atlas", f"yeo_{n_yeo}")
-            yeo_targets = list(config["localizers"][0].get("networks", []))  # Copy to avoid modifying original
-            n_components = (
-                config["localizers"][0].get("extraction", {}).get("n_components", 30)
-                if config.get("localizers")
-                else 30
-            )
-            threshold = config.get("mask", {}).get("threshold", 2000)
-            smooth_fwhm = config["localizers"][0]["extraction"]["smooth_fwhm"]
-            highpass = config["localizers"][0]["extraction"]["highpass"]
-            lowpass = config["localizers"][0].get("extraction", {}).get("lowpass")
+            n_yeo = extraction["n_yeo"]
+            network_atlas = extraction.get("network_atlas", f"yeo_{n_yeo}")
+            yeo_targets = list(loc0.get("networks", []))  # Copy to avoid modifying original
+            n_components = extraction.get("n_components", 30)
+            threshold = extraction.get("threshold", 2000)
+            smooth_fwhm = extraction["smooth_fwhm"]
+            highpass = extraction["highpass"]
+            lowpass = extraction.get("lowpass")
 
             # If sham is enabled with alternative masks, include those networks too
             sham_config = config.get("sham", {})
@@ -1244,9 +1211,16 @@ class PipelineRunner:
         ref_file: str | Path | None,
         progress_callback: Callable[[str, str], None] | None = None,
     ) -> None:
-        """Create WM/CSF tissue masks for nuisance regression when enabled."""
-        fb_cfg = self.config.get("feedback", {})
-        if not (fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False)):
+        """Create WM/CSF tissue masks for nuisance regression when enabled.
+
+        Triggered when *any* feedback run requests WM or CSF nuisance regressors.
+        """
+        feedback_runs = self.config.get("feedback_runs", []) or []
+        if not any(
+            frc.get("glm", {}).get("include_wm_regressor", False)
+            or frc.get("glm", {}).get("include_csf_regressor", False)
+            for frc in feedback_runs
+        ):
             return
         if not ref_file:
             self._emit_progress("WM/CSF regressors enabled but no reference volume available; skipping tissue masks")
@@ -1620,11 +1594,12 @@ class PipelineRunner:
         ref_file = self._find_best_reference()
 
         # Read atlas/network config (same settings used for ICA pipeline)
-        mask_cfg = config.get("mask", {})
-        n_yeo = mask_cfg.get("n_yeo", 17)
-        network_atlas = mask_cfg.get("network_atlas", f"yeo_{n_yeo}")
-        yeo_targets = list(mask_cfg.get("yeo_targets", ["DefaultA", "ContA"]))
-        threshold = mask_cfg.get("threshold", 2000)
+        loc0 = _loc(config)
+        extraction = loc0.get("extraction", {})
+        n_yeo = extraction.get("n_yeo", 17)
+        network_atlas = extraction.get("network_atlas", f"yeo_{n_yeo}")
+        yeo_targets = list(loc0.get("networks", ["DefaultA", "ContA"]))
+        threshold = extraction.get("threshold", 2000)
 
         # Handle sham networks (same logic as _run_mask_extraction)
         sham_config = config.get("sham", {})
@@ -1672,9 +1647,13 @@ class PipelineRunner:
             sham_hemisphere_network=sham_hemisphere_network,
         )
 
-        # Create WM/CSF tissue masks for nuisance regression (if enabled)
-        fb_cfg = config.get("feedback", {})
-        if fb_cfg.get("include_wm_regressor", False) or fb_cfg.get("include_csf_regressor", False):
+        # Create WM/CSF tissue masks for nuisance regression (if any feedback run needs them)
+        feedback_runs = config.get("feedback_runs", []) or []
+        if any(
+            frc.get("glm", {}).get("include_wm_regressor", False)
+            or frc.get("glm", {}).get("include_csf_regressor", False)
+            for frc in feedback_runs
+        ):
             from pineuro.mask_extraction import create_tissue_masks
 
             self._emit_progress("Creating WM/CSF tissue masks for nuisance regression...")
@@ -2150,25 +2129,14 @@ class PipelineRunner:
             else (config.get("feedback_runs", [{}])[0].get("task", "ball") if config.get("feedback_runs") else "ball")
         )
 
-        # Determine mask names based on localizer type.
-        # For task-based (GLM) extraction, mask names come from contrast keys.
-        # For ICA-based (rest) extraction, mask names come from mask_names/yeo_targets.
-        localizer_type = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
+        # Determine mask names based on the localizer entry's type.
+        loc0 = _loc(config)
+        loc_type = loc0.get("type", "rest")
         signal_mode = _fb("feedback_mode", "activation")
-        include_reverse = config.get("mask", {}).get("include_reverse_contrasts", False)
-        if localizer_type == "task":
-            contrasts = config["localizers"][0].get("contrasts", {}) if config.get("localizers") else {}
+        include_reverse = loc0.get("include_reverse_contrasts", False)
+        if loc_type not in ("rest", "manual"):
+            contrasts = loc0.get("contrasts", {})
             real_mask_names = list(contrasts.keys())
-            # Fallback to task metadata default_contrasts if config has none
-            if not real_mask_names:
-                localizer_task_type = config["localizers"][0].get("type") if config.get("localizers") else None
-                if localizer_task_type:
-                    try:
-                        loc_meta = get_task_metadata(localizer_task_type)
-                        real_mask_names = list((loc_meta.default_contrasts or {}).keys())
-                    except KeyError:
-                        pass
-            # Append reverse contrast mask names
             if include_reverse:
                 real_mask_names = real_mask_names + [f"{n}_reverse" for n in real_mask_names]
         else:
