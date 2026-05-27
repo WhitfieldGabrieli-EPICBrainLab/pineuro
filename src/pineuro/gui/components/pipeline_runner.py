@@ -640,8 +640,7 @@ class PipelineRunner:
             # Task-based localizer (e.g., self/other)
             actual_task_id = localizer_task_type
         else:
-            # Rest localizer - use fixation task
-            actual_task_id = "fixation"
+            actual_task_id = "rest"
 
         # Shared event so collect_dicoms knows when acquisition actually starts
         trigger_event = threading.Event()
@@ -726,7 +725,7 @@ class PipelineRunner:
 
         Args:
             run_num: Run number (1-based)
-            task_id: Task identifier (e.g., "fixation", "self_other")
+            task_id: Task identifier (e.g., "rest", "self_other")
             watch_dir: Directory to watch for first DICOM arrival (auto-trigger)
             acq: Acquisition number (for retry handling)
             simulator: VolumeSimulator instance (optional, for offline testing)

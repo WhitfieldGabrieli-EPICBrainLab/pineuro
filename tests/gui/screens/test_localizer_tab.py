@@ -70,9 +70,9 @@ class TestRefreshNVolumesInfoForVariableDurationTask:
 
 
 class TestRefreshNVolumesInfoForFixedDurationTask:
-    def test_fixation_leaves_value_untouched(self):
-        # Fixation does not declare compute_max_run_seconds → method should return without writing.
-        builder = _stub_builder("fixation", tr="1.5")
+    def test_rest_leaves_value_untouched(self):
+        # Rest does not declare compute_max_run_seconds → method should return without writing.
+        builder = _stub_builder("rest", tr="1.5")
         builder.n_volumes_info_text.value = "(unchanged)"
         builder._refresh_n_volumes_info()
         assert builder.n_volumes_info_text.value == "(unchanged)"

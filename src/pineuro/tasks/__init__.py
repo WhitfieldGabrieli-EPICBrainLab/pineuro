@@ -179,8 +179,8 @@ def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
 def _load_builtin_tasks():
     from . import (  # noqa: F401
         ball,
-        fixation,
         gauge,
+        rest,
         rnt,
         rnt_experience_sampling,
         rnt_triggered_ball,
@@ -201,7 +201,7 @@ _LAZY_TASK_CLASS_NAMES = {
     "GaugeTask",
     "ThermometerTask",
     "SelfOtherTask",
-    "FixationTask",
+    "RestTask",
     "RNTTask",
     "RNTExperienceSamplingTask",
     "RNTTriggeredBallTask",
@@ -231,7 +231,7 @@ __all__ = [
     "GaugeTask",
     "ThermometerTask",
     "SelfOtherTask",
-    "FixationTask",
+    "RestTask",
     "RNTTask",
     "RNTExperienceSamplingTask",
     "RNTTriggeredBallTask",

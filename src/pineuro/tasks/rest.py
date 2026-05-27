@@ -1,5 +1,5 @@
 """
-Fixation task for resting-state localizer runs.
+Rest task for resting-state localizer runs.
 
 Summary
 -------
@@ -22,10 +22,10 @@ from .task_registry import TaskMetadata, TaskParameter, pineuro_task
 logger = logging.getLogger(__name__)
 
 
-FIXATION_METADATA = TaskMetadata(
-    task_id="fixation",
-    display_name="Fixation Localizer (Rest)",
-    description="Simple fixation cross display for resting-state acquisition",
+REST_METADATA = TaskMetadata(
+    task_id="rest",
+    display_name="Rest Localizer",
+    description="Fixation cross display for resting-state acquisition",
     roles={"localizer"},
     n_networks=0,
     parameters=[
@@ -45,13 +45,13 @@ FIXATION_METADATA = TaskMetadata(
 )
 
 
-@pineuro_task(FIXATION_METADATA)
-class FixationTask(BaseLocalizerTask):
-    """Fixation task for resting-state localizer runs.
+@pineuro_task(REST_METADATA)
+class RestTask(BaseLocalizerTask):
+    """Rest task for resting-state localizer runs.
 
-    Displays a simple fixation cross for the duration of the scan. Used to
-    ensure the participant is ready and looking at the screen before volume
-    acquisition begins.
+    Displays a fixation cross for the duration of the scan. Used to ensure the
+    participant is ready and looking at the screen before volume acquisition
+    begins.
 
     Parameters
     ----------
@@ -69,7 +69,7 @@ class FixationTask(BaseLocalizerTask):
         first volume to arrive.
     """
 
-    task_id = "fixation"
+    task_id = "rest"
 
     def __init__(
         self,
@@ -96,10 +96,10 @@ class FixationTask(BaseLocalizerTask):
         self.create_window(
             monitor_position=self.monitor_position,
         )
-        logger.info(f"FixationTask setup: duration={self.duration}s")
+        logger.info(f"RestTask setup: duration={self.duration}s")
 
     def run_paradigm(self) -> None:
-        """Execute the fixation paradigm."""
+        """Execute the rest paradigm."""
         from psychopy import core
 
         # Instructions
@@ -119,9 +119,9 @@ class FixationTask(BaseLocalizerTask):
 
         # Show fixation for entire duration
         onset = self._experiment_clock.getTime()
-        logger.info(f"[TIMING] Fixation START: onset={onset:.2f}s, duration={self.duration}s")
+        logger.info(f"[TIMING] Rest START: onset={onset:.2f}s, duration={self.duration}s")
         self.show_fixation(self.duration)
         self.record_event(onset, self.duration, "rest")
-        logger.info(f"[TIMING] Fixation END: time={self._experiment_clock.getTime():.2f}s")
+        logger.info(f"[TIMING] Rest END: time={self._experiment_clock.getTime():.2f}s")
 
-        logger.info(f"Fixation paradigm complete: {self.duration:.1f}s")
+        logger.info(f"Rest paradigm complete: {self.duration:.1f}s")

@@ -180,9 +180,9 @@ class TestTaskMetadataField:
         )
         assert meta.compute_max_run_seconds is None
 
-    def test_fixation_task_has_no_duration_calculator(self):
-        """Fixed-duration tasks (like fixation) don't set the callable."""
+    def test_rest_task_has_no_duration_calculator(self):
+        """Fixed-duration tasks (like rest) don't set the callable."""
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("fixation")
+        meta = get_task_metadata("rest")
         assert meta.compute_max_run_seconds is None
