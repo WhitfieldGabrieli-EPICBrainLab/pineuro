@@ -771,7 +771,9 @@ class StudyEditorScreen:
         self.scanner_setup_guide_btn.visible = not is_simulator
 
         self.simulator_instruction_text = ft.Text(
-            "Simulator replays volumes from source directories at configurable speed for offline testing."
+            "Simulator replays volumes from source directories at configurable speed for offline testing. "
+            "Speed settings only control the rate at which DICOMs are delivered to the pipeline — "
+            "the PsychoPy task itself always runs at real time."
             if is_simulator
             else "Scanner DICOM directory will be monitored for real-time acquisition.",
             size=11,
@@ -1190,7 +1192,9 @@ class StudyEditorScreen:
 
         if hasattr(self, "simulator_instruction_text"):
             self.simulator_instruction_text.value = (
-                "Simulator replays volumes from source directories at configurable speed for offline testing."
+                "Simulator replays volumes from source directories at configurable speed for offline testing. "
+                "Speed settings only control the rate at which DICOMs are delivered to the pipeline — "
+                "the PsychoPy task itself always runs at real time."
                 if is_simulator
                 else "Scanner DICOM directory will be monitored for real-time acquisition."
             )
