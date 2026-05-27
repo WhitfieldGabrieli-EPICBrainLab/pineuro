@@ -1369,13 +1369,6 @@ THERMOMETER_METADATA = TaskMetadata(
             default="3",
             hint="Key for confirming rating and advancing instructions (ring finger)",
         ),
-        TaskParameter(
-            key="trigger_keys",
-            label="Scanner Trigger Keys",
-            type="list[str]",
-            default=["t", "+", "5", "equal"],
-            hint="Keys that trigger volume acquisition",
-        ),
     ],
     session_state_fields=[],
     post_run_questions=[],

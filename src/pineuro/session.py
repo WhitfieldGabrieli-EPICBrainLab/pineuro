@@ -525,6 +525,7 @@ class ScannerConfig:
 
     dicom_dir: str = "/BOLD_DICOM"
     ip: str = ""
+    trigger_keys: list[str] = field(default_factory=lambda: ["t", "+", "5", "equal"])
 
 
 @dataclass
@@ -2634,6 +2635,7 @@ def run_single_task(
         **eff_task_params,
         "mask_names": task_mask_names,
         "feedback_mode": feedback_mode,
+        "trigger_keys": config.scanner.trigger_keys,
     }
 
     # Create task via factory

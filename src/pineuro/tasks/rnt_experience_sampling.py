@@ -1043,13 +1043,6 @@ RNT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
             default="3",
             hint="Scanner button for confirming rating",
         ),
-        TaskParameter(
-            key="trigger_keys",
-            label="Scanner Trigger Keys",
-            type="list[str]",
-            default=["t", "+", "5", "equal"],
-            hint="Keys that trigger volume acquisition",
-        ),
     ],
     session_state_fields=[],
     post_run_questions=[],

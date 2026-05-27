@@ -918,13 +918,6 @@ GAUGE_METADATA = TaskMetadata(
             default="1",
             hint="Key for button press responses",
         ),
-        TaskParameter(
-            key="trigger_keys",
-            label="Scanner Trigger Keys",
-            type="list[str]",
-            default=["t", "+", "5", "equal"],
-            hint="Keys that trigger volume acquisition",
-        ),
     ],
     design_type="nuisance_only",
     live_metrics=[

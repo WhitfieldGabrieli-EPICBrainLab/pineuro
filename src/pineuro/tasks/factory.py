@@ -40,6 +40,7 @@ RUNTIME_PARAMETERS = {
     "signal_mode",  # "activation" or "connectivity"
     "connectivity_target",  # "increase" or "decrease" (ball direction for connectivity)
     "presenter_monitor",  # Which monitor to use for display
+    "trigger_keys",  # Scanner trigger keys (study-level, applies to all tasks)
 }
 
 

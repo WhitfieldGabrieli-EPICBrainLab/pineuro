@@ -728,6 +728,9 @@ class PipelineRunner:
         display_config = config.get("display", {})
         presenter_monitor = display_config.get("presenter_monitor", "right")
 
+        scanner_cfg = config.get("scanner", {}) or {}
+        trigger_keys = scanner_cfg.get("trigger_keys") or ["t", "+", "5", "equal"]
+
         task = create_localizer_task(
             task_id=task_id,
             output_dir=events_dir,
@@ -738,6 +741,7 @@ class PipelineRunner:
             watch_dir=str(watch_dir),  # Pass watch_dir for auto-trigger on first DICOM
             simulator=simulator,  # Pass simulator for task-controlled start timing
             monitor_position=presenter_monitor,
+            trigger_keys=trigger_keys,
         )
 
         # Set trigger event for timing synchronization with collect_dicoms

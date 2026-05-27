@@ -1142,13 +1142,6 @@ RNT_TRIGGERED_BALL_METADATA = TaskMetadata(
             default=True,
             hint="If true, ball position and circles reset at each episode start",
         ),
-        TaskParameter(
-            key="trigger_keys",
-            label="Scanner Trigger Keys",
-            type="list[str]",
-            default=["t", "+", "5", "equal"],
-            hint="Keys that trigger volume acquisition",
-        ),
     ],
     session_state_fields=[],
     post_run_questions=[],

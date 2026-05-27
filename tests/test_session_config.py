@@ -204,6 +204,17 @@ class TestNewTopLevelBlocks:
         cfg = ScannerConfig(ip="192.168.2.1")
         assert cfg.ip == "192.168.2.1"
         assert cfg.dicom_dir == "/BOLD_DICOM"
+        assert cfg.trigger_keys == ["t", "+", "5", "equal"]
+
+    def test_scanner_trigger_keys_override(self):
+        cfg = ScannerConfig(trigger_keys=["5"])
+        assert cfg.trigger_keys == ["5"]
+
+    def test_scanner_trigger_keys_are_independent_per_instance(self):
+        a = ScannerConfig()
+        b = ScannerConfig()
+        a.trigger_keys.append("x")
+        assert b.trigger_keys == ["t", "+", "5", "equal"]
 
     def test_reference(self):
         cfg = ReferenceConfig(initial_enabled=False)

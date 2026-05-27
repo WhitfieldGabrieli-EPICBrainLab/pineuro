@@ -1264,13 +1264,6 @@ BALL_TASK_METADATA = TaskMetadata(
             hint="If hits > this, decrease scale factor 25%",
         ),
         TaskParameter(
-            key="trigger_keys",
-            label="Scanner Trigger Keys",
-            type="list[str]",
-            default=["t", "+", "5", "equal"],
-            hint="Keys that trigger volume acquisition (comma-separated)",
-        ),
-        TaskParameter(
             key="left_button",
             label="Left Control Button",
             type="str",
