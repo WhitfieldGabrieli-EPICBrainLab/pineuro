@@ -77,7 +77,7 @@ class BaseLocalizerTask(TaskBase):
         output_dir: Union[str, Path],
         participant_id: str,
         session_id: str,
-        acq: int,
+        attempt: int,
         run: int = 1,
         trigger_keys: list[str] | None = None,
         monitor_position: str = "right",
@@ -94,7 +94,7 @@ class BaseLocalizerTask(TaskBase):
         self.participant_id = participant_id
         self.session_id = session_id
         self.run_number = run
-        self.acq_number = acq
+        self.attempt_number = attempt
         self.monitor_position = monitor_position
 
         self._events: list[dict[str, Any]] = []
@@ -170,7 +170,7 @@ class BaseLocalizerTask(TaskBase):
         ----------
         path : Path, optional
             Output path. Defaults to
-            {output_dir}/{participant}_{session}_task-{task_id}_acq-{acq}_run-{run}_events.tsv.
+            {output_dir}/{participant}_{session}_task-{task_id}_run-{run}_attempt-{attempt}_events.tsv.
 
         Returns
         -------
@@ -186,7 +186,7 @@ class BaseLocalizerTask(TaskBase):
                 self.session_id,
                 self.task_id,
                 self.run_number,
-                acq=self.acq_number,
+                attempt=self.attempt_number,
             )
             path = self.output_dir / f"{prefix}_events.tsv"
 

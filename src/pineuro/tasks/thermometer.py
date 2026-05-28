@@ -388,7 +388,7 @@ class ThermometerTask(BaseTask):
             self.coordinator.session,
             self.coordinator.task,
             self.coordinator.run_number,
-            acq=self.coordinator.acq,
+            attempt=self.coordinator.attempt,
         )
 
         path = output_dir / f"{prefix}_events.tsv"

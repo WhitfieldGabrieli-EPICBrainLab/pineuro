@@ -218,30 +218,30 @@ class TestPreprocessingPipeline:
 
 
 # =============================================================================
-# preprocessing — acq/run-aware intermediate file naming
+# preprocessing — run/attempt-aware intermediate file naming
 # =============================================================================
 
 
-class TestParseAcqRunFromPath:
+class TestParseRunAttemptFromPath:
     def test_matches_collection_folder(self):
-        from pineuro.preprocessing import _parse_acq_run_from_path
+        from pineuro.preprocessing import _parse_run_attempt_from_path
 
-        assert _parse_acq_run_from_path(Path("/x/y/task-rest_acq-02_run-01")) == (2, 1)
+        assert _parse_run_attempt_from_path(Path("/x/y/task-rest_run-01_attempt-02")) == (1, 2)
 
     def test_matches_with_extra_path_components(self):
-        from pineuro.preprocessing import _parse_acq_run_from_path
+        from pineuro.preprocessing import _parse_run_attempt_from_path
 
-        assert _parse_acq_run_from_path(Path("/study/collection/task-rest_acq-03_run-02/dcm")) == (3, 2)
+        assert _parse_run_attempt_from_path(Path("/study/collection/task-rest_run-02_attempt-03/dcm")) == (2, 3)
 
     def test_no_match_returns_nones(self):
-        from pineuro.preprocessing import _parse_acq_run_from_path
+        from pineuro.preprocessing import _parse_run_attempt_from_path
 
-        assert _parse_acq_run_from_path(Path("/external/source_dicoms/run1")) == (None, None)
+        assert _parse_run_attempt_from_path(Path("/external/source_dicoms/run1")) == (None, None)
 
 
-class TestPreprocessingAcqAwareNaming:
-    """preprocessing() must thread (acq, run) into intermediate filenames so that
-    re-preprocessing a different acq attempt does not collide, and multi-acq-per-run
+class TestPreprocessingAttemptAwareNaming:
+    """preprocessing() must thread (run, attempt) into intermediate filenames so that
+    re-preprocessing a different attempt does not collide, and multi-attempt-per-run
     selections ({1: [2, 3]}) keep their run identity."""
 
     def _make_dicom_dirs(self, tmp_path, names):
@@ -337,10 +337,10 @@ class TestPreprocessingAcqAwareNaming:
 
         return call_log
 
-    def test_intermediates_carry_acq_when_parsed_from_folder(self, tmp_path, monkeypatch):
+    def test_intermediates_carry_attempt_when_parsed_from_folder(self, tmp_path, monkeypatch):
         from pineuro.preprocessing import preprocessing
 
-        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_acq-03_run-01", "task-rest_acq-01_run-02"])
+        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_run-01_attempt-03", "task-rest_run-02_attempt-01"])
         root_dir = tmp_path / "preproc"
         root_dir.mkdir()
         log = self._patch_steps(monkeypatch, root_dir / "01_nifti")
@@ -357,26 +357,26 @@ class TestPreprocessingAcqAwareNaming:
 
         nifti_names = sorted(p.name for p in log["dicom_to_nifti"])
         assert nifti_names == [
-            "sub-01_ses-01_task-rest_acq-01_run-02.nii.gz",
-            "sub-01_ses-01_task-rest_acq-03_run-01.nii.gz",
+            "sub-01_ses-01_task-rest_run-01_attempt-03.nii.gz",
+            "sub-01_ses-01_task-rest_run-02_attempt-01.nii.gz",
         ]
         mcf_names = sorted(p.name for p in log["motion_correction"])
         assert mcf_names == [
-            "sub-01_ses-01_task-rest_acq-01_run-02_mcf.nii.gz",
-            "sub-01_ses-01_task-rest_acq-03_run-01_mcf.nii.gz",
+            "sub-01_ses-01_task-rest_run-01_attempt-03_mcf.nii.gz",
+            "sub-01_ses-01_task-rest_run-02_attempt-01_mcf.nii.gz",
         ]
         mean_names = sorted(p.name for p in log["compute_mean"])
         assert mean_names == [
-            "sub-01_ses-01_task-rest_acq-01_run-02_mean.nii.gz",
-            "sub-01_ses-01_task-rest_acq-03_run-01_mean.nii.gz",
+            "sub-01_ses-01_task-rest_run-01_attempt-03_mean.nii.gz",
+            "sub-01_ses-01_task-rest_run-02_attempt-01_mean.nii.gz",
         ]
 
-    def test_multi_acq_per_run_keeps_run_identity(self, tmp_path, monkeypatch):
-        """{1: [2, 3]} selection: two inputs at run-01 with different acqs
-        must produce acq-02_run-01 and acq-03_run-01, NOT run-01/run-02."""
+    def test_multi_attempt_per_run_keeps_run_identity(self, tmp_path, monkeypatch):
+        """{1: [2, 3]} selection: two inputs at run-01 with different attempts
+        must produce run-01_attempt-02 and run-01_attempt-03, NOT run-01/run-02."""
         from pineuro.preprocessing import preprocessing
 
-        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_acq-02_run-01", "task-rest_acq-03_run-01"])
+        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_run-01_attempt-02", "task-rest_run-01_attempt-03"])
         root_dir = tmp_path / "preproc"
         root_dir.mkdir()
         log = self._patch_steps(monkeypatch, root_dir / "01_nifti")
@@ -389,14 +389,14 @@ class TestPreprocessingAcqAwareNaming:
             [str(d) for d in dirs],
             n_jobs=1,
             qc_enabled=False,
-            acq_per_input=[2, 3],
+            attempt_per_input=[2, 3],
             run_per_input=[1, 1],
         )
 
         nifti_names = sorted(p.name for p in log["dicom_to_nifti"])
         assert nifti_names == [
-            "sub-01_ses-01_task-rest_acq-02_run-01.nii.gz",
-            "sub-01_ses-01_task-rest_acq-03_run-01.nii.gz",
+            "sub-01_ses-01_task-rest_run-01_attempt-02.nii.gz",
+            "sub-01_ses-01_task-rest_run-01_attempt-03.nii.gz",
         ]
         # No "run-02" should appear in any per-input artifact
         all_names = [
@@ -405,8 +405,8 @@ class TestPreprocessingAcqAwareNaming:
         assert not any("run-02" in n for n in all_names), all_names
 
     def test_external_paths_fall_back_to_enumeration(self, tmp_path, monkeypatch):
-        """Folders that don't match the acq-NN_run-NN convention default to
-        acq=1 and run=enumerate_index+1 (covers skip_collection paths)."""
+        """Folders that don't match the run-NN_attempt-NN convention default to
+        attempt=1 and run=enumerate_index+1 (covers skip_collection paths)."""
         from pineuro.preprocessing import preprocessing
 
         dirs = self._make_dicom_dirs(tmp_path, ["raw_run_one", "raw_run_two"])
@@ -426,19 +426,19 @@ class TestPreprocessingAcqAwareNaming:
 
         nifti_names = sorted(p.name for p in log["dicom_to_nifti"])
         assert nifti_names == [
-            "sub-01_ses-01_task-rest_acq-01_run-01.nii.gz",
-            "sub-01_ses-01_task-rest_acq-01_run-02.nii.gz",
+            "sub-01_ses-01_task-rest_run-01_attempt-01.nii.gz",
+            "sub-01_ses-01_task-rest_run-02_attempt-01.nii.gz",
         ]
 
     def test_explicit_lengths_must_match(self, tmp_path, monkeypatch):
         from pineuro.preprocessing import preprocessing
 
-        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_acq-01_run-01"])
+        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_run-01_attempt-01"])
         root_dir = tmp_path / "preproc"
         root_dir.mkdir()
         self._patch_steps(monkeypatch, root_dir / "01_nifti")
 
-        with pytest.raises(ValueError, match="acq_per_input has 2 entries"):
+        with pytest.raises(ValueError, match="attempt_per_input has 2 entries"):
             preprocessing(
                 "sub-01",
                 "ses-01",
@@ -447,7 +447,7 @@ class TestPreprocessingAcqAwareNaming:
                 [str(d) for d in dirs],
                 n_jobs=1,
                 qc_enabled=False,
-                acq_per_input=[1, 2],
+                attempt_per_input=[1, 2],
             )
 
 

@@ -428,7 +428,7 @@ class TestDicomToNiftiOverwriteCleanup:
         return dicom_to_nifti, dicom_dir, output_dir, primary
 
     def test_removes_stale_primary_suffix_and_multiecho(self, tmp_path):
-        output_name = "sub-01_ses-01_task-rest_acq-01_run-01"
+        output_name = "sub-01_ses-01_task-rest_run-01_attempt-01"
         dicom_to_nifti, dicom_dir, output_dir, primary = self._setup(tmp_path, output_name)
 
         # Stale files dcm2niix may have left behind on prior runs
@@ -463,13 +463,13 @@ class TestDicomToNiftiOverwriteCleanup:
 
     def test_does_not_touch_other_outputs(self, tmp_path):
         """Cleanup must be scoped to the current output_name only."""
-        output_name = "sub-01_ses-01_task-rest_acq-01_run-01"
+        output_name = "sub-01_ses-01_task-rest_run-01_attempt-01"
         dicom_to_nifti, dicom_dir, output_dir, primary = self._setup(tmp_path, output_name)
 
-        sibling_run = output_dir / "sub-01_ses-01_task-rest_acq-01_run-02.nii.gz"
+        sibling_run = output_dir / "sub-01_ses-01_task-rest_run-02_attempt-01.nii.gz"
         sibling_run.write_text("other-run")
-        sibling_acq = output_dir / "sub-01_ses-01_task-rest_acq-02_run-01.nii.gz"
-        sibling_acq.write_text("other-acq")
+        sibling_attempt = output_dir / "sub-01_ses-01_task-rest_run-01_attempt-02.nii.gz"
+        sibling_attempt.write_text("other-attempt")
 
         def fake_run(cmd, *args, **kwargs):
             primary.write_bytes(b"fresh")
@@ -482,12 +482,12 @@ class TestDicomToNiftiOverwriteCleanup:
             dicom_to_nifti(dicom_dir, output_dir, output_name, overwrite=True)
 
         assert sibling_run.read_text() == "other-run"
-        assert sibling_acq.read_text() == "other-acq"
+        assert sibling_attempt.read_text() == "other-attempt"
 
     def test_overwrite_false_no_cleanup(self, tmp_path):
         """When overwrite=False, cleanup must not run (it would be wasted work
         and could surprise a user who explicitly opted out)."""
-        output_name = "sub-01_ses-01_task-rest_acq-01_run-01"
+        output_name = "sub-01_ses-01_task-rest_run-01_attempt-01"
         dicom_to_nifti, dicom_dir, output_dir, primary = self._setup(tmp_path, output_name)
 
         stale_sidecar = output_dir / f"{output_name}.json"

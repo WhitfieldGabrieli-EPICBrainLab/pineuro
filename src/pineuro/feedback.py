@@ -1969,7 +1969,7 @@ def _detect_interrupted_run(
     task: str,
     run: int,
     n_volumes: int,
-    acq: int,
+    attempt: int,
 ) -> dict | None:
     """Check if a previous interrupted run exists for this task/run combination.
 
@@ -1988,8 +1988,8 @@ def _detect_interrupted_run(
         Run number to check
     n_volumes : int
         Expected number of volumes for a complete run
-    acq : int
-        Acquisition number (1, 2, 3, ...) for retry tracking.
+    attempt : int
+        Attempt number (1, 2, 3, ...) for retry tracking.
 
     Returns
     -------
@@ -2002,10 +2002,12 @@ def _detect_interrupted_run(
         Returns None if no incomplete run found.
     """
     run_str = f"{run:02d}"
-    acq_str = f"{acq:02d}"
-    feedbacklog_path = output_dir / f"{subject}_{session}_task-{task}_acq-{acq_str}_run-{run_str}_feedbacklog.tsv"
-    design_path = output_dir / f"{subject}_{session}_task-{task}_acq-{acq_str}_run-{run_str}_design.tsv"
-    nifti_dir = output_dir / f"nifti_{session}_task-{task}_acq-{acq_str}_run-{run_str}"
+    attempt_str = f"{attempt:02d}"
+    feedbacklog_path = (
+        output_dir / f"{subject}_{session}_task-{task}_run-{run_str}_attempt-{attempt_str}_feedbacklog.tsv"
+    )
+    design_path = output_dir / f"{subject}_{session}_task-{task}_run-{run_str}_attempt-{attempt_str}_design.tsv"
+    nifti_dir = output_dir / f"nifti_{session}_task-{task}_run-{run_str}_attempt-{attempt_str}"
 
     if not feedbacklog_path.exists():
         return None
@@ -2040,7 +2042,7 @@ def _archive_interrupted_run(
     session: str,
     task: str,
     run: int,
-    acq: int,
+    attempt: int,
 ) -> Path:
     """Move interrupted run files to an archive subfolder with timestamp.
 
@@ -2057,8 +2059,8 @@ def _archive_interrupted_run(
         Task name
     run : int
         Run number
-    acq : int
-        Acquisition number (1, 2, 3, ...) for retry tracking.
+    attempt : int
+        Attempt number (1, 2, 3, ...) for retry tracking.
 
     Returns
     -------
@@ -2066,15 +2068,15 @@ def _archive_interrupted_run(
         Path to the created archive directory
     """
     run_str = f"{run:02d}"
-    acq_str = f"{acq:02d}"
+    attempt_str = f"{attempt:02d}"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_dir = output_dir / f"interrupted_{timestamp}"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
     items_to_move = [
-        output_dir / f"{subject}_{session}_task-{task}_acq-{acq_str}_run-{run_str}_feedbacklog.tsv",
-        output_dir / f"{subject}_{session}_task-{task}_acq-{acq_str}_run-{run_str}_design.tsv",
-        output_dir / f"nifti_{session}_task-{task}_acq-{acq_str}_run-{run_str}",
+        output_dir / f"{subject}_{session}_task-{task}_run-{run_str}_attempt-{attempt_str}_feedbacklog.tsv",
+        output_dir / f"{subject}_{session}_task-{task}_run-{run_str}_attempt-{attempt_str}_design.tsv",
+        output_dir / f"nifti_{session}_task-{task}_run-{run_str}_attempt-{attempt_str}",
     ]
 
     # Also check for QC directory
@@ -2098,7 +2100,7 @@ def _generate_partial_qc(
     session: str,
     task: str,
     run: int,
-    acq: int,
+    attempt: int,
     task_id: str | None = None,
 ) -> Path | None:
     """Generate QC report for interrupted session before archiving.
@@ -2115,8 +2117,8 @@ def _generate_partial_qc(
         Task name
     run : int
         Run number
-    acq : int
-        Acquisition number (1, 2, 3, ...) for retry tracking.
+    attempt : int
+        Attempt number (1, 2, 3, ...) for retry tracking.
     task_id : str, optional
         Registered task identifier (e.g., "ball", "gauge"). When provided, the
         QC report surfaces the task's declared live metrics in its summary.
@@ -2146,7 +2148,7 @@ def _generate_partial_qc(
             session=session,
             task=task,
             run=run,
-            acq=acq,
+            attempt=attempt,
             output_dir=qc_output_dir,
             open_browser=False,
             live_metrics=live_metrics,
@@ -2250,11 +2252,11 @@ def get_slot_run_info(
     task: str,
     step_id: str,
 ) -> dict:
-    """Get run info based on workflow slot with BIDS acq entity for retries.
+    """Get run info based on workflow slot with attempt entity for retries.
 
     Uses a slot-based run numbering system where:
     - The run number is derived from the step_id suffix (e.g., feedback_3 -> run-03)
-    - acq-a/acq-b/acq-c corresponds to attempt number (first, second, third...)
+    - attempt-01/attempt-02/attempt-03 corresponds to attempt number (first, second, third...)
 
     Parameters
     ----------
@@ -2272,64 +2274,64 @@ def get_slot_run_info(
     dict
         Dictionary containing:
         - 'run': int - The run number for this slot
-        - 'acq': int - The acquisition number for this attempt (1, 2, 3, ...)
-        - 'run_acq_string': str - Combined string like 'acq-01_run-03'
-        - 'existing_acqs': list - List of existing acquisition numbers for this slot
+        - 'attempt': int - The attempt number for this try (1, 2, 3, ...)
+        - 'run_attempt_string': str - Combined string like 'run-03_attempt-01'
+        - 'existing_attempts': list - List of existing attempt numbers for this slot
 
     Examples
     --------
     >>> info = get_slot_run_info(output_dir, 'sub-01', 'transfer', 'transfer_1')
     >>> info
-    {'run': 1, 'acq': 1, 'run_acq_string': 'acq-01_run-01', 'existing_acqs': []}
+    {'run': 1, 'attempt': 1, 'run_attempt_string': 'run-01_attempt-01', 'existing_attempts': []}
     >>> # After one interrupted run:
     >>> info = get_slot_run_info(output_dir, 'sub-01', 'transfer', 'transfer_1')
     >>> info
-    {'run': 1, 'acq': 2, 'run_acq_string': 'acq-02_run-01', 'existing_acqs': [1]}
+    {'run': 1, 'attempt': 2, 'run_attempt_string': 'run-01_attempt-02', 'existing_attempts': [1]}
     """
     run_num = parse_step_run_number(step_id)
 
     if not output_dir.exists():
         return {
             "run": run_num,
-            "acq": 1,
-            "run_acq_string": f"acq-01_run-{run_num:02d}",
-            "existing_acqs": [],
+            "attempt": 1,
+            "run_attempt_string": f"run-{run_num:02d}_attempt-01",
+            "existing_attempts": [],
         }
 
     # Scan for existing attempts at this run number
-    # Pattern: {subject}_{session}_task-{task}_acq-*_run-{run:02d}_feedbacklog.tsv
-    pattern = f"{subject}_{session}_task-{task}_acq-*_run-{run_num:02d}_feedbacklog.tsv"
+    # Pattern: {subject}_{session}_task-{task}_run-{run:02d}_attempt-*_feedbacklog.tsv
+    pattern = f"{subject}_{session}_task-{task}_run-{run_num:02d}_attempt-*_feedbacklog.tsv"
 
-    existing_acqs: list[int] = []
+    existing_attempts: list[int] = []
 
     # Check main output directory
     for f in output_dir.glob(pattern):
-        match = re.search(r"acq-(\d+)_run-", f.name)
+        match = re.search(r"attempt-(\d+)", f.name)
         if match:
-            existing_acqs.append(int(match.group(1)))
+            existing_attempts.append(int(match.group(1)))
 
     # Also check archived directories for runs
     for archive_dir in output_dir.glob("interrupted_*"):
         if archive_dir.is_dir():
             for f in archive_dir.glob(pattern):
-                match = re.search(r"acq-(\d+)_run-", f.name)
+                match = re.search(r"attempt-(\d+)", f.name)
                 if match:
-                    existing_acqs.append(int(match.group(1)))
+                    existing_attempts.append(int(match.group(1)))
 
     # Remove duplicates and sort
-    existing_acqs = sorted(set(existing_acqs))
+    existing_attempts = sorted(set(existing_attempts))
 
-    # Determine next acq number
-    if not existing_acqs:
-        acq = 1
+    # Determine next attempt number
+    if not existing_attempts:
+        attempt = 1
     else:
-        acq = max(existing_acqs) + 1
+        attempt = max(existing_attempts) + 1
 
     return {
         "run": run_num,
-        "acq": acq,
-        "run_acq_string": f"acq-{acq:02d}_run-{run_num:02d}",
-        "existing_acqs": existing_acqs,
+        "attempt": attempt,
+        "run_attempt_string": f"run-{run_num:02d}_attempt-{attempt:02d}",
+        "existing_attempts": existing_attempts,
     }
 
 
@@ -2454,7 +2456,7 @@ class NeurofeedbackCoordinator:
         session: str,
         task: str,
         run: int,
-        acq: int,
+        attempt: int,
         n_baseline: int,
         n_volumes: int,
         tr: float,
@@ -2489,7 +2491,7 @@ class NeurofeedbackCoordinator:
         self.session = session
         self.task = task
         self.run_number = run
-        self.acq = acq  # Acquisition number for retry tracking (1, 2, 3, ...)
+        self.attempt = attempt  # Attempt number for retry tracking (1, 2, 3, ...)
         self._task_id = task_id
         self.n_baseline = n_baseline
         self.n_volumes = n_volumes
@@ -2533,10 +2535,10 @@ class NeurofeedbackCoordinator:
         if not self.watch_dir.is_dir():
             raise ValueError(f"Watch path is not a directory: {self.watch_dir}")
 
-        # Create output directories using acq-based naming
-        self._run_acq_str = f"acq-{self.acq:02d}_run-{self.run_number:02d}"
+        # Create output directories using attempt-based naming
+        self._run_attempt_str = f"run-{self.run_number:02d}_attempt-{self.attempt:02d}"
         self._bids_subject_prefix = f"{self.subject}_{self.session}"
-        self.nifti_dir = self.output_dir / f"nifti_{self.session}_task-{self.task}_{self._run_acq_str}"
+        self.nifti_dir = self.output_dir / f"nifti_{self.session}_task-{self.task}_{self._run_attempt_str}"
         self.nifti_dir.mkdir(parents=True, exist_ok=True)
         # Multi-run handling: Current implementation processes a single continuous
         # acquisition. For multi-run sessions, run separate NeurofeedbackCoordinator
@@ -2673,12 +2675,12 @@ class NeurofeedbackCoordinator:
         self._activation_callback = activation_callback
         self._error_callback = error_callback
 
-        # CSV log setup with BIDS-style naming (use acq entity if provided)
+        # CSV log setup with BIDS-style naming using run/attempt entities
         self._csv_path = (
-            self.output_dir / f"{self._bids_subject_prefix}_task-{self.task}_{self._run_acq_str}_feedbacklog.tsv"
+            self.output_dir / f"{self._bids_subject_prefix}_task-{self.task}_{self._run_attempt_str}_feedbacklog.tsv"
         )
         self._design_matrix_path = (
-            self.output_dir / f"{self._bids_subject_prefix}_task-{self.task}_{self._run_acq_str}_design.tsv"
+            self.output_dir / f"{self._bids_subject_prefix}_task-{self.task}_{self._run_attempt_str}_design.tsv"
         )
         self._design_file: IO[Any] | None = None  # File handle for incremental design matrix writes
 
@@ -3563,7 +3565,7 @@ class NeurofeedbackCoordinator:
                 session=self.session,
                 task=self.task,
                 run=self.run_number,
-                acq=self.acq,
+                attempt=self.attempt,
                 output_dir=self.output_dir / "qc",
                 overwrite=True,
                 open_browser=False,
@@ -3821,9 +3823,9 @@ def run_feedback_task(
         visualizations. Default is True.
     step_id : str, optional
         Workflow step identifier (e.g., 'transfer_1', 'feedback_2'). If provided,
-        uses slot-based run numbering with BIDS acq entity for retry tracking.
+        uses slot-based run numbering with the attempt entity for retry tracking.
         The step_id determines the run number (transfer_1/feedback_1 -> run-01,
-        transfer_2/feedback_2 -> run-02) and an acquisition letter (a, b, c...)
+        transfer_2/feedback_2 -> run-02) and an attempt index (1, 2, 3, ...)
         is appended for each attempt at the same slot. When step_id is provided,
         the `run` parameter is ignored and determined from the step_id mapping.
     sham_provider : ShamActivationProvider, optional
@@ -3955,19 +3957,20 @@ def run_feedback_task(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine run number and acquisition number based on step_id.
+    # Determine run number and attempt number based on step_id.
     # step_id is required: it selects the workflow slot ("feedback_1", "transfer_2", ...)
-    # which `get_slot_run_info` uses to derive run-NN and the next acq-NN attempt.
+    # which `get_slot_run_info` uses to derive run-NN and the next attempt-NN.
     if step_id is None:
-        raise ValueError("step_id is required: it selects the workflow slot for slot-based acq tracking.")
+        raise ValueError("step_id is required: it selects the workflow slot for slot-based attempt tracking.")
     run_info = get_slot_run_info(output_dir, subject, session, task, step_id)
     run = run_info["run"]  # Override run parameter with slot-determined value
-    acq = run_info["acq"]
-    logger.info(f"Using slot-based naming for {step_id}: run-{run:02d}, acq-{acq:02d}")
+    attempt = run_info["attempt"]
+    logger.info(f"Using slot-based naming for {step_id}: run-{run:02d}, attempt-{attempt:02d}")
 
     # Check for and archive any interrupted run before starting fresh.
-    # With acq-based naming, a new acq means a fresh attempt; we only archive if
-    # there's a partial file already at the *same* acq (shouldn't normally happen).
+    # With attempt-based naming, a new attempt means a fresh attempt; we only
+    # archive if there's a partial file already at the *same* attempt (shouldn't
+    # normally happen).
     interrupted = _detect_interrupted_run(
         output_dir=output_dir,
         subject=subject,
@@ -3975,20 +3978,20 @@ def run_feedback_task(
         task=task,
         run=run,
         n_volumes=n_volumes,
-        acq=acq,
+        attempt=attempt,
     )
     if interrupted is not None:
         logger.warning(f"Found interrupted run with {interrupted['volumes_completed']} volumes (expected {n_volumes})")
         # Generate partial QC before archiving
-        _generate_partial_qc(output_dir, subject, session, task, run, acq=acq, task_id=task_id)
+        _generate_partial_qc(output_dir, subject, session, task, run, attempt=attempt, task_id=task_id)
         # Archive interrupted data
-        archive_path = _archive_interrupted_run(output_dir, subject, session, task, run, acq=acq)
+        archive_path = _archive_interrupted_run(output_dir, subject, session, task, run, attempt=attempt)
         logger.info(f"Archived interrupted run to: {archive_path}")
 
-    # Create DICOM collection folder for this attempt (e.g., collection/feedback_acq-01_run-01)
+    # Create DICOM collection folder for this attempt (e.g., collection/feedback_run-01_attempt-01)
     collection_dir = Path(collection_dir)
     collection_dir.mkdir(parents=True, exist_ok=True)
-    dicom_collection_dir = collection_dir / f"{task}_acq-{acq:02d}_run-{run:02d}"
+    dicom_collection_dir = collection_dir / f"{task}_run-{run:02d}_attempt-{attempt:02d}"
     dicom_collection_dir.mkdir(parents=True, exist_ok=True)
 
     # Default incoming_dir to collection_dir/incoming if not specified
@@ -4062,7 +4065,7 @@ def run_feedback_task(
         error_callback=error_callback,
         qc_enabled=qc_enabled,
         fd_threshold=fd_threshold,
-        acq=acq,
+        attempt=attempt,
         sham_provider=sham_provider,
         condition=condition,
         motion_correction=motion_correction,

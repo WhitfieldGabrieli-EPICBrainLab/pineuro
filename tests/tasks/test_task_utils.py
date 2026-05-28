@@ -18,11 +18,14 @@ class TestMakeBidsSubjectPrefix:
 
 
 class TestMakeBidsRunPrefix:
-    def test_pads_run_and_acq_to_two_digits(self):
-        assert make_bids_run_prefix("sub-01", "ses-01", "ball", run=2, acq=3) == "sub-01_ses-01_task-ball_acq-03_run-02"
+    def test_pads_run_and_attempt_to_two_digits(self):
+        assert (
+            make_bids_run_prefix("sub-01", "ses-01", "ball", run=2, attempt=3)
+            == "sub-01_ses-01_task-ball_run-02_attempt-03"
+        )
 
     def test_run_padding(self):
-        assert make_bids_run_prefix("sub-01", "ses-01", "ball", run=1, acq=1).endswith("acq-01_run-01")
+        assert make_bids_run_prefix("sub-01", "ses-01", "ball", run=1, attempt=1).endswith("run-01_attempt-01")
 
 
 class TestIsActivationOutlier:

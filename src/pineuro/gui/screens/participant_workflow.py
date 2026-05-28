@@ -41,7 +41,7 @@ from ..components.pipeline_runner import PipelineRunner
 from ..components.qc_plots import DVARSPlot, FDPlot, TSNRPlot
 from ..components.qc_viewer import QCReportManager
 from ..components.task_mirror import TaskMirror
-from ..components.unified_acq_dialog import RunGroup, UnifiedAcqDialog, scan_collection_acqs
+from ..components.unified_attempt_dialog import RunGroup, UnifiedAttemptDialog, scan_collection_attempts
 from ..config_manager import ConfigManager
 from ..config_snapshot import (
     archive_config_snapshot,
@@ -265,8 +265,8 @@ class ParticipantWorkflowScreen:
 
         # Selected rest runs for preprocessing (None = use all available)
         self._selected_rest_runs: list[int] | None = None
-        # Selected acquisitions per run for preprocessing (None = auto-select best)
-        self._selected_acqs: dict[int, list[int]] | None = None
+        # Selected attempts per run for preprocessing (None = auto-select best)
+        self._selected_attempts: dict[int, list[int]] | None = None
 
         # Overwrite flag — set to True to re-run already-complete steps
         self._pending_overwrite: bool = False
@@ -389,7 +389,7 @@ class ParticipantWorkflowScreen:
 
         # Check initial reference DICOMs
         collection_dir = base_dir / "collection"
-        ref_dirs = sorted(collection_dir.glob("task-reference_acq-*_run-01"))
+        ref_dirs = sorted(collection_dir.glob("task-reference_run-01_attempt-*"))
         for ref_dir in reversed(ref_dirs):
             if any(ref_dir.iterdir()):
                 return True, f"initial reference scan ({ref_dir.name})"
@@ -1962,13 +1962,13 @@ class ParticipantWorkflowScreen:
         else:
             return StepStatus.PENDING
 
-    def _check_acq_collection_status(
+    def _check_attempt_collection_status(
         self, collection_dir: Path, task: str, run: int, expected_volumes: int
     ) -> StepStatus:
-        """Check collection status across all acq attempts for a task+run.
+        """Check collection status across all attempts for a task+run.
 
-        Scans for task-{task}_acq-*_run-{run:02d} folders and returns COMPLETE
-        if any acq has enough volumes.
+        Scans for task-{task}_run-{run:02d}_attempt-* folders and returns COMPLETE
+        if any attempt has enough volumes.
 
         Args:
             collection_dir: Parent collection directory
@@ -1977,7 +1977,7 @@ class ParticipantWorkflowScreen:
             expected_volumes: Expected number of volumes
 
         Returns:
-            StepStatus based on best available acquisition
+            StepStatus based on best available attempt
         """
         collections = PipelineRunner.find_available_collections(
             collection_dir=collection_dir,
@@ -1989,18 +1989,18 @@ class ParticipantWorkflowScreen:
         if not collections:
             return StepStatus.PENDING
 
-        # If any acq is complete, the step is complete
+        # If any attempt is complete, the step is complete
         if any(c["is_complete"] for c in collections):
             return StepStatus.COMPLETE
 
         # Has data but none complete
         return StepStatus.INTERRUPTED
 
-    def _get_unified_acq_info(self) -> list[RunGroup]:
-        """Get all acquisitions for all configured localizer runs.
+    def _get_unified_attempt_info(self) -> list[RunGroup]:
+        """Get all attempts for all configured localizer runs.
 
         Returns:
-            List of RunGroup objects with all acquisitions per run
+            List of RunGroup objects with all attempts per run
         """
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
@@ -2019,7 +2019,7 @@ class ParticipantWorkflowScreen:
 
         run_groups = []
         for run_num in range(1, n_localizer_runs + 1):
-            acqs = scan_collection_acqs(
+            attempts = scan_collection_attempts(
                 collection_dir=collection_dir,
                 task=f"task-{task_name}",
                 run=run_num,
@@ -2029,54 +2029,54 @@ class ParticipantWorkflowScreen:
                 RunGroup(
                     run_id=run_num,
                     run_name=f"Localizer Run {run_num}",
-                    acquisitions=acqs,
+                    attempts=attempts,
                 )
             )
 
         return run_groups
 
     def _needs_unified_dialog(self) -> bool:
-        """Check if the unified acq selection dialog should be shown.
+        """Check if the unified attempt selection dialog should be shown.
 
-        Returns True if any run is incomplete/missing or has multiple acqs.
+        Returns True if any run is incomplete/missing or has multiple attempts.
         """
-        run_groups = self._get_unified_acq_info()
+        run_groups = self._get_unified_attempt_info()
 
         # No data at all — don't show
-        if not any(rg.acquisitions for rg in run_groups):
+        if not any(rg.attempts for rg in run_groups):
             return False
 
         for rg in run_groups:
             # Run has no data
-            if not rg.acquisitions:
+            if not rg.attempts:
                 return True
-            # Run has multiple acquisition attempts
-            if len(rg.acquisitions) > 1:
+            # Run has multiple attempts
+            if len(rg.attempts) > 1:
                 return True
-            # Single acq but incomplete
-            if not rg.acquisitions[0].is_complete:
+            # Single attempt but incomplete
+            if not rg.attempts[0].is_complete:
                 return True
 
         return False
 
-    def _show_unified_acq_dialog(self, on_selected):
-        """Show the unified acquisition selection dialog.
+    def _show_unified_attempt_dialog(self, on_selected):
+        """Show the unified attempt selection dialog.
 
         Args:
             on_selected: Callback invoked after user confirms selection
         """
-        run_groups = self._get_unified_acq_info()
+        run_groups = self._get_unified_attempt_info()
 
-        def on_confirm(selected_acqs: dict[int, list[int]]):
-            self._selected_acqs = selected_acqs
-            self._selected_rest_runs = list(selected_acqs.keys())
-            self._add_log(f"Selected acquisitions: {selected_acqs}")
-            on_selected(selected_acqs)
+        def on_confirm(selected_attempts: dict[int, list[int]]):
+            self._selected_attempts = selected_attempts
+            self._selected_rest_runs = list(selected_attempts.keys())
+            self._add_log(f"Selected attempts: {selected_attempts}")
+            on_selected(selected_attempts)
 
         def on_cancel():
             self._on_preview_cancel()
 
-        dialog = UnifiedAcqDialog(
+        dialog = UnifiedAttemptDialog(
             page=self.page,
             run_groups=run_groups,
             on_confirm=on_confirm,
@@ -2114,9 +2114,9 @@ class ParticipantWorkflowScreen:
     def _check_feedback_slot_status(
         self, step_id: str, output_dir: Path, participant_id: str, session_id: str, expected_volumes: int
     ) -> StepStatus:
-        """Check status of a feedback/transfer slot using acq-based naming.
+        """Check status of a feedback/transfer slot using attempt-based naming.
 
-        Looks for any acq-* files for the given slot's run number and determines
+        Looks for any attempt-* files for the given slot's run number and determines
         if any attempt is complete or if there are interrupted attempts.
 
         Args:
@@ -2141,8 +2141,8 @@ class ParticipantWorkflowScreen:
         if not output_dir.exists():
             return StepStatus.PENDING
 
-        # Search for any acq-* files for this slot's run number
-        pattern = f"{participant_id}_{session_id}_task-{task_type}_acq-*_run-{run_num:02d}_feedbacklog.tsv"
+        # Search for any attempt-* files for this slot's run number
+        pattern = f"{participant_id}_{session_id}_task-{task_type}_run-{run_num:02d}_attempt-*_feedbacklog.tsv"
         log_files = list(output_dir.glob(pattern))
 
         if not log_files:
@@ -2276,7 +2276,7 @@ class ParticipantWorkflowScreen:
             collection_dir = base_dir / "collection"
             if reference_initial_enabled:
                 n_vols = config.get("reference", {}).get("initial_n_volumes", 2)
-                status = self._check_acq_collection_status(collection_dir, "task-reference", 1, n_vols)
+                status = self._check_attempt_collection_status(collection_dir, "task-reference", 1, n_vols)
                 self.step_statuses["reference_initial"] = status
 
             preprocessing_dir = base_dir / "preprocessing"
@@ -2299,7 +2299,7 @@ class ParticipantWorkflowScreen:
                         # Check collection steps
                         for run_num in range(1, loc_n_runs + 1):
                             step_id = f"localizer_{loc_idx}_run_{run_num}"
-                            status = self._check_acq_collection_status(
+                            status = self._check_attempt_collection_status(
                                 collection_dir,
                                 f"task-{loc_task_name}",
                                 run_num,
@@ -2344,7 +2344,7 @@ class ParticipantWorkflowScreen:
 
                 for run_num in range(1, n_localizer_runs + 1):
                     step_id = f"rest_run_{run_num}"
-                    status = self._check_acq_collection_status(
+                    status = self._check_attempt_collection_status(
                         collection_dir,
                         f"task-{loc_task_name}",
                         run_num,
@@ -2403,7 +2403,9 @@ class ParticipantWorkflowScreen:
             # In standard mode, reference is run-02 (after initial reference)
             realtime_reference_run = 1 if is_mask_reuse else 2
             n_vols = config.get("reference", {}).get("realtime_n_volumes", 2)
-            status = self._check_acq_collection_status(collection_dir, "task-reference", realtime_reference_run, n_vols)
+            status = self._check_attempt_collection_status(
+                collection_dir, "task-reference", realtime_reference_run, n_vols
+            )
             self.step_statuses["reference_realtime"] = status
 
             # Check coregistration_realtime outputs - realtime is in feedback/01_reference
@@ -4152,14 +4154,14 @@ class ParticipantWorkflowScreen:
             logger.warning(f"No feedbacklog found for {step_id}, skipping summary")
             return
 
-        # Extract acq from the discovered filename (e.g., "..._acq-01_run-01_feedbacklog.tsv")
+        # Extract attempt from the discovered filename (e.g., "..._run-01_attempt-01_feedbacklog.tsv")
         import re
 
-        acq_match = re.search(r"_acq-(\d+)_", feedbacklog_path.name)
-        if acq_match is None:
-            logger.error(f"Feedbacklog {feedbacklog_path.name} has no acq entity; cannot generate summary")
+        attempt_match = re.search(r"_attempt-(\d+)", feedbacklog_path.name)
+        if attempt_match is None:
+            logger.error(f"Feedbacklog {feedbacklog_path.name} has no attempt entity; cannot generate summary")
             return
-        acq: int = int(acq_match.group(1))
+        attempt: int = int(attempt_match.group(1))
 
         # Compute summary data
         try:
@@ -4231,7 +4233,7 @@ class ParticipantWorkflowScreen:
             logger.warning(f"Failed to generate summary plots: {e}")
 
         def on_view_full_qc():
-            # Regenerate QC report to ensure correct acq, expected_volumes, and display names
+            # Regenerate QC report to ensure correct attempt, expected_volumes, and display names
             try:
                 qc.generate_feedback_report(
                     feedback_dir=output_dir,
@@ -4239,7 +4241,7 @@ class ParticipantWorkflowScreen:
                     session=self.session_id,
                     task=task,
                     run=run,
-                    acq=acq,
+                    attempt=attempt,
                     output_dir=qc_dir,
                     overwrite=True,
                     expected_volumes=n_volumes,
@@ -4266,7 +4268,7 @@ class ParticipantWorkflowScreen:
         dialog.show()
 
     def _find_latest_feedback_file(self, output_dir: Path, task: str, run: int, suffix: str) -> Path | None:
-        """Find the most recent acq-NN_run-NN feedback file for this task/run.
+        """Find the most recent run-NN_attempt-NN feedback file for this task/run.
 
         Args:
             output_dir: Directory containing feedback output files
@@ -4277,7 +4279,7 @@ class ParticipantWorkflowScreen:
         Returns:
             Path to the most recent matching file, or None if not found
         """
-        pattern = f"{self._bids_prefix}_task-{task}_acq-*_run-{run:02d}_{suffix}"
+        pattern = f"{self._bids_prefix}_task-{task}_run-{run:02d}_attempt-*_{suffix}"
         matches = list(output_dir.glob(pattern))
 
         if matches:
@@ -4742,7 +4744,7 @@ class ParticipantWorkflowScreen:
         )
         if outputs_exist:
             if is_collection or is_feedback_transfer:
-                # Collection and feedback steps use acq numbering - previous data is archived
+                # Collection and feedback steps use attempt numbering - previous data is archived
                 warning_text = "Previous run data exists and will be archived before starting fresh."
                 warning_icon = ft.icons.Icons.ARCHIVE
             else:
@@ -5020,7 +5022,7 @@ class ParticipantWorkflowScreen:
         }
 
     def _get_reference_initial_step_info(self, config: dict, base_dir: Path) -> dict:
-        """Get step info for initial reference collection with acq tracking.
+        """Get step info for initial reference collection with attempt tracking.
 
         Args:
             config: Session configuration
@@ -5037,7 +5039,7 @@ class ParticipantWorkflowScreen:
                 "description": "Initial Reference collection is disabled in study configuration.",
                 "parameters": {"Status": "Disabled"},
                 "output_path": base_dir / "collection",
-                "output_pattern": "task-reference_acq-*_run-01",
+                "output_pattern": "task-reference_run-01_attempt-*",
             }
 
         from pineuro.session import get_localizer_run_info
@@ -5052,8 +5054,8 @@ class ParticipantWorkflowScreen:
         )
 
         description = "Collect 2 volumes for initial positioning verification before localizer acquisition."
-        if run_info["existing_acqs"]:
-            attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+        if run_info["existing_attempts"]:
+            attempts_str = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
             description += f" Previous attempts ({attempts_str}) will be preserved."
 
         info: dict[str, Any] = {
@@ -5061,17 +5063,17 @@ class ParticipantWorkflowScreen:
             "description": description,
             "parameters": {
                 "Task": "reference (run-01)",
-                "Attempt": f"acq-{run_info['acq']:02d}",
+                "Attempt": f"attempt-{run_info['attempt']:02d}",
                 "Volumes": n_vols,
                 "Source": config.get("reference", {}).get("initial_dicoms", ""),
-                "Output": base_dir / "collection" / f"task-reference_acq-{run_info['acq']:02d}_run-01",
+                "Output": base_dir / "collection" / f"task-reference_run-01_attempt-{run_info['attempt']:02d}",
                 "Enabled": "Yes",
             },
             "output_path": base_dir / "collection",
-            "output_pattern": "task-reference_acq-*_run-01",
+            "output_pattern": "task-reference_run-01_attempt-*",
         }
-        if run_info["existing_acqs"]:
-            attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+        if run_info["existing_attempts"]:
+            attempts_str = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
             info["parameters"]["Previous Attempts"] = attempts_str
 
         return info
@@ -5101,7 +5103,7 @@ class ParticipantWorkflowScreen:
                 "description": "Real-time Reference collection is disabled. Feedback will use masks from subject boldref space.",
                 "parameters": {"Status": "Disabled - using boldref masks"},
                 "output_path": base_dir / "collection",
-                "output_pattern": f"task-reference_acq-*_run-{run_num:02d}",
+                "output_pattern": f"task-reference_run-{run_num:02d}_attempt-*",
             }
 
         from pineuro.session import get_localizer_run_info
@@ -5116,8 +5118,8 @@ class ParticipantWorkflowScreen:
         )
 
         description = "Collect 2 volumes immediately before feedback tasks for real-time registration verification."
-        if run_info["existing_acqs"]:
-            attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+        if run_info["existing_attempts"]:
+            attempts_str = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
             description += f" Previous attempts ({attempts_str}) will be preserved."
 
         info: dict[str, Any] = {
@@ -5125,17 +5127,19 @@ class ParticipantWorkflowScreen:
             "description": description,
             "parameters": {
                 "Task": f"reference (run-{run_num:02d})",
-                "Attempt": f"acq-{run_info['acq']:02d}",
+                "Attempt": f"attempt-{run_info['attempt']:02d}",
                 "Volumes": n_vols,
                 "Source": config.get("reference", {}).get("realtime_dicoms", ""),
-                "Output": base_dir / "collection" / f"task-reference_acq-{run_info['acq']:02d}_run-{run_num:02d}",
+                "Output": base_dir
+                / "collection"
+                / f"task-reference_run-{run_num:02d}_attempt-{run_info['attempt']:02d}",
                 "Enabled": "Yes",
             },
             "output_path": base_dir / "collection",
-            "output_pattern": f"task-reference_acq-*_run-{run_num:02d}",
+            "output_pattern": f"task-reference_run-{run_num:02d}_attempt-*",
         }
-        if run_info["existing_acqs"]:
-            attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+        if run_info["existing_attempts"]:
+            attempts_str = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
             info["parameters"]["Previous Attempts"] = attempts_str
 
         return info
@@ -5256,7 +5260,7 @@ class ParticipantWorkflowScreen:
                 "label": "Run Preprocessing",
                 "description": "Motion correction, brain extraction, and coregistration of localizer runs.",
                 "parameters": {
-                    "Input": base_dir / "collection" / "task-*_acq-*_run-*",
+                    "Input": base_dir / "collection" / "task-*_run-*_attempt-*",
                     "Output": base_dir / "preprocessing",
                     "Expected Outputs": "preproc.nii.gz, mask.nii.gz, boldref.nii.gz",
                 },
@@ -5332,17 +5336,19 @@ class ParticipantWorkflowScreen:
             )
 
             description = f"Collect {loc_display} data (run {run_num}) for network mask extraction."
-            if run_info["existing_acqs"]:
-                attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            if run_info["existing_attempts"]:
+                attempts_str = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
                 description += f" Previous attempts ({attempts_str}) will be preserved."
 
             params: dict[str, Any] = {
                 "Task": f"{loc_display} (run-{run_num:02d})",
-                "Attempt": f"acq-{run_info['acq']:02d}",
+                "Attempt": f"attempt-{run_info['attempt']:02d}",
                 "Volumes": loc_n_vols,
                 "TR": f"{loc_tr}s",
                 "Source": source_dicom or "(not configured)",
-                "Output": base_dir / "collection" / f"task-{loc_task_name}_acq-{run_info['acq']:02d}_run-{run_num:02d}",
+                "Output": base_dir
+                / "collection"
+                / f"task-{loc_task_name}_run-{run_num:02d}_attempt-{run_info['attempt']:02d}",
                 "Simulator Speed": f"{config.get('simulator', {}).get('collection_speed', 1.0)}x",
             }
 
@@ -5361,15 +5367,15 @@ class ParticipantWorkflowScreen:
                 if loc.get("network_atlas"):
                     params["Atlas"] = loc["network_atlas"]
 
-            if run_info["existing_acqs"]:
-                params["Previous Attempts"] = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            if run_info["existing_attempts"]:
+                params["Previous Attempts"] = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
 
             info: dict[str, Any] = {
                 "label": f"Collect {loc_display} Run {run_num}",
                 "description": description,
                 "parameters": params,
                 "output_path": base_dir / "collection",
-                "output_pattern": f"task-{loc_task_name}_acq-*_run-{run_num:02d}",
+                "output_pattern": f"task-{loc_task_name}_run-{run_num:02d}_attempt-*",
             }
 
         elif step_id.startswith("localizer_") and step_id.endswith("_preprocessing"):
@@ -5476,7 +5482,7 @@ class ParticipantWorkflowScreen:
             loc_name = loc_task if loc_task != "rest" else "rest"
             expected_vols = (config["localizers"][0].get("n_volumes") if config.get("localizers") else None) or 250
 
-            # Get acq info for this run (same pattern as feedback steps)
+            # Get attempt info for this run (same pattern as feedback steps)
             collection_dir = base_dir / "collection"
             run_info = get_localizer_run_info(
                 collection_dir=collection_dir,
@@ -5485,8 +5491,8 @@ class ParticipantWorkflowScreen:
             )
 
             description = f"Collect localizer fMRI data (run {run_num}) for network mask extraction."
-            if run_info["existing_acqs"]:
-                attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            if run_info["existing_attempts"]:
+                attempts_str = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
                 description += f" Previous attempts ({attempts_str}) will be preserved."
 
             info = {
@@ -5494,17 +5500,19 @@ class ParticipantWorkflowScreen:
                 "description": description,
                 "parameters": {
                     "Task": f"{loc_task} (run-{run_num:02d})",
-                    "Attempt": f"acq-{run_info['acq']:02d}",
+                    "Attempt": f"attempt-{run_info['attempt']:02d}",
                     "Volumes": expected_vols,
                     "Source": source_dicom,
-                    "Output": base_dir / "collection" / f"task-{loc_name}_acq-{run_info['acq']:02d}_run-{run_num:02d}",
+                    "Output": base_dir
+                    / "collection"
+                    / f"task-{loc_name}_run-{run_num:02d}_attempt-{run_info['attempt']:02d}",
                     "Simulator Speed": f"{config.get('simulator', {}).get('collection_speed', 1.0)}x",
                 },
                 "output_path": base_dir / "collection",
-                "output_pattern": f"task-{loc_name}_acq-*_run-{run_num:02d}",
+                "output_pattern": f"task-{loc_name}_run-{run_num:02d}_attempt-*",
             }
-            if run_info["existing_acqs"]:
-                attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            if run_info["existing_attempts"]:
+                attempts_str = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
                 info["parameters"]["Previous Attempts"] = attempts_str
         # Handle dynamic feedback_N steps
         elif step_id.startswith("feedback_"):
@@ -5569,14 +5577,14 @@ class ParticipantWorkflowScreen:
                 },
             )
 
-        # For feedback/transfer steps, show slot-based run info with acq entity
+        # For feedback/transfer steps, show slot-based run info with attempt entity
         feedback_step_ids = [sid for sid, _ in _build_feedback_step_ids(config)]
 
         if step_id in feedback_step_ids:
             task_type = "transfer" if "transfer" in step_id else "feedback"
             output_dir = base_dir / "feedback" / "02_feedback_output"
 
-            # Get slot-based run info with acquisition letter
+            # Get slot-based run info with attempt number
             run_info = get_slot_run_info(
                 output_dir=output_dir,
                 subject=participant_id,
@@ -5585,13 +5593,13 @@ class ParticipantWorkflowScreen:
                 step_id=step_id,
             )
 
-            # Update parameters to show run number and acquisition attempt
+            # Update parameters to show run number and attempt
             info["parameters"]["Task"] = f"{task_type} (run-{run_info['run']:02d})"
-            info["parameters"]["Attempt"] = f"acq-{run_info['acq']:02d}"
+            info["parameters"]["Attempt"] = f"attempt-{run_info['attempt']:02d}"
 
             # If there are previous attempts, show them
-            if run_info["existing_acqs"]:
-                attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
+            if run_info["existing_attempts"]:
+                attempts_str = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
                 info["parameters"]["Previous Attempts"] = attempts_str
                 info["description"] = info["description"] + f" Previous attempts ({attempts_str}) will be preserved."
 
@@ -5887,26 +5895,26 @@ class ParticipantWorkflowScreen:
             loc = self.study_config.session_config["localizers"][manual_loc_idx]
             if not manual_masks_complete(base_dir, loc):
                 self._selected_rest_runs = None
-                self._selected_acqs = None
+                self._selected_attempts = None
                 self._show_manual_mask_config_dialog(
                     loc_idx=manual_loc_idx,
                     on_saved=lambda: self._start_step(step_id),
                 )
                 return
 
-        # For preprocessing, show unified acq selection dialog if needed
+        # For preprocessing, show unified attempt selection dialog if needed
         if step_id == "preprocessing":
             if self._needs_unified_dialog():
-                self._show_unified_acq_dialog(lambda _: self._start_step(step_id))
+                self._show_unified_attempt_dialog(lambda _: self._start_step(step_id))
                 return
             self._selected_rest_runs = None
-            self._selected_acqs = None
+            self._selected_attempts = None
             self._start_step(step_id)
             return
 
         # Clear any previous selection for non-preprocessing steps
         self._selected_rest_runs = None
-        self._selected_acqs = None
+        self._selected_attempts = None
         self._start_step(step_id)
 
     def _start_step(self, step_id: str):
@@ -5941,13 +5949,13 @@ class ParticipantWorkflowScreen:
         # Pass overwrite choice to runner
         self.pipeline_runner.set_overwrite(getattr(self, "_pending_overwrite", False))
 
-        # Pass selected runs and acqs to runner for preprocessing step
+        # Pass selected runs and attempts to runner for preprocessing step
         if step_id == "preprocessing":
             self.pipeline_runner.set_selected_rest_runs(self._selected_rest_runs)
-            self.pipeline_runner.set_selected_acqs(self._selected_acqs)
+            self.pipeline_runner.set_selected_attempts(self._selected_attempts)
         else:
             self.pipeline_runner.set_selected_rest_runs(None)
-            self.pipeline_runner.set_selected_acqs(None)
+            self.pipeline_runner.set_selected_attempts(None)
 
         # Show monitoring panel (creates task_mirror for feedback steps)
         self._show_monitoring_panel(step_id)
@@ -6077,12 +6085,12 @@ class ParticipantWorkflowScreen:
         kind = attempt["kind"]
         subject = attempt["subject"]
         task = attempt["task"]
-        acq = attempt["acq"]
+        attempt_num = attempt["attempt"]
         run = attempt["run"]
 
         def on_keep(_e):
             self.page.pop_dialog()
-            self._add_log(f"[INFO] Kept partial files for {kind} acq-{acq:02d} run-{run:02d}")
+            self._add_log(f"[INFO] Kept partial files for {kind} run-{run:02d} attempt-{attempt_num:02d}")
 
         def on_discard(_e):
             self.page.pop_dialog()
@@ -6096,7 +6104,7 @@ class ParticipantWorkflowScreen:
                     subject=subject,
                     session=self.session_id,
                     task=task,
-                    acq=acq,
+                    attempt=attempt_num,
                     run=run,
                     kind=kind,
                 )
@@ -6110,12 +6118,14 @@ class ParticipantWorkflowScreen:
                     )
                 )
                 return
-            self._add_log(f"[INFO] Discarded {len(removed)} artifact(s) for {kind} acq-{acq:02d} run-{run:02d}")
+            self._add_log(
+                f"[INFO] Discarded {len(removed)} artifact(s) for {kind} run-{run:02d} attempt-{attempt_num:02d}"
+            )
 
         body = ft.Text(
-            f"{kind.capitalize()} stopped at acq-{acq:02d} run-{run:02d}.\n\n"
-            f"Keep the partial files (next attempt will be acq-{acq + 1:02d}), or "
-            f"discard them (next attempt reuses acq-{acq:02d})?",
+            f"{kind.capitalize()} stopped at run-{run:02d} attempt-{attempt_num:02d}.\n\n"
+            f"Keep the partial files (next attempt will be attempt-{attempt_num + 1:02d}), or "
+            f"discard them (next attempt reuses attempt-{attempt_num:02d})?",
             size=14,
         )
         dialog = ft.AlertDialog(
@@ -7266,7 +7276,7 @@ class ParticipantWorkflowScreen:
         task_type = "transfer" if "transfer" in step_id else "feedback"
         output_dir = base_dir / "feedback" / "02_feedback_output"
 
-        # Get the slot-based run info (run number and acq letter)
+        # Get the slot-based run info (run number and attempt number)
         from pineuro.feedback import get_slot_run_info
 
         run_info = get_slot_run_info(
@@ -7277,10 +7287,10 @@ class ParticipantWorkflowScreen:
             step_id=step_id,
         )
 
-        # Construct log file path with acq entity (format as 2-digit number)
+        # Construct log file path with attempt entity (format as 2-digit number)
         log_path = (
             output_dir
-            / f"{self._bids_prefix}_task-{task_type}_acq-{run_info['acq']:02d}_run-{run_info['run']:02d}_feedbacklog.tsv"
+            / f"{self._bids_prefix}_task-{task_type}_run-{run_info['run']:02d}_attempt-{run_info['attempt']:02d}_feedbacklog.tsv"
         )
         # Store psychopylog path for hit count reading (same pattern but psychopylog.tsv)
         self._psychopylog_path = output_dir / log_path.name.replace("feedbacklog.tsv", "psychopylog.tsv")

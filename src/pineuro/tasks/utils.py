@@ -57,9 +57,13 @@ def make_bids_run_prefix(
     session: str,
     task: str,
     run: int,
-    acq: int,
+    attempt: int,
 ) -> str:
-    """Build a BIDS-compliant filename prefix for task output files.
+    """Build a filename prefix for task output files.
+
+    Uses BIDS-style entity tokens. ``attempt-`` is a pineuro-specific entity
+    (not part of the BIDS spec) tracking retry attempts within a logical run.
+    It is placed after ``run-`` because attempts are nested within runs.
 
     Parameters
     ----------
@@ -71,21 +75,21 @@ def make_bids_run_prefix(
         Task label (e.g., 'ball', 'thermometer')
     run : int
         Run number (formatted as zero-padded 2-digit string)
-    acq : int
-        Acquisition number for retry tracking (1, 2, 3, ...). Formatted as
+    attempt : int
+        Attempt number for retry tracking (1, 2, 3, ...). Formatted as
         zero-padded 2-digit string.
 
     Returns
     -------
     str
-        Filename prefix like ``{subject}_{session}_task-{task}_acq-01_run-01``.
+        Filename prefix like ``{subject}_{session}_task-{task}_run-01_attempt-01``.
 
     Examples
     --------
-    >>> make_bids_run_prefix("sub-01", "ses-01", "ball", run=2, acq=3)
-    'sub-01_ses-01_task-ball_acq-03_run-02'
+    >>> make_bids_run_prefix("sub-01", "ses-01", "ball", run=2, attempt=3)
+    'sub-01_ses-01_task-ball_run-02_attempt-03'
     """
-    return f"{subject}_{session}_task-{task}_acq-{acq:02d}_run-{run:02d}"
+    return f"{subject}_{session}_task-{task}_run-{run:02d}_attempt-{attempt:02d}"
 
 
 def is_activation_outlier(acts: list[float] | float, threshold: float) -> bool:

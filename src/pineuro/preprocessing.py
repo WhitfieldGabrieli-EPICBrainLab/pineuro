@@ -99,7 +99,7 @@ References
 import contextlib
 import heapq  # Priority queue for ordered volume collection
 import logging  # Structured logging throughout the pipeline
-import re  # Parse acq/run numbers from collection folder names
+import re  # Parse run/attempt numbers from collection folder names
 import shutil  # File operations (copy during DICOM collection)
 import threading  # Multi-threading for volume collection with watchdog
 import time  # Timing for collection timeout and progress tracking
@@ -659,17 +659,17 @@ def brain_extraction(
 # =============================================================================
 
 
-# Regex matching collection folder names like "task-rest_acq-02_run-01" or
-# "rest_acq-02_run-01". Used by preprocessing() to recover the (acq, run) pair
-# the GUI assigned when the user picked acquisitions via UnifiedAcqDialog, so
-# that intermediate output filenames preserve which attempt produced them.
-_ACQ_RUN_RE = re.compile(r"acq-(\d+)_run-(\d+)")
+# Regex matching collection folder names like "task-rest_run-01_attempt-02".
+# Used by preprocessing() to recover the (run, attempt) pair the GUI assigned
+# when the user picked attempts via UnifiedAttemptDialog, so that intermediate
+# output filenames preserve which attempt produced them.
+_RUN_ATTEMPT_RE = re.compile(r"run-(\d+)_attempt-(\d+)")
 
 
-def _parse_acq_run_from_path(p: Path) -> tuple[int | None, int | None]:
-    """Extract (acq, run) ints from a collection folder path, or (None, None)."""
+def _parse_run_attempt_from_path(p: Path) -> tuple[int | None, int | None]:
+    """Extract (run, attempt) ints from a collection folder path, or (None, None)."""
     for part in reversed(p.parts):
-        m = _ACQ_RUN_RE.search(part)
+        m = _RUN_ATTEMPT_RE.search(part)
         if m:
             try:
                 return int(m.group(1)), int(m.group(2))
@@ -688,7 +688,7 @@ def preprocessing(
     n_jobs: int = -1,
     qc_enabled: bool = True,
     progress_callback: Callable[[str, str], None] | None = None,
-    acq_per_input: list[int] | None = None,
+    attempt_per_input: list[int] | None = None,
     run_per_input: list[int] | None = None,
 ) -> tuple[Path, Path, Path]:
     """
@@ -731,17 +731,17 @@ def preprocessing(
         Callback function for progress updates with signature:
         ``callback(step: str, detail: str)``.
         Used by GUI to display real-time progress.
-    acq_per_input : list of int, optional
-        Acquisition attempt number for each entry in ``input_dicoms``. Used in
-        intermediate output filenames so re-preprocessing a different attempt
-        of the same run does not collide. If omitted, each input's acq is
-        parsed from its folder name (``..._acq-NN_run-NN``); folders without
-        that pattern default to ``acq=1``.
+    attempt_per_input : list of int, optional
+        Attempt number for each entry in ``input_dicoms``. Used in intermediate
+        output filenames so re-preprocessing a different attempt of the same
+        run does not collide. If omitted, each input's attempt number is parsed
+        from its folder name (``..._run-NN_attempt-NN``); folders without that
+        pattern default to ``attempt=1``.
     run_per_input : list of int, optional
         Run number for each entry in ``input_dicoms``. Lets the caller pass
-        ``{1: [2, 3]}``-style multi-acq-per-run selections without losing the
-        run identity (otherwise both entries enumerate as run-01/run-02). If
-        omitted, parsed from folder names, falling back to enumeration order.
+        ``{1: [2, 3]}``-style multi-attempt-per-run selections without losing
+        the run identity (otherwise both entries enumerate as run-01/run-02).
+        If omitted, parsed from folder names, falling back to enumeration order.
 
     Returns
     -------
@@ -765,13 +765,13 @@ def preprocessing(
 
         root_dir/
         ├── 01_nifti/                    # DICOM → NIfTI conversion
-        │   └── {participant}_{session}_task-{task}_acq-{A}_run-{N}.nii.gz
+        │   └── {participant}_{session}_task-{task}_run-{N}_attempt-{A}.nii.gz
         ├── 02_motion_correction/        # Motion-corrected volumes
-        │   ├── {participant}_{session}_task-{task}_acq-{A}_run-{N}_mcf.nii.gz
-        │   └── {participant}_{session}_task-{task}_acq-{A}_run-{N}_mcf.nii.gz.par
+        │   ├── {participant}_{session}_task-{task}_run-{N}_attempt-{A}_mcf.nii.gz
+        │   └── {participant}_{session}_task-{task}_run-{N}_attempt-{A}_mcf.nii.gz.par
         ├── 03_brain_extraction/         # Temporal means and brain mask
-        │   ├── {participant}_{session}_task-{task}_acq-{A}_run-{N}_mean.nii.gz
-        │   └── {participant}_{session}_task-{task}_acq-{A}_run-01_mean_brain_mask.nii.gz
+        │   ├── {participant}_{session}_task-{task}_run-{N}_attempt-{A}_mean.nii.gz
+        │   └── {participant}_{session}_task-{task}_run-01_attempt-{A}_mean_brain_mask.nii.gz
         ├── 04_coregistered/             # Multi-run alignment (if >1 run)
         │   ├── {participant}_{session}_task-{task}.nii.gz
         │   └── xfm/                     # ANTs transform files
@@ -781,11 +781,11 @@ def preprocessing(
         └── qc/                          # QC report (if enabled)
             └── preprocessing_qc.html
 
-    Intermediate filenames include ``acq-{A}_run-{N}`` so that re-preprocessing
-    a different acquisition attempt of the same run does not overwrite or
-    collide with the first attempt's files. The final ``_preproc``, ``_mask``,
-    and ``_boldref`` outputs do not carry ``acq-`` because they represent the
-    canonical merged result for ``(participant, session, task)``.
+    Intermediate filenames include ``run-{N}_attempt-{A}`` so that re-preprocessing
+    a different attempt of the same run does not overwrite or collide with the
+    first attempt's files. The final ``_preproc``, ``_mask``, and ``_boldref``
+    outputs do not carry ``attempt-`` because they represent the canonical
+    merged result for ``(participant, session, task)``.
 
     **Multi-Run Coregistration:**
     When multiple DICOM folders are provided, all runs are registered to the
@@ -882,35 +882,39 @@ def preprocessing(
         logger.info(f"  {str(path)}")
 
     # -------------------------------------------------------------------------
-    # Resolve (acq, run) for each input
+    # Resolve (run, attempt) for each input
     # -------------------------------------------------------------------------
-    # The GUI's UnifiedAcqDialog lets the user map ``{run: [acq, ...]}``, then
-    # _resolve_acq_paths flattens that into ``input_dicoms`` paths whose folder
-    # names encode acq/run as ``..._acq-NN_run-NN``. We recover those numbers
-    # here so intermediate filenames (Steps 1-4) carry ``acq-NN_run-NN`` and
-    # don't collide across re-attempts of the same run.
-    if acq_per_input is not None and len(acq_per_input) != len(input_paths):
+    # The GUI's UnifiedAttemptDialog lets the user map ``{run: [attempt, ...]}``,
+    # then _resolve_attempt_paths flattens that into ``input_dicoms`` paths whose
+    # folder names encode run/attempt as ``..._run-NN_attempt-NN``. We recover
+    # those numbers here so intermediate filenames (Steps 1-4) carry
+    # ``run-NN_attempt-NN`` and don't collide across re-attempts of the same run.
+    if attempt_per_input is not None and len(attempt_per_input) != len(input_paths):
         raise ValueError(
-            f"acq_per_input has {len(acq_per_input)} entries but {len(input_paths)} input_dicoms were provided"
+            f"attempt_per_input has {len(attempt_per_input)} entries but {len(input_paths)} input_dicoms were provided"
         )
     if run_per_input is not None and len(run_per_input) != len(input_paths):
         raise ValueError(
             f"run_per_input has {len(run_per_input)} entries but {len(input_paths)} input_dicoms were provided"
         )
 
-    acqs: list[int] = []
+    attempts: list[int] = []
     runs: list[int] = []
     for idx, path_str in enumerate(input_paths):
-        parsed_acq, parsed_run = _parse_acq_run_from_path(Path(path_str))
-        acq_val = acq_per_input[idx] if acq_per_input is not None else (parsed_acq if parsed_acq is not None else 1)
+        parsed_run, parsed_attempt = _parse_run_attempt_from_path(Path(path_str))
+        attempt_val = (
+            attempt_per_input[idx]
+            if attempt_per_input is not None
+            else (parsed_attempt if parsed_attempt is not None else 1)
+        )
         run_val = (
             run_per_input[idx] if run_per_input is not None else (parsed_run if parsed_run is not None else idx + 1)
         )
-        acqs.append(acq_val)
+        attempts.append(attempt_val)
         runs.append(run_val)
 
     def _label(idx: int) -> str:
-        return f"{bids_prefix}_task-{task}_acq-{acqs[idx]:02d}_run-{runs[idx]:02d}"
+        return f"{bids_prefix}_task-{task}_run-{runs[idx]:02d}_attempt-{attempts[idx]:02d}"
 
     # =========================================================================
     # STEP 1: DICOM TO NIFTI CONVERSION
@@ -928,7 +932,7 @@ def preprocessing(
     nifti_dir = root_dir / "01_nifti"
     nifti_files: list[Path] = []
 
-    # Pre-clean stale dcm2niix outputs for the current (acq, run) labels when
+    # Pre-clean stale dcm2niix outputs for the current (run, attempt) labels when
     # overwriting. dicom_to_nifti() does this internally on the sequential
     # path; we replicate it here so the parallel path (which builds the cmd
     # inline and calls parallel_run_command directly) gets the same hygiene.
@@ -963,7 +967,7 @@ def preprocessing(
                 {
                     "cmd_name": "dcm2niix",
                     "cmd": ["dcm2niix", "-z", "y", "-o", str(nifti_dir), "-f", output_name, str(dicom_dir)],
-                    "description": f"DICOM to NIfTI conversion acq-{acqs[idx]:02d}_run-{runs[idx]:02d}",
+                    "description": f"DICOM to NIfTI conversion run-{runs[idx]:02d}_attempt-{attempts[idx]:02d}",
                     "inputs": dicom_dir,
                     "outputs": nifti_file_path,
                     "overwrite": overwrite,
@@ -979,7 +983,8 @@ def preprocessing(
         # --- Sequential Conversion (single run or n_jobs=1) ---
         for idx, dicom_dir in enumerate(input_paths):
             emit_progress(
-                "Step 1/4", f"Converting {idx + 1}/{len(input_paths)} (acq-{acqs[idx]:02d}_run-{runs[idx]:02d})..."
+                "Step 1/4",
+                f"Converting {idx + 1}/{len(input_paths)} (run-{runs[idx]:02d}_attempt-{attempts[idx]:02d})...",
             )
             nifti_file = dicom_to_nifti(
                 dicom_dir=dicom_dir,
@@ -1013,7 +1018,7 @@ def preprocessing(
     for idx, nifti in enumerate(nifti_files):
         emit_progress(
             "Step 2/4",
-            f"Running motion correction on {idx + 1}/{len(nifti_files)} (acq-{acqs[idx]:02d}_run-{runs[idx]:02d})...",
+            f"Running motion correction on {idx + 1}/{len(nifti_files)} (run-{runs[idx]:02d}_attempt-{attempts[idx]:02d})...",
         )
         mcf_file = mcf_dir / Path(f"{_label(idx)}_mcf.nii.gz")
         motion_correction(input_file=nifti, output_file=mcf_file, overwrite=overwrite)
@@ -1091,9 +1096,9 @@ def preprocessing(
     else:
         # --- Multiple Runs: Coregister to First Input ---
         # The first input serves as the reference. All subsequent inputs are
-        # aligned to it. With multi-acq-per-run selections the "first input"
-        # may be e.g. acq-02_run-01; its acq/run pair is the reference label.
-        ref_label = f"acq-{acqs[0]:02d}_run-{runs[0]:02d}"
+        # aligned to it. With multi-attempt-per-run selections the "first input"
+        # may be e.g. run-01_attempt-02; its run/attempt pair is the reference label.
+        ref_label = f"run-{runs[0]:02d}_attempt-{attempts[0]:02d}"
         emit_progress("Step 4/4", f"Coregistering {len(mcf_files)} inputs to {ref_label}...")
         sub_ref = mean_files[0]  # First input's mean is the registration target
         concat_files = []

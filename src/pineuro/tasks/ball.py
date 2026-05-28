@@ -274,13 +274,13 @@ class BallTask(BaseTask):
 
         # Store slot info from coordinator for session state tracking
         self._slot_run_number = coordinator.run_number
-        self._acq = coordinator.acq
+        self._attempt = coordinator.attempt
 
         if task_state is not None:
-            slot_state = task_state.get_state_for_slot(self._slot_run_number, self._acq)
+            slot_state = task_state.get_state_for_slot(self._slot_run_number, self._attempt)
             self.scale_factor = slot_state.get("scale_factor", self.scale_factor)
             logger.info(
-                f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, acq={self._acq})"
+                f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, attempt={self._attempt})"
             )
 
         self.network_directions = np.array([1, -1])  # +1 = up, -1 = down
@@ -298,7 +298,7 @@ class BallTask(BaseTask):
             coordinator.session,
             coordinator.task,
             coordinator.run_number,
-            acq=coordinator.acq,
+            attempt=coordinator.attempt,
         )
         self._psychopy_log_path = output_dir / f"{prefix}_psychopylog.tsv"
         self._psychopy_log_file = None
@@ -423,9 +423,11 @@ class BallTask(BaseTask):
 
         # Setup questions CSV file with BIDS-style naming
         output_dir = Path(self.coordinator.output_dir)
-        run_acq_str = f"acq-{self.coordinator.acq:02d}_run-{self.coordinator.run_number:02d}"
+        run_attempt_str = f"run-{self.coordinator.run_number:02d}_attempt-{self.coordinator.attempt:02d}"
         subj_ses = f"{self.coordinator.subject}_{self.coordinator.session}"
-        self._questions_file_path = output_dir / f"{subj_ses}_task-{self.coordinator.task}_{run_acq_str}_questions.tsv"
+        self._questions_file_path = (
+            output_dir / f"{subj_ses}_task-{self.coordinator.task}_{run_attempt_str}_questions.tsv"
+        )
         self._questions_file = open(self._questions_file_path, "w", newline="", encoding="utf-8")  # noqa: SIM115
         self._questions_writer = csv.writer(self._questions_file, delimiter="\t")
         self._questions_writer.writerow(["subject", "run", "feedback_mode", "question_text", "response", "rt"])
@@ -833,7 +835,7 @@ class BallTask(BaseTask):
             },
             # Slot-based tracking
             slot_run_number=self._slot_run_number,
-            acq=self._acq,
+            attempt=self._attempt,
         )
 
     def get_run_results(self) -> dict:
@@ -856,7 +858,7 @@ class BallTask(BaseTask):
         - If max single-network hits > max_hits_threshold: decrease scale_factor
         - If total hits < min_hits_threshold: increase scale_factor
         - Only adjusts for feedback runs, not transfer runs
-        - Only adjusts for new run slots, not retries (acq > 1)
+        - Only adjusts for new run slots, not retries (attempt > 1)
         """
         if self._task_state is None:
             return
@@ -872,7 +874,7 @@ class BallTask(BaseTask):
                     break
 
         if is_retry:
-            logger.info(f"  Retry (acq={self._acq}): skipping scale_factor adjustment")
+            logger.info(f"  Retry (attempt={self._attempt}): skipping scale_factor adjustment")
             return
 
         if run_type != "feedback":
@@ -931,7 +933,7 @@ class BallTask(BaseTask):
             volumes_processed=self.current_volume,
             task_state_snapshot=snapshot,
             slot_run_number=self._slot_run_number,
-            acq=self._acq,
+            attempt=self._attempt,
         )
 
     def get_mirror_state(self) -> dict:

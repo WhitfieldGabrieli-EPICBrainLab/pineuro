@@ -889,16 +889,16 @@ def _path_to_str(obj: Any) -> Any:
 
 
 @dataclass
-class SelectedAcquisitions:
-    """Store user-selected run/acq combinations for reproducibility.
+class SelectedAttempts:
+    """Store user-selected run/attempt combinations for reproducibility.
 
-    This allows manual selection of which acquisition attempt to use for each run
-    when multiple attempts exist (e.g., after interruptions/retries).
+    This allows manual selection of which attempt to use for each run when
+    multiple attempts exist (e.g., after interruptions/retries).
     """
 
-    localizer: dict[int, int] | None = None  # run_num -> acq_num for localizer runs
-    reference: dict[int, int] | None = None  # run_num -> acq_num for reference scans
-    feedback: dict[str, dict[str, Any]] | None = None  # step_id -> {run, acq} for feedback runs
+    localizer: dict[int, int] | None = None  # run_num -> attempt_num for localizer runs
+    reference: dict[int, int] | None = None  # run_num -> attempt_num for reference scans
+    feedback: dict[str, dict[str, Any]] | None = None  # step_id -> {run, attempt} for feedback runs
 
     def __post_init__(self) -> None:
         """Initialize empty dicts if None."""
@@ -1293,8 +1293,8 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
     """
     max_run = 0
     if collection_dir.exists():
-        # Collection folders are named "{task}_acq-NN_run-NN".
-        pattern = re.compile(rf"{re.escape(task_name)}_acq-\d+_run-(\d+)$")
+        # Collection folders are named "{task}_run-NN_attempt-NN".
+        pattern = re.compile(rf"{re.escape(task_name)}_run-(\d+)_attempt-\d+$")
         for entry in collection_dir.iterdir():
             if entry.is_dir():
                 match = pattern.match(entry.name)
@@ -1304,10 +1304,10 @@ def next_collection_run_number(collection_dir: Path, task_name: str) -> int:
 
 
 def get_localizer_run_info(collection_dir: Path, task: str, run: int) -> dict[str, Any]:
-    """Get run info for localizer/reference with retry detection using acq entity.
+    """Get run info for localizer/reference with retry detection using attempt entity.
 
-    Scans for existing {task}_acq-*_run-{run:02d} folders and determines
-    next acq number. Previous attempts are preserved in place.
+    Scans for existing {task}_run-{run:02d}_attempt-* folders and determines
+    next attempt number. Previous attempts are preserved in place.
 
     Parameters
     ----------
@@ -1323,55 +1323,55 @@ def get_localizer_run_info(collection_dir: Path, task: str, run: int) -> dict[st
     dict
         Dictionary containing:
         - 'run': int - The run number (same as input)
-        - 'acq': int - The acquisition number for this attempt (1, 2, 3, ...)
-        - 'run_acq_string': str - Combined string like 'acq-01_run-01'
-        - 'existing_acqs': list - List of existing acquisition numbers for this run
+        - 'attempt': int - The attempt number for this try (1, 2, 3, ...)
+        - 'run_attempt_string': str - Combined string like 'run-01_attempt-01'
+        - 'existing_attempts': list - List of existing attempt numbers for this run
 
     Examples
     --------
     >>> info = get_localizer_run_info(collection_dir, 'task-rest', 1)
     >>> info
-    {'run': 1, 'acq': 1, 'run_acq_string': 'acq-01_run-01', 'existing_acqs': []}
+    {'run': 1, 'attempt': 1, 'run_attempt_string': 'run-01_attempt-01', 'existing_attempts': []}
     >>> # After one collection:
     >>> info = get_localizer_run_info(collection_dir, 'task-rest', 1)
     >>> info
-    {'run': 1, 'acq': 2, 'run_acq_string': 'acq-02_run-01', 'existing_acqs': [1]}
+    {'run': 1, 'attempt': 2, 'run_attempt_string': 'run-01_attempt-02', 'existing_attempts': [1]}
     """
     if not collection_dir.exists():
         return {
             "run": run,
-            "acq": 1,
-            "run_acq_string": f"acq-01_run-{run:02d}",
-            "existing_acqs": [],
+            "attempt": 1,
+            "run_attempt_string": f"run-{run:02d}_attempt-01",
+            "existing_attempts": [],
         }
 
     # Scan for existing collection folders for this run
-    # Pattern: {task}_acq-*_run-{run:02d}/
-    pattern = f"{task}_acq-*_run-{run:02d}"
+    # Pattern: {task}_run-{run:02d}_attempt-*/
+    pattern = f"{task}_run-{run:02d}_attempt-*"
 
-    existing_acqs: list[int] = []
+    existing_attempts: list[int] = []
 
     # Check main collection directory
     for folder in collection_dir.glob(pattern):
         if folder.is_dir():
-            match = re.search(r"acq-(\d+)_run-", folder.name)
+            match = re.search(r"attempt-(\d+)", folder.name)
             if match:
-                existing_acqs.append(int(match.group(1)))
+                existing_attempts.append(int(match.group(1)))
 
     # Remove duplicates and sort
-    existing_acqs = sorted(set(existing_acqs))
+    existing_attempts = sorted(set(existing_attempts))
 
-    # Determine next acq number
-    if not existing_acqs:
-        acq = 1
+    # Determine next attempt number
+    if not existing_attempts:
+        attempt = 1
     else:
-        acq = max(existing_acqs) + 1
+        attempt = max(existing_attempts) + 1
 
     return {
         "run": run,
-        "acq": acq,
-        "run_acq_string": f"acq-{acq:02d}_run-{run:02d}",
-        "existing_acqs": existing_acqs,
+        "attempt": attempt,
+        "run_attempt_string": f"run-{run:02d}_attempt-{attempt:02d}",
+        "existing_attempts": existing_attempts,
     }
 
 
@@ -1381,25 +1381,25 @@ def discard_attempt(
     subject: str,
     session: str,
     task: str,
-    acq: int,
+    attempt: int,
     run: int,
     kind: Literal["localizer", "feedback"],
 ) -> list[Path]:
-    """Delete all artifacts for one ``acq-NN_run-NN`` attempt.
+    """Delete all artifacts for one ``run-NN_attempt-NN`` attempt.
 
     Used after the operator stops a run mid-acquisition and chooses to discard
-    the partial data so the next attempt reuses the same ``acq`` number (rather
-    than having the failed try permanently occupy an ``acq`` slot).
+    the partial data so the next attempt reuses the same ``attempt`` number
+    (rather than having the failed try permanently occupy an ``attempt`` slot).
 
     For ``kind="localizer"``, deletes the entire
-    ``base_dir/collection/task-{task}_acq-NN_run-NN/`` directory plus any
+    ``base_dir/collection/task-{task}_run-NN_attempt-NN/`` directory plus any
     per-attempt files the localizer task wrote into ``base_dir/preprocessing/``
-    matching ``{subject}_task-{task}_acq-NN_run-NN_*`` (e.g. events.tsv).
+    matching ``{subject}_task-{task}_run-NN_attempt-NN_*`` (e.g. events.tsv).
 
     For ``kind="feedback"``, deletes every file under
     ``base_dir/feedback/02_feedback_output/`` whose name starts with
-    ``{subject}_task-{task}_acq-NN_run-NN`` plus the sibling
-    ``nifti_task-{task}_acq-NN_run-NN/`` directory.
+    ``{subject}_task-{task}_run-NN_attempt-NN`` plus the sibling
+    ``nifti_task-{task}_run-NN_attempt-NN/`` directory.
 
     Parameters
     ----------
@@ -1410,8 +1410,8 @@ def discard_attempt(
         Subject identifier (e.g. ``"sub-01"``). Only used for the feedback kind.
     task : str
         Task name (e.g. ``"rest"``, ``"feedback"``, ``"transfer"``).
-    acq : int
-        Acquisition number (1, 2, 3, ...) of the attempt to discard.
+    attempt : int
+        Attempt number (1, 2, 3, ...) of the attempt to discard.
     run : int
         Run number (1, 2, ...) of the attempt to discard.
     kind : {"localizer", "feedback"}
@@ -1430,22 +1430,22 @@ def discard_attempt(
         removed.
     """
     base_dir = Path(base_dir)
-    acq_run = f"acq-{acq:02d}_run-{run:02d}"
+    run_attempt = f"run-{run:02d}_attempt-{attempt:02d}"
 
     if kind == "localizer":
-        targets = [base_dir / "collection" / f"task-{task}_{acq_run}"]
+        targets = [base_dir / "collection" / f"task-{task}_{run_attempt}"]
         # Localizer tasks also write an events TSV (and any per-attempt
         # outputs the task subclass adds) into preprocessing/.
         preprocessing_dir = base_dir / "preprocessing"
         if preprocessing_dir.exists():
-            targets.extend(preprocessing_dir.glob(f"{subject}_{session}_task-{task}_{acq_run}_*"))
+            targets.extend(preprocessing_dir.glob(f"{subject}_{session}_task-{task}_{run_attempt}_*"))
     elif kind == "feedback":
         feedback_dir = base_dir / "feedback" / "02_feedback_output"
         if not feedback_dir.exists():
             return []
-        prefix = f"{subject}_{session}_task-{task}_{acq_run}"
+        prefix = f"{subject}_{session}_task-{task}_{run_attempt}"
         targets = list(feedback_dir.glob(f"{prefix}*"))
-        nifti_dir = feedback_dir / f"nifti_{session}_task-{task}_{acq_run}"
+        nifti_dir = feedback_dir / f"nifti_{session}_task-{task}_{run_attempt}"
         if nifti_dir.exists() and nifti_dir not in targets:
             targets.append(nifti_dir)
     else:
@@ -1664,13 +1664,13 @@ def run_dicom_collection(
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(collection_dir=collection_dir, task=task_name, run=run_num)
-        acq = run_info["acq"]
+        attempt = run_info["attempt"]
 
-        logger.info(f"Collecting {task_name} run {run_num} (acq-{acq:02d})...")
-        if run_info["existing_acqs"]:
-            logger.info(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
+        logger.info(f"Collecting {task_name} run {run_num} (attempt-{attempt:02d})...")
+        if run_info["existing_attempts"]:
+            logger.info(f"Previous attempts: {', '.join(f'attempt-{a:02d}' for a in run_info['existing_attempts'])}")
 
-        output_dir = collection_dir / f"{task_name}_acq-{acq:02d}_run-{run_num:02d}"
+        output_dir = collection_dir / f"{task_name}_run-{run_num:02d}_attempt-{attempt:02d}"
 
         # Skip if simulator outputs already present
         if use_simulator and output_dir.exists():
@@ -1688,7 +1688,7 @@ def run_dicom_collection(
         if qc_log_dir is not None:
             from .collection_qc import CollectionQCMonitor
 
-            qc_log_path = qc_log_dir / f"{task_name}_acq-{acq:02d}_run-{run_num:02d}_collectionlog.tsv"
+            qc_log_path = qc_log_dir / f"{task_name}_run-{run_num:02d}_attempt-{attempt:02d}_collectionlog.tsv"
             motion_mode = config.localizers[0].motion_correction if config.localizers else "siemens_moco"
             qc_mon = CollectionQCMonitor(
                 log_path=qc_log_path,

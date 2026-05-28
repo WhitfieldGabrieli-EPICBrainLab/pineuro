@@ -17,7 +17,7 @@ def _touch(path: Path, content: str = "") -> Path:
 
 class TestDiscardLocalizer:
     def test_removes_collection_dir(self, tmp_path):
-        coll = tmp_path / "collection" / "task-rest_acq-01_run-01"
+        coll = tmp_path / "collection" / "task-rest_run-01_attempt-01"
         _touch(coll / "a.dcm", "x")
         _touch(coll / "b.dcm", "y")
 
@@ -26,7 +26,7 @@ class TestDiscardLocalizer:
             subject="sub-01",
             session="ses-01",
             task="rest",
-            acq=1,
+            attempt=1,
             run=1,
             kind="localizer",
         )
@@ -41,42 +41,42 @@ class TestDiscardLocalizer:
             subject="sub-01",
             session="ses-01",
             task="rest",
-            acq=1,
+            attempt=1,
             run=1,
             kind="localizer",
         )
         assert removed == []
 
-    def test_other_acqs_untouched(self, tmp_path):
+    def test_other_attempts_untouched(self, tmp_path):
         coll_dir = tmp_path / "collection"
-        acq1 = coll_dir / "task-rest_acq-01_run-01"
-        acq2 = coll_dir / "task-rest_acq-02_run-01"
-        _touch(acq1 / "a.dcm")
-        _touch(acq2 / "a.dcm")
+        attempt1 = coll_dir / "task-rest_run-01_attempt-01"
+        attempt2 = coll_dir / "task-rest_run-01_attempt-02"
+        _touch(attempt1 / "a.dcm")
+        _touch(attempt2 / "a.dcm")
 
-        discard_attempt(tmp_path, subject="sub-01", session="ses-01", task="rest", acq=1, run=1, kind="localizer")
+        discard_attempt(tmp_path, subject="sub-01", session="ses-01", task="rest", attempt=1, run=1, kind="localizer")
 
-        assert not acq1.exists()
-        assert acq2.exists()  # the other attempt is left alone
+        assert not attempt1.exists()
+        assert attempt2.exists()  # the other attempt is left alone
 
     def test_removes_preprocessing_events(self, tmp_path):
         """Localizer events TSV (and any per-attempt preprocessing file) is cleaned."""
-        coll = tmp_path / "collection" / "task-rest_acq-01_run-01"
+        coll = tmp_path / "collection" / "task-rest_run-01_attempt-01"
         _touch(coll / "a.dcm")
         preproc = tmp_path / "preprocessing"
-        events = _touch(preproc / "sub-01_ses-01_task-rest_acq-01_run-01_events.tsv", "onset\tduration\n0\t10\n")
+        events = _touch(preproc / "sub-01_ses-01_task-rest_run-01_attempt-01_events.tsv", "onset\tduration\n0\t10\n")
         # Sibling files from other attempts/tasks/runs must survive.
-        other_acq = _touch(preproc / "sub-01_ses-01_task-rest_acq-02_run-01_events.tsv")
-        other_run = _touch(preproc / "sub-01_ses-01_task-rest_acq-01_run-02_events.tsv")
-        other_task = _touch(preproc / "sub-01_ses-01_task-rnt_acq-01_run-01_events.tsv")
+        other_attempt = _touch(preproc / "sub-01_ses-01_task-rest_run-01_attempt-02_events.tsv")
+        other_run = _touch(preproc / "sub-01_ses-01_task-rest_run-02_attempt-01_events.tsv")
+        other_task = _touch(preproc / "sub-01_ses-01_task-rnt_run-01_attempt-01_events.tsv")
 
         removed = discard_attempt(
-            tmp_path, subject="sub-01", session="ses-01", task="rest", acq=1, run=1, kind="localizer"
+            tmp_path, subject="sub-01", session="ses-01", task="rest", attempt=1, run=1, kind="localizer"
         )
 
         assert not coll.exists()
         assert not events.exists()
-        assert other_acq.exists()
+        assert other_attempt.exists()
         assert other_run.exists()
         assert other_task.exists()
         assert set(removed) == {coll, events}
@@ -85,21 +85,21 @@ class TestDiscardLocalizer:
 class TestDiscardFeedback:
     def test_removes_all_artifacts(self, tmp_path):
         fb = tmp_path / "feedback" / "02_feedback_output"
-        prefix = "sub-01_ses-01_task-feedback_acq-02_run-01"
+        prefix = "sub-01_ses-01_task-feedback_run-01_attempt-02"
         log = _touch(fb / f"{prefix}_feedbacklog.tsv", "header\nrow")
         design = _touch(fb / f"{prefix}_design.tsv")
         params = _touch(fb / f"{prefix}_parameters.json")
-        nifti_dir = fb / "nifti_ses-01_task-feedback_acq-02_run-01"
+        nifti_dir = fb / "nifti_ses-01_task-feedback_run-01_attempt-02"
         _touch(nifti_dir / "vol-0001.nii.gz")
-        # Unrelated acq-03 file that must survive.
-        survivor = _touch(fb / "sub-01_ses-01_task-feedback_acq-03_run-01_feedbacklog.tsv")
+        # Unrelated attempt-03 file that must survive.
+        survivor = _touch(fb / "sub-01_ses-01_task-feedback_run-01_attempt-03_feedbacklog.tsv")
 
         removed = discard_attempt(
             tmp_path,
             subject="sub-01",
             session="ses-01",
             task="feedback",
-            acq=2,
+            attempt=2,
             run=1,
             kind="feedback",
         )
@@ -115,7 +115,7 @@ class TestDiscardFeedback:
             subject="sub-01",
             session="ses-01",
             task="feedback",
-            acq=1,
+            attempt=1,
             run=1,
             kind="feedback",
         )
@@ -123,48 +123,52 @@ class TestDiscardFeedback:
 
     def test_other_run_untouched(self, tmp_path):
         fb = tmp_path / "feedback" / "02_feedback_output"
-        target = _touch(fb / "sub-01_ses-01_task-feedback_acq-01_run-01_feedbacklog.tsv")
-        other_run = _touch(fb / "sub-01_ses-01_task-feedback_acq-01_run-02_feedbacklog.tsv")
+        target = _touch(fb / "sub-01_ses-01_task-feedback_run-01_attempt-01_feedbacklog.tsv")
+        other_run = _touch(fb / "sub-01_ses-01_task-feedback_run-02_attempt-01_feedbacklog.tsv")
 
-        discard_attempt(tmp_path, subject="sub-01", session="ses-01", task="feedback", acq=1, run=1, kind="feedback")
+        discard_attempt(
+            tmp_path, subject="sub-01", session="ses-01", task="feedback", attempt=1, run=1, kind="feedback"
+        )
 
         assert not target.exists()
         assert other_run.exists()
 
 
 class TestDiscardIntegration:
-    def test_localizer_discard_lets_next_attempt_reuse_acq(self, tmp_path):
-        """After discard, get_localizer_run_info returns the same acq number."""
+    def test_localizer_discard_lets_next_attempt_reuse_number(self, tmp_path):
+        """After discard, get_localizer_run_info returns the same attempt number."""
         coll = tmp_path / "collection"
-        _touch(coll / "task-rest_acq-01_run-01" / "a.dcm")
+        _touch(coll / "task-rest_run-01_attempt-01" / "a.dcm")
 
-        # Without discard, the next attempt would be acq-02.
+        # Without discard, the next attempt would be attempt-02.
         before = get_localizer_run_info(coll, "task-rest", run=1)
-        assert before["acq"] == 2
+        assert before["attempt"] == 2
 
-        discard_attempt(tmp_path, subject="sub-01", session="ses-01", task="rest", acq=1, run=1, kind="localizer")
+        discard_attempt(tmp_path, subject="sub-01", session="ses-01", task="rest", attempt=1, run=1, kind="localizer")
 
         after = get_localizer_run_info(coll, "task-rest", run=1)
-        assert after["acq"] == 1  # acq slot freed up
+        assert after["attempt"] == 1  # attempt slot freed up
 
-    def test_feedback_discard_lets_next_attempt_reuse_acq(self, tmp_path):
+    def test_feedback_discard_lets_next_attempt_reuse_number(self, tmp_path):
         fb = tmp_path / "feedback" / "02_feedback_output"
-        _touch(fb / "sub-01_ses-01_task-feedback_acq-01_run-01_feedbacklog.tsv", "header\nrow")
+        _touch(fb / "sub-01_ses-01_task-feedback_run-01_attempt-01_feedbacklog.tsv", "header\nrow")
 
         before = get_slot_run_info(fb, "sub-01", "ses-01", "feedback", step_id="feedback_1")
-        assert before["acq"] == 2
+        assert before["attempt"] == 2
 
-        discard_attempt(tmp_path, subject="sub-01", session="ses-01", task="feedback", acq=1, run=1, kind="feedback")
+        discard_attempt(
+            tmp_path, subject="sub-01", session="ses-01", task="feedback", attempt=1, run=1, kind="feedback"
+        )
 
         after = get_slot_run_info(fb, "sub-01", "ses-01", "feedback", step_id="feedback_1")
-        assert after["acq"] == 1
+        assert after["attempt"] == 1
 
 
 class TestDiscardFailures:
     def test_partial_failure_raises_aggregated_oserror(self, tmp_path, monkeypatch):
         fb = tmp_path / "feedback" / "02_feedback_output"
-        log = _touch(fb / "sub-01_ses-01_task-feedback_acq-01_run-01_feedbacklog.tsv")
-        params = _touch(fb / "sub-01_ses-01_task-feedback_acq-01_run-01_parameters.json")
+        log = _touch(fb / "sub-01_ses-01_task-feedback_run-01_attempt-01_feedbacklog.tsv")
+        params = _touch(fb / "sub-01_ses-01_task-feedback_run-01_attempt-01_parameters.json")
 
         real_unlink = Path.unlink
 
@@ -181,7 +185,7 @@ class TestDiscardFailures:
                 subject="sub-01",
                 session="ses-01",
                 task="feedback",
-                acq=1,
+                attempt=1,
                 run=1,
                 kind="feedback",
             )
@@ -197,7 +201,7 @@ class TestDiscardFailures:
                 subject="sub-01",
                 session="ses-01",
                 task="feedback",
-                acq=1,
+                attempt=1,
                 run=1,
                 kind="bogus",  # type: ignore[arg-type]
             )
@@ -205,7 +209,7 @@ class TestDiscardFailures:
 
 def test_discard_uses_shutil_rmtree_for_directories(tmp_path, monkeypatch):
     """Sanity: directory removal goes through shutil.rmtree (not unlink)."""
-    coll = tmp_path / "collection" / "task-rest_acq-01_run-01"
+    coll = tmp_path / "collection" / "task-rest_run-01_attempt-01"
     _touch(coll / "a.dcm")
 
     seen = []
@@ -217,6 +221,6 @@ def test_discard_uses_shutil_rmtree_for_directories(tmp_path, monkeypatch):
 
     monkeypatch.setattr("pineuro.session.shutil.rmtree", spy)
 
-    discard_attempt(tmp_path, subject="sub-01", session="ses-01", task="rest", acq=1, run=1, kind="localizer")
+    discard_attempt(tmp_path, subject="sub-01", session="ses-01", task="rest", attempt=1, run=1, kind="localizer")
 
     assert coll in seen

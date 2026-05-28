@@ -278,7 +278,7 @@ class RNTTriggeredBallTask(BaseTask):
             coordinator.session,
             coordinator.task,
             coordinator.run_number,
-            acq=coordinator.acq,
+            attempt=coordinator.attempt,
         )
         self._psychopy_log_path = Path(coordinator.output_dir) / f"{prefix}_psychopylog.tsv"
         self._psychopy_log_file: Any = None

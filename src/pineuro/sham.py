@@ -534,8 +534,7 @@ def find_feedbacklog_for_replay(
     bids_prefix = f"{matched_participant}_{matched_session}"
     patterns = [
         f"{bids_prefix}_task-{task}_{run_str}_feedbacklog.tsv",
-        f"{bids_prefix}_task-{task}_{run_str}_acq-*_feedbacklog.tsv",
-        f"{bids_prefix}_task-{task}_acq-*_{run_str}_feedbacklog.tsv",
+        f"{bids_prefix}_task-{task}_{run_str}_attempt-*_feedbacklog.tsv",
         f"*_task-{task}_{run_str}*_feedbacklog.tsv",
     ]
 

@@ -108,7 +108,7 @@ class PipelineRunner:
         self._current_coordinator = None  # Track coordinator for feedback tasks
         self._current_feedback_task: Any = None  # Track feedback task for stop support
         self._current_localizer_task = None  # Track localizer task for stop support
-        # Tracks the in-flight acq/run attempt so stop() can return enough info
+        # Tracks the in-flight run/attempt so stop() can return enough info
         # for the workflow to offer Keep/Discard. Cleared when the step finishes.
         self._current_attempt: dict[str, Any] | None = None
         # Guards the four _current_* refs above: written by the worker
@@ -117,7 +117,7 @@ class PipelineRunner:
         self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
         self.overwrite: bool = False
         self._selected_rest_runs: list | None = None  # Selected runs for preprocessing
-        self._selected_acqs: dict[int, list[int]] | None = None  # {run_id: [acq_nums]}
+        self._selected_attempts: dict[int, list[int]] | None = None  # {run_id: [attempt_nums]}
 
     def _resolve_feedback_run_config(self, step_id: str) -> dict[str, Any] | None:
         """Return the ``feedback_runs`` entry for *step_id*, or None.
@@ -171,13 +171,13 @@ class PipelineRunner:
             return [pos, neg]
         return None
 
-    def set_selected_acqs(self, acqs: dict[int, list[int]] | None) -> None:
-        """Set which acquisitions to use for each run.
+    def set_selected_attempts(self, attempts: dict[int, list[int]] | None) -> None:
+        """Set which attempts to use for each run.
 
         Args:
-            acqs: Dict {run_id: [acq_nums]}, or None to auto-select highest complete
+            attempts: Dict {run_id: [attempt_nums]}, or None to auto-select highest complete
         """
-        self._selected_acqs = acqs
+        self._selected_attempts = attempts
 
     def set_selected_rest_runs(self, runs: list | None) -> None:
         """Set which rest runs to use for preprocessing.
@@ -230,40 +230,40 @@ class PipelineRunner:
         -------
         list[dict]
             List of dicts with keys:
-            - acq: int - Acquisition number
+            - attempt: int - Attempt number
             - path: Path - Folder path
             - n_volumes: int - Number of volumes present
             - is_complete: bool - True if >= expected_volumes
 
-            Sorted by acq number (highest first)
+            Sorted by attempt number (highest first)
         """
         import re
 
         if not collection_dir.exists():
             return []
 
-        pattern = f"{task}_acq-*_run-{run:02d}"
+        pattern = f"{task}_run-{run:02d}_attempt-*"
         collections: list[dict[str, Any]] = []
 
         for folder in collection_dir.glob(pattern):
             if folder.is_dir():
-                match = re.search(r"acq-(\d+)_run-", folder.name)
+                match = re.search(r"attempt-(\d+)", folder.name)
                 if match:
-                    acq_num = int(match.group(1))
+                    attempt_num = int(match.group(1))
                     n_files = len([f for f in folder.iterdir() if f.is_file()])
                     is_complete = n_files >= expected_volumes
 
                     collections.append(
                         {
-                            "acq": acq_num,
+                            "attempt": attempt_num,
                             "path": folder,
                             "n_volumes": n_files,
                             "is_complete": is_complete,
                         }
                     )
 
-        # Sort by acq number (highest first)
-        collections.sort(key=lambda x: x["acq"], reverse=True)
+        # Sort by attempt number (highest first)
+        collections.sort(key=lambda x: x["attempt"], reverse=True)
         return collections
 
     def run_step(self, step_id: str) -> None:
@@ -301,7 +301,7 @@ class PipelineRunner:
         -------
         dict or None
             Snapshot of the in-flight attempt with keys ``kind``
-            (``"localizer"`` | ``"feedback"``), ``subject``, ``task``, ``acq``,
+            (``"localizer"`` | ``"feedback"``), ``subject``, ``task``, ``attempt``,
             ``run`` — for the workflow to offer a Keep/Discard prompt. Returns
             ``None`` if no attempt was active or if the localizer's collection
             directory hasn't been created yet (nothing to discard).
@@ -335,7 +335,9 @@ class PipelineRunner:
         if attempt is not None and attempt["kind"] == "localizer":
             base_dir = Path(self.config["paths"]["base_dir"])
             collection_dir = (
-                base_dir / "collection" / f"task-{attempt['task']}_acq-{attempt['acq']:02d}_run-{attempt['run']:02d}"
+                base_dir
+                / "collection"
+                / f"task-{attempt['task']}_run-{attempt['run']:02d}_attempt-{attempt['attempt']:02d}"
             )
             if not collection_dir.exists():
                 return None
@@ -408,14 +410,14 @@ class PipelineRunner:
             with self._task_lock:
                 self._current_attempt = None
 
-    def _set_current_attempt(self, *, kind: str, subject: str, task: str, acq: int, run: int) -> None:
-        """Record the in-flight acq/run attempt so stop() can offer Keep/Discard."""
+    def _set_current_attempt(self, *, kind: str, subject: str, task: str, attempt: int, run: int) -> None:
+        """Record the in-flight run/attempt so stop() can offer Keep/Discard."""
         with self._task_lock:
             self._current_attempt = {
                 "kind": kind,
                 "subject": subject,
                 "task": task,
-                "acq": acq,
+                "attempt": attempt,
                 "run": run,
             }
 
@@ -458,14 +460,18 @@ class PipelineRunner:
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(collection_dir=collection_dir, task="task-reference", run=1)
-        acq = run_info["acq"]
-        self._set_current_attempt(kind="localizer", subject=self.participant_id, task="reference", acq=acq, run=1)
+        attempt = run_info["attempt"]
+        self._set_current_attempt(
+            kind="localizer", subject=self.participant_id, task="reference", attempt=attempt, run=1
+        )
 
-        self._emit_progress(f"Collecting initial reference DICOMs (acq-{acq:02d})...")
-        if run_info["existing_acqs"]:
-            self._emit_progress(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
+        self._emit_progress(f"Collecting initial reference DICOMs (attempt-{attempt:02d})...")
+        if run_info["existing_attempts"]:
+            self._emit_progress(
+                f"Previous attempts: {', '.join(f'attempt-{a:02d}' for a in run_info['existing_attempts'])}"
+            )
 
-        output_dir = collection_dir / f"task-reference_acq-{acq:02d}_run-01"
+        output_dir = collection_dir / f"task-reference_run-01_attempt-{attempt:02d}"
 
         # Determine simulator vs real-time mode
         simulator_enabled = config.get("simulator", {}).get("enabled", True)
@@ -557,14 +563,18 @@ class PipelineRunner:
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(collection_dir=collection_dir, task=f"task-{task_name}", run=run_num)
-        acq = run_info["acq"]
-        self._set_current_attempt(kind="localizer", subject=self.participant_id, task=task_name, acq=acq, run=run_num)
+        attempt = run_info["attempt"]
+        self._set_current_attempt(
+            kind="localizer", subject=self.participant_id, task=task_name, attempt=attempt, run=run_num
+        )
 
-        self._emit_progress(f"Collecting {task_name} run {run_num} (acq-{acq:02d}) DICOMs...")
-        if run_info["existing_acqs"]:
-            self._emit_progress(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
+        self._emit_progress(f"Collecting {task_name} run {run_num} (attempt-{attempt:02d}) DICOMs...")
+        if run_info["existing_attempts"]:
+            self._emit_progress(
+                f"Previous attempts: {', '.join(f'attempt-{a:02d}' for a in run_info['existing_attempts'])}"
+            )
 
-        output_dir = collection_dir / f"task-{task_name}_acq-{acq:02d}_run-{run_num:02d}"
+        output_dir = collection_dir / f"task-{task_name}_run-{run_num:02d}_attempt-{attempt:02d}"
 
         # Determine simulator vs real-time mode
         simulator_enabled = config.get("simulator", {}).get("enabled", True)
@@ -653,7 +663,7 @@ class PipelineRunner:
             run_num,
             actual_task_id,
             watch_dir,
-            acq=acq,
+            attempt=attempt,
             simulator=simulator,
             trigger_event=trigger_event,
             task_done_event=task_done_event,
@@ -706,7 +716,7 @@ class PipelineRunner:
         run_num: int,
         task_id: str,
         watch_dir: Path,
-        acq: int = 1,
+        attempt: int = 1,
         simulator=None,
         trigger_event=None,
         task_done_event: threading.Event | None = None,
@@ -722,7 +732,7 @@ class PipelineRunner:
             run_num: Run number (1-based)
             task_id: Task identifier (e.g., "rest", "self_other")
             watch_dir: Directory to watch for first DICOM arrival (auto-trigger)
-            acq: Acquisition number (for retry handling)
+            attempt: Attempt number (for retry handling)
             simulator: VolumeSimulator instance (optional, for offline testing)
             trigger_event: Event set when scanner trigger is received
             task_done_event: Event to set when task paradigm finishes, signaling
@@ -776,7 +786,7 @@ class PipelineRunner:
             session_id=self.session_id,
             config=localizer_params,
             run=run_num,
-            acq=acq,  # Pass acq for events file naming
+            attempt=attempt,  # Pass attempt for events file naming
             watch_dir=str(watch_dir),  # Pass watch_dir for auto-trigger on first DICOM
             simulator=simulator,  # Pass simulator for task-controlled start timing
             monitor_position=presenter_monitor,
@@ -817,13 +827,13 @@ class PipelineRunner:
         logger.info(f"Dispatched localizer task '{task_id}' to main thread")
         return _DispatchedTask(future)
 
-    def _resolve_acq_paths(
+    def _resolve_attempt_paths(
         self, task_name: str, runs_to_process: list[int], rest_volumes: list[int]
     ) -> list[tuple[Path, int, int]]:
-        """Resolve collection folder paths using selected acqs.
+        """Resolve collection folder paths using selected attempts.
 
-        Uses self._selected_acqs if set (from GUI dialog), otherwise
-        auto-selects highest complete acq for each run.
+        Uses self._selected_attempts if set (from GUI dialog), otherwise
+        auto-selects highest complete attempt for each run.
 
         Parameters
         ----------
@@ -837,11 +847,11 @@ class PipelineRunner:
         Returns
         -------
         list[tuple[Path, int, int]]
-            ``(path, acq, run)`` triples in selection order. ``acq`` and
+            ``(path, attempt, run)`` triples in selection order. ``attempt`` and
             ``run`` are the integers the GUI assigned; callers forward them
             to ``preprocessing()`` so intermediate filenames carry the
-            ``acq-NN_run-NN`` identity (and ``{1: [2, 3]}``-style multi-acq
-            selections don't get mis-numbered into run-01/run-02).
+            ``run-NN_attempt-NN`` identity (and ``{1: [2, 3]}``-style
+            multi-attempt selections don't get mis-numbered into run-01/run-02).
         """
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
@@ -851,22 +861,22 @@ class PipelineRunner:
         for run_num in runs_to_process:
             expected_vols = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
 
-            # If user selected specific acqs, use those directly
-            if self._selected_acqs and run_num in self._selected_acqs:
-                acq_nums = self._selected_acqs[run_num]
+            # If user selected specific attempts, use those directly
+            if self._selected_attempts and run_num in self._selected_attempts:
+                attempt_nums = self._selected_attempts[run_num]
                 found_any = False
-                for acq_num in acq_nums:
-                    acq_path = collection_dir / f"task-{task_name}_acq-{acq_num:02d}_run-{run_num:02d}"
-                    if acq_path.exists():
-                        self._emit_progress(f"Run {run_num}: Using selected acq-{acq_num:02d}")
-                        selected.append((acq_path, acq_num, run_num))
+                for attempt_num in attempt_nums:
+                    attempt_path = collection_dir / f"task-{task_name}_run-{run_num:02d}_attempt-{attempt_num:02d}"
+                    if attempt_path.exists():
+                        self._emit_progress(f"Run {run_num}: Using selected attempt-{attempt_num:02d}")
+                        selected.append((attempt_path, attempt_num, run_num))
                         found_any = True
                     else:
-                        logger.warning(f"Selected acq-{acq_num:02d} for run {run_num} not found")
+                        logger.warning(f"Selected attempt-{attempt_num:02d} for run {run_num} not found")
                 if found_any:
                     continue
 
-            # Auto-select: find highest complete acq
+            # Auto-select: find highest complete attempt
             collections = self.find_available_collections(
                 collection_dir=collection_dir, task=f"task-{task_name}", run=run_num, expected_volumes=expected_vols
             )
@@ -877,8 +887,8 @@ class PipelineRunner:
 
             complete = [c for c in collections if c["is_complete"]]
             picked = complete[0] if complete else collections[0]
-            self._emit_progress(f"Run {run_num}: Using acq-{picked['acq']:02d} ({picked['n_volumes']} volumes)")
-            selected.append((picked["path"], int(picked["acq"]), run_num))
+            self._emit_progress(f"Run {run_num}: Using attempt-{picked['attempt']:02d} ({picked['n_volumes']} volumes)")
+            selected.append((picked["path"], int(picked["attempt"]), run_num))
 
         return selected
 
@@ -919,19 +929,19 @@ class PipelineRunner:
                 if collections:
                     runs_to_process.append(run_num)
 
-        # Select acquisitions (uses GUI selections if set, else auto-selects)
-        resolved = self._resolve_acq_paths(
+        # Select attempts (uses GUI selections if set, else auto-selects)
+        resolved = self._resolve_attempt_paths(
             task_name=task_name, runs_to_process=runs_to_process, rest_volumes=rest_volumes
         )
 
         if not resolved:
             raise ValueError(f"No {task_name} collection directories selected for preprocessing")
 
-        input_paths = [path for path, _acq, _run in resolved]
-        acq_per_input = [acq for _path, acq, _run in resolved]
-        run_per_input = [run for _path, _acq, run in resolved]
+        input_paths = [path for path, _attempt, _run in resolved]
+        attempt_per_input = [attempt for _path, attempt, _run in resolved]
+        run_per_input = [run for _path, _attempt, run in resolved]
 
-        # Log selected acquisitions
+        # Log selected attempts
         for path in input_paths:
             self._emit_progress(f"Using: {path.name}")
 
@@ -951,7 +961,7 @@ class PipelineRunner:
             overwrite=self.overwrite,
             qc_enabled=True,  # Generate QC report
             progress_callback=progress_callback,
-            acq_per_input=acq_per_input,
+            attempt_per_input=attempt_per_input,
             run_per_input=run_per_input,
         )
 
@@ -1096,14 +1106,14 @@ class PipelineRunner:
             events_dir = base_dir / "preprocessing"
             events_glob = sorted(events_dir.glob(f"*_task-{loc_type}_*_events.tsv"))
             if events_glob:
-                # If acqs were selected, prefer events file matching selected acq
+                # If attempts were selected, prefer events file matching selected attempt
                 events_file = None
-                if self._selected_acqs:
-                    for run_num, acq_nums in self._selected_acqs.items():
-                        for acq_num in acq_nums:
-                            acq_pattern = f"acq-{acq_num:02d}_run-{run_num:02d}"
+                if self._selected_attempts:
+                    for run_num, attempt_nums in self._selected_attempts.items():
+                        for attempt_num in attempt_nums:
+                            attempt_pattern = f"run-{run_num:02d}_attempt-{attempt_num:02d}"
                             for ef in events_glob:
-                                if acq_pattern in ef.name:
+                                if attempt_pattern in ef.name:
                                     events_file = str(ef)
                                     break
                             if events_file:
@@ -1335,9 +1345,9 @@ class PipelineRunner:
             if collections:
                 runs_to_process.append(run_num)
 
-        # Select acquisitions
+        # Select attempts
         rest_volumes = [n_volumes] * n_runs
-        resolved = self._resolve_acq_paths(
+        resolved = self._resolve_attempt_paths(
             task_name=task_name,
             runs_to_process=runs_to_process,
             rest_volumes=rest_volumes,
@@ -1346,9 +1356,9 @@ class PipelineRunner:
         if not resolved:
             raise ValueError(f"No {task_name} collection directories found for preprocessing")
 
-        input_paths = [path for path, _acq, _run in resolved]
-        acq_per_input = [acq for _path, acq, _run in resolved]
-        run_per_input = [run for _path, _acq, run in resolved]
+        input_paths = [path for path, _attempt, _run in resolved]
+        attempt_per_input = [attempt for _path, attempt, _run in resolved]
+        run_per_input = [run for _path, _attempt, run in resolved]
 
         for path in input_paths:
             self._emit_progress(f"Using: {path.name}")
@@ -1368,7 +1378,7 @@ class PipelineRunner:
             overwrite=self.overwrite,
             qc_enabled=True,
             progress_callback=progress_callback,
-            acq_per_input=acq_per_input,
+            attempt_per_input=attempt_per_input,
             run_per_input=run_per_input,
         )
 
@@ -1551,8 +1561,8 @@ class PipelineRunner:
         mni_ref_dir = base_dir / "mask_extraction" / "00_mni_ref"
 
         # Option 2: Initial reference DICOMs → convert to NIfTI → compute mean
-        ref_dirs = sorted(collection_dir.glob("task-reference_acq-*_run-01"))
-        for ref_dir in reversed(ref_dirs):  # newest acq first
+        ref_dirs = sorted(collection_dir.glob("task-reference_run-01_attempt-*"))
+        for ref_dir in reversed(ref_dirs):  # newest attempt first
             dicoms = list(ref_dir.iterdir())
             if dicoms:
                 from pineuro.utils import compute_mean, dicom_to_nifti
@@ -1578,8 +1588,8 @@ class PipelineRunner:
                         return mean_file
 
         # Option 3: Realtime reference DICOMs (for 0-localizer MNI atlas mode)
-        rt_ref_dirs = sorted(collection_dir.glob("task-reference_acq-*_run-02"))
-        for ref_dir in reversed(rt_ref_dirs):  # newest acq first
+        rt_ref_dirs = sorted(collection_dir.glob("task-reference_run-02_attempt-*"))
+        for ref_dir in reversed(rt_ref_dirs):  # newest attempt first
             dicoms = list(ref_dir.iterdir())
             if dicoms:
                 from pineuro.utils import compute_mean, dicom_to_nifti
@@ -1795,7 +1805,7 @@ class PipelineRunner:
         if not collections:
             raise ValueError(f"No reference collection found for run {actual_reference_run}")
 
-        # Use highest complete acq (or highest incomplete if none complete)
+        # Use highest complete attempt (or highest incomplete if none complete)
         complete = [c for c in collections if c["is_complete"]]
         selected = complete[0] if complete else collections[0]
         reference_dicom = selected["path"]
@@ -2018,14 +2028,18 @@ class PipelineRunner:
 
         # Get run info with retry detection
         run_info = get_localizer_run_info(collection_dir=collection_dir, task="task-reference", run=run_id)
-        acq = run_info["acq"]
-        self._set_current_attempt(kind="localizer", subject=self.participant_id, task="reference", acq=acq, run=run_id)
+        attempt = run_info["attempt"]
+        self._set_current_attempt(
+            kind="localizer", subject=self.participant_id, task="reference", attempt=attempt, run=run_id
+        )
 
-        self._emit_progress(f"Collecting real-time reference DICOMs (acq-{acq:02d}, run-{run_id:02d})...")
-        if run_info["existing_acqs"]:
-            self._emit_progress(f"Previous attempts: {', '.join(f'acq-{a:02d}' for a in run_info['existing_acqs'])}")
+        self._emit_progress(f"Collecting real-time reference DICOMs (run-{run_id:02d}, attempt-{attempt:02d})...")
+        if run_info["existing_attempts"]:
+            self._emit_progress(
+                f"Previous attempts: {', '.join(f'attempt-{a:02d}' for a in run_info['existing_attempts'])}"
+            )
 
-        output_dir = collection_dir / f"task-reference_acq-{acq:02d}_run-{run_id:02d}"
+        output_dir = collection_dir / f"task-reference_run-{run_id:02d}_attempt-{attempt:02d}"
 
         # Determine simulator vs real-time mode
         simulator_enabled = config.get("simulator", {}).get("enabled", True)
@@ -2143,7 +2157,7 @@ class PipelineRunner:
         output_dir = feedback_dir / "02_feedback_output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use slot-based run numbering with acq entity for retry tracking
+        # Use slot-based run numbering with attempt entity for retry tracking
         run_info = get_slot_run_info(
             output_dir=output_dir,
             subject=self.participant_id,
@@ -2152,16 +2166,16 @@ class PipelineRunner:
             step_id=step_id,
         )
         task_run_number = run_info["run"]
-        task_acq = run_info["acq"]
+        task_attempt = run_info["attempt"]
         self._set_current_attempt(
             kind="feedback",
             subject=self.participant_id,
             task=task_type,
-            acq=task_acq,
+            attempt=task_attempt,
             run=task_run_number,
         )
 
-        self._emit_progress(f"Starting {task_type} run-{task_run_number:02d} acq-{task_acq:02d}...")
+        self._emit_progress(f"Starting {task_type} run-{task_run_number:02d} attempt-{task_attempt:02d}...")
 
         # Get mask files - use reference-coregistered masks if realtime reference is enabled,
         # otherwise use boldref space masks from mask extraction
@@ -2280,7 +2294,7 @@ class PipelineRunner:
 
         if simulator_enabled:
             # Simulator mode: create temp watch dir and use source DICOMs
-            watch_dir = base_dir / "tmp" / f"incoming_{task_type}_acq-{task_acq:02d}_run-{task_run_number:02d}"
+            watch_dir = base_dir / "tmp" / f"incoming_{task_type}_run-{task_run_number:02d}_attempt-{task_attempt:02d}"
             watch_dir.mkdir(parents=True, exist_ok=True)
 
             # Get per-run simulator source path based on step_id
@@ -2533,7 +2547,7 @@ class PipelineRunner:
                 simulator_source_dir=simulator_source_dir,
                 simulator_speed=simulator_speed,
                 simulator_trigger_mode=config.get("simulator", {}).get("trigger_mode", "manual"),
-                step_id=step_id,  # Use slot-based naming with acq entity
+                step_id=step_id,  # Use slot-based naming with attempt entity
                 qc_enabled=True,
                 fd_threshold=_fb("fd_threshold", 0.5),
                 condition=condition,  # Log the actual condition

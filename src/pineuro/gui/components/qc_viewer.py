@@ -173,26 +173,28 @@ class QCReportManager:
 
         return None
 
-    def get_feedback_qc(self, task: str, run: int, acq: int | None = None) -> Path | None:
+    def get_feedback_qc(self, task: str, run: int, attempt: int | None = None) -> Path | None:
         """Get path to feedback/transfer run QC report.
 
         Args:
             task: Task type ("feedback" or "transfer")
             run: Run number
-            acq: Acquisition number (optional)
+            attempt: Attempt number (optional)
 
         Returns:
             Path to report if exists, None otherwise
         """
         qc_dir = self.base_dir / "feedback" / "02_feedback_output" / "qc"
 
-        # Try acq-specific path first if acq provided
-        if acq is not None:
-            report_path = qc_dir / f"{self.participant_id}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedback_qc.html"
+        # Try attempt-specific path first if attempt provided
+        if attempt is not None:
+            report_path = (
+                qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_feedback_qc.html"
+            )
             if report_path.exists():
                 return report_path
 
-        # Glob to find the matching report when acq isn't specified
+        # Glob to find the matching report when attempt isn't specified
         pattern = f"*task-{task}*run-{run:02d}*qc.html"
         matches = list(qc_dir.glob(pattern))
         if matches:

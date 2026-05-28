@@ -1,7 +1,7 @@
-"""Unified acquisition selection dialog for preprocessing step.
+"""Unified attempt selection dialog for preprocessing step.
 
-Replaces the separate run-selection and acq-selection dialogs with a single
-dialog that lists all acquisitions grouped by run, each with a checkbox.
+Replaces the separate run-selection and attempt-selection dialogs with a single
+dialog that lists all attempts grouped by run, each with a checkbox.
 """
 
 import logging
@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class AcqInfo:
-    """Information about a single acquisition attempt."""
+class AttemptInfo:
+    """Information about a single attempt."""
 
-    acq_num: int
+    attempt_num: int
     directory: Path
     n_volumes: int
     expected_volumes: int
@@ -31,20 +31,20 @@ class AcqInfo:
 
 @dataclass
 class RunGroup:
-    """All acquisitions for one run, for display grouping."""
+    """All attempts for one run, for display grouping."""
 
     run_id: int
     run_name: str
-    acquisitions: list[AcqInfo] = field(default_factory=list)
+    attempts: list[AttemptInfo] = field(default_factory=list)
 
 
-def scan_collection_acqs(
+def scan_collection_attempts(
     collection_dir: Path,
     task: str,
     run: int,
     expected_volumes: int,
-) -> list[AcqInfo]:
-    """Scan collection directory for acquisition attempts for a given run.
+) -> list[AttemptInfo]:
+    """Scan collection directory for attempts for a given run.
 
     Parameters
     ----------
@@ -59,24 +59,24 @@ def scan_collection_acqs(
 
     Returns
     -------
-    list[AcqInfo]
-        Available acquisitions sorted by acq number (highest first)
+    list[AttemptInfo]
+        Available attempts sorted by attempt number (highest first)
     """
     if not collection_dir.exists():
         return []
 
-    pattern = f"{task}_acq-*_run-{run:02d}"
-    acqs = []
+    pattern = f"{task}_run-{run:02d}_attempt-*"
+    attempts = []
 
     for folder in collection_dir.glob(pattern):
         if folder.is_dir():
-            match = re.search(r"acq-(\d+)_run-", folder.name)
+            match = re.search(r"attempt-(\d+)", folder.name)
             if match:
-                acq_num = int(match.group(1))
+                attempt_num = int(match.group(1))
                 n_files = len([f for f in folder.iterdir() if f.is_file()])
-                acqs.append(
-                    AcqInfo(
-                        acq_num=acq_num,
+                attempts.append(
+                    AttemptInfo(
+                        attempt_num=attempt_num,
                         directory=folder,
                         n_volumes=n_files,
                         expected_volumes=expected_volumes,
@@ -84,15 +84,15 @@ def scan_collection_acqs(
                     )
                 )
 
-    acqs.sort(key=lambda a: a.acq_num, reverse=True)
-    return acqs
+    attempts.sort(key=lambda a: a.attempt_num, reverse=True)
+    return attempts
 
 
-class UnifiedAcqDialog(BaseDialog):
-    """Modal dialog for selecting acquisitions for preprocessing.
+class UnifiedAttemptDialog(BaseDialog):
+    """Modal dialog for selecting attempts for preprocessing.
 
-    Displays all acquisition attempts grouped by run, each with a checkbox.
-    The user can freely check/uncheck any acquisition across any run.
+    Displays all attempts grouped by run, each with a checkbox.
+    The user can freely check/uncheck any attempt across any run.
     """
 
     def __init__(
@@ -106,7 +106,7 @@ class UnifiedAcqDialog(BaseDialog):
         self.run_groups = run_groups
         self.on_confirm = on_confirm
         self.on_cancel = on_cancel
-        # Keyed by (run_id, acq_num)
+        # Keyed by (run_id, attempt_num)
         self._checkboxes: dict[tuple[int, int], ft.Checkbox] = {}
 
     def show(self):
@@ -118,7 +118,7 @@ class UnifiedAcqDialog(BaseDialog):
                     [
                         ft.Icon(ft.Icons.PLAYLIST_ADD_CHECK, color=ft.Colors.BLUE),
                         ft.Text(
-                            "Select Acquisitions for Preprocessing",
+                            "Select Attempts for Preprocessing",
                             weight=ft.FontWeight.BOLD,
                         ),
                     ],
@@ -131,32 +131,32 @@ class UnifiedAcqDialog(BaseDialog):
         )
 
     def _build_content(self) -> ft.Control:
-        """Build the dialog content with checkboxes per acquisition."""
+        """Build the dialog content with checkboxes per attempt."""
         run_controls: list[ft.Control] = []
 
         for run_group in self.run_groups:
-            if not run_group.acquisitions:
+            if not run_group.attempts:
                 continue
 
             # Determine default selection: highest complete, or highest overall
-            default_acq = None
-            complete = [a for a in run_group.acquisitions if a.is_complete]
+            default_attempt = None
+            complete = [a for a in run_group.attempts if a.is_complete]
             if complete:
-                default_acq = max(a.acq_num for a in complete)
-            elif run_group.acquisitions:
-                best = [a for a in run_group.acquisitions if a.n_volumes > 0]
+                default_attempt = max(a.attempt_num for a in complete)
+            elif run_group.attempts:
+                best = [a for a in run_group.attempts if a.n_volumes > 0]
                 if best:
-                    default_acq = max(a.acq_num for a in best)
+                    default_attempt = max(a.attempt_num for a in best)
 
-            # Build checkbox rows for each acquisition
-            acq_rows: list[ft.Control] = []
-            for acq in run_group.acquisitions:
-                if acq.n_volumes == 0:
+            # Build checkbox rows for each attempt
+            attempt_rows: list[ft.Control] = []
+            for attempt in run_group.attempts:
+                if attempt.n_volumes == 0:
                     status_icon = ft.Icons.BLOCK
                     status_color = ft.Colors.GREY_400
                     status_text = "No data"
                     can_select = False
-                elif acq.is_complete:
+                elif attempt.is_complete:
                     status_icon = ft.Icons.CHECK_CIRCLE
                     status_color = ft.Colors.GREEN
                     status_text = "Complete"
@@ -167,23 +167,23 @@ class UnifiedAcqDialog(BaseDialog):
                     status_text = "Incomplete"
                     can_select = True
 
-                progress_value = acq.n_volumes / acq.expected_volumes if acq.expected_volumes > 0 else 0
+                progress_value = attempt.n_volumes / attempt.expected_volumes if attempt.expected_volumes > 0 else 0
 
-                checked = can_select and acq.acq_num == default_acq
+                checked = can_select and attempt.attempt_num == default_attempt
                 checkbox = ft.Checkbox(
                     value=checked,
                     disabled=not can_select,
                 )
-                self._checkboxes[(run_group.run_id, acq.acq_num)] = checkbox
+                self._checkboxes[(run_group.run_id, attempt.attempt_num)] = checkbox
 
-                acq_row = ft.Container(
+                attempt_row = ft.Container(
                     content=ft.Column(
                         [
                             ft.Row(
                                 [
                                     checkbox,
                                     ft.Text(
-                                        f"acq-{acq.acq_num:02d}",
+                                        f"attempt-{attempt.attempt_num:02d}",
                                         size=14,
                                         weight=ft.FontWeight.W_500,
                                     ),
@@ -204,7 +204,7 @@ class UnifiedAcqDialog(BaseDialog):
                                                     color=ft.Colors.GREY_700,
                                                 ),
                                                 ft.Text(
-                                                    f"{acq.n_volumes} / {acq.expected_volumes}",
+                                                    f"{attempt.n_volumes} / {attempt.expected_volumes}",
                                                     size=12,
                                                     weight=ft.FontWeight.W_500,
                                                     color=status_color,
@@ -228,7 +228,7 @@ class UnifiedAcqDialog(BaseDialog):
                     ),
                     padding=ft.padding.only(top=2, bottom=2),
                 )
-                acq_rows.append(acq_row)
+                attempt_rows.append(attempt_row)
 
             run_card = ft.Container(
                 content=ft.Column(
@@ -238,7 +238,7 @@ class UnifiedAcqDialog(BaseDialog):
                             size=16,
                             weight=ft.FontWeight.W_500,
                         ),
-                        *acq_rows,
+                        *attempt_rows,
                     ],
                     spacing=5,
                 ),
@@ -250,7 +250,7 @@ class UnifiedAcqDialog(BaseDialog):
             run_controls.append(run_card)
 
         # Info text
-        has_incomplete = any(not a.is_complete and a.n_volumes > 0 for rg in self.run_groups for a in rg.acquisitions)
+        has_incomplete = any(not a.is_complete and a.n_volumes > 0 for rg in self.run_groups for a in rg.attempts)
         if has_incomplete:
             run_controls.append(ft.Container(height=5))
             run_controls.append(
@@ -259,7 +259,7 @@ class UnifiedAcqDialog(BaseDialog):
                         [
                             ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.BLUE_700, size=18),
                             ft.Text(
-                                "Incomplete acquisitions may still be usable but could affect quality.",
+                                "Incomplete attempts may still be usable but could affect quality.",
                                 size=12,
                                 color=ft.Colors.BLUE_700,
                             ),
@@ -297,15 +297,15 @@ class UnifiedAcqDialog(BaseDialog):
 
     def _on_confirm_clicked(self, e):
         """Handle confirm button click."""
-        # Collect all checked acquisitions grouped by run
+        # Collect all checked attempts grouped by run
         selected: dict[int, list[int]] = defaultdict(list)
-        for (run_id, acq_num), cb in self._checkboxes.items():
+        for (run_id, attempt_num), cb in self._checkboxes.items():
             if cb.value:
-                selected[run_id].append(acq_num)
+                selected[run_id].append(attempt_num)
 
         if not selected:
             _snack = ft.SnackBar(
-                ft.Text("Please select at least one acquisition."),
+                ft.Text("Please select at least one attempt."),
                 bgcolor=ft.Colors.ORANGE,
             )
             _snack.open = True
@@ -313,8 +313,8 @@ class UnifiedAcqDialog(BaseDialog):
             self.page.update()
             return
 
-        # Sort acq lists so ordering is deterministic
-        result = {run_id: sorted(acqs) for run_id, acqs in sorted(selected.items())}
+        # Sort attempt lists so ordering is deterministic
+        result = {run_id: sorted(attempts) for run_id, attempts in sorted(selected.items())}
 
         self._close_dialog()
         self.on_confirm(result)

@@ -71,8 +71,8 @@ class CoordinatorProtocol(Protocol):
         Task label registered in the task registry (e.g. ``'ball'``).
     run_number : int
         Current run number (1-based).
-    acq : int or None
-        Acquisition number for retry tracking (1, 2, 3, ...).
+    attempt : int or None
+        Attempt number for retry tracking (1, 2, 3, ...).
     n_volumes : int
         Total number of volumes expected in this run.
     mask_names : list[str]
@@ -82,7 +82,7 @@ class CoordinatorProtocol(Protocol):
     subject: str
     task: str
     run_number: int
-    acq: int
+    attempt: int
     n_volumes: int
     mask_names: list[str]
 

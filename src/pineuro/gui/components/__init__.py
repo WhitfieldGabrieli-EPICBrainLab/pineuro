@@ -84,7 +84,7 @@ from .qc_plots import FDData, FDPlot
 from .qc_viewer import QCReportManager, open_qc_report
 from .session_selection_dialog import SessionSelectionDialog
 from .task_mirror import TaskMirror
-from .unified_acq_dialog import RunGroup, UnifiedAcqDialog
+from .unified_attempt_dialog import RunGroup, UnifiedAttemptDialog
 
 __all__ = [
     "BaseDialog",
@@ -99,7 +99,7 @@ __all__ = [
     "QCReportManager",
     "open_qc_report",
     "CollectionProgressPanel",
-    "UnifiedAcqDialog",
+    "UnifiedAttemptDialog",
     "RunGroup",
     "MaskSelectionDialog",
     "MaskReviewInfo",

@@ -43,7 +43,7 @@ class RunInfo:
     run_number: int
     run_type: str  # 'transfer' or 'feedback'
     volumes_processed: int
-    acq: int
+    attempt: int
     # Task-specific state at end of run (e.g., hit_counters, scale_factor)
     task_state_snapshot: dict[str, Any] = field(default_factory=dict)
 
@@ -57,7 +57,7 @@ class RunInfo:
             "run_type": self.run_type,
             "volumes_processed": self.volumes_processed,
             "task_state_snapshot": self.task_state_snapshot,
-            "acq": self.acq,
+            "attempt": self.attempt,
         }
         if self.slot_run_number is not None:
             data["slot_run_number"] = self.slot_run_number
@@ -70,7 +70,7 @@ class RunInfo:
             run_number=data["run_number"],
             run_type=data["run_type"],
             volumes_processed=data.get("volumes_processed", 0),
-            acq=data["acq"],
+            attempt=data["attempt"],
             task_state_snapshot=data.get("task_state_snapshot", {}),
             slot_run_number=data.get("slot_run_number"),
         )
@@ -217,28 +217,28 @@ class TaskState:
         """
         return self.feedback_run_count >= self.max_feedback_runs
 
-    def get_state_for_slot(self, slot_run_number: int, acq: int = 1) -> dict[str, Any]:
+    def get_state_for_slot(self, slot_run_number: int, attempt: int = 1) -> dict[str, Any]:
         """Get the appropriate task state for a run slot.
 
-        For retries (acq > 1), returns the task state from before that slot
-        was first started. For first attempts (acq == 1), returns the current
+        For retries (attempt > 1), returns the task state from before that slot
+        was first started. For first attempts (attempt == 1), returns the current
         task state and records it as the base for this slot.
 
         Parameters
         ----------
         slot_run_number : int
             The run slot number (1 or 2)
-        acq : int
-            The acquisition number (1, 2, 3, ...)
+        attempt : int
+            The attempt number (1, 2, 3, ...)
 
         Returns
         -------
         dict
             The task state to use for this run
         """
-        if acq > 1 and slot_run_number in self.slot_base_state:
+        if attempt > 1 and slot_run_number in self.slot_base_state:
             base = self.slot_base_state[slot_run_number]
-            logger.info(f"Retry (acq={acq}): using base state for slot {slot_run_number}")
+            logger.info(f"Retry (attempt={attempt}): using base state for slot {slot_run_number}")
             return base.copy()
         else:
             if slot_run_number not in self.slot_base_state:
@@ -443,7 +443,7 @@ class TaskState:
         self,
         run_type: str,
         volumes_processed: int,
-        acq: int,
+        attempt: int,
         task_state_snapshot: dict[str, Any] | None = None,
         # Slot-based tracking parameters
         slot_run_number: int | None = None,
@@ -461,8 +461,8 @@ class TaskState:
             'transfer' or 'feedback'
         volumes_processed : int
             Number of volumes processed in this run
-        acq : int
-            The acquisition number (1, 2, 3, ...). Used for retry tracking.
+        attempt : int
+            The attempt number (1, 2, 3, ...). Used for retry tracking.
         task_state_snapshot : dict, optional
             Snapshot of task state at end of run. All keys in this dict
             will be merged into the persistent task_state.
@@ -472,7 +472,7 @@ class TaskState:
         if task_state_snapshot is None:
             task_state_snapshot = {}
 
-        # Determine if this is a retry (acq > 1 for same slot)
+        # Determine if this is a retry (attempt > 1 for same slot)
         is_retry = False
         existing_run_idx = None
         if slot_run_number is not None:
@@ -494,12 +494,12 @@ class TaskState:
             volumes_processed=volumes_processed,
             task_state_snapshot=task_state_snapshot,
             slot_run_number=slot_run_number,
-            acq=acq,
+            attempt=attempt,
         )
 
         if is_retry and existing_run_idx is not None:
             old_run = self.completed_runs[existing_run_idx]
-            logger.info(f"Replacing run for slot {slot_run_number} (acq {old_run.acq} -> {acq})")
+            logger.info(f"Replacing run for slot {slot_run_number} (attempt {old_run.attempt} -> {attempt})")
             self.completed_runs[existing_run_idx] = run_info
         else:
             self.completed_runs.append(run_info)
@@ -529,5 +529,5 @@ class TaskState:
 
         logger.info(f"Recorded run {run_info.run_number} ({run_type})")
         if slot_run_number is not None:
-            logger.debug(f"  Slot: {slot_run_number}, Acq: {acq}")
+            logger.debug(f"  Slot: {slot_run_number}, Attempt: {attempt}")
         logger.debug(f"  Task state: {self.task_state}")

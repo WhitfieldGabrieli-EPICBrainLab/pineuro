@@ -25,7 +25,7 @@ def localizer(tmp_path):
         def run_paradigm(self):  # pragma: no cover
             pass
 
-    return _StubLocalizer(output_dir=tmp_path, participant_id="sub-01", session_id="ses-01", run=2, acq=3)
+    return _StubLocalizer(output_dir=tmp_path, participant_id="sub-01", session_id="ses-01", run=2, attempt=3)
 
 
 class TestRecordEvent:
@@ -50,8 +50,8 @@ class TestSaveEvents:
     def test_default_path_uses_bids_prefix(self, localizer):
         localizer.record_event(onset=0.0, duration=1.0, trial_type="self")
         path = localizer.save_events()
-        # Prefix uses task_id=stub_localizer, run=2, acq=3
-        assert path.name == "sub-01_ses-01_task-stub_localizer_acq-03_run-02_events.tsv"
+        # Prefix uses task_id=stub_localizer, run=2, attempt=3
+        assert path.name == "sub-01_ses-01_task-stub_localizer_run-02_attempt-03_events.tsv"
         assert path.exists()
 
     def test_custom_path_respected(self, localizer, tmp_path):

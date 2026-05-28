@@ -28,7 +28,7 @@ class TestProtocols:
         mock.subject = "sub-01"
         mock.task = "ball"
         mock.run_number = 1
-        mock.acq = None
+        mock.attempt = None
         mock.n_volumes = 100
         mock.mask_names = ["DMN"]
         mock.is_complete = MagicMock(return_value=False)

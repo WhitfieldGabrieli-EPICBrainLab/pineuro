@@ -1054,11 +1054,11 @@ def generate_preprocessing_report(
     ref_file = preprocessing_dir / ref_pattern
 
     # Check for multi-run coregistered data. Preprocessing writes per-input
-    # coreg outputs as {bids_prefix}_task-{task}_acq-NN_run-NN_to_acq-NN_run-NN.nii.gz
-    # (intermediate files), so we glob with the acq-aware pattern.
+    # coreg outputs as {bids_prefix}_task-{task}_run-NN_attempt-NN_to_run-NN_attempt-NN.nii.gz
+    # (intermediate files), so we glob with the run/attempt-aware pattern.
     coreg_files = []
     if coreg_dir.exists():
-        coreg_files = sorted(glob(str(coreg_dir / f"{bids_prefix}_task-{task}_acq-*_run-*.nii.gz")))
+        coreg_files = sorted(glob(str(coreg_dir / f"{bids_prefix}_task-{task}_run-*_attempt-*.nii.gz")))
 
     # Build QC sections
     sections: list[dict[str, Any]] = []
@@ -3279,7 +3279,7 @@ def generate_feedback_report(
     overwrite: bool = False,
     open_browser: bool = False,
     expected_volumes: int | None = None,
-    acq: int = 1,
+    attempt: int = 1,
     fd_threshold: float = 0.5,
     display_names: dict[str, str] | None = None,
     live_metrics: "list[LiveMetric] | None" = None,
@@ -3310,8 +3310,8 @@ def generate_feedback_report(
         Expected number of volumes for a complete run. If provided, used to
         determine COMPLETE vs PARTIAL status. If None, status shows as PARTIAL
         with a note that target is unknown.
-    acq : int, default=1
-        Acquisition number (1, 2, 3, ...) used in BIDS acq entity for the
+    attempt : int, default=1
+        Attempt number (1, 2, 3, ...) used in the attempt entity for the
         report's input filenames.
     fd_threshold : float, default=0.5
         Framewise displacement threshold in mm for highlighting excessive motion
@@ -3343,10 +3343,10 @@ def generate_feedback_report(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     bids_prefix = f"{subject}_{session}"
-    logger.info(f"Generating feedback QC report for {bids_prefix}, task={task}, run={run}, acq={acq:02d}")
+    logger.info(f"Generating feedback QC report for {bids_prefix}, task={task}, run={run}, attempt={attempt:02d}")
 
-    feedback_log_pattern = f"{bids_prefix}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedbacklog.tsv"
-    design_pattern = f"{bids_prefix}_task-{task}_acq-{acq:02d}_run-{run:02d}_design.tsv"
+    feedback_log_pattern = f"{bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_feedbacklog.tsv"
+    design_pattern = f"{bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_design.tsv"
 
     feedback_log = feedback_dir / feedback_log_pattern
     design_file = feedback_dir / design_pattern
@@ -3360,7 +3360,7 @@ def generate_feedback_report(
         "Session": session,
         "Task": task,
         "Run": f"{run:02d}",
-        "Acquisition": f"{acq:02d}" if isinstance(acq, int) else (acq if acq else "N/A"),
+        "Attempt": f"{attempt:02d}" if isinstance(attempt, int) else (attempt if attempt else "N/A"),
         "Feedback log": str(feedback_log.exists()),
         "Design matrix": str(design_file.exists()),
     }
@@ -3426,7 +3426,7 @@ def generate_feedback_report(
         summary_data["Status"] = "NO DATA"
 
     # Locate the matching PsychoPy log for declared live metrics.
-    psychopy_pattern = f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}_psychopylog.tsv"
+    psychopy_pattern = f"{subject}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_psychopylog.tsv"
     psychopy_log = feedback_dir / psychopy_pattern
 
     if live_metrics and psychopy_log.exists():
@@ -3604,9 +3604,9 @@ def generate_feedback_report(
             {"type": "single_image", "path": design_out.relative_to(output_dir).as_posix(), "alt": "Design matrix"}
         )
 
-    # Generate HTML report with acq entity
-    html_report = output_dir / f"{bids_prefix}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedback_qc.html"
-    stage_str = f"Feedback (session: {session}, task: {task}, run: {run}, acq: {acq:02d})"
+    # Generate HTML report with attempt entity
+    html_report = output_dir / f"{bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_feedback_qc.html"
+    stage_str = f"Feedback (session: {session}, task: {task}, run: {run}, attempt: {attempt:02d})"
     html = _generate_html_template(
         title=f"Feedback QC - {bids_prefix}", participant_id=subject, stage=stage_str, sections=sections
     )
