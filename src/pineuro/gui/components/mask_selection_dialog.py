@@ -1556,23 +1556,27 @@ class MaskSelectionDialog:
             return
 
         try:
-            # Generate script content
-            script_content = generate_mask_extraction_script(
-                participant_id=self.participant_id,
-                session_id=self.session_id,
-                mask_extraction_dir=self.mask_extraction_dir,
-                input_file=self.input_file,
-                mask_file=self.brain_mask_file,
-                ref_file=self.ref_file,
-                n_yeo=self.n_yeo,
-                yeo_targets=self.yeo_targets,
-                n_components=self.n_components,
-                threshold=self.threshold,
-                smooth_fwhm=self.smooth_fwhm,
-                highpass=self.highpass,
-                lowpass=self.lowpass,
-                selections=self._selections,
-            )
+            # Rebuild the resolved rest/ICA params and replay them through the
+            # shared dispatcher (same path the live pipeline uses).
+            params = {
+                "participant_id": self.participant_id,
+                "session_id": self.session_id,
+                "root_dir": self.mask_extraction_dir,
+                "input_file": self.input_file,
+                "mask_file": self.brain_mask_file,
+                "ref_file": self.ref_file,
+                "n_yeo": self.n_yeo,
+                "yeo_targets": self.yeo_targets,
+                "network_atlas": f"yeo_{self.n_yeo}",
+                "n_components": self.n_components,
+                "threshold": self.threshold,
+                "smooth_fwhm": self.smooth_fwhm,
+                "highpass": self.highpass,
+                "lowpass": self.lowpass,
+                "overwrite": True,
+                "qc_enabled": True,
+            }
+            script_content = generate_mask_extraction_script("rest", params, selections=self._selections)
 
             # Save to file
             script_path = self.mask_extraction_dir / "reproduce_masks.py"

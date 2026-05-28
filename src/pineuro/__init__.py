@@ -97,6 +97,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "mask_extraction_rest": (".mask_extraction", "mask_extraction_rest"),
     "mask_extraction_mni": (".mask_extraction", "mask_extraction_mni"),
     "mask_extraction_task": (".mask_extraction", "mask_extraction_task"),
+    "run_mask_extraction_from_config": (".mask_extraction", "run_mask_extraction_from_config"),
     "import_manual_masks": (".mask_extraction", "import_manual_masks"),
     "coregister_reference": (".mask_extraction", "coregister_reference"),
     "create_tissue_masks": (".mask_extraction", "create_tissue_masks"),
@@ -161,7 +162,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "compute_boxcar_task_regressor": (".utils", "compute_boxcar_task_regressor"),
     # --- script_generator.py ---
     "generate_mask_extraction_script": (".script_generator", "generate_mask_extraction_script"),
-    "generate_task_mask_extraction_script": (".script_generator", "generate_task_mask_extraction_script"),
     "save_script": (".script_generator", "save_script"),
     # --- scanner_setup.py (lightweight: stdlib only) ---
     "test_scanner_connection": (".scanner_setup", "test_scanner_connection"),
@@ -203,6 +203,7 @@ __all__ = [
     "mask_extraction_rest",
     "mask_extraction_mni",
     "mask_extraction_task",
+    "run_mask_extraction_from_config",
     "import_manual_masks",
     "coregister_reference",
     "ATLAS_SOURCES",
@@ -272,7 +273,6 @@ __all__ = [
     "ProgressEmitter",
     # Script generation
     "generate_mask_extraction_script",
-    "generate_task_mask_extraction_script",
     "save_script",
     # Scanner setup
     "test_scanner_connection",

@@ -3905,6 +3905,52 @@ def mask_extraction_task(
 
 
 # =============================================================================
+# SECTION 3C: CONFIG-DRIVEN DISPATCH (rest / task / mni)
+# =============================================================================
+
+
+def run_mask_extraction_from_config(
+    mode: str,
+    params: dict[str, Any],
+    *,
+    progress_callback: Callable[[str, str], None] | None = None,
+    stop_event: threading.Event | None = None,
+) -> list[Path]:
+    """Dispatch to the right ``mask_extraction_*`` function by mode.
+
+    Single source of truth for "how to call mask extraction". Both the live GUI
+    pipeline and the generated ``reproduce_masks.py`` script call this, so neither
+    can drift from the underlying function signatures.
+
+    Parameters
+    ----------
+    mode : str
+        One of ``"rest"`` (ICA), ``"task"`` (GLM), or ``"mni"`` (atlas fallback).
+    params : dict
+        The science-defining keyword arguments for the chosen function
+        (``participant_id``, ``session_id``, ``root_dir``, inputs, atlas/threshold
+        settings, ``overwrite``, ``qc_enabled``, ...). Forwarded as ``**params``,
+        so this helper needs no edits when a function gains a parameter.
+    progress_callback : callable, optional
+        Runtime progress hook. Not part of ``params`` (not serializable).
+    stop_event : threading.Event, optional
+        Cooperative cancellation signal. Only ``mode="rest"`` supports it.
+
+    Returns
+    -------
+    list[Path]
+        Paths to the thresholded network mask files.
+    """
+    if mode == "rest":
+        return mask_extraction_rest(**params, progress_callback=progress_callback, stop_event=stop_event)
+    if mode == "task":
+        return mask_extraction_task(**params, progress_callback=progress_callback)
+    if mode == "mni":
+        return mask_extraction_mni(**params, progress_callback=progress_callback)
+    raise ValueError(f"Unknown mask extraction mode: {mode!r}. Expected 'rest', 'task', or 'mni'.")
+
+
+# =============================================================================
 # SECTION 3B: MANUAL ROI IMPORT
 # =============================================================================
 # For researchers with pre-existing NIfTI masks (FreeSurfer, fMRIPrep,

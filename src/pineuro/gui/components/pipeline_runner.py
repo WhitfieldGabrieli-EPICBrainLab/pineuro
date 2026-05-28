@@ -1071,7 +1071,7 @@ class PipelineRunner:
 
     def _run_mask_extraction(self) -> None:
         """Extract network masks using ICA (rest), GLM contrasts (task), or manual import."""
-        from pineuro.mask_extraction import mask_extraction_rest
+        from pineuro.mask_extraction import run_mask_extraction_from_config
 
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
@@ -1116,8 +1116,6 @@ class PipelineRunner:
             return
 
         if loc_type != "rest":
-            from pineuro.mask_extraction import mask_extraction_task
-
             self._emit_progress("Using task-based (GLM) mask extraction")
 
             contrasts = loc0.get("contrasts", {})
@@ -1166,34 +1164,35 @@ class PipelineRunner:
 
             include_reverse = loc0.get("include_reverse_contrasts", False)
 
-            _mask_files = mask_extraction_task(
-                participant_id=self.participant_id,
-                session_id=self.session_id,
-                root_dir=mask_extraction_dir,
-                input_file=preproc_file,
-                mask_file=mask_file,
-                events=events_file,
-                contrasts=contrasts,
-                tr=tr,
-                threshold=threshold,
-                threshold_method=threshold_method,
-                atlas_mask=atlas_mask_cfg,
-                atlas_name=atlas_name_cfg,
-                atlas_source=atlas_source_cfg,
-                atlas_regions=atlas_regions_cfg,
-                ref_file=str(ref_file),
-                cluster_start_threshold=cluster_start_threshold,
-                cluster_step=cluster_step,
-                cluster_return_all=cluster_return_all,
-                min_cluster_size=min_cluster_size,
-                max_total_voxels=max_total_voxels,
-                include_reverse=include_reverse,
-                overwrite=self.overwrite,
-                smoothing_fwhm=smooth_fwhm,
-                high_pass=highpass,
-                qc_enabled=True,
-                progress_callback=progress_callback,
-            )
+            params = {
+                "participant_id": self.participant_id,
+                "session_id": self.session_id,
+                "root_dir": mask_extraction_dir,
+                "input_file": preproc_file,
+                "mask_file": mask_file,
+                "events": events_file,
+                "contrasts": contrasts,
+                "tr": tr,
+                "threshold": threshold,
+                "threshold_method": threshold_method,
+                "atlas_mask": atlas_mask_cfg,
+                "atlas_name": atlas_name_cfg,
+                "atlas_source": atlas_source_cfg,
+                "atlas_regions": atlas_regions_cfg,
+                "ref_file": str(ref_file),
+                "cluster_start_threshold": cluster_start_threshold,
+                "cluster_step": cluster_step,
+                "cluster_return_all": cluster_return_all,
+                "min_cluster_size": min_cluster_size,
+                "max_total_voxels": max_total_voxels,
+                "include_reverse": include_reverse,
+                "overwrite": self.overwrite,
+                "smoothing_fwhm": smooth_fwhm,
+                "high_pass": highpass,
+                "qc_enabled": True,
+            }
+            _mask_files = run_mask_extraction_from_config("task", params, progress_callback=progress_callback)
+            self._write_reproduce_script("task", params)
         else:
             # ICA-based extraction (existing behavior)
             n_yeo = extraction["n_yeo"]
@@ -1231,30 +1230,54 @@ class PipelineRunner:
                             else:
                                 self._emit_progress(f"Including sham alternative network: {target}")
 
-            _mask_files = mask_extraction_rest(
-                participant_id=self.participant_id,
-                session_id=self.session_id,
-                root_dir=mask_extraction_dir,
-                input_file=preproc_file,
-                mask_file=mask_file,
-                ref_file=ref_file,
-                n_yeo=n_yeo,
-                yeo_targets=yeo_targets,
-                network_atlas=network_atlas,
-                n_components=n_components,
-                threshold=threshold,
-                smooth_fwhm=smooth_fwhm,
-                highpass=highpass,
-                lowpass=lowpass,
-                overwrite=self.overwrite,
-                qc_enabled=True,
-                progress_callback=progress_callback,
-                sham_hemisphere_network=sham_hemisphere_network,
-                stop_event=self._stop_event,
+            params = {
+                "participant_id": self.participant_id,
+                "session_id": self.session_id,
+                "root_dir": mask_extraction_dir,
+                "input_file": preproc_file,
+                "mask_file": mask_file,
+                "ref_file": ref_file,
+                "n_yeo": n_yeo,
+                "yeo_targets": yeo_targets,
+                "network_atlas": network_atlas,
+                "n_components": n_components,
+                "threshold": threshold,
+                "smooth_fwhm": smooth_fwhm,
+                "highpass": highpass,
+                "lowpass": lowpass,
+                "overwrite": self.overwrite,
+                "qc_enabled": True,
+                "sham_hemisphere_network": sham_hemisphere_network,
+            }
+            _mask_files = run_mask_extraction_from_config(
+                "rest", params, progress_callback=progress_callback, stop_event=self._stop_event
             )
+            self._write_reproduce_script("rest", params)
 
         # Create WM/CSF tissue masks for nuisance regression (if enabled)
         self._create_tissue_masks_if_enabled(mask_extraction_dir, ref_file, progress_callback)
+
+    def _write_reproduce_script(
+        self,
+        mode: str,
+        params: dict,
+        selections: dict | None = None,
+    ) -> None:
+        """Write a standalone reproduce_masks.py capturing this extraction call.
+
+        The script replays the exact ``mode`` + ``params`` through
+        ``run_mask_extraction_from_config`` — the same dispatcher the pipeline
+        just used — so it can never drift from the core API. Best-effort: a
+        failure here must not break the pipeline run.
+        """
+        try:
+            from pineuro.script_generator import generate_mask_extraction_script, save_script
+
+            script = generate_mask_extraction_script(mode, params, selections=selections)
+            out = save_script(script, Path(params["root_dir"]) / "reproduce_masks.py")
+            self._emit_progress(f"Wrote reproduction script: {out.name}")
+        except Exception as ex:
+            logger.warning(f"Could not write reproduction script: {ex}")
 
     def _create_tissue_masks_if_enabled(
         self,
@@ -1443,7 +1466,7 @@ class PipelineRunner:
                 progress_callback=progress_callback,
             )
         elif loc_type == "rest":
-            from pineuro.mask_extraction import mask_extraction_rest
+            from pineuro.mask_extraction import run_mask_extraction_from_config
 
             n_yeo = loc.get("n_yeo", 17)
             network_atlas = loc.get("network_atlas", f"yeo_{n_yeo}")
@@ -1468,28 +1491,31 @@ class PipelineRunner:
                         if target and target not in yeo_targets:
                             yeo_targets.append(target)
 
-            mask_files = mask_extraction_rest(
-                participant_id=self.participant_id,
-                session_id=self.session_id,
-                root_dir=loc_dir,
-                input_file=preproc_file,
-                mask_file=mask_file,
-                ref_file=ref_file,
-                n_yeo=n_yeo,
-                yeo_targets=yeo_targets,
-                network_atlas=network_atlas,
-                threshold=threshold,
-                smooth_fwhm=smooth_fwhm,
-                highpass=highpass,
-                lowpass=lowpass,
-                overwrite=self.overwrite,
-                qc_enabled=True,
-                progress_callback=progress_callback,
-                sham_hemisphere_network=sham_hemisphere_network,
-                stop_event=self._stop_event,
+            params = {
+                "participant_id": self.participant_id,
+                "session_id": self.session_id,
+                "root_dir": loc_dir,
+                "input_file": preproc_file,
+                "mask_file": mask_file,
+                "ref_file": ref_file,
+                "n_yeo": n_yeo,
+                "yeo_targets": yeo_targets,
+                "network_atlas": network_atlas,
+                "n_components": loc.get("n_components", 30),
+                "threshold": threshold,
+                "smooth_fwhm": smooth_fwhm,
+                "highpass": highpass,
+                "lowpass": lowpass,
+                "overwrite": self.overwrite,
+                "qc_enabled": True,
+                "sham_hemisphere_network": sham_hemisphere_network,
+            }
+            mask_files = run_mask_extraction_from_config(
+                "rest", params, progress_callback=progress_callback, stop_event=self._stop_event
             )
+            self._write_reproduce_script("rest", params)
         else:
-            from pineuro.mask_extraction import mask_extraction_task
+            from pineuro.mask_extraction import run_mask_extraction_from_config
 
             contrasts = loc.get("contrasts", {})
             if not contrasts:
@@ -1515,36 +1541,37 @@ class PipelineRunner:
                     f"Run the localizer task first to generate the events TSV."
                 )
 
-            mask_files = mask_extraction_task(
-                participant_id=self.participant_id,
-                session_id=self.session_id,
-                root_dir=loc_dir,
-                input_file=preproc_file,
-                mask_file=mask_file,
-                events=events_file,
-                contrasts=contrasts,
-                tr=loc.get("tr", 1.2),
-                threshold=loc.get("threshold", 2000),
-                threshold_method=loc.get("threshold_method", "top_n"),
-                atlas_mask=loc.get("atlas_mask"),
-                atlas_name=loc.get("atlas_name"),
-                atlas_source=loc.get("atlas_source"),
-                atlas_regions=loc.get("atlas_regions"),
-                ref_file=str(ref_file),
-                cluster_start_threshold=loc.get("cluster_start_threshold", 2.0),
-                cluster_step=loc.get("cluster_step", 0.1),
-                cluster_return_all=loc.get("cluster_return_all", False),
-                min_cluster_size=loc.get("min_cluster_size", 50),
-                max_total_voxels=loc.get("max_total_voxels"),
-                include_reverse=loc.get("include_reverse_contrasts", False),
-                overwrite=self.overwrite,
-                smoothing_fwhm=loc.get("smooth_fwhm", 5.0),
-                high_pass=loc.get("highpass", 0.01),
-                drift_model=loc.get("drift_model", "cosine"),
-                hrf_model=loc.get("hrf_model", "spm"),
-                qc_enabled=True,
-                progress_callback=progress_callback,
-            )
+            params = {
+                "participant_id": self.participant_id,
+                "session_id": self.session_id,
+                "root_dir": loc_dir,
+                "input_file": preproc_file,
+                "mask_file": mask_file,
+                "events": events_file,
+                "contrasts": contrasts,
+                "tr": loc.get("tr", 1.2),
+                "threshold": loc.get("threshold", 2000),
+                "threshold_method": loc.get("threshold_method", "top_n"),
+                "atlas_mask": loc.get("atlas_mask"),
+                "atlas_name": loc.get("atlas_name"),
+                "atlas_source": loc.get("atlas_source"),
+                "atlas_regions": loc.get("atlas_regions"),
+                "ref_file": str(ref_file),
+                "cluster_start_threshold": loc.get("cluster_start_threshold", 2.0),
+                "cluster_step": loc.get("cluster_step", 0.1),
+                "cluster_return_all": loc.get("cluster_return_all", False),
+                "min_cluster_size": loc.get("min_cluster_size", 50),
+                "max_total_voxels": loc.get("max_total_voxels"),
+                "include_reverse": loc.get("include_reverse_contrasts", False),
+                "overwrite": self.overwrite,
+                "smoothing_fwhm": loc.get("smooth_fwhm", 5.0),
+                "high_pass": loc.get("highpass", 0.01),
+                "drift_model": loc.get("drift_model", "cosine"),
+                "hrf_model": loc.get("hrf_model", "spm"),
+                "qc_enabled": True,
+            }
+            mask_files = run_mask_extraction_from_config("task", params, progress_callback=progress_callback)
+            self._write_reproduce_script("task", params)
 
         # Copy masks to shared 03_masks/
         shared_mask_dir = mask_extraction_dir / "03_masks"
@@ -1647,7 +1674,7 @@ class PipelineRunner:
         This is the fallback pathway that registers a network atlas from MNI
         space to the participant's reference scan and extracts binary masks.
         """
-        from pineuro.mask_extraction import mask_extraction_mni
+        from pineuro.mask_extraction import run_mask_extraction_from_config
 
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
@@ -1696,20 +1723,21 @@ class PipelineRunner:
             else:
                 self._emit_progress(step)
 
-        _mask_files = mask_extraction_mni(
-            participant_id=self.participant_id,
-            session_id=self.session_id,
-            root_dir=mask_extraction_dir,
-            ref_file=ref_file,
-            n_yeo=n_yeo,
-            yeo_targets=yeo_targets,
-            network_atlas=network_atlas,
-            threshold=threshold,
-            overwrite=self.overwrite,
-            qc_enabled=True,
-            progress_callback=progress_callback,
-            sham_hemisphere_network=sham_hemisphere_network,
-        )
+        params = {
+            "participant_id": self.participant_id,
+            "session_id": self.session_id,
+            "root_dir": mask_extraction_dir,
+            "ref_file": ref_file,
+            "n_yeo": n_yeo,
+            "yeo_targets": yeo_targets,
+            "network_atlas": network_atlas,
+            "threshold": threshold,
+            "overwrite": self.overwrite,
+            "qc_enabled": True,
+            "sham_hemisphere_network": sham_hemisphere_network,
+        }
+        _mask_files = run_mask_extraction_from_config("mni", params, progress_callback=progress_callback)
+        self._write_reproduce_script("mni", params)
 
         # Create WM/CSF tissue masks for nuisance regression (if any feedback run needs them)
         feedback_runs = config.get("feedback_runs", []) or []
