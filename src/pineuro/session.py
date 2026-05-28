@@ -7,60 +7,60 @@ This module provides type-safe configuration dataclasses and high-level orchestr
 functions for running neurofeedback sessions. It separates configuration from execution,
 making it suitable for both scripted usage and future GUI integration.
 
-Multi-Visit Support
+Multi-Session Support
 ------------------
-The module supports longitudinal studies with multiple visits per participant:
-- Single-visit mode: Traditional layout with all data in participant directory
-- Multi-visit mode: Data organized in ses-XX subdirectories
+The module supports longitudinal studies with multiple sessions per participant:
+- Single-session mode: Traditional layout with all data in participant directory
+- Multi-session mode: Data organized in ses-XX subdirectories
 
-For multi-visit studies, masks can be:
-- Computed fresh each visit (mask_source='compute')
-- Reused from a previous visit (mask_source='reuse')
+For multi-session studies, masks can be:
+- Computed fresh each session (mask_source='compute')
+- Reused from a previous session (mask_source='reuse')
 
 Components
 ----------
 Configuration Dataclasses:
-- PathConfig: Paths for session directories (with optional visit_id)
+- PathConfig: Paths for session directories (with optional session_id)
 - ScanConfig: Scanner/acquisition parameters
 - MaskConfig: Mask extraction parameters
-- FeedbackConfig: Feedback session parameters
+- FeedbackConfig: Feedback task parameters
 - TaskConfig: Generic task parameters (task_type, task_params, network_assignment)
-- VisitConfig: Visit-level configuration for multi-visit studies
+- SessionMetadata: Session-level configuration for multi-session studies
 - ShamConfig: Sham/control condition configuration
 - SessionConfig: Top-level config combining all above
 
 Orchestration Functions:
 - setup_session(): Run all setup steps (collection, preprocessing, mask extraction)
-- setup_visit_with_reused_masks(): Set up visit reusing masks from another visit
+- setup_session_with_reused_masks(): Set up session reusing masks from another session
 - run_single_task(): Run one transfer/feedback task
 - run_full_session(): Run complete workflow (Transfer -> Feedback x N -> Transfer)
 - run_next_task(): Run next task in sequence (for incremental progression)
-- reset_session_state(): Reset session for new participant
+- reset_task_state(): Reset task state for a new session
 
-Multi-Visit Support Functions:
-- resolve_mask_source(): Get mask paths based on visit configuration
-- detect_existing_visits(): List visits for a participant
-- next_visit_id(): Get next visit ID (ses-01, ses-02, etc.)
-- is_single_visit_data(): Check if data uses single-visit layout
-- migrate_to_multi_visit(): Convert single-visit to multi-visit structure
+Multi-Session Support Functions:
+- resolve_mask_source(): Get mask paths based on session configuration
+- detect_existing_sessions(): List sessions for a participant
+- next_session_id(): Get next session ID (ses-01, ses-02, etc.)
+- is_single_session_data(): Check if data uses single-session layout
+- migrate_to_multi_session(): Convert single-session to multi-session structure
 
 Workflow
 --------
-Single-visit (traditional):
-1. Create SessionConfig with PathConfig(visit_id=None)
+Single-session (traditional):
+1. Create SessionConfig with PathConfig(session_id=None)
 2. Call setup_session() to prepare masks
 3. Call run_next_task() repeatedly to progress through session
 
-Multi-visit with fresh masks:
-1. Create SessionConfig with PathConfig(visit_id='ses-01') and VisitConfig(mask_source='compute')
+Multi-session with fresh masks:
+1. Create SessionConfig with PathConfig(session_id='ses-01') and SessionMetadata(mask_source='compute')
 2. Call setup_session() for full pipeline
-3. Run feedback session
+3. Run feedback task
 
-Multi-visit with mask reuse:
-1. Create SessionConfig with PathConfig(visit_id='ses-02') and
-   VisitConfig(mask_source='reuse', mask_source_visit='ses-01')
+Multi-session with mask reuse:
+1. Create SessionConfig with PathConfig(session_id='ses-02') and
+   SessionMetadata(mask_source='reuse', mask_source_session='ses-01')
 2. Call setup_session() - only runs reference collection + coregistration
-3. Run feedback session
+3. Run feedback task
 
 Dependencies
 ------------
@@ -68,9 +68,9 @@ dataclasses, pathlib, json, shutil, datetime, yaml (optional), logging
 
 Notes
 -----
-This module works alongside tasks/session.py which contains SessionState for
+This module works alongside tasks/state.py which contains TaskState for
 persisting task-level state (hits, scale factors) between runs.
-Session state resets each visit (visits are independent).
+Task state resets each session (sessions are independent).
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from .tasks.session import SessionState
+    from .tasks.state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -268,32 +268,32 @@ class SimulatorSourceMapping:
 
 
 @dataclass
-class VisitConfig:
-    """Visit-level configuration for multi-visit studies.
+class SessionMetadata:
+    """Session-level configuration for multi-session studies.
 
     Parameters
     ----------
-    visit_id : str
-        Visit identifier (e.g., 'ses-01', 'ses-02')
-    visit_number : int
-        1-indexed visit number
+    session_id : str
+        Session identifier (e.g., 'ses-01', 'ses-02')
+    session_number : int
+        1-indexed session number
     mask_source : str
         How masks are obtained: 'compute' (run localizer + extraction)
-        or 'reuse' (reuse from another visit)
-    mask_source_visit : str, optional
-        If mask_source='reuse', the visit ID to copy masks from (e.g., 'ses-01')
+        or 'reuse' (reuse from another session)
+    mask_source_session : str, optional
+        If mask_source='reuse', the session ID to copy masks from (e.g., 'ses-01')
     localizer_enabled : bool
         Whether to run localizer (resting-state) collection
     notes : str
-        Optional notes about this visit
+        Optional notes about this session
     created : str
-        ISO timestamp of visit creation
+        ISO timestamp of session creation
     """
 
-    visit_id: str
-    visit_number: int
+    session_id: str
+    session_number: int
     mask_source: str = "compute"  # "compute" or "reuse"
-    mask_source_visit: str | None = None
+    mask_source_session: str | None = None
     localizer_enabled: bool = True
     notes: str = ""
     created: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -302,8 +302,8 @@ class VisitConfig:
         """Validate configuration."""
         if self.mask_source not in ("compute", "reuse"):
             raise ValueError(f"mask_source must be 'compute' or 'reuse', got '{self.mask_source}'")
-        if self.mask_source == "reuse" and not self.mask_source_visit:
-            raise ValueError("mask_source_visit is required when mask_source='reuse'")
+        if self.mask_source == "reuse" and not self.mask_source_session:
+            raise ValueError("mask_source_session is required when mask_source='reuse'")
         if self.mask_source == "reuse":
             # Disable localizer when reusing masks
             self.localizer_enabled = False
@@ -350,7 +350,7 @@ class ShamConfig:
         (e.g., ["SomMotA", "SomMotB"] instead of ["DefaultA", "ContA"])
     randomization_file : Path, optional
         Path to TSV file containing subject -> condition assignments.
-        Columns: subject_id, condition, matched_participant, matched_visit, notes
+        Columns: subject_id, condition, matched_participant, matched_session, notes
         For 'replay' method: matched_participant specifies which participant's
         feedbacklog to replay from (looked up in the study's base_dir).
     """
@@ -397,73 +397,73 @@ class PathConfig:
         Base directory for all session data (study-level, not participant-specific)
     participant_id : str
         Participant identifier (e.g., 'sub-01')
-    visit_id : str, optional
-        Visit identifier (e.g., 'ses-01'). If None, uses single-visit mode
+    session_id : str, optional
+        Session identifier (e.g., 'ses-01'). If None, uses single-session mode
         (backward compatible with existing data).
-    session_dir : Path, optional
-        Directory for session state and feedback outputs. Defaults to participant_visit_dir/feedback
+    feedback_dir : Path, optional
+        Directory for task state and feedback outputs. Defaults to participant_session_dir/feedback
     preprocessing_dir : Path, optional
-        Directory for preprocessing outputs. Defaults to participant_visit_dir/preprocessing
+        Directory for preprocessing outputs. Defaults to participant_session_dir/preprocessing
     mask_extraction_dir : Path, optional
-        Directory for mask extraction outputs. Defaults to participant_visit_dir/mask_extraction
+        Directory for mask extraction outputs. Defaults to participant_session_dir/mask_extraction
     feedback_output_dir : Path, optional
-        Directory for feedback run outputs. Defaults to session_dir/02_feedback_output
+        Directory for feedback run outputs. Defaults to feedback_dir/02_feedback_output
     collection_dir : Path, optional
-        Directory for DICOM collection. Defaults to participant_visit_dir/collection
+        Directory for DICOM collection. Defaults to participant_session_dir/collection
     mask_source_dir : Path, optional
-        If reusing masks from another visit, the source mask_extraction directory
+        If reusing masks from another session, the source mask_extraction directory
     """
 
     base_dir: Path
     participant_id: str
-    visit_id: str | None = None  # None = single-visit mode (backward compat)
+    session_id: str | None = None  # None = single-session mode (backward compat)
     example_participant_id: str = ""  # GUI placeholder text (e.g. "sub-001")
-    session_dir: Path | None = None
+    feedback_dir: Path | None = None
     preprocessing_dir: Path | None = None
     mask_extraction_dir: Path | None = None
     feedback_output_dir: Path | None = None
     collection_dir: Path | None = None
-    mask_source_dir: Path | None = None  # For mask reuse across visits
+    mask_source_dir: Path | None = None  # For mask reuse across sessions
 
     def __post_init__(self) -> None:
         """Convert all paths to Path objects and set defaults for optional directories."""
         self.base_dir = Path(self.base_dir)
 
-        # Validate visit_id format if provided
-        if self.visit_id and not re.match(r"^ses-\d+$", self.visit_id):
-            raise ValueError(f"visit_id must be in BIDS format 'ses-NN' (e.g., 'ses-01'), got '{self.visit_id}'")
+        # Validate session_id format if provided
+        if self.session_id and not re.match(r"^ses-\d+$", self.session_id):
+            raise ValueError(f"session_id must be in BIDS format 'ses-NN' (e.g., 'ses-01'), got '{self.session_id}'")
 
-        # Compute participant + visit directory
-        if self.visit_id:
-            # Multi-visit mode: base_dir/participant_id/visit_id/
-            self._participant_visit_dir = self.base_dir / self.participant_id / self.visit_id
+        # Compute participant + session directory
+        if self.session_id:
+            # Multi-session mode: base_dir/participant_id/session_id/
+            self._participant_session_dir = self.base_dir / self.participant_id / self.session_id
         else:
-            # Single-visit mode (backward compatible): base_dir/participant_id/
-            self._participant_visit_dir = self.base_dir / self.participant_id
+            # Single-session mode (backward compatible): base_dir/participant_id/
+            self._participant_session_dir = self.base_dir / self.participant_id
 
-        # Set default paths relative to participant_visit_dir if not provided
-        if self.session_dir is None:
-            self.session_dir = self._participant_visit_dir / "feedback"
+        # Set default paths relative to participant_session_dir if not provided
+        if self.feedback_dir is None:
+            self.feedback_dir = self._participant_session_dir / "feedback"
         else:
-            self.session_dir = Path(self.session_dir)
+            self.feedback_dir = Path(self.feedback_dir)
 
         if self.preprocessing_dir is None:
-            self.preprocessing_dir = self._participant_visit_dir / "preprocessing"
+            self.preprocessing_dir = self._participant_session_dir / "preprocessing"
         else:
             self.preprocessing_dir = Path(self.preprocessing_dir)
 
         if self.mask_extraction_dir is None:
-            self.mask_extraction_dir = self._participant_visit_dir / "mask_extraction"
+            self.mask_extraction_dir = self._participant_session_dir / "mask_extraction"
         else:
             self.mask_extraction_dir = Path(self.mask_extraction_dir)
 
         if self.feedback_output_dir is None:
-            self.feedback_output_dir = self.session_dir / "02_feedback_output"
+            self.feedback_output_dir = self.feedback_dir / "02_feedback_output"
         else:
             self.feedback_output_dir = Path(self.feedback_output_dir)
 
         if self.collection_dir is None:
-            self.collection_dir = self._participant_visit_dir / "collection"
+            self.collection_dir = self._participant_session_dir / "collection"
         else:
             self.collection_dir = Path(self.collection_dir)
 
@@ -471,14 +471,14 @@ class PathConfig:
             self.mask_source_dir = Path(self.mask_source_dir)
 
     @property
-    def participant_visit_dir(self) -> Path:
-        """Return the participant + visit directory."""
-        return cast(Path, self._participant_visit_dir)
+    def participant_session_dir(self) -> Path:
+        """Return the participant + session directory."""
+        return cast(Path, self._participant_session_dir)
 
     @property
-    def is_multi_visit(self) -> bool:
-        """Check if this is a multi-visit configuration."""
-        return self.visit_id is not None
+    def is_multi_session(self) -> bool:
+        """Check if this is a multi-session configuration."""
+        return self.session_id is not None
 
 
 # =============================================================================
@@ -490,7 +490,7 @@ class PathConfig:
 class StudyInfoConfig:
     """Study-level configuration (the YAML ``study:`` block)."""
 
-    multi_visit_enabled: bool = False
+    multi_session_enabled: bool = False
 
 
 @dataclass
@@ -950,34 +950,34 @@ class SessionConfig:
     mask : MaskConfig
         Mask extraction parameters
     feedback : FeedbackConfig
-        Feedback session parameters
+        Feedback task parameters
     task : TaskConfig
         BallTask parameters
-    visit : VisitConfig, optional
-        Visit-specific configuration for multi-visit studies.
-        If None, uses single-visit mode (backward compatible).
+    session : SessionMetadata, optional
+        Session-specific configuration for multi-session studies.
+        If None, uses single-session mode (backward compatible).
     sham : ShamConfig, optional
         Sham/control condition configuration.
         If None or sham.enabled=False, all participants receive real feedback.
 
     Examples
     --------
-    >>> # Single-visit mode (backward compatible)
+    >>> # Single-session mode (backward compatible)
     >>> config = SessionConfig(
     ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01"),
     ...     scan=ScanConfig(tr=1.2, feedback_dicoms="/data/dicoms/feedback"),
     ... )
 
-    >>> # Multi-visit mode
+    >>> # Multi-session mode
     >>> config = SessionConfig(
-    ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", visit_id="ses-01"),
-    ...     visit=VisitConfig(visit_id="ses-01", visit_number=1, mask_source="compute"),
+    ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", session_id="ses-01"),
+    ...     session=SessionMetadata(session_id="ses-01", session_number=1, mask_source="compute"),
     ... )
 
-    >>> # Multi-visit with mask reuse
+    >>> # Multi-session with mask reuse
     >>> config = SessionConfig(
-    ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", visit_id="ses-02"),
-    ...     visit=VisitConfig(visit_id="ses-02", visit_number=2, mask_source="reuse", mask_source_visit="ses-01"),
+    ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", session_id="ses-02"),
+    ...     session=SessionMetadata(session_id="ses-02", session_number=2, mask_source="reuse", mask_source_session="ses-01"),
     ... )
     """
 
@@ -986,13 +986,13 @@ class SessionConfig:
     simulator: SimulatorConfig = field(default_factory=SimulatorConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     reference: ReferenceConfig = field(default_factory=ReferenceConfig)
-    visit: VisitConfig | None = None
+    session: SessionMetadata | None = None
     sham: ShamConfig | None = None
     localizers: list[LocalizerConfig] = field(default_factory=list)
     feedback_runs: list[FeedbackRunConfig] = field(default_factory=list)
 
     # Runtime-only fields (not serialized to YAML). Set by coregister_before_first_transfer
-    # / tissue-mask resolution and consumed by run_feedback_session. Previously lived on
+    # / tissue-mask resolution and consumed by run_feedback_task. Previously lived on
     # FeedbackConfig.wm_mask_path / csf_mask_path; moved here so they don't appear in YAML.
     _wm_mask_path: Path | None = field(default=None, repr=False)
     _csf_mask_path: Path | None = field(default=None, repr=False)
@@ -1047,8 +1047,8 @@ class SessionConfig:
         reference_data = data.get("reference", {})
         reference = ReferenceConfig(**reference_data) if reference_data else ReferenceConfig()
 
-        visit_data = data.get("visit")
-        visit = VisitConfig(**visit_data) if visit_data else None
+        session_data = data.get("session")
+        session = SessionMetadata(**session_data) if session_data else None
 
         sham_data = data.get("sham")
         sham = ShamConfig(**sham_data) if sham_data else None
@@ -1076,7 +1076,7 @@ class SessionConfig:
             simulator=simulator,
             scanner=scanner,
             reference=reference,
-            visit=visit,
+            session=session,
             sham=sham,
             localizers=localizers,
             feedback_runs=feedback_runs,
@@ -1138,8 +1138,8 @@ class SessionConfig:
             "scanner": asdict(self.scanner),
             "reference": _path_to_str(asdict(self.reference)),
         }
-        if self.visit is not None:
-            result["visit"] = asdict(self.visit)
+        if self.session is not None:
+            result["session"] = asdict(self.session)
         if self.sham is not None:
             result["sham"] = _path_to_str(asdict(self.sham))
         if self.localizers:
@@ -1154,7 +1154,7 @@ class SessionConfig:
 
         Replaces the legacy stored ``mask.mask_names`` field. Returns the
         ordered union (first occurrence wins) so callers that previously
-        passed ``config.mask.mask_names`` to :func:`run_feedback_session`
+        passed ``config.mask.mask_names`` to :func:`run_feedback_task`
         get a stable, deterministic list.
         """
         seen: set[str] = set()
@@ -1271,7 +1271,7 @@ class SessionConfig:
 # =============================================================================
 
 
-def ref_file_path(config: SessionConfig, task: str = "rest", source_visit: str | None = None) -> Path:
+def ref_file_path(config: SessionConfig, task: str = "rest", source_session: str | None = None) -> Path:
     """Return the expected BOLD reference path based on config.
 
     Parameters
@@ -1280,17 +1280,17 @@ def ref_file_path(config: SessionConfig, task: str = "rest", source_visit: str |
         Session configuration
     task : str
         Task name (default: 'rest')
-    source_visit : str, optional
-        If specified, return ref path from this visit instead of current visit
+    source_session : str, optional
+        If specified, return ref path from this session instead of current session
 
     Returns
     -------
     Path
         Path to BOLD reference file
     """
-    if source_visit:
-        # Get ref from a different visit
-        preprocessing_dir = config.paths.base_dir / config.paths.participant_id / source_visit / "preprocessing"
+    if source_session:
+        # Get ref from a different session
+        preprocessing_dir = config.paths.base_dir / config.paths.participant_id / source_session / "preprocessing"
     else:
         assert config.paths.preprocessing_dir is not None
         preprocessing_dir = config.paths.preprocessing_dir
@@ -1514,16 +1514,16 @@ def discard_attempt(
 
 
 # =============================================================================
-# Multi-Visit Support Functions
+# Multi-Session Support Functions
 # =============================================================================
 
 
 def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
-    """Resolve mask file paths based on visit configuration.
+    """Resolve mask file paths based on session configuration.
 
-    For visits that compute their own masks, returns paths from the current visit's
-    mask_extraction directory. For visits that reuse masks from another visit,
-    returns paths from the source visit.
+    For sessions that compute their own masks, returns paths from the current session's
+    mask_extraction directory. For sessions that reuse masks from another session,
+    returns paths from the source session.
 
     Parameters
     ----------
@@ -1536,33 +1536,33 @@ def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
         (mask_files, ref_file) where mask_files are thresholded network masks
         and ref_file is the BOLD reference from preprocessing
     """
-    if config.visit is None or config.visit.mask_source == "compute":
-        # Masks computed in this visit
+    if config.session is None or config.session.mask_source == "compute":
+        # Masks computed in this session
         if config.paths.mask_extraction_dir is None:
             raise ValueError("config.paths.mask_extraction_dir must be set when mask_source='compute'")
         mask_dir = config.paths.mask_extraction_dir / "03_masks"
         mask_files = sorted(mask_dir.glob("*_thr.nii.gz")) if mask_dir.exists() else []
         ref = ref_file_path(config)
         return (mask_files, ref)
-    elif config.visit.mask_source == "reuse":
-        # Masks from another visit
-        if config.visit.mask_source_visit is None:
-            raise ValueError("config.visit.mask_source_visit must be set when mask_source='reuse'")
-        source_visit = config.visit.mask_source_visit
-        source_base = config.paths.base_dir / config.paths.participant_id / source_visit / "mask_extraction"
+    elif config.session.mask_source == "reuse":
+        # Masks from another session
+        if config.session.mask_source_session is None:
+            raise ValueError("config.session.mask_source_session must be set when mask_source='reuse'")
+        source_session = config.session.mask_source_session
+        source_base = config.paths.base_dir / config.paths.participant_id / source_session / "mask_extraction"
         source_mask_dir = source_base / "03_masks"
         mask_files = sorted(source_mask_dir.glob("*_thr.nii.gz")) if source_mask_dir.exists() else []
-        ref = ref_file_path(config, source_visit=source_visit)
+        ref = ref_file_path(config, source_session=source_session)
         return (mask_files, ref)
     else:
-        raise ValueError(f"Unknown mask_source: {config.visit.mask_source}")
+        raise ValueError(f"Unknown mask_source: {config.session.mask_source}")
 
 
-def is_single_visit_data(participant_dir: Path) -> bool:
-    """Check if participant data uses single-visit layout.
+def is_single_session_data(participant_dir: Path) -> bool:
+    """Check if participant data uses single-session layout.
 
-    Single-visit layout has mask_extraction/preprocessing directly in participant dir.
-    Multi-visit layout has ses-* subdirectories.
+    Single-session layout has mask_extraction/preprocessing directly in participant dir.
+    Multi-session layout has ses-* subdirectories.
 
     Parameters
     ----------
@@ -1572,19 +1572,19 @@ def is_single_visit_data(participant_dir: Path) -> bool:
     Returns
     -------
     bool
-        True if single-visit layout, False if multi-visit
+        True if single-session layout, False if multi-session
     """
     has_direct_masks = (participant_dir / "mask_extraction").exists()
-    has_visit_dirs = (
+    has_session_dirs = (
         any(d.name.startswith("ses-") for d in participant_dir.iterdir() if d.is_dir())
         if participant_dir.exists()
         else False
     )
-    return has_direct_masks and not has_visit_dirs
+    return has_direct_masks and not has_session_dirs
 
 
-def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict[str, Any]]:
-    """Detect existing visit directories for a participant.
+def detect_existing_sessions(base_dir: Path, participant_id: str) -> list[dict[str, Any]]:
+    """Detect existing session directories for a participant.
 
     Parameters
     ----------
@@ -1596,48 +1596,48 @@ def detect_existing_visits(base_dir: Path, participant_id: str) -> list[dict[str
     Returns
     -------
     list[dict]
-        List of visit info dicts with keys:
-        - visit_id: str or None (None for single-visit mode)
+        List of session info dicts with keys:
+        - session_id: str or None (None for single-session mode)
         - has_masks: bool
         - has_feedback: bool
         - masks_approved: bool
     """
     participant_dir = base_dir / participant_id
-    visits: list[dict[str, Any]] = []
+    sessions: list[dict[str, Any]] = []
 
     if not participant_dir.exists():
-        return visits
+        return sessions
 
-    # Look for ses-* directories (multi-visit)
+    # Look for ses-* directories (multi-session)
     for entry in sorted(participant_dir.iterdir()):
         if entry.is_dir() and entry.name.startswith("ses-"):
             me_dir = entry / "mask_extraction"
-            visit_info = {
-                "visit_id": entry.name,
+            session_info = {
+                "session_id": entry.name,
                 "has_masks": (me_dir / "03_masks").exists(),
-                "has_feedback": (entry / "feedback" / "session_state.json").exists(),
+                "has_feedback": (entry / "feedback" / "task_state.json").exists(),
                 "masks_approved": (me_dir / ".masks_approved").exists(),
             }
-            visits.append(visit_info)
+            sessions.append(session_info)
 
-    # Also check for single-visit mode (no ses-* directory)
-    if is_single_visit_data(participant_dir):
+    # Also check for single-session mode (no ses-* directory)
+    if is_single_session_data(participant_dir):
         me_dir = participant_dir / "mask_extraction"
-        visits.insert(
+        sessions.insert(
             0,
             {
-                "visit_id": None,  # Single-visit mode
+                "session_id": None,  # Single-session mode
                 "has_masks": (me_dir / "03_masks").exists(),
-                "has_feedback": (participant_dir / "feedback" / "session_state.json").exists(),
+                "has_feedback": (participant_dir / "feedback" / "task_state.json").exists(),
                 "masks_approved": (me_dir / ".masks_approved").exists(),
             },
         )
 
-    return visits
+    return sessions
 
 
-def next_visit_id(base_dir: Path, participant_id: str) -> str:
-    """Get the next visit ID for a participant.
+def next_session_id(base_dir: Path, participant_id: str) -> str:
+    """Get the next session ID for a participant.
 
     Parameters
     ----------
@@ -1649,52 +1649,52 @@ def next_visit_id(base_dir: Path, participant_id: str) -> str:
     Returns
     -------
     str
-        Next visit ID (e.g., 'ses-01', 'ses-02')
+        Next session ID (e.g., 'ses-01', 'ses-02')
     """
-    visits = detect_existing_visits(base_dir, participant_id)
-    # Filter to only multi-visit entries (those with actual visit_id)
-    multi_visits = [v for v in visits if v["visit_id"] is not None]
-    # Defensively parse "ses-NN" IDs; ignore any malformed visit directory names.
-    visit_nums: list[int] = []
-    for v in multi_visits:
-        parts = str(v["visit_id"]).split("-")
+    sessions = detect_existing_sessions(base_dir, participant_id)
+    # Filter to only multi-session entries (those with actual session_id)
+    multi_sessions = [v for v in sessions if v["session_id"] is not None]
+    # Defensively parse "ses-NN" IDs; ignore any malformed session directory names.
+    session_nums: list[int] = []
+    for v in multi_sessions:
+        parts = str(v["session_id"]).split("-")
         if len(parts) == 2 and parts[1].isdigit():
-            visit_nums.append(int(parts[1]))
-    next_num = max(visit_nums) + 1 if visit_nums else 1
+            session_nums.append(int(parts[1]))
+    next_num = max(session_nums) + 1 if session_nums else 1
     return f"ses-{next_num:02d}"
 
 
-def migrate_to_multi_visit(
+def migrate_to_multi_session(
     participant_dir: Path,
-    target_visit_id: str = "ses-01",
+    target_session_id: str = "ses-01",
 ) -> Path:
-    """Migrate single-visit data to multi-visit structure.
+    """Migrate single-session data to multi-session structure.
 
-    Moves existing data from participant directory into a visit subdirectory.
+    Moves existing data from participant directory into a session subdirectory.
 
     Parameters
     ----------
     participant_dir : Path
-        Path to participant directory with single-visit data
-    target_visit_id : str
-        Visit ID to migrate data to (default: 'ses-01')
+        Path to participant directory with single-session data
+    target_session_id : str
+        Session ID to migrate data to (default: 'ses-01')
 
     Returns
     -------
     Path
-        Path to the new visit directory
+        Path to the new session directory
 
     Raises
     ------
     ValueError
-        If participant already uses multi-visit structure
+        If participant already uses multi-session structure
     """
     participant_dir = Path(participant_dir)
 
-    if not is_single_visit_data(participant_dir):
-        raise ValueError("Participant already uses multi-visit structure or has no data")
+    if not is_single_session_data(participant_dir):
+        raise ValueError("Participant already uses multi-session structure or has no data")
 
-    target_dir = participant_dir / target_visit_id
+    target_dir = participant_dir / target_session_id
     target_dir.mkdir(exist_ok=True)
 
     # Move standard directories
@@ -2233,68 +2233,68 @@ def run_coregistration(
     return network_coreg
 
 
-def setup_visit_with_reused_masks(
+def setup_session_with_reused_masks(
     config: SessionConfig,
     reference_dicoms: Path,
     overwrite: bool = False,
 ) -> list[Path]:
-    """Set up a visit that reuses masks from a previous visit.
+    """Set up a session that reuses masks from a previous session.
 
-    This is used when config.visit.mask_source='reuse'. Only collects reference
-    and coregisters masks from the source visit - skips localizer, preprocessing,
+    This is used when config.session.mask_source='reuse'. Only collects reference
+    and coregisters masks from the source session - skips localizer, preprocessing,
     and mask extraction.
 
     Parameters
     ----------
     config : SessionConfig
-        Session configuration with visit.mask_source='reuse'
+        Session configuration with session.mask_source='reuse'
     reference_dicoms : Path
-        Path to collected reference DICOMs for this visit
+        Path to collected reference DICOMs for this session
     overwrite : bool
         Whether to overwrite existing coregistration outputs
 
     Returns
     -------
     list[Path]
-        Coregistered mask files in current visit's feedback/01_reference/masks/
+        Coregistered mask files in current session's feedback/01_reference/masks/
     """
     from .mask_extraction import coregister_reference
 
     logger.info("")
     logger.info("=" * 60)
-    logger.info("MASK REUSE: Coregistering masks from previous visit")
+    logger.info("MASK REUSE: Coregistering masks from previous session")
     logger.info("=" * 60)
 
-    if config.visit is None or config.visit.mask_source != "reuse":
-        raise ValueError("setup_visit_with_reused_masks requires config.visit.mask_source='reuse'")
+    if config.session is None or config.session.mask_source != "reuse":
+        raise ValueError("setup_session_with_reused_masks requires config.session.mask_source='reuse'")
 
-    if config.visit.mask_source_visit is None:
-        raise ValueError("config.visit.mask_source_visit must be set when mask_source='reuse'")
-    source_visit = config.visit.mask_source_visit
-    logger.info(f"Source visit: {source_visit}")
+    if config.session.mask_source_session is None:
+        raise ValueError("config.session.mask_source_session must be set when mask_source='reuse'")
+    source_session = config.session.mask_source_session
+    logger.info(f"Source session: {source_session}")
 
     # Resolve source masks and reference
     source_masks, source_ref = resolve_mask_source(config)
 
     if not source_masks:
-        source_base = config.paths.base_dir / config.paths.participant_id / source_visit / "mask_extraction"
+        source_base = config.paths.base_dir / config.paths.participant_id / source_session / "mask_extraction"
         raise FileNotFoundError(
-            f"No masks found in source visit {source_visit}. Expected masks in: {source_base / '03_masks'}"
+            f"No masks found in source session {source_session}. Expected masks in: {source_base / '03_masks'}"
         )
 
     if not source_ref.exists():
-        raise FileNotFoundError(f"Reference file not found in source visit {source_visit}: {source_ref}")
+        raise FileNotFoundError(f"Reference file not found in source session {source_session}: {source_ref}")
 
-    logger.info(f"Found {len(source_masks)} masks from {source_visit}")
+    logger.info(f"Found {len(source_masks)} masks from {source_session}")
     logger.info(f"Reference file: {source_ref}")
 
-    # Coregister source masks to current visit's reference
-    # Output goes to session_dir (feedback/) instead of mask_extraction_dir
-    if config.paths.session_dir is None:
-        raise RuntimeError("config.paths.session_dir must be set before coregistration")
+    # Coregister source masks to current session's reference
+    # Output goes to feedback_dir instead of mask_extraction_dir
+    if config.paths.feedback_dir is None:
+        raise RuntimeError("config.paths.feedback_dir must be set before coregistration")
     coreg_masks = coregister_reference(
         participant_id=config.paths.participant_id,
-        root_dir=str(config.paths.session_dir),  # feedback/ directory
+        root_dir=str(config.paths.feedback_dir),  # feedback/ directory
         input_dicom=str(reference_dicoms),
         network_files=source_masks,
         ref_file=source_ref,
@@ -2302,14 +2302,14 @@ def setup_visit_with_reused_masks(
         overwrite=overwrite,
     )
 
-    # Copy mask_selections.json from source visit for reference
+    # Copy mask_selections.json from source session for reference
     source_selections = source_masks[0].parent / "mask_selections.json"
-    dest_dir = config.paths.session_dir / "01_reference"
+    dest_dir = config.paths.feedback_dir / "01_reference"
     dest_dir.mkdir(parents=True, exist_ok=True)
     if source_selections.exists():
         dest_selections = dest_dir / "mask_selections.json"
         shutil.copy2(source_selections, dest_selections)
-        logger.info("Copied mask selections from source visit")
+        logger.info("Copied mask selections from source session")
 
     logger.info("")
     logger.info("Mask reuse complete! Coregistered masks ready for feedback:")
@@ -2327,8 +2327,8 @@ def setup_session(
 ) -> list[Path]:
     """Run all setup steps: collection, preprocessing, mask extraction, coregistration.
 
-    This should be run once per participant/visit before the feedback session.
-    For visits with mask_source='reuse', skips localizer/preprocessing/extraction
+    This should be run once per participant/session before the feedback tasks.
+    For sessions with mask_source='reuse', skips localizer/preprocessing/extraction
     and only runs reference collection + coregistration.
 
     Parameters
@@ -2353,9 +2353,9 @@ def setup_session(
     logger.info("SESSION SETUP")
     logger.info("=" * 60)
 
-    # Check if this is a mask-reuse visit
-    if config.visit and config.visit.mask_source == "reuse":
-        logger.info(f"Visit {config.visit.visit_id}: Reusing masks from {config.visit.mask_source_visit}")
+    # Check if this is a mask-reuse session
+    if config.session and config.session.mask_source == "reuse":
+        logger.info(f"Session {config.session.session_id}: Reusing masks from {config.session.mask_source_session}")
 
         # Only need reference collection for mask reuse
         reference_source = config.resolve_simulator_source("reference_realtime")
@@ -2375,12 +2375,12 @@ def setup_session(
             )
             reference_dicoms = reference_list[0]
 
-        return setup_visit_with_reused_masks(config, reference_dicoms, overwrite=overwrite)
+        return setup_session_with_reused_masks(config, reference_dicoms, overwrite=overwrite)
 
     # Manual ROI import: skip localizer + preprocessing, just import + coregister
     if config.localizers and config.localizers[0].type == "manual":
-        if config.visit:
-            logger.info(f"Visit {config.visit.visit_id}: Manual ROI import")
+        if config.session:
+            logger.info(f"Session {config.session.session_id}: Manual ROI import")
 
         # Step 0: Initial reference (still needed for coregistration)
         initial_reference_source = config.resolve_simulator_source("reference_initial")
@@ -2417,8 +2417,8 @@ def setup_session(
         return coreg_mask_files
 
     # Standard setup: full pipeline (compute masks)
-    if config.visit:
-        logger.info(f"Visit {config.visit.visit_id}: Computing new masks")
+    if config.session:
+        logger.info(f"Session {config.session.session_id}: Computing new masks")
 
     # Step 0: Initial reference (pre-scan positioning check)
     initial_reference_source = config.resolve_simulator_source("reference_initial")
@@ -2585,7 +2585,7 @@ def setup_session(
 def run_single_task(
     config: SessionConfig,
     mask_files: list[Path],
-    session_state: SessionState,
+    task_state: TaskState,
     run_type: str,
     use_simulator: bool = True,
     run_config: FeedbackRunConfig | None = None,
@@ -2602,7 +2602,7 @@ def run_single_task(
         Session configuration
     mask_files : list[Path]
         Paths to coregistered mask files
-    session_state : SessionState
+    task_state : TaskState
         Session state for multi-run continuity
     run_type : str
         'transfer' or 'feedback'
@@ -2618,7 +2618,7 @@ def run_single_task(
         Run results (task-specific, always includes run_number, run_type,
         volumes_processed)
     """
-    from .feedback import run_feedback_session
+    from .feedback import run_feedback_task
     from .tasks.factory import create_task
     from .tasks.task_registry import get_task_metadata
 
@@ -2655,8 +2655,8 @@ def run_single_task(
     else:
         eff_differential_pair = None
 
-    run_number = session_state.next_run_number
-    task_run_number = session_state.next_run_number_for_type(run_type)
+    run_number = task_state.next_run_number
+    task_run_number = task_state.next_run_number_for_type(run_type)
     feedback_mode = run_type == "feedback"
 
     logger.info("")
@@ -2665,7 +2665,7 @@ def run_single_task(
     logger.info("=" * 60)
     logger.info(f"Task: {eff_task_type}")
     logger.info(f"Mode: {'FEEDBACK' if feedback_mode else 'TRANSFER (no feedback)'}")
-    logger.info(f"Task state: {session_state.task_state}")
+    logger.info(f"Task state: {task_state.task_state}")
 
     # Compute task regressors based on task metadata design_type
     metadata = get_task_metadata(eff_task_type)
@@ -2688,11 +2688,11 @@ def run_single_task(
     task_mask_names = _resolve_mask_names_for_run(config, metadata, eff_network_assignment)
 
     if config.paths.feedback_output_dir is None:
-        raise RuntimeError("config.paths.feedback_output_dir must be set before starting a feedback session")
+        raise RuntimeError("config.paths.feedback_output_dir must be set before starting a feedback task")
     if config.paths.collection_dir is None:
-        raise RuntimeError("config.paths.collection_dir must be set before starting a feedback session")
-    # Start feedback session
-    session_info = run_feedback_session(
+        raise RuntimeError("config.paths.collection_dir must be set before starting a feedback task")
+    # Start feedback task
+    session_info = run_feedback_task(
         mask_paths=list(mask_files),
         subject=config.paths.participant_id,
         task="feedback" if feedback_mode else "transfer",
@@ -2724,7 +2724,7 @@ def run_single_task(
     coordinator = session_info["coordinator"]
 
     # Determine if this is the first run of this type
-    completed_of_type = sum(1 for r in session_state.completed_runs if r.run_type == run_type)
+    completed_of_type = sum(1 for r in task_state.completed_runs if r.run_type == run_type)
     _is_first_of_type = completed_of_type == 0
 
     # Build config for task factory
@@ -2740,7 +2740,7 @@ def run_single_task(
         task_id=eff_task_type,
         coordinator=coordinator,
         config=factory_config,
-        session_state=session_state,
+        task_state=task_state,
     )
 
     # Register callback
@@ -2856,7 +2856,7 @@ def _resolve_mask_names_for_run(
 
 def coregister_before_first_transfer(
     config: SessionConfig,
-    session_state: SessionState,
+    task_state: TaskState,
     mask_files: list[Path],
     use_simulator: bool = True,
 ) -> list[Path]:
@@ -2866,7 +2866,7 @@ def coregister_before_first_transfer(
     ----------
     config : SessionConfig
         Session configuration
-    session_state : SessionState
+    task_state : TaskState
         Session state (used to check if any runs completed)
     mask_files : list[Path]
         Current mask files
@@ -2878,7 +2878,7 @@ def coregister_before_first_transfer(
     list[Path]
         Updated coregistered mask files
     """
-    if session_state.completed_runs:
+    if task_state.completed_runs:
         return mask_files
 
     logger.info("")
@@ -3003,7 +3003,7 @@ def run_full_session(
     list[dict]
         Results from each run
     """
-    from .tasks.session import SessionState
+    from .tasks.state import TaskState
 
     run_sequence = _build_run_sequence(config, n_feedback_runs)
     # Derive total feedback run count from sequence
@@ -3021,24 +3021,24 @@ def run_full_session(
     workflow_labels = [rt.capitalize() for rt, _ in run_sequence]
     logger.info(f"Workflow: {' -> '.join(workflow_labels)}")
 
-    if config.paths.session_dir is None:
-        raise RuntimeError("config.paths.session_dir must be set before running a session")
-    session_dir = config.paths.session_dir
+    if config.paths.feedback_dir is None:
+        raise RuntimeError("config.paths.feedback_dir must be set before running a session")
+    feedback_dir = config.paths.feedback_dir
     if reset_session:
-        session_state = SessionState.reset(session_dir, task_id=primary_task)
-        session_state.max_feedback_runs = total_feedback
-        session_state.save()
+        task_state = TaskState.reset(feedback_dir, task_id=primary_task)
+        task_state.max_feedback_runs = total_feedback
+        task_state.save()
     else:
-        session_state = SessionState.load(session_dir, task_id=primary_task)
-        if session_state.max_feedback_runs != total_feedback:
-            session_state.max_feedback_runs = total_feedback
-            session_state.save()
+        task_state = TaskState.load(feedback_dir, task_id=primary_task)
+        if task_state.max_feedback_runs != total_feedback:
+            task_state.max_feedback_runs = total_feedback
+            task_state.save()
 
     mask_files = [Path(f) for f in mask_files]
 
     all_results = []
 
-    completed_count = len(session_state.completed_runs)
+    completed_count = len(task_state.completed_runs)
     total_runs = len(run_sequence)
 
     logger.info(f"Completed runs: {completed_count}")
@@ -3049,30 +3049,28 @@ def run_full_session(
         logger.info("")
         logger.info(f">>> Starting run {i + 1}/{total_runs} ({run_type})")
 
-        if run_type == "transfer" and not session_state.completed_runs:
-            mask_files = coregister_before_first_transfer(
-                config, session_state, mask_files, use_simulator=use_simulator
-            )
+        if run_type == "transfer" and not task_state.completed_runs:
+            mask_files = coregister_before_first_transfer(config, task_state, mask_files, use_simulator=use_simulator)
 
         frc = config.feedback_runs[frc_idx] if config.feedback_runs else None
         results = run_single_task(
             config=config,
             mask_files=mask_files,
-            session_state=session_state,
+            task_state=task_state,
             run_type=run_type,
             use_simulator=use_simulator,
             run_config=frc,
         )
         all_results.append(results)
 
-        session_state = SessionState.load(session_dir, task_id=config.feedback_runs[frc_idx].task)
+        task_state = TaskState.load(feedback_dir, task_id=config.feedback_runs[frc_idx].task)
 
     logger.info("")
     logger.info("=" * 60)
     logger.info("SESSION COMPLETE")
     logger.info("=" * 60)
-    logger.info(f"Total runs: {len(session_state.completed_runs)}")
-    logger.info(f"Final task state: {session_state.task_state}")
+    logger.info(f"Total runs: {len(task_state.completed_runs)}")
+    logger.info(f"Final task state: {task_state.task_state}")
 
     return all_results
 
@@ -3104,26 +3102,26 @@ def run_next_task(
     dict or None
         Run results, or None if session is complete
     """
-    from .tasks.session import SessionState
+    from .tasks.state import TaskState
 
     if not config.feedback_runs:
         raise ValueError("config.feedback_runs must be non-empty")
-    if config.paths.session_dir is None:
-        raise RuntimeError("config.paths.session_dir must be set before running a task")
-    session_dir = config.paths.session_dir
-    session_state = SessionState.load(session_dir, task_id=config.feedback_runs[0].task)
+    if config.paths.feedback_dir is None:
+        raise RuntimeError("config.paths.feedback_dir must be set before running a task")
+    feedback_dir = config.paths.feedback_dir
+    task_state = TaskState.load(feedback_dir, task_id=config.feedback_runs[0].task)
 
     mask_files = [Path(f) for f in mask_files]
 
     run_sequence = _build_run_sequence(config, n_feedback_runs)
     total_feedback = sum(1 for rt, _ in run_sequence if rt == "feedback")
 
-    if session_state.max_feedback_runs != total_feedback:
-        session_state.max_feedback_runs = total_feedback
-        session_state.save()
+    if task_state.max_feedback_runs != total_feedback:
+        task_state.max_feedback_runs = total_feedback
+        task_state.save()
 
     total_runs = len(run_sequence)
-    completed_count = len(session_state.completed_runs)
+    completed_count = len(task_state.completed_runs)
 
     if completed_count >= total_runs:
         logger.info("")
@@ -3131,8 +3129,8 @@ def run_next_task(
         logger.info("SESSION ALREADY COMPLETE")
         logger.info("=" * 60)
         logger.info(f"Total runs: {completed_count}")
-        logger.info(f"Final task state: {session_state.task_state}")
-        logger.info("Use reset_session_state() to start a new session.")
+        logger.info(f"Final task state: {task_state.task_state}")
+        logger.info("Use reset_task_state() to start a new session.")
         return None
 
     run_type, frc_idx = run_sequence[completed_count]
@@ -3141,18 +3139,18 @@ def run_next_task(
     logger.info("=" * 60)
     logger.info(f"NEXT RUN: {completed_count + 1}/{total_runs} ({run_type.upper()})")
     logger.info("=" * 60)
-    logger.info(f"Completed: {[r.run_type for r in session_state.completed_runs]}")
+    logger.info(f"Completed: {[r.run_type for r in task_state.completed_runs]}")
     remaining_labels = [rt for rt, _ in run_sequence[completed_count:]]
     logger.info(f"Remaining: {remaining_labels}")
 
-    if run_type == "transfer" and not session_state.completed_runs:
-        mask_files = coregister_before_first_transfer(config, session_state, mask_files, use_simulator=use_simulator)
+    if run_type == "transfer" and not task_state.completed_runs:
+        mask_files = coregister_before_first_transfer(config, task_state, mask_files, use_simulator=use_simulator)
 
     frc = config.feedback_runs[frc_idx] if config.feedback_runs else None
     results = run_single_task(
         config=config,
         mask_files=mask_files,
-        session_state=session_state,
+        task_state=task_state,
         run_type=run_type,
         use_simulator=use_simulator,
         run_config=frc,
@@ -3161,7 +3159,7 @@ def run_next_task(
     return results
 
 
-def reset_session_state(config: SessionConfig) -> SessionState:
+def reset_task_state(config: SessionConfig) -> TaskState:
     """Reset session state for a new session.
 
     Parameters
@@ -3171,13 +3169,13 @@ def reset_session_state(config: SessionConfig) -> SessionState:
 
     Returns
     -------
-    SessionState
+    TaskState
         Fresh session state
     """
-    from .tasks.session import SessionState
+    from .tasks.state import TaskState
 
     if not config.feedback_runs:
         raise ValueError("config.feedback_runs must be non-empty")
-    if config.paths.session_dir is None:
-        raise RuntimeError("config.paths.session_dir must be set to reset session state")
-    return SessionState.reset(config.paths.session_dir, task_id=config.feedback_runs[0].task)
+    if config.paths.feedback_dir is None:
+        raise RuntimeError("config.paths.feedback_dir must be set to reset session state")
+    return TaskState.reset(config.paths.feedback_dir, task_id=config.feedback_runs[0].task)

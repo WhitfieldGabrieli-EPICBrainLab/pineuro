@@ -155,7 +155,7 @@ class TaskParameter:
 
 
 @dataclass
-class SessionStateField:
+class TaskStateField:
     """Definition of a task-specific persistent state field.
 
     Session state fields are persisted across runs and can be used to track
@@ -311,8 +311,8 @@ class TaskMetadata:
         network_roles: Descriptions of network slots required by this task.
             Allows the GUI to render labeled dropdowns for each network role
             instead of hardcoding task-specific network names.
-        session_state_fields: List of fields to persist across runs.
-            These are stored in session_state.json and available to the task.
+        task_state_fields: List of fields to persist across runs.
+            These are stored in task_state.json and available to the task.
         post_run_questions: List of slider questions to display after each run.
             Questions can be conditional on run type or position.
         design_type: GLM design type for the pipeline runner. Determines how
@@ -345,7 +345,7 @@ class TaskMetadata:
     roles: set[str] = field(default_factory=lambda: {"feedback"})
     default_contrasts: dict[str, str] = field(default_factory=dict)
     network_roles: list[NetworkRole] = field(default_factory=list)
-    session_state_fields: list[SessionStateField] = field(default_factory=list)
+    task_state_fields: list[TaskStateField] = field(default_factory=list)
     post_run_questions: list[PostRunQuestion] = field(default_factory=list)
     design_type: str = "block"
     compute_max_run_seconds: Callable[[dict[str, Any]], float] | None = None

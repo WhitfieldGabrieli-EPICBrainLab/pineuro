@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Optional
 from .base import BaseTask
 
 if TYPE_CHECKING:
-    from .session import SessionState
+    from .state import TaskState
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ class GaugeTask(BaseTask):
         button_key: str = "1",
         presenter_monitor: str = "right",
         feedback_mode: bool = True,
-        session_state: Optional["SessionState"] = None,
+        task_state: Optional["TaskState"] = None,
         **kwargs,
     ):
         if len(coordinator.mask_names) < 2:
@@ -133,7 +133,7 @@ class GaugeTask(BaseTask):
             coordinator,
             mask_name=mask_names[0],
             feedback_mode=feedback_mode,
-            session_state=session_state,
+            task_state=task_state,
             **kwargs,
         )
 

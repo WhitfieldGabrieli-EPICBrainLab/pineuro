@@ -11,7 +11,7 @@ Examples
 ...     task_id='ball',
 ...     coordinator=coordinator,
 ...     config={'initial_scale_factor': 10.0},
-...     session_state=session_state,
+...     task_state=task_state,
 ... )
 """
 
@@ -24,7 +24,7 @@ from .task_registry import TaskConfigError, get_task_metadata
 __all__ = ["create_task", "create_localizer_task", "get_registered_task_ids", "TaskConfigError"]
 
 if TYPE_CHECKING:
-    from .session import SessionState
+    from .state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def create_task(
     task_id: str,
     coordinator,
     config: dict[str, Any],
-    session_state: Optional["SessionState"] = None,
+    task_state: Optional["TaskState"] = None,
     output_dir: str | None = None,
     simulator=None,
 ) -> BaseTask:
@@ -79,7 +79,7 @@ def create_task(
         Task configuration parameters. Includes:
         - Parameters defined in TaskMetadata (validated)
         - Runtime parameters: mask_names, feedback_mode, presenter_monitor
-    session_state : SessionState, optional
+    task_state : TaskState, optional
         Session state for adaptive difficulty
     output_dir : str, optional
         Output directory for task logs
@@ -133,7 +133,7 @@ def create_task(
     # Create task instance
     task: BaseTask = task_class(
         coordinator=coordinator,
-        session_state=session_state,
+        task_state=task_state,
         output_dir=output_dir,
         simulator=simulator,
         **filtered_config,

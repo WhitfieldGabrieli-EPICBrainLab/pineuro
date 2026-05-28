@@ -139,13 +139,13 @@ class TestRunResults:
 
 
 class TestRecordRunCompletion:
-    def test_noop_without_session_state(self, base_task):
-        # No session_state set → should silently do nothing
+    def test_noop_without_task_state(self, base_task):
+        # No task_state set → should silently do nothing
         base_task._record_run_completion()
 
-    def test_records_with_session_state(self, base_task):
+    def test_records_with_task_state(self, base_task):
         session = MagicMock()
-        base_task._session_state = session
+        base_task._task_state = session
         base_task.feedback_mode = True
         base_task._volumes_processed = 100
         base_task._task_state_snapshot = {"hits": 5}
@@ -162,7 +162,7 @@ class TestRecordRunCompletion:
 
     def test_records_transfer_when_not_feedback_mode(self, base_task):
         session = MagicMock()
-        base_task._session_state = session
+        base_task._task_state = session
         base_task.feedback_mode = False
         base_task._record_run_completion()
         assert session.record_run.call_args.kwargs["run_type"] == "transfer"

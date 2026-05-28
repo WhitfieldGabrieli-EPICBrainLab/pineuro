@@ -77,7 +77,7 @@ from .models import StudyConfig
 from .utils import validate_participant_id
 
 if TYPE_CHECKING:
-    from pineuro.session import VisitConfig
+    from pineuro.session import SessionMetadata
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -329,7 +329,7 @@ class PyrtnfApp:
         """
         from pathlib import Path
 
-        from .components.visit_selection_dialog import VisitSelectionDialog
+        from .components.session_selection_dialog import SessionSelectionDialog
 
         logger.info(f"Starting session for study: {study_name}")
 
@@ -372,26 +372,26 @@ class PyrtnfApp:
 
             self.page.pop_dialog()
 
-            # Check if multi-visit mode is enabled for this study
-            multi_visit_enabled = study_config.session_config.get("study", {}).get("multi_visit_enabled", False)
+            # Check if multi-session mode is enabled for this study
+            multi_session_enabled = study_config.session_config.get("study", {}).get("multi_session_enabled", False)
 
-            if multi_visit_enabled:
+            if multi_session_enabled:
                 # Get base directory from config
                 base_dir = Path(study_config.session_config["paths"]["base_dir"])
 
-                # Show visit selection dialog
-                def on_visit_selected(visit_id, visit_config):
-                    self.show_participant_workflow(study_config, participant_id, visit_id, visit_config)
+                # Show session selection dialog
+                def on_session_selected(session_id, session_metadata):
+                    self.show_participant_workflow(study_config, participant_id, session_id, session_metadata)
 
-                visit_dialog = VisitSelectionDialog(
+                session_dialog = SessionSelectionDialog(
                     page=self.page,
                     participant_id=participant_id,
                     base_dir=base_dir,
-                    on_select=on_visit_selected,
+                    on_select=on_session_selected,
                 )
-                visit_dialog.show()
+                session_dialog.show()
             else:
-                # Single-visit mode - go directly to workflow
+                # Single-session mode - go directly to workflow
                 self.show_participant_workflow(study_config, participant_id)
 
         def cancel_start(e):
@@ -667,8 +667,8 @@ class PyrtnfApp:
             study_config=self.current_study,
             on_cancel=lambda: self.show_study_manager(),
             on_save=lambda: self.show_study_manager(),
-            on_start_session=lambda participant_id, visit_id=None, visit_config=None: (
-                self.show_participant_workflow(self.current_study, participant_id, visit_id, visit_config)
+            on_start_session=lambda participant_id, session_id=None, session_metadata=None: (
+                self.show_participant_workflow(self.current_study, participant_id, session_id, session_metadata)
                 if self.current_study is not None
                 else None
             ),
@@ -682,21 +682,21 @@ class PyrtnfApp:
         self,
         study_config: StudyConfig,
         participant_id: str,
-        visit_id: str | None = None,
-        visit_config: "VisitConfig | None" = None,
+        session_id: str | None = None,
+        session_metadata: "SessionMetadata | None" = None,
     ):
         """Show the participant workflow screen.
 
         Args:
             study_config: Study configuration to use
             participant_id: Participant ID
-            visit_id: Visit identifier (e.g., 'ses-01'). None for single-visit mode.
-            visit_config: VisitConfig for new visits. None when continuing existing visit.
+            session_id: Session identifier (e.g., 'ses-01'). None for single-session mode.
+            session_metadata: SessionMetadata for new sessions. None when continuing existing session.
         """
         from .screens.participant_workflow import ParticipantWorkflowScreen
 
-        visit_str = f", visit: {visit_id}" if visit_id else ""
-        logger.info(f"Navigating to Participant Workflow (participant: {participant_id}{visit_str})")
+        session_str = f", session: {session_id}" if session_id else ""
+        logger.info(f"Navigating to Participant Workflow (participant: {participant_id}{session_str})")
 
         self.current_study = study_config
 
@@ -709,8 +709,8 @@ class PyrtnfApp:
             config_manager=self.config_manager,
             study_config=study_config,
             participant_id=participant_id,
-            visit_id=visit_id,
-            visit_config=visit_config,
+            session_id=session_id,
+            session_metadata=session_metadata,
             on_back=lambda: self.show_study_manager(),
         )
 

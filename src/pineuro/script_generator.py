@@ -161,7 +161,7 @@ from pineuro.qc import generate_alternative_overlays, generate_yeo_network_overl
 def clean_stale_outputs(root_dir: Path):
     """Remove directories and files that would become stale after regenerating masks.
 
-    - 04_reference/: Coregistered masks from localizer session (must be re-run)
+    - 04_reference/: Coregistered masks from localizer tasks (must be re-run)
     - qc/: QC report and overlays (regenerated at the end)
     - .masks_approved: Approval marker (masks need re-approval after regeneration)
     """

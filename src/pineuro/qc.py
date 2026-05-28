@@ -3,7 +3,7 @@ Quality control visualization and reporting for the pineuro pipeline.
 
 This module provides comprehensive QC visualization and HTML report generation
 for all stages of the neurofeedback pipeline: preprocessing, mask extraction,
-and feedback sessions. Each stage has a dedicated high-level report generator
+and feedback tasks. Each stage has a dedicated high-level report generator
 that auto-discovers outputs and creates professional HTML reports with
 embedded plots.
 
@@ -17,7 +17,7 @@ generate_mask_extraction_report : Create QC report for mask extraction stage
     Visualizes ICA components, network-Yeo correlations, mask overlays
     in multiple spaces (subject, MNI, reference), and mask metrics.
 
-generate_feedback_report : Create QC report for feedback sessions
+generate_feedback_report : Create QC report for feedback tasks
     Visualizes activation timeseries, framewise displacement, design
     matrix, and run completion status.
 
@@ -50,7 +50,7 @@ MaskSummary : Container for per-mask QC metrics
 Workflow
 --------
 1. **Automatic QC** (recommended): Enable `qc_enabled=True` in pipeline
-   functions (preprocessing, mask_extraction_rest, run_feedback_session)
+   functions (preprocessing, mask_extraction_rest, run_feedback_task)
    to generate QC reports automatically during execution.
 
 2. **Manual QC**: Call report generators directly for post-hoc analysis:
@@ -112,7 +112,7 @@ Generate QC report for mask extraction with browser preview:
 ...     open_browser=True
 ... )
 
-Generate QC report for feedback session:
+Generate QC report for feedback task:
 
 >>> report = qc.generate_feedback_report(
 ...     feedback_dir=Path('/data/sub-01/feedback'),
@@ -3262,7 +3262,7 @@ def generate_feedback_report(
     live_metrics: "list[LiveMetric] | None" = None,
 ) -> Path:
     """
-    Generate comprehensive QC report for feedback session outputs.
+    Generate comprehensive QC report for feedback task outputs.
 
     Automatically discovers feedback logs, design matrices, and generates
     quality control visualizations.

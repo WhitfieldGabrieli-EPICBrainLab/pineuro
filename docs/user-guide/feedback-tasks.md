@@ -1,6 +1,6 @@
-# Feedback Sessions
+# Feedback Tasks
 
-A feedback session is the core of neurofeedback training. pineuro processes each fMRI volume in real-time, estimates brain activation using an incremental GLM, and streams the result to a visual task display.
+A feedback task is the core of neurofeedback training. pineuro processes each fMRI volume in real-time, estimates brain activation using an incremental GLM, and streams the result to a visual task display.
 
 ## Feedback Modes
 
@@ -107,7 +107,7 @@ Volumes exceeding FD or DVARS thresholds are flagged as outliers. Outlier volume
 
 ## Real-Time Monitoring
 
-During a feedback session, the operator GUI displays:
+During a feedback task, the operator GUI displays:
 - **Activation plot** — Per-volume activation for each network (and differential if configured)
 - **FD plot** — Framewise displacement with threshold line
 - **DVARS plot** — Signal intensity change with threshold line

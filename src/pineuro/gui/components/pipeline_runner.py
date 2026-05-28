@@ -1705,9 +1705,9 @@ class PipelineRunner:
         feedback_dir = base_dir / "feedback"
 
         # Check for mask reuse mode
-        visit_config = config.get("visit", {})
-        is_mask_reuse = visit_config.get("mask_source") == "reuse"
-        mask_source_visit = visit_config.get("mask_source_visit")
+        session_metadata = config.get("session", {})
+        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
+        mask_source_session = session_metadata.get("mask_source_session")
 
         # Determine actual reference run number
         # In mask reuse mode, realtime (run_id=2 from caller) uses reference run-01 (since no initial reference)
@@ -1723,24 +1723,24 @@ class PipelineRunner:
         # For QC overlay generation, we need the mask_extraction_dir where ICA outputs are
         source_mask_extraction_dir = None
 
-        if is_mask_reuse and mask_source_visit:
-            # Mask reuse mode: get masks and ref_file from source visit
-            # The source visit is at: study_base_dir / participant_id / source_visit_id
-            # Current base_dir is: study_base_dir / participant_id / current_visit_id
-            # So we go up one level and into the source visit
-            study_base_dir = base_dir.parent.parent  # Go up from participant/visit to study
-            source_visit_dir = study_base_dir / self.participant_id / mask_source_visit
-            source_preprocessing_dir = source_visit_dir / "preprocessing"
-            source_mask_extraction_dir = source_visit_dir / "mask_extraction"
+        if is_mask_reuse and mask_source_session:
+            # Mask reuse mode: get masks and ref_file from source session
+            # The source session is at: study_base_dir / participant_id / source_session_id
+            # Current base_dir is: study_base_dir / participant_id / current_session_id
+            # So we go up one level and into the source session
+            study_base_dir = base_dir.parent.parent  # Go up from participant/session to study
+            source_session_dir = study_base_dir / self.participant_id / mask_source_session
+            source_preprocessing_dir = source_session_dir / "preprocessing"
+            source_mask_extraction_dir = source_session_dir / "mask_extraction"
 
             localizer_task = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
             task_name = localizer_task if localizer_task != "rest" else "rest"
             ref_file = source_preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
             masks_dir = source_mask_extraction_dir / "03_masks"
 
-            self._emit_progress(f"Using masks from source visit: {mask_source_visit}")
+            self._emit_progress(f"Using masks from source session: {mask_source_session}")
         else:
-            # Standard mode: get masks and ref_file from current visit
+            # Standard mode: get masks and ref_file from current session
             loc0 = config["localizers"][0] if config.get("localizers") else {}
             localizer_task = loc0.get("type", "rest")
             if localizer_task == "manual":
@@ -1930,7 +1930,7 @@ class PipelineRunner:
                 reference_subdir = "01_reference"
 
             # For QC overlays, use the mask_extraction_dir where ICA outputs are located
-            # In mask reuse mode, this is the source visit's mask_extraction_dir
+            # In mask reuse mode, this is the source session's mask_extraction_dir
             qc_mask_extraction_dir = source_mask_extraction_dir if source_mask_extraction_dir else mask_extraction_dir
 
             generate_reference_qc_overlays(
@@ -1952,7 +1952,7 @@ class PipelineRunner:
             self._emit_progress(f"Warning: QC overlay generation failed: {e}")
 
     def _run_reference_realtime(self) -> None:
-        """Collect real-time reference scan before feedback session."""
+        """Collect real-time reference scan before feedback tasks."""
         from pineuro.preprocessing import collect_dicoms
         from pineuro.session import get_localizer_run_info
 
@@ -1968,8 +1968,8 @@ class PipelineRunner:
 
         # In mask reuse mode, realtime reference is run-01 (no initial reference)
         # In standard mode, realtime reference is run-02 (after initial reference)
-        visit_config = config.get("visit", {})
-        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        session_metadata = config.get("session", {})
+        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
         run_id = 1 if is_mask_reuse else 2
 
         # Get number of volumes (use new field, fall back to legacy)
@@ -2037,7 +2037,7 @@ class PipelineRunner:
         Args:
             step_id: One of transfer_1, transfer_2, feedback_1, feedback_2, feedback_3, etc.
         """
-        from pineuro.feedback import get_slot_run_info, run_feedback_session
+        from pineuro.feedback import get_slot_run_info, run_feedback_task
         from pineuro.sham import (
             ReplayActivationProvider,
             find_feedbacklog_for_replay,
@@ -2045,7 +2045,7 @@ class PipelineRunner:
             load_randomization,
         )
         from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
-        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.state import TaskState
         from pineuro.tasks.task_registry import get_task_metadata
 
         # Parse step ID to determine task type
@@ -2176,8 +2176,8 @@ class PipelineRunner:
         # Determine reference run number for mask file pattern
         # In mask reuse mode, reference is run-01 (no initial reference)
         # In standard mode, reference is run-02 (after initial reference)
-        visit_config = config.get("visit", {})
-        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        session_metadata = config.get("session", {})
+        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
         realtime_reference_run = 1 if is_mask_reuse else 2
 
         if reference_realtime_enabled:
@@ -2363,7 +2363,7 @@ class PipelineRunner:
                         elif delivery_method == "replay" and condition == "sham":
                             # Replay mode: find feedbacklog from matched participant
                             matched_participant = condition_info.get("matched_participant")
-                            matched_visit = condition_info.get("matched_visit")
+                            matched_session = condition_info.get("matched_session")
 
                             if not matched_participant:
                                 raise ValueError(
@@ -2374,13 +2374,13 @@ class PipelineRunner:
                             if self._is_blind_mode():
                                 self._emit_progress_file_only(
                                     f"Replay mode: looking up feedbacklog from {matched_participant}"
-                                    + (f" visit {matched_visit}" if matched_visit else "")
+                                    + (f" session {matched_session}" if matched_session else "")
                                 )
                                 self._emit_progress("Replay mode: loading activation source")
                             else:
                                 self._emit_progress(
                                     f"Replay mode: looking up feedbacklog from {matched_participant}"
-                                    + (f" visit {matched_visit}" if matched_visit else "")
+                                    + (f" session {matched_session}" if matched_session else "")
                                 )
 
                             try:
@@ -2391,7 +2391,7 @@ class PipelineRunner:
                                 feedbacklog_path = find_feedbacklog_for_replay(
                                     source_dir=study_base_dir,
                                     matched_participant=matched_participant,
-                                    matched_visit=matched_visit,
+                                    matched_session=matched_session,
                                     task=task_type,
                                     run=task_run_number,
                                 )
@@ -2470,10 +2470,10 @@ class PipelineRunner:
             if sham_pair not in connectivity_pairs:
                 connectivity_pairs = list(connectivity_pairs) + [sham_pair]
 
-        # Run feedback session (this will handle DICOM collection + processing)
+        # Run feedback task (this will handle DICOM collection + processing)
         # Pass ALL masks so all activations are computed and logged
         try:
-            session_info = run_feedback_session(
+            session_info = run_feedback_task(
                 mask_paths=[str(f) for f in all_mask_files],
                 subject=self.participant_id,
                 task=task_type,
@@ -2533,15 +2533,15 @@ class PipelineRunner:
             presenter_monitor = display_config.get("presenter_monitor", "right")
 
             # Load session state for adaptive difficulty persistence across runs
-            session_state = SessionState.load(output_dir, task_id=feedback_task_type)
+            task_state = TaskState.load(output_dir, task_id=feedback_task_type)
 
             # Update max_feedback_runs from config if different (sum across all feedback_runs)
             max_feedback_runs = sum(fr.get("max_runs", 1) for fr in config.get("feedback_runs", [])) or 2
-            if session_state.max_feedback_runs != max_feedback_runs:
-                session_state.max_feedback_runs = max_feedback_runs
-                session_state.save()
+            if task_state.max_feedback_runs != max_feedback_runs:
+                task_state.max_feedback_runs = max_feedback_runs
+                task_state.save()
 
-            self._emit_progress(f"Session state: task={feedback_task_type}, runs={len(session_state.completed_runs)}")
+            self._emit_progress(f"Session state: task={feedback_task_type}, runs={len(task_state.completed_runs)}")
 
             # Build factory config with task parameters plus runtime settings
             signal_mode = _fb("feedback_mode", "activation")
@@ -2563,7 +2563,7 @@ class PipelineRunner:
                 task_id=feedback_task_type,
                 coordinator=coordinator,
                 config=factory_config,
-                session_state=session_state,
+                task_state=task_state,
                 output_dir=str(output_dir),
                 simulator=simulator,
             )

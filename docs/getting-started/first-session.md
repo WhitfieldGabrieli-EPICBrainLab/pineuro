@@ -1,6 +1,6 @@
 # First Session Tutorial
 
-This tutorial walks you through a complete neurofeedback session using pineuro's GUI. You'll preprocess resting-state data, extract participant-specific network masks, and run a simulated real-time neurofeedback session — all without a scanner.
+This tutorial walks you through a complete neurofeedback task using pineuro's GUI. You'll preprocess resting-state data, extract participant-specific network masks, and run a simulated real-time neurofeedback task — all without a scanner.
 
 We use the NKI Rockland Sample neurofeedback dataset as example data, but the same workflow applies to any DICOM dataset.
 
@@ -119,7 +119,7 @@ After this step, you can review the mask QC report to verify the selected compon
 
 ### Phase 5: Feedback Run
 
-The feedback session starts. On the operator monitor, you'll see real-time plots of:
+The feedback task starts. On the operator monitor, you'll see real-time plots of:
 - **Activation timeseries** — Per-volume CEN and DMN activation
 - **FD plot** — Framewise displacement (head motion)
 - **DVARS plot** — Signal intensity changes
@@ -166,14 +166,14 @@ data/sub-rockland01/
 │
 ├── feedback/
 │   ├── 01_reference/                    # Reference scan + coregistered masks
-│   │   ├── masks/                       # Network masks aligned to feedback session
+│   │   ├── masks/                       # Network masks aligned to feedback task
 │   │   └── xfm/                         # Registration transforms
 │   └── 02_feedback_output/
 │       ├── sub-rockland01_task-feedback_acq-01_run-01_feedbacklog.tsv   # Per-volume activations
 │       ├── sub-rockland01_task-feedback_acq-01_run-01_design.tsv        # GLM design matrix
 │       ├── sub-rockland01_task-feedback_acq-01_run-01_psychopylog.tsv   # Task display state
 │       ├── sub-rockland01_task-feedback_acq-01_run-01_events.tsv        # Block events
-│       ├── session_state.json                                            # Session progress
+│       ├── task_state.json                                            # Task state
 │       └── qc/
 │           └── sub-rockland01_task-feedback_acq-01_run-01_feedback_qc.html
 │
@@ -206,7 +206,7 @@ data/sub-rockland01/
 
 - **Run more participants** — Enter a different participant ID (e.g., `sub-rockland02`) and run the same pipeline. The source mapping automatically selects the correct DICOMs.
 - **Adjust parameters** — Edit the study to change ICA components, threshold values, or task settings. Re-run with `overwrite=False` to skip completed steps.
-- **Multi-visit studies** — Enable multi-visit mode in the study editor to reuse masks across sessions with reference scan coregistration.
+- **Multi-session studies** — Enable multi-session mode in the study editor to reuse masks across sessions with reference scan coregistration.
 - **Sham conditions** — Enable sham mode to deliver alternative mask feedback or replay data for control participants.
 
 See the [Pipeline Overview](../user-guide/pipeline-overview.md) for details on each processing stage.

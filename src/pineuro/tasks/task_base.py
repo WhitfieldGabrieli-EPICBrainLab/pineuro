@@ -268,7 +268,7 @@ class TaskBase(ABC):  # noqa: B024
 
     def _snapshot_quartz(self) -> set[str]:
         try:
-            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedSessionState
+            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedTaskState
         except ImportError:
             return set()
         held: set[str] = set()
@@ -276,7 +276,7 @@ class TaskBase(ABC):  # noqa: B024
             vk = self._PSYCHOPY_TO_MAC_VK.get(name)
             if vk is None:
                 continue
-            if CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, vk):
+            if CGEventSourceKeyState(kCGEventSourceStateCombinedTaskState, vk):
                 held.add(name)
         return held
 
@@ -397,7 +397,7 @@ class TaskBase(ABC):  # noqa: B024
         """Poll global key state on macOS via CGEventSourceKeyState."""
         try:
             from AppKit import NSApplication
-            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedSessionState
+            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedTaskState
         except ImportError:
             return
 
@@ -417,7 +417,7 @@ class TaskBase(ABC):  # noqa: B024
             vk = self._PSYCHOPY_TO_MAC_VK.get(name)
             if vk is None:
                 continue
-            pressed = CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, vk)
+            pressed = CGEventSourceKeyState(kCGEventSourceStateCombinedTaskState, vk)
             if pressed and name not in self._poll_prev:
                 psychopy_event._keyBuffer.append((name, 0, core.getTime()))
                 self._last_inject_source = "poll_quartz"

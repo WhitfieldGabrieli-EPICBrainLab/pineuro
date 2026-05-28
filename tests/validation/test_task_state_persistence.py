@@ -1,12 +1,12 @@
-"""Validation -- SessionState JSON round-trip persistence.
+"""Validation -- TaskState JSON round-trip persistence.
 
-SessionState persists adaptive multi-run task state to ``session_state.json``.
+TaskState persists adaptive multi-run task state to ``task_state.json``.
 The round-trip contract: every field written by ``save()`` must come back
 unchanged from ``load()``. A bug -- dropped field on save, key renamed on load,
 type coerced (e.g. int -> str via json) -- corrupts state across run boundaries
 and silently breaks the multi-run adaptation that depends on it.
 
-Every test below saves a SessionState built directly from constructor literals,
+Every test below saves a TaskState built directly from constructor literals,
 loads it back through the public API, and asserts exact equality on every field
 that the public ``save()`` writes. Expected values are the original literals --
 there is no formula involved, only a structural round-trip.
@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from pineuro.tasks.session import RunInfo, SessionState
+from pineuro.tasks.state import RunInfo, TaskState
 
 pytestmark = pytest.mark.validation
 
@@ -30,8 +30,8 @@ def test_round_trip_empty_state(tmp_path):
     task_state from the task registry's defaults. This isolates the
     save/load round-trip from the task-metadata default-injection path.
     """
-    state = SessionState(
-        session_dir=tmp_path,
+    state = TaskState(
+        feedback_dir=tmp_path,
         task_id="_validation_test_unregistered_task",
         task_state={},
         completed_runs=[],
@@ -39,7 +39,7 @@ def test_round_trip_empty_state(tmp_path):
     )
     state.save()
 
-    loaded = SessionState.load(tmp_path, task_id="_validation_test_unregistered_task")
+    loaded = TaskState.load(tmp_path, task_id="_validation_test_unregistered_task")
     assert loaded.task_id == "_validation_test_unregistered_task"
     assert loaded.task_state == {}
     assert loaded.completed_runs == []
@@ -56,8 +56,8 @@ def test_round_trip_task_state_values(tmp_path):
         "label": "stable",
         "active": True,
     }
-    state = SessionState(
-        session_dir=tmp_path,
+    state = TaskState(
+        feedback_dir=tmp_path,
         task_id="thermometer",
         task_state=dict(original_state),
         completed_runs=[],
@@ -65,7 +65,7 @@ def test_round_trip_task_state_values(tmp_path):
     )
     state.save()
 
-    loaded = SessionState.load(tmp_path, task_id="thermometer")
+    loaded = TaskState.load(tmp_path, task_id="thermometer")
     assert loaded.task_state == original_state  # exact dict equality across types
 
 
@@ -90,8 +90,8 @@ def test_round_trip_completed_runs(tmp_path):
             slot_run_number=2,
         ),
     ]
-    state = SessionState(
-        session_dir=tmp_path,
+    state = TaskState(
+        feedback_dir=tmp_path,
         task_id="ball",
         task_state={"some": "state"},
         completed_runs=runs,
@@ -99,7 +99,7 @@ def test_round_trip_completed_runs(tmp_path):
     )
     state.save()
 
-    loaded = SessionState.load(tmp_path, task_id="ball")
+    loaded = TaskState.load(tmp_path, task_id="ball")
     assert len(loaded.completed_runs) == len(runs)
     for orig, restored in zip(runs, loaded.completed_runs, strict=True):
         assert restored.run_number == orig.run_number
@@ -112,8 +112,8 @@ def test_round_trip_completed_runs(tmp_path):
 
 def test_round_trip_slot_base_state(tmp_path):
     """slot_base_state keys (int) round-trip through JSON string-key conversion."""
-    state = SessionState(
-        session_dir=tmp_path,
+    state = TaskState(
+        feedback_dir=tmp_path,
         task_id="ball",
         task_state={},
         completed_runs=[],
@@ -123,12 +123,12 @@ def test_round_trip_slot_base_state(tmp_path):
     state.save()
 
     # Inspect the on-disk JSON: save() stores slot keys as strings (JSON requirement).
-    written = json.loads((tmp_path / "session_state.json").read_text())
+    written = json.loads((tmp_path / "task_state.json").read_text())
     assert "slot_base_state" in written
     assert set(written["slot_base_state"].keys()) == {"1", "2"}
 
     # load() must reverse that conversion back to integer keys for in-memory use.
-    loaded = SessionState.load(tmp_path, task_id="ball")
+    loaded = TaskState.load(tmp_path, task_id="ball")
     # Note: slot_base_state may still be string-keyed depending on load implementation.
     # The values themselves must round-trip exactly:
     assert {str(k): v for k, v in loaded.slot_base_state.items()} == {
@@ -138,8 +138,8 @@ def test_round_trip_slot_base_state(tmp_path):
 
 
 def test_load_missing_file_creates_fresh_state(tmp_path):
-    """Loading from a directory with no session_state.json yields fresh defaults."""
-    loaded = SessionState.load(tmp_path, task_id="some_task")
+    """Loading from a directory with no task_state.json yields fresh defaults."""
+    loaded = TaskState.load(tmp_path, task_id="some_task")
     assert loaded.task_id == "some_task"
     assert loaded.completed_runs == []
     # The default max_feedback_runs is 5 (class default); a fresh state inherits it.
@@ -148,8 +148,8 @@ def test_load_missing_file_creates_fresh_state(tmp_path):
 
 def test_round_trip_max_feedback_runs_value(tmp_path):
     """max_feedback_runs preserves its int value across the round trip."""
-    state = SessionState(
-        session_dir=tmp_path,
+    state = TaskState(
+        feedback_dir=tmp_path,
         task_id="ball",
         task_state={},
         completed_runs=[],
@@ -157,25 +157,25 @@ def test_round_trip_max_feedback_runs_value(tmp_path):
     )
     state.save()
 
-    loaded = SessionState.load(tmp_path, task_id="ball")
+    loaded = TaskState.load(tmp_path, task_id="ball")
     assert loaded.max_feedback_runs == 7  # exact int round-trip
 
 
 def test_save_then_reload_then_save_is_stable(tmp_path):
     """Two successive save→load→save cycles produce identical JSON content."""
-    state1 = SessionState(
-        session_dir=tmp_path,
+    state1 = TaskState(
+        feedback_dir=tmp_path,
         task_id="ball",
         task_state={"a": 1, "b": [2, 3]},
         completed_runs=[RunInfo(1, "transfer", 50, acq=1)],
         max_feedback_runs=3,
     )
     state1.save()
-    written1 = (tmp_path / "session_state.json").read_text()
+    written1 = (tmp_path / "task_state.json").read_text()
 
-    loaded = SessionState.load(tmp_path, task_id="ball")
+    loaded = TaskState.load(tmp_path, task_id="ball")
     loaded.save()
-    written2 = (tmp_path / "session_state.json").read_text()
+    written2 = (tmp_path / "task_state.json").read_text()
 
     assert json.loads(written1) == json.loads(written2)  # structural equality on the JSON
 

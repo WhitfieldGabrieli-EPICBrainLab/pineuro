@@ -14,7 +14,7 @@ pineuro provides a complete pipeline for real-time fMRI neurofeedback experiment
 
 1. **Preprocessing** — DICOM conversion, motion correction, brain extraction
 2. **Mask Extraction** — ICA-based network identification from resting-state data
-3. **Feedback Sessions** — Real-time activation estimation and display
+3. **Feedback Tasks** — Real-time activation estimation and display
 
 The library is designed for:
 - **Research flexibility** — Customize every stage of the pipeline
@@ -33,10 +33,10 @@ The library is designed for:
 - [Study Configuration](user-guide/study-configuration.md) — Creating and configuring studies
 - [Preprocessing](user-guide/preprocessing.md) — Motion correction, brain extraction, coregistration
 - [Mask Extraction](user-guide/mask-extraction.md) — ICA, GLM, manual ROI import, atlas options
-- [Feedback Sessions](user-guide/feedback-sessions.md) — Activation, connectivity, differential, intermittent feedback
+- [Feedback Tasks](user-guide/feedback-tasks.md) — Activation, connectivity, differential, intermittent feedback
 - [Tasks](user-guide/tasks.md) — Gauge, ball, thermometer, fixation, self/other; transfer runs
 - [Sham & Blinding](user-guide/sham-and-blinding.md) — Control conditions, blind operator mode, randomization
-- [Multi-Visit Studies](user-guide/multi-visit.md) — Longitudinal protocols with mask reuse
+- [Multi-Session Studies](user-guide/multi-session.md) — Longitudinal protocols with mask reuse
 - [Display Setup](user-guide/display-setup.md) — Multi-monitor and projector configuration
 - [Simulation Mode](user-guide/simulation-mode.md) — Offline testing with DICOM replay
 - [QC Reports & Output Files](user-guide/qc-reports.md) — Quality reports, feedbacklog, psychopylog

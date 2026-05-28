@@ -1,7 +1,7 @@
 """CSV/TSV file poller for real-time data monitoring.
 
 This module provides a polling mechanism to watch feedback log files
-and emit new data as it's written during neurofeedback sessions.
+and emit new data as it's written during neurofeedback tasks.
 """
 
 import csv

@@ -1071,7 +1071,7 @@ def preprocessing(
     # The masked mean of run-01 serves as a reference image for:
     # - Registration to MNI space (mask extraction)
     # - Overlay visualization (QC reports)
-    # - 2-volume coregistration (feedback sessions)
+    # - 2-volume coregistration (feedback tasks)
     ref_file = root_dir / Path(f"{participant_id}_task-{task}_boldref.nii.gz")
     if not ref_file.exists() or overwrite:
         apply_mask(input_file=sub_ref, mask_file=mask_file, output_file=ref_file, overwrite=overwrite)

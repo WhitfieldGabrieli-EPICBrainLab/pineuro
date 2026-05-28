@@ -1113,7 +1113,7 @@ class FeedbackTabBuilder:
                 ft.Row(rand_controls),
                 ft.Text(
                     "TSV file with columns: subject_id, condition (real/sham), "
-                    "matched_participant (for replay), matched_visit",
+                    "matched_participant (for replay), matched_session",
                     size=11,
                     color=ft.Colors.GREY_600,
                     italic=True,

@@ -41,7 +41,7 @@ A TSV file that assigns participants to conditions. Generate one using the Study
 **Format:**
 
 ```
-subject_id	condition	matched_participant	matched_visit	notes
+subject_id	condition	matched_participant	matched_session	notes
 sub-001	real
 sub-002	sham	sub-001		Matched for age/sex
 sub-003	real
@@ -53,7 +53,7 @@ sub-004	sham	sub-003
 | `subject_id` | Yes | Participant identifier |
 | `condition` | Yes | `real` or `sham` |
 | `matched_participant` | For replay | Whose data to replay |
-| `matched_visit` | No | Which visit (defaults to same visit number) |
+| `matched_session` | No | Which session (defaults to same session number) |
 | `notes` | No | Free-text notes |
 
 The randomization file is configured in the Study Editor sham section.

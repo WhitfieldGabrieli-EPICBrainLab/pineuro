@@ -22,7 +22,7 @@ threading (stdlib), PsychoPy (for concrete tasks)
 
 Threading Model
 ---------------
-Two threads interact with each task during a feedback session:
+Two threads interact with each task during a feedback task:
 
 Coordinator thread (background)
     Runs incremental GLM and activation computation.  Calls
@@ -61,7 +61,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from .task_base import TaskBase
 
 if TYPE_CHECKING:
-    from .session import SessionState
+    from .state import TaskState
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class BaseTask(TaskBase):
         Display refresh rate in Hz (default: 60.0)
     feedback_mode : bool, optional
         Whether feedback is active (default: True)
-    session_state : SessionState, optional
+    task_state : TaskState, optional
         Session state for persistence across runs
     simulator : VolumeSimulator, optional
         Volume simulator for offline testing
@@ -102,7 +102,7 @@ class BaseTask(TaskBase):
         Target refresh rate in Hz
     feedback_mode : bool
         Whether feedback is active
-    _session_state : SessionState or None
+    _task_state : TaskState or None
         Session state for persistence
 
     Examples
@@ -128,7 +128,7 @@ class BaseTask(TaskBase):
         mask_name: str | None = None,
         refresh_rate: float = 60.0,
         feedback_mode: bool = True,
-        session_state: Optional["SessionState"] = None,
+        task_state: Optional["TaskState"] = None,
         simulator=None,
         **kwargs,  # Accept additional kwargs for subclass compatibility
     ):
@@ -145,7 +145,7 @@ class BaseTask(TaskBase):
 
         # Question support
         self.feedback_mode = feedback_mode
-        self._session_state = session_state
+        self._task_state = task_state
         self._questions_file = None  # Optional file handle for logging responses
         self._questions_writer = None  # Optional CSV writer
 
@@ -475,8 +475,8 @@ class BaseTask(TaskBase):
 
             elif question.condition == "last_feedback_only":
                 is_last = False
-                if self._session_state is not None:
-                    is_last = getattr(self._session_state, "is_last_feedback_run", False)
+                if self._task_state is not None:
+                    is_last = getattr(self._task_state, "is_last_feedback_run", False)
                 if not (self.feedback_mode and is_last):
                     continue
 
@@ -675,10 +675,10 @@ class BaseTask(TaskBase):
 
         Override this method if you need custom recording logic.
         """
-        if self._session_state is None:
+        if self._task_state is None:
             return
 
-        self._session_state.record_run(
+        self._task_state.record_run(
             run_type="feedback" if self.feedback_mode else "transfer",
             volumes_processed=getattr(self, "_volumes_processed", 0),
             acq=self.coordinator.acq,

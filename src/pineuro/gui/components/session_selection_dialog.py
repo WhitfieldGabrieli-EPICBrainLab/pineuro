@@ -1,9 +1,9 @@
-"""Visit selection dialog for multi-visit studies.
+"""Session selection dialog for multi-session studies.
 
 This dialog allows users to:
-- View existing visits for a participant
-- Select an existing visit to continue
-- Create a new visit (with mask compute or reuse options)
+- View existing sessions for a participant
+- Select an existing session to continue
+- Create a new session (with mask compute or reuse options)
 """
 
 from __future__ import annotations
@@ -17,59 +17,59 @@ import flet as ft
 
 if TYPE_CHECKING:
     # pineuro.session is a heavy module; import it lazily inside methods.
-    from pineuro.session import VisitConfig
+    from pineuro.session import SessionMetadata
 
 logger = logging.getLogger(__name__)
 
 
-class VisitSelectionDialog:
-    """Dialog for selecting or creating visits for a participant."""
+class SessionSelectionDialog:
+    """Dialog for selecting or creating sessions for a participant."""
 
     def __init__(
         self,
         page: ft.Page,
         participant_id: str,
         base_dir: Path,
-        on_select: Callable[[str | None, VisitConfig | None], None],
+        on_select: Callable[[str | None, SessionMetadata | None], None],
     ):
-        """Initialize the visit selection dialog.
+        """Initialize the session selection dialog.
 
         Args:
             page: Flet Page object
             participant_id: Participant ID
             base_dir: Study base directory
-            on_select: Callback when visit is selected/created.
-                       Called with (visit_id, visit_config) where:
-                       - visit_id is None for single-visit mode
-                       - visit_config is None when continuing existing visit
+            on_select: Callback when session is selected/created.
+                       Called with (session_id, session_metadata) where:
+                       - session_id is None for single-session mode
+                       - session_metadata is None when continuing existing session
         """
         self.page = page
         self.participant_id = participant_id
         self.base_dir = Path(base_dir)
         self.on_select = on_select
-        from pineuro.session import detect_existing_visits
+        from pineuro.session import detect_existing_sessions
 
-        self.existing_visits = detect_existing_visits(self.base_dir, participant_id)
+        self.existing_sessions = detect_existing_sessions(self.base_dir, participant_id)
         self.dialog: ft.AlertDialog | None = None
 
     def show(self):
-        """Show the visit selection dialog."""
-        # Check if participant has any existing visits
-        if not self.existing_visits:
-            # No existing data - offer single-visit vs multi-visit choice
+        """Show the session selection dialog."""
+        # Check if participant has any existing sessions
+        if not self.existing_sessions:
+            # No existing data - offer single-session vs multi-session choice
             self._show_new_participant_dialog()
-        elif len(self.existing_visits) == 1 and self.existing_visits[0]["visit_id"] is None:
-            # Single-visit mode data exists - continue or migrate
-            self._show_single_visit_dialog()
+        elif len(self.existing_sessions) == 1 and self.existing_sessions[0]["session_id"] is None:
+            # Single-session mode data exists - continue or migrate
+            self._show_single_session_dialog()
         else:
-            # Multi-visit data exists - select or create new
-            self._show_multi_visit_dialog()
+            # Multi-session data exists - select or create new
+            self._show_multi_session_dialog()
 
     def _show_new_participant_dialog(self):
         """Show dialog for new participant without existing data."""
-        # For new participants, just start with ses-01 in multi-visit mode
+        # For new participants, just start with ses-01 in multi-session mode
         # This simplifies the UX while maintaining the new structure
-        default_visit_id = "ses-01"
+        default_session_id = "ses-01"
 
         content = ft.Column(
             [
@@ -85,7 +85,7 @@ class VisitSelectionDialog:
                     color=ft.Colors.GREY_600,
                 ),
                 ft.Text(
-                    f"A new visit ({default_visit_id}) will be created.",
+                    f"A new session ({default_session_id}) will be created.",
                     size=12,
                 ),
             ],
@@ -94,15 +94,15 @@ class VisitSelectionDialog:
         )
 
         def start_new(e):
-            from pineuro.session import VisitConfig
+            from pineuro.session import SessionMetadata
 
             self.page.pop_dialog()
-            visit_config = VisitConfig(
-                visit_id=default_visit_id,
-                visit_number=1,
+            session_metadata = SessionMetadata(
+                session_id=default_session_id,
+                session_number=1,
                 mask_source="compute",
             )
-            self.on_select(default_visit_id, visit_config)
+            self.on_select(default_session_id, session_metadata)
 
         def cancel(e):
             self.page.pop_dialog()
@@ -117,16 +117,16 @@ class VisitSelectionDialog:
         )
         self.page.show_dialog(self.dialog)
 
-    def _show_single_visit_dialog(self):
-        """Show dialog when single-visit data exists."""
-        visit_info = self.existing_visits[0]
+    def _show_single_session_dialog(self):
+        """Show dialog when single-session data exists."""
+        session_info = self.existing_sessions[0]
 
         status_items = []
-        if visit_info["has_masks"]:
+        if session_info["has_masks"]:
             status_items.append("Masks: extracted")
-            if visit_info["masks_approved"]:
+            if session_info["masks_approved"]:
                 status_items.append("(approved)")
-        if visit_info["has_feedback"]:
+        if session_info["has_feedback"]:
             status_items.append("Feedback: started")
 
         status_text = ", ".join(status_items) if status_items else "No completed steps"
@@ -140,7 +140,7 @@ class VisitSelectionDialog:
                 ),
                 ft.Divider(),
                 ft.Text(
-                    "Existing single-visit session found.",
+                    "Existing single-session session found.",
                     size=12,
                 ),
                 ft.Text(
@@ -161,7 +161,7 @@ class VisitSelectionDialog:
 
         def continue_session(e):
             self.page.pop_dialog()
-            # Continue in single-visit mode (backward compatible)
+            # Continue in single-session mode (backward compatible)
             self.on_select(None, None)
 
         def cancel(e):
@@ -181,42 +181,42 @@ class VisitSelectionDialog:
         )
         self.page.show_dialog(self.dialog)
 
-    def _show_multi_visit_dialog(self):
-        """Show dialog when multi-visit data exists."""
-        # Build visit list
-        visit_tiles: list[ft.Control] = []
-        visits_with_approved_masks = []
+    def _show_multi_session_dialog(self):
+        """Show dialog when multi-session data exists."""
+        # Build session list
+        session_tiles: list[ft.Control] = []
+        sessions_with_approved_masks = []
 
-        for visit in self.existing_visits:
-            visit_id = visit["visit_id"]
-            if visit_id is None:
-                continue  # Skip single-visit entries in multi-visit mode
+        for session in self.existing_sessions:
+            session_id = session["session_id"]
+            if session_id is None:
+                continue  # Skip single-session entries in multi-session mode
 
             status_parts = []
-            if visit["has_masks"]:
-                if visit["masks_approved"]:
+            if session["has_masks"]:
+                if session["masks_approved"]:
                     status_parts.append("Masks approved")
-                    visits_with_approved_masks.append(visit_id)
+                    sessions_with_approved_masks.append(session_id)
                 else:
                     status_parts.append("Masks extracted")
-            if visit["has_feedback"]:
+            if session["has_feedback"]:
                 status_parts.append("Feedback started")
 
             status_text = ", ".join(status_parts) if status_parts else "Not started"
 
-            visit_tiles.append(
+            session_tiles.append(
                 ft.ListTile(
                     leading=ft.Icon(ft.Icons.FOLDER_OPEN),
-                    title=ft.Text(visit_id),
+                    title=ft.Text(session_id),
                     subtitle=ft.Text(status_text, size=11),
-                    on_click=lambda e, vid=visit_id: self._select_existing_visit(vid),
+                    on_click=lambda e, vid=session_id: self._select_existing_session(vid),
                 )
             )
 
-        # Add "New Visit" option
-        from pineuro.session import next_visit_id
+        # Add "New Session" option
+        from pineuro.session import next_session_id
 
-        new_visit_id = next_visit_id(self.base_dir, self.participant_id)
+        new_session_id = next_session_id(self.base_dir, self.participant_id)
 
         content = ft.Column(
             [
@@ -227,19 +227,19 @@ class VisitSelectionDialog:
                 ),
                 ft.Divider(),
                 ft.Text(
-                    "Existing visits:",
+                    "Existing sessions:",
                     size=12,
                     weight=ft.FontWeight.W_500,
                 ),
                 ft.Container(
-                    content=ft.Column(visit_tiles, spacing=0),
+                    content=ft.Column(session_tiles, spacing=0),
                     border=ft.border.all(1, ft.Colors.GREY_300),
                     border_radius=8,
                     padding=0,
                 ),
                 ft.Container(height=10),
                 ft.Text(
-                    "Or create a new visit:",
+                    "Or create a new session:",
                     size=12,
                     weight=ft.FontWeight.W_500,
                 ),
@@ -248,45 +248,45 @@ class VisitSelectionDialog:
             spacing=8,
         )
 
-        def create_new_visit(e):
+        def create_new_session(e):
             self.page.pop_dialog()
-            self._show_new_visit_dialog(new_visit_id, visits_with_approved_masks)
+            self._show_new_session_dialog(new_session_id, sessions_with_approved_masks)
 
         def cancel(e):
             self.page.pop_dialog()
 
         self.dialog = ft.AlertDialog(
-            title=ft.Text("Select Visit"),
+            title=ft.Text("Select Session"),
             content=ft.Container(content=content, width=450, height=350),
             actions=[
                 ft.TextButton("Cancel", on_click=cancel),
                 ft.FilledButton(
-                    f"New Visit ({new_visit_id})",
+                    f"New Session ({new_session_id})",
                     icon=ft.Icons.ADD,
-                    on_click=create_new_visit,
+                    on_click=create_new_session,
                 ),
             ],
         )
         self.page.show_dialog(self.dialog)
 
-    def _select_existing_visit(self, visit_id: str):
-        """Handle selection of existing visit."""
+    def _select_existing_session(self, session_id: str):
+        """Handle selection of existing session."""
         self.page.pop_dialog()
-        # Continue existing visit - no new VisitConfig needed
-        self.on_select(visit_id, None)
+        # Continue existing session - no new SessionMetadata needed
+        self.on_select(session_id, None)
 
-    def _show_new_visit_dialog(self, new_visit_id: str, visits_with_masks: list[str]):
-        """Show dialog for creating a new visit."""
+    def _show_new_session_dialog(self, new_session_id: str, sessions_with_masks: list[str]):
+        """Show dialog for creating a new session."""
         # Mask source dropdown options
         mask_options = [
             ft.dropdown.Option("compute", "Compute new masks (run localizer)"),
         ]
 
-        for source_visit in visits_with_masks:
+        for source_session in sessions_with_masks:
             mask_options.append(
                 ft.dropdown.Option(
-                    f"reuse:{source_visit}",
-                    f"Reuse masks from {source_visit}",
+                    f"reuse:{source_session}",
+                    f"Reuse masks from {source_session}",
                 )
             )
 
@@ -307,7 +307,7 @@ class VisitSelectionDialog:
         content = ft.Column(
             [
                 ft.Text(
-                    f"Creating visit: {new_visit_id}",
+                    f"Creating session: {new_session_id}",
                     size=14,
                     weight=ft.FontWeight.BOLD,
                 ),
@@ -331,47 +331,47 @@ class VisitSelectionDialog:
             spacing=8,
         )
 
-        def create_visit(e):
-            from pineuro.session import VisitConfig
+        def create_session(e):
+            from pineuro.session import SessionMetadata
 
             self.page.pop_dialog()
 
             mask_value = mask_source_dropdown.value or ""
             if mask_value.startswith("reuse:"):
                 mask_source = "reuse"
-                mask_source_visit = mask_value.split(":", 1)[1]
+                mask_source_session = mask_value.split(":", 1)[1]
             else:
                 mask_source = "compute"
-                mask_source_visit = None
+                mask_source_session = None
 
-            # Determine visit number
-            existing_multi = [v for v in self.existing_visits if v["visit_id"] is not None]
-            visit_number = len(existing_multi) + 1
+            # Determine session number
+            existing_multi = [v for v in self.existing_sessions if v["session_id"] is not None]
+            session_number = len(existing_multi) + 1
 
-            visit_config = VisitConfig(
-                visit_id=new_visit_id,
-                visit_number=visit_number,
+            session_metadata = SessionMetadata(
+                session_id=new_session_id,
+                session_number=session_number,
                 mask_source=mask_source,
-                mask_source_visit=mask_source_visit,
+                mask_source_session=mask_source_session,
                 notes=notes_field.value.strip(),
             )
 
             logger.info(
-                f"Creating new visit: {new_visit_id}, mask_source={mask_source}, source_visit={mask_source_visit}"
+                f"Creating new session: {new_session_id}, mask_source={mask_source}, source_session={mask_source_session}"
             )
 
-            self.on_select(new_visit_id, visit_config)
+            self.on_select(new_session_id, session_metadata)
 
         def back(e):
             self.page.pop_dialog()
-            self._show_multi_visit_dialog()
+            self._show_multi_session_dialog()
 
         self.dialog = ft.AlertDialog(
-            title=ft.Text("New Visit Options"),
+            title=ft.Text("New Session Options"),
             content=ft.Container(content=content, width=400),
             actions=[
                 ft.TextButton("Back", on_click=back),
-                ft.FilledButton("Create", icon=ft.Icons.CHECK, on_click=create_visit),
+                ft.FilledButton("Create", icon=ft.Icons.CHECK, on_click=create_session),
             ],
         )
         self.page.show_dialog(self.dialog)

@@ -18,7 +18,7 @@ TaskProtocol : Protocol
 
 Threading Model
 ---------------
-Two threads interact with each task during a feedback session:
+Two threads interact with each task during a feedback task:
 
 Coordinator thread (background)
     Runs incremental GLM and activation computation.  Calls

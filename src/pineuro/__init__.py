@@ -5,7 +5,7 @@ through preprocessing, network mask extraction, and moment-to-moment BOLD activa
 
 Main Functions
 --------------
-run_feedback_session : Run complete real-time feedback session
+run_feedback_task : Run a complete real-time feedback task
 preprocessing : DICOM conversion, motion correction, brain extraction
 collect_volumes : Watch for and collect incoming scanner volumes (DICOM or NIfTI)
 collect_dicoms : Alias for collect_volumes (backward compatibility)
@@ -32,11 +32,11 @@ LocalizerConfig / FeedbackRunConfig : Per-localizer and per-feedback-run configu
 run_full_session : Run complete multi-run session
 setup_session : Initialize session (collection, preprocessing, mask extraction)
 run_single_task : Run one feedback/transfer task via task factory
-SessionState : Persistent state across runs
+TaskState : Persistent state across runs
 
 Examples
 --------
->>> from pineuro import preprocessing, mask_extraction_rest, run_feedback_session
+>>> from pineuro import preprocessing, mask_extraction_rest, run_feedback_task
 >>>
 >>> # Step 1: Preprocess resting-state data
 >>> preproc_file, mask_file, ref_file = preprocessing(
@@ -52,8 +52,8 @@ Examples
 ...     yeo_networks=[7],  # Default Mode Network
 ... )
 >>>
->>> # Step 3: Run feedback session
->>> results = run_feedback_session(
+>>> # Step 3: Run feedback task
+>>> results = run_feedback_task(
 ...     mask_paths=['/data/masks/03_masks/network_7.nii.gz'],
 ...     subject='sub-01', task='nback', run=1,
 ...     output_dir='/data/feedback',
@@ -84,7 +84,7 @@ except _PackageNotFoundError:  # pragma: no cover - package not installed
 # Mapping: attribute_name -> (submodule_path, attribute_name_in_submodule)
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # --- feedback.py (heavy: nibabel, scipy, watchdog, pydicom) ---
-    "run_feedback_session": (".feedback", "run_feedback_session"),
+    "run_feedback_task": (".feedback", "run_feedback_task"),
     "ConnectivityEstimator": (".feedback", "ConnectivityEstimator"),
     "get_next_run_number": (".feedback", "get_next_run_number"),
     "get_slot_run_info": (".feedback", "get_slot_run_info"),
@@ -112,9 +112,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "NetworkRole": (".tasks", "NetworkRole"),
     "create_task": (".tasks", "create_task"),
     "create_localizer_task": (".tasks", "create_localizer_task"),
-    # --- tasks.session ---
-    "SessionState": (".tasks.session", "SessionState"),
-    "RunInfo": (".tasks.session", "RunInfo"),
+    # --- tasks.state ---
+    "TaskState": (".tasks.state", "TaskState"),
+    "RunInfo": (".tasks.state", "RunInfo"),
     # --- session.py (lightweight: stdlib only) ---
     "SessionConfig": (".session", "SessionConfig"),
     "PathConfig": (".session", "PathConfig"),
@@ -129,20 +129,20 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ScannerConfig": (".session", "ScannerConfig"),
     "ReferenceConfig": (".session", "ReferenceConfig"),
     "StudyInfoConfig": (".session", "StudyInfoConfig"),
-    "VisitConfig": (".session", "VisitConfig"),
+    "SessionMetadata": (".session", "SessionMetadata"),
     "ShamConfig": (".session", "ShamConfig"),
     "SimulatorSourceMapping": (".session", "SimulatorSourceMapping"),
     "setup_session": (".session", "setup_session"),
     "run_single_task": (".session", "run_single_task"),
     "run_full_session": (".session", "run_full_session"),
     "run_next_task": (".session", "run_next_task"),
-    "reset_session_state": (".session", "reset_session_state"),
+    "reset_task_state": (".session", "reset_task_state"),
     "resolve_mask_source": (".session", "resolve_mask_source"),
-    "detect_existing_visits": (".session", "detect_existing_visits"),
-    "next_visit_id": (".session", "next_visit_id"),
-    "is_single_visit_data": (".session", "is_single_visit_data"),
-    "migrate_to_multi_visit": (".session", "migrate_to_multi_visit"),
-    "setup_visit_with_reused_masks": (".session", "setup_visit_with_reused_masks"),
+    "detect_existing_sessions": (".session", "detect_existing_sessions"),
+    "next_session_id": (".session", "next_session_id"),
+    "is_single_session_data": (".session", "is_single_session_data"),
+    "migrate_to_multi_session": (".session", "migrate_to_multi_session"),
+    "setup_session_with_reused_masks": (".session", "setup_session_with_reused_masks"),
     # --- sham.py ---
     "ShamActivationProvider": (".sham", "ShamActivationProvider"),
     "ReplayActivationProvider": (".sham", "ReplayActivationProvider"),
@@ -195,7 +195,7 @@ __all__ = [
     # Version
     "__version__",
     # Core functions
-    "run_feedback_session",
+    "run_feedback_task",
     "ConnectivityEstimator",
     "get_next_run_number",
     "get_slot_run_info",
@@ -225,7 +225,7 @@ __all__ = [
     "compute_hrf",
     "compute_boxcar_task_regressor",
     # Session state
-    "SessionState",
+    "TaskState",
     "RunInfo",
     # Configuration dataclasses
     "SessionConfig",
@@ -241,7 +241,7 @@ __all__ = [
     "ScannerConfig",
     "ReferenceConfig",
     "StudyInfoConfig",
-    "VisitConfig",
+    "SessionMetadata",
     "ShamConfig",
     "SimulatorSourceMapping",
     # Sham functionality
@@ -257,14 +257,14 @@ __all__ = [
     "run_single_task",
     "run_full_session",
     "run_next_task",
-    "reset_session_state",
-    # Multi-visit support functions
+    "reset_task_state",
+    # Multi-session support functions
     "resolve_mask_source",
-    "detect_existing_visits",
-    "next_visit_id",
-    "is_single_visit_data",
-    "migrate_to_multi_visit",
-    "setup_visit_with_reused_masks",
+    "detect_existing_sessions",
+    "next_session_id",
+    "is_single_session_data",
+    "migrate_to_multi_session",
+    "setup_session_with_reused_masks",
     # Timing functions
     "enable_timing",
     "disable_timing",

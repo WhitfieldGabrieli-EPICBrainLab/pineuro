@@ -1,29 +1,29 @@
-"""Tests for pineuro.tasks.session — SessionState (JSON-backed) and RunInfo."""
+"""Tests for pineuro.tasks.state — TaskState (JSON-backed) and RunInfo."""
 
 
-class TestSessionState:
+class TestTaskState:
     def test_create_for_task(self, tmp_path):
-        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.state import TaskState
 
-        state = SessionState.create_for_task(tmp_path, "ball")
+        state = TaskState.create_for_task(tmp_path, "ball")
         assert state.task_id == "ball"
         assert state.next_run_number == 1
         assert state.feedback_run_count == 0
 
     def test_save_and_load(self, tmp_path):
-        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.state import TaskState
 
-        state = SessionState.create_for_task(tmp_path, "ball")
+        state = TaskState.create_for_task(tmp_path, "ball")
         state.set("custom_key", 42)
         state.save()
 
-        loaded = SessionState.load(tmp_path, "ball")
+        loaded = TaskState.load(tmp_path, "ball")
         assert loaded.get("custom_key") == 42
 
     def test_record_run(self, tmp_path):
-        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.state import TaskState
 
-        state = SessionState.create_for_task(tmp_path, "ball")
+        state = TaskState.create_for_task(tmp_path, "ball")
         state.record_run(run_type="feedback", volumes_processed=100, acq=1)
 
         assert state.feedback_run_count == 1
@@ -32,20 +32,20 @@ class TestSessionState:
         assert state.completed_runs[0].volumes_processed == 100
 
     def test_reset(self, tmp_path):
-        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.state import TaskState
 
-        state = SessionState.create_for_task(tmp_path, "ball")
+        state = TaskState.create_for_task(tmp_path, "ball")
         state.record_run(run_type="feedback", volumes_processed=50, acq=1)
         state.save()
 
-        reset = SessionState.reset(tmp_path, "ball")
+        reset = TaskState.reset(tmp_path, "ball")
         assert reset.feedback_run_count == 0
         assert reset.next_run_number == 1
 
 
 class TestRunInfo:
     def test_construction(self):
-        from pineuro.tasks.session import RunInfo
+        from pineuro.tasks.state import RunInfo
 
         info = RunInfo(run_number=1, run_type="feedback", volumes_processed=200, acq=1)
         assert info.run_number == 1
@@ -53,7 +53,7 @@ class TestRunInfo:
         assert info.acq == 1
 
     def test_to_dict_roundtrip(self):
-        from pineuro.tasks.session import RunInfo
+        from pineuro.tasks.state import RunInfo
 
         info = RunInfo(
             run_number=2,

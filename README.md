@@ -17,7 +17,7 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 
 **Study management**
 - **Desktop GUI**: Study configuration and participant workflows (`pineuro-gui`)
-- **Session orchestration**: Multi-run and multi-visit protocols
+- **Session orchestration**: Multi-run and multi-session protocols
 - **Sham / control conditions**: Sham feedback, replay providers, and randomization
 - **QC reports**: HTML quality reports for each pipeline stage
 
@@ -55,7 +55,7 @@ The desktop GUI provides study configuration, participant workflows, live activa
 
 **User guide**: [Full index](docs/index.md)
 
-[Pipeline Overview](docs/user-guide/pipeline-overview.md) · [Study Configuration](docs/user-guide/study-configuration.md) · [Preprocessing](docs/user-guide/preprocessing.md) · [Mask Extraction](docs/user-guide/mask-extraction.md) · [Feedback Sessions](docs/user-guide/feedback-sessions.md) · [Tasks](docs/user-guide/tasks.md) · [Sham & Blinding](docs/user-guide/sham-and-blinding.md) · [Multi-Visit](docs/user-guide/multi-visit.md) · [Display Setup](docs/user-guide/display-setup.md) · [Simulation Mode](docs/user-guide/simulation-mode.md) · [QC Reports](docs/user-guide/qc-reports.md) · [Network Testing](docs/user-guide/network-testing.md)
+[Pipeline Overview](docs/user-guide/pipeline-overview.md) · [Study Configuration](docs/user-guide/study-configuration.md) · [Preprocessing](docs/user-guide/preprocessing.md) · [Mask Extraction](docs/user-guide/mask-extraction.md) · [Feedback Tasks](docs/user-guide/feedback-tasks.md) · [Tasks](docs/user-guide/tasks.md) · [Sham & Blinding](docs/user-guide/sham-and-blinding.md) · [Multi-Session](docs/user-guide/multi-session.md) · [Display Setup](docs/user-guide/display-setup.md) · [Simulation Mode](docs/user-guide/simulation-mode.md) · [QC Reports](docs/user-guide/qc-reports.md) · [Network Testing](docs/user-guide/network-testing.md)
 
 ## Citation
 

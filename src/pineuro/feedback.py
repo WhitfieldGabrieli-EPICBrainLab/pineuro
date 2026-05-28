@@ -25,8 +25,8 @@ NeurofeedbackCoordinator : Pipeline orchestration
     Watches for incoming volumes (DICOM or NIfTI), handles conversion,
     coordinates timing, and streams results to display tasks.
 
-run_feedback_session : High-level API
-    One-call function that sets up and runs a complete feedback session,
+run_feedback_task : High-level API
+    One-call function that sets up and runs a complete feedback task,
     handling both real-time and simulation modes.
 
 Workflow
@@ -106,7 +106,7 @@ motion parameters should be in the JSON sidecar's ImageComments field
 
 See Also
 --------
-preprocessing : Prepares fMRI data for feedback sessions
+preprocessing : Prepares fMRI data for feedback tasks
 mask_extraction : Creates network masks for feedback regions
 tasks : Display tasks that receive and visualize activations
 
@@ -1978,7 +1978,7 @@ def _detect_interrupted_run(
     Parameters
     ----------
     output_dir : Path
-        Base output directory for feedback sessions
+        Base output directory for feedback tasks
     subject : str
         Subject identifier (e.g., 'sub-01')
     task : str
@@ -2170,7 +2170,7 @@ def get_next_run_number(
     Parameters
     ----------
     output_dir : Path
-        Base output directory for feedback sessions
+        Base output directory for feedback tasks
     subject : str
         Subject identifier (e.g., 'sub-01')
     task : str
@@ -2251,7 +2251,7 @@ def get_slot_run_info(
     Parameters
     ----------
     output_dir : Path
-        Base output directory for feedback sessions
+        Base output directory for feedback tasks
     subject : str
         Subject identifier (e.g., 'sub-01')
     task : str
@@ -2329,7 +2329,7 @@ def get_slot_run_info(
 # SECTION 4: NEUROFEEDBACK COORDINATOR
 # =============================================================================
 # The NeurofeedbackCoordinator is the top-level orchestrator for real-time
-# neurofeedback sessions. It handles:
+# neurofeedback tasks. It handles:
 #
 # 1. **Volume Watching**: Monitors a directory for incoming files using
 #    filesystem events (watchdog) plus periodic polling for reliability.
@@ -2912,7 +2912,7 @@ class NeurofeedbackCoordinator:
 
     def is_complete(self) -> bool:
         """
-        Check if the feedback session is complete or stopped.
+        Check if the feedback task is complete or stopped.
 
         Returns True if any of these conditions are met:
         - All expected volumes have been processed
@@ -3596,7 +3596,7 @@ class NeurofeedbackCoordinator:
         """Clean up temporary directories created during the session.
 
         Use this method to explicitly clean up incoming DICOM and converted
-        NIfTI directories after a feedback session completes. This is useful
+        NIfTI directories after a feedback task completes. This is useful
         when automatic cleanup is disabled (e.g., for debugging) but you want
         to clean up directories after inspecting them.
 
@@ -3681,9 +3681,9 @@ class NeurofeedbackCoordinator:
 # =============================================================================
 # SECTION 5: HIGH-LEVEL SESSION ORCHESTRATION
 # =============================================================================
-# This section provides the user-facing API for running feedback sessions.
+# This section provides the user-facing API for running feedback tasks.
 #
-# run_feedback_session() is designed to be the primary entry point for most
+# run_feedback_task() is designed to be the primary entry point for most
 # users. It handles all the complexity of:
 # - Setting up the coordinator with appropriate parameters
 # - Configuring simulation mode for offline testing
@@ -3691,10 +3691,10 @@ class NeurofeedbackCoordinator:
 # - Setting up sham conditions for control groups
 #
 # For users who need more control, they can instantiate NeurofeedbackCoordinator
-# directly. But for typical use cases, run_feedback_session() is recommended.
+# directly. But for typical use cases, run_feedback_task() is recommended.
 
 
-def run_feedback_session(
+def run_feedback_task(
     mask_paths: list[Path | str],
     subject: str,
     task: str,
@@ -3736,9 +3736,9 @@ def run_feedback_session(
     csf_mask_path: Path | str | None = None,
     task_id: str | None = None,
 ) -> dict:
-    """Run a complete feedback session with optional volume simulation.
+    """Run a complete feedback task with optional volume simulation.
 
-    This is the main entry point for running neurofeedback sessions. It handles
+    This is the main entry point for running neurofeedback tasks. It handles
     both simulated (offline) and real-time (scanner) acquisition modes. Supports
     both DICOM and NIfTI input files.
 
@@ -3870,7 +3870,7 @@ def run_feedback_session(
     --------
     Simulated (offline) mode:
 
-    >>> results = run_feedback_session(
+    >>> results = run_feedback_task(
     ...     mask_paths=['/path/to/dmn_mask.nii.gz'],
     ...     subject='sub-01',
     ...     task='nback',
@@ -3885,7 +3885,7 @@ def run_feedback_session(
 
     Real-time (scanner) mode:
 
-    >>> results = run_feedback_session(
+    >>> results = run_feedback_task(
     ...     mask_paths=['/path/to/dmn_mask.nii.gz'],
     ...     subject='sub-01',
     ...     task='nback',

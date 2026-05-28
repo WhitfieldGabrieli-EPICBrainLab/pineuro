@@ -9,9 +9,9 @@ single participant:
 - QC report viewing
 
 The workflow is divided into four main sections:
-1. Localizer Session: Initial Reference collection and localizer task/rest collection
+1. Localizer Tasks: Initial Reference collection and localizer task/rest collection
 2. Mask Extraction: Preprocessing, network mask extraction (ICA or GLM), and coregistration to reference
-3. Feedback Session: Real-time Reference collection and feedback runs
+3. Feedback Tasks: Real-time Reference collection and feedback runs
 4. Quality Control: View QC reports for each phase
 
 Status is automatically detected based on output file existence, allowing sessions
@@ -27,9 +27,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 if TYPE_CHECKING:
-    from pineuro.session import VisitConfig
+    from pineuro.session import SessionMetadata
 
-# Heavy pineuro imports (feedback, preprocessing, session, sham, tasks.session)
+# Heavy pineuro imports (feedback, preprocessing, session, sham, tasks.state)
 # are deferred to method bodies to avoid loading numpy/nibabel/scipy at import time.
 import flet as ft
 
@@ -121,8 +121,8 @@ class ParticipantWorkflowScreen:
         config_manager: ConfigManager,
         study_config: StudyConfig,
         participant_id: str,
-        visit_id: str | None = None,
-        visit_config: Optional["VisitConfig"] = None,
+        session_id: str | None = None,
+        session_metadata: Optional["SessionMetadata"] = None,
         on_back=None,
     ):
         """Initialize the participant workflow screen.
@@ -132,15 +132,15 @@ class ParticipantWorkflowScreen:
             config_manager: ConfigManager instance
             study_config: Study configuration to use
             participant_id: Participant ID (e.g., "sub-01")
-            visit_id: Visit identifier (e.g., "ses-01"). None for single-visit mode.
-            visit_config: VisitConfig for new visits. None when continuing existing visit.
+            session_id: Session identifier (e.g., "ses-01"). None for single-session mode.
+            session_metadata: SessionMetadata for new sessions. None when continuing existing session.
             on_back: Callback when back button is clicked
         """
         self.page = page
         self.config_manager = config_manager
         self.participant_id = participant_id
-        self.visit_id = visit_id
-        self.visit_config = visit_config
+        self.session_id = session_id
+        self.session_metadata = session_metadata
         self.on_back_callback = on_back
 
         # Create participant-specific base directory
@@ -150,7 +150,7 @@ class ParticipantWorkflowScreen:
         self.study_config = copy.deepcopy(study_config)
         base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
 
-        # The base_dir might already contain participant/visit paths from a previous session
+        # The base_dir might already contain participant/session paths from a previous session
         # (if the study_config object was reused). We need to get the study-level base_dir.
         # Look for participant ID in the path parts and strip it and everything after.
         parts = base_dir.parts
@@ -158,11 +158,11 @@ class ParticipantWorkflowScreen:
             idx = parts.index(participant_id)
             base_dir = Path(*parts[:idx])
 
-        if visit_id:
-            # Multi-visit mode: base_dir/participant_id/visit_id/
-            participant_base_dir = base_dir / participant_id / visit_id
+        if session_id:
+            # Multi-session mode: base_dir/participant_id/session_id/
+            participant_base_dir = base_dir / participant_id / session_id
         else:
-            # Single-visit mode: base_dir/participant_id/
+            # Single-session mode: base_dir/participant_id/
             participant_base_dir = base_dir / participant_id
 
         # Update the session config with participant-specific base directory
@@ -171,52 +171,52 @@ class ParticipantWorkflowScreen:
         # Create the participant directory if it doesn't exist
         participant_base_dir.mkdir(parents=True, exist_ok=True)
 
-        # Visit config file path for persistence
-        visit_config_file = participant_base_dir / "visit_config.json"
+        # Session config file path for persistence
+        session_metadata_file = participant_base_dir / "session_metadata.json"
 
-        # Store visit config info in session config if provided (new visit)
-        if visit_config:
-            visit_config_dict = {
-                "visit_id": visit_config.visit_id,
-                "visit_number": visit_config.visit_number,
-                "mask_source": visit_config.mask_source,
-                "mask_source_visit": visit_config.mask_source_visit,
-                "localizer_enabled": visit_config.localizer_enabled,
-                "notes": visit_config.notes,
+        # Store session config info in session config if provided (new session)
+        if session_metadata:
+            session_metadata_dict = {
+                "session_id": session_metadata.session_id,
+                "session_number": session_metadata.session_number,
+                "mask_source": session_metadata.mask_source,
+                "mask_source_session": session_metadata.mask_source_session,
+                "localizer_enabled": session_metadata.localizer_enabled,
+                "notes": session_metadata.notes,
             }
-            self.study_config.session_config["visit"] = visit_config_dict
+            self.study_config.session_config["session"] = session_metadata_dict
 
-            # Persist visit config to file
+            # Persist session config to file
             import json
 
-            with open(visit_config_file, "w") as f:
-                json.dump(visit_config_dict, f, indent=2)
+            with open(session_metadata_file, "w") as f:
+                json.dump(session_metadata_dict, f, indent=2)
 
-        elif visit_config_file.exists():
-            # Load existing visit config from file (continuing existing visit)
+        elif session_metadata_file.exists():
+            # Load existing session config from file (continuing existing session)
             import json
 
-            with open(visit_config_file) as f:
-                visit_config_dict = json.load(f)
-            self.study_config.session_config["visit"] = visit_config_dict
+            with open(session_metadata_file) as f:
+                session_metadata_dict = json.load(f)
+            self.study_config.session_config["session"] = session_metadata_dict
 
         # Study config snapshot: save on first run, compare on re-run
         self._config_differences = []
         saved_snapshot = load_config_snapshot(participant_base_dir)
         if saved_snapshot is None:
-            save_config_snapshot(self.study_config, participant_base_dir, participant_id, visit_id)
+            save_config_snapshot(self.study_config, participant_base_dir, participant_id, session_id)
         else:
             self._config_differences = compare_protocol_configs(saved_snapshot, self.study_config.to_dict())
             if self._config_differences:
                 logger.warning(
                     "Study config changed since last run for %s%s:\n%s",
                     participant_id,
-                    f" ({visit_id})" if visit_id else "",
+                    f" ({session_id})" if session_id else "",
                     format_differences(self._config_differences),
                 )
         self._participant_base_dir = participant_base_dir
 
-        _visit_str = f" ({visit_id})" if visit_id else ""
+        _session_str = f" ({session_id})" if session_id else ""
 
         # Mask approval state (must be initialized before _detect_completed_steps)
         self._initial_qc_approved = self._check_qc_approval("initial")
@@ -255,9 +255,9 @@ class ParticipantWorkflowScreen:
         self._log_file_handler: logging.FileHandler | None = None
 
         # Cache mask reuse mode flag for easy access
-        visit_conf_dict: dict = self.study_config.session_config.get("visit", {})
-        self._is_mask_reuse_mode = visit_conf_dict.get("mask_source") == "reuse"
-        self._mask_source_visit = visit_conf_dict.get("mask_source_visit")
+        session_conf_dict: dict = self.study_config.session_config.get("session", {})
+        self._is_mask_reuse_mode = session_conf_dict.get("mask_source") == "reuse"
+        self._mask_source_session = session_conf_dict.get("mask_source_session")
         # Track whether user switched to MNI atlas masks mid-session
         self._is_mni_atlas_mode: bool = False
         self._log_file_path: Path | None = None
@@ -2183,9 +2183,9 @@ class ParticipantWorkflowScreen:
         reference_initial_enabled = config.get("reference", {}).get("initial_enabled", True)
         reference_realtime_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
-        # Check if this is a mask-reuse visit
-        visit_config = config.get("visit", {})
-        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        # Check if this is a mask-reuse session
+        session_metadata = config.get("session", {})
+        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
 
         # Build dynamic steps list
         steps = []
@@ -2486,27 +2486,27 @@ class ParticipantWorkflowScreen:
             ):
                 self.step_statuses["coregistration"] = StepStatus.SKIPPED
 
-    def _get_session_for_next_step(self) -> str | None:
-        """Determine which session contains the earliest incomplete step.
+    def _get_section_for_next_step(self) -> str | None:
+        """Determine which section contains the earliest incomplete step.
 
         Returns:
-            Session name ("localizer", "mask_extraction", "feedback") or None if all complete
+            Section name ("localizer", "mask_extraction", "feedback") or None if all complete
         """
         next_step = self._get_next_step()
         if next_step is None:
             return None
 
         step_id, _ = next_step
-        return self._get_session_for_step(step_id)
+        return self._get_section_for_step(step_id)
 
-    def _get_session_for_step(self, step_id: str) -> str:
-        """Get the session name for a given step ID.
+    def _get_section_for_step(self, step_id: str) -> str:
+        """Get the section name for a given step ID.
 
         Args:
             step_id: Step identifier
 
         Returns:
-            Session name ("localizer", "mask_extraction", "feedback")
+            Section name ("localizer", "mask_extraction", "feedback")
         """
         # Handle dynamic step IDs
         if step_id.startswith("rest_run_"):
@@ -2518,7 +2518,7 @@ class ParticipantWorkflowScreen:
         ):
             return "mask_extraction"
 
-        step_to_session = {
+        step_to_section = {
             "reference_initial": "localizer",
             "preprocessing": "mask_extraction",
             "mask_extraction": "mask_extraction",
@@ -2529,7 +2529,7 @@ class ParticipantWorkflowScreen:
             "coregistration_realtime": "feedback",
         }
 
-        return step_to_session.get(step_id, "feedback")
+        return step_to_section.get(step_id, "feedback")
 
     def _get_status_icon(self, status: StepStatus) -> ft.Icon:
         """Get icon for a step status.
@@ -2760,7 +2760,7 @@ class ParticipantWorkflowScreen:
         """
         status = self.step_statuses.get(step_id, StepStatus.PENDING)
 
-        # In mask reuse mode, preprocessing and mask approval are inherited from source visit
+        # In mask reuse mode, preprocessing and mask approval are inherited from source session
         # so these gates should not apply
         if self._is_mask_reuse_mode:
             requires_preprocessing = False
@@ -2828,8 +2828,8 @@ class ParticipantWorkflowScreen:
             padding=5,
         )
 
-    def _build_localizer_session_section(self) -> ft.ExpansionPanel:
-        """Build the localizer session section with collapsible steps.
+    def _build_localizer_tasks_section(self) -> ft.ExpansionPanel:
+        """Build the localizer tasks section with collapsible steps.
 
         Returns:
             ExpansionPanel control
@@ -2945,10 +2945,10 @@ class ParticipantWorkflowScreen:
 
         return ft.ExpansionPanel(
             header=ft.ListTile(
-                title=ft.Text("Localizer Session", weight=ft.FontWeight.BOLD),
+                title=ft.Text("Localizer Tasks", weight=ft.FontWeight.BOLD),
             ),
             content=ft.Column(controls, spacing=10),
-            expanded=self._get_session_for_next_step() == "localizer",
+            expanded=self._get_section_for_next_step() == "localizer",
         )
 
     def _build_mask_extraction_section(self) -> ft.ExpansionPanel:
@@ -3064,7 +3064,7 @@ class ParticipantWorkflowScreen:
                     title=ft.Text("Mask Extraction", weight=ft.FontWeight.BOLD),
                 ),
                 content=ft.Column(controls, spacing=10),
-                expanded=self._get_session_for_next_step() == "mask_extraction",
+                expanded=self._get_section_for_next_step() == "mask_extraction",
             )
 
         # Standard mode: preprocessing + ICA/GLM extraction
@@ -3331,11 +3331,11 @@ class ParticipantWorkflowScreen:
                 controls,
                 spacing=10,
             ),
-            expanded=self._get_session_for_next_step() == "mask_extraction",
+            expanded=self._get_section_for_next_step() == "mask_extraction",
         )
 
     def _build_feedback_section(self) -> ft.ExpansionPanel:
-        """Build the feedback session section.
+        """Build the feedback tasks section.
 
         Returns:
             ExpansionPanel control
@@ -3412,13 +3412,13 @@ class ParticipantWorkflowScreen:
 
         return ft.ExpansionPanel(
             header=ft.ListTile(
-                title=ft.Text("Feedback Session", weight=ft.FontWeight.BOLD),
+                title=ft.Text("Feedback Tasks", weight=ft.FontWeight.BOLD),
             ),
             content=ft.Column(
                 controls,
                 spacing=10,
             ),
-            expanded=self._get_session_for_next_step() == "feedback",
+            expanded=self._get_section_for_next_step() == "feedback",
         )
 
     def _get_dir_size(self, path: Path) -> int:
@@ -4610,7 +4610,7 @@ class ParticipantWorkflowScreen:
             self.study_config,
             self._participant_base_dir,
             self.participant_id,
-            self.visit_id,
+            self.session_id,
         )
         self._config_differences = []
         if hasattr(self, "_config_change_banner") and self._config_change_banner:
@@ -4984,24 +4984,24 @@ class ParticipantWorkflowScreen:
             Dictionary with step information
         """
         # Check for mask reuse mode
-        visit_config = config.get("visit", {})
-        is_mask_reuse = visit_config.get("mask_source") == "reuse"
-        mask_source_visit = visit_config.get("mask_source_visit")
+        session_metadata = config.get("session", {})
+        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
+        mask_source_session = session_metadata.get("mask_source_session")
 
         # In mask reuse mode, reference is run-01 (no initial reference)
         run_num = 1 if is_mask_reuse else 2
 
-        if is_mask_reuse and mask_source_visit:
-            # Mask reuse mode: masks come from source visit
-            study_base_dir = base_dir.parent.parent  # Go up from participant/visit to study
-            source_visit_dir = study_base_dir / self.participant_id / mask_source_visit
-            me_dir = source_visit_dir / "mask_extraction"
+        if is_mask_reuse and mask_source_session:
+            # Mask reuse mode: masks come from source session
+            study_base_dir = base_dir.parent.parent  # Go up from participant/session to study
+            source_session_dir = study_base_dir / self.participant_id / mask_source_session
+            me_dir = source_session_dir / "mask_extraction"
             input_masks_path = me_dir / "03_masks"
             description = (
-                f"Register network masks from {mask_source_visit} to real-time reference space for feedback runs."
+                f"Register network masks from {mask_source_session} to real-time reference space for feedback runs."
             )
         else:
-            # Standard mode: masks come from current visit
+            # Standard mode: masks come from current session
             me_dir = base_dir / "mask_extraction"
             input_masks_path = me_dir / "03_masks"
             description = "Register network masks to real-time reference space for feedback runs."
@@ -5088,8 +5088,8 @@ class ParticipantWorkflowScreen:
         reference_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
         # Check for mask reuse mode
-        visit_config = config.get("visit", {})
-        is_mask_reuse = visit_config.get("mask_source") == "reuse"
+        session_metadata = config.get("session", {})
+        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
 
         # In mask reuse mode, reference is run-01 (no initial reference)
         run_num = 1 if is_mask_reuse else 2
@@ -5114,7 +5114,7 @@ class ParticipantWorkflowScreen:
             run=run_num,
         )
 
-        description = "Collect 2 volumes immediately before feedback session for real-time registration verification."
+        description = "Collect 2 volumes immediately before feedback tasks for real-time registration verification."
         if run_info["existing_acqs"]:
             attempts_str = ", ".join(f"acq-{a:02d}" for a in run_info["existing_acqs"])
             description += f" Previous attempts ({attempts_str}) will be preserved."
@@ -5204,22 +5204,22 @@ class ParticipantWorkflowScreen:
         """
         from pineuro.feedback import get_slot_run_info
         from pineuro.session import get_localizer_run_info
-        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.state import TaskState
 
         # Load session state for adaptive state display
         feedback_dir = base_dir / "feedback" / "02_feedback_output"
         # Cache session states per task type for multi-FRC support
         feedback_runs = config.get("feedback_runs", [])
-        _session_states: dict[str, SessionState | None] = {}
+        _task_states: dict[str, TaskState | None] = {}
         default_task_type = config["feedback_runs"][0].get("task", "ball") if config.get("feedback_runs") else "ball"
 
-        def _get_session_state(task_id: str) -> SessionState | None:
-            if task_id not in _session_states:
+        def _get_task_state(task_id: str) -> TaskState | None:
+            if task_id not in _task_states:
                 try:
-                    _session_states[task_id] = SessionState.load(feedback_dir, task_id=task_id)
+                    _task_states[task_id] = TaskState.load(feedback_dir, task_id=task_id)
                 except Exception:
-                    _session_states[task_id] = None
-            return _session_states[task_id]
+                    _task_states[task_id] = None
+            return _task_states[task_id]
 
         def get_task_state_summary(step_id: str) -> str:
             """Get task state summary string for a specific step."""
@@ -5228,18 +5228,18 @@ class ParticipantWorkflowScreen:
                 task_id = feedback_runs[frc_idx].get("task", default_task_type)
             else:
                 task_id = default_task_type
-            session_state = _get_session_state(task_id)
-            if not session_state or not session_state.task_state:
+            task_state = _get_task_state(task_id)
+            if not task_state or not task_state.task_state:
                 return "initial"
 
             if step_id in ["transfer_1", "feedback_1"]:
                 return "initial"
 
-            if not session_state.completed_runs:
+            if not task_state.completed_runs:
                 return "initial"
 
             # Show key task state values
-            state = session_state.task_state
+            state = task_state.task_state
             parts = []
             for key, value in state.items():
                 if isinstance(value, float):
@@ -6424,7 +6424,7 @@ class ParticipantWorkflowScreen:
                         try:
                             randomization = load_randomization(randomization_path)
                             condition_info = get_condition_for_participant(
-                                randomization, self.participant_id, self.visit_id
+                                randomization, self.participant_id, self.session_id
                             )
                             condition = condition_info.get("condition", "real")
                         except Exception as e:
@@ -7703,7 +7703,7 @@ class ParticipantWorkflowScreen:
 
         # Only show localizer and mask extraction sections if NOT in mask reuse mode
         if not self._is_mask_reuse_mode and has_localizers:
-            panels.append(self._build_localizer_session_section())
+            panels.append(self._build_localizer_tasks_section())
         if not self._is_mask_reuse_mode and has_feedback:
             panels.append(self._build_mask_extraction_section())
         if has_feedback:
@@ -7798,7 +7798,7 @@ class ParticipantWorkflowScreen:
         has_localizers = getattr(self, "_has_localizers", True)
         has_feedback = getattr(self, "_has_feedback", True)
         if not self._is_mask_reuse_mode and has_localizers:
-            panels.append(self._build_localizer_session_section())
+            panels.append(self._build_localizer_tasks_section())
         if not self._is_mask_reuse_mode and has_feedback:
             panels.append(self._build_mask_extraction_section())
         if has_feedback:

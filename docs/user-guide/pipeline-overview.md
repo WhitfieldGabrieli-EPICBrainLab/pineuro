@@ -175,9 +175,9 @@ BOLD = β₀ + β₁·drift + β₂₋₇·motion + β₈·task + error
 
 **Code:**
 ```python
-from pineuro import run_feedback_session
+from pineuro import run_feedback_task
 
-results = run_feedback_session(
+results = run_feedback_task(
     mask_paths=aligned_masks,
     subject='sub-01',
     task='nback',
@@ -217,7 +217,7 @@ Scanner → collect_volumes() → preprocessing() → mask_extraction_rest()
                                                           ↓
                                                     Network Masks
                                                           ↓
-Scanner → coregister_reference() → run_feedback_session() → Display Task
+Scanner → coregister_reference() → run_feedback_task() → Display Task
                                       ↓
                                   TSV Logs
 ```
@@ -235,4 +235,4 @@ The incremental GLM achieves O(p²) complexity per volume (vs O(np²) for full r
 
 - [Preprocessing Details](preprocessing.md)
 - [Mask Extraction Details](mask-extraction.md)
-- [Feedback Session Details](feedback-sessions.md)
+- [Feedback Task Details](feedback-tasks.md)

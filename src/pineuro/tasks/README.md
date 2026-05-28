@@ -13,9 +13,9 @@ The task framework handles:
 ## Quick Start
 
 ```python
-from pineuro import run_feedback_session, BallTask
+from pineuro import run_feedback_task, BallTask
 # Start feedback in background thread
-session_info = run_feedback_session(
+session_info = run_feedback_task(
     mask_paths=['/path/to/cen_mask.nii.gz', '/path/to/dmn_mask.nii.gz'],
     subject='sub-01',
     task='rest',
@@ -115,7 +115,7 @@ Example implementation with:
 - Dual-network feedback (e.g., CEN/DMN)
 - Ball movement based on activation
 - Hit detection with circle shrink
-- Adaptive difficulty scaling; scale factors persist via SessionState
+- Adaptive difficulty scaling; scale factors persist via TaskState
 
 ### ActivationSmoother
 

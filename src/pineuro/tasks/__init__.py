@@ -9,7 +9,7 @@ Key Classes
 BaseTask : Abstract base class for all neurofeedback tasks
 BallTask : Example task with dual-network feedback and ball movement
 GaugeTask : Analog gauge (brain-o-meter) with differential feedback
-SessionState : Persistent state management for multi-run sessions
+TaskState : Persistent state management for multi-run sessions
 ActivationSmoother : Exponential moving average smoother
 ActivationNormalizer : Percentile-based activation normalizer
 
@@ -24,7 +24,7 @@ Task Registry
 -------------
 TaskMetadata : Metadata describing a task's configurable parameters
 TaskParameter : Definition of a single task parameter
-SessionStateField : Definition of a persistent session state field
+TaskStateField : Definition of a persistent task state field
 PostRunQuestion : Definition of a post-run slider question
 register_task : Register a new task type
 pineuro_task : Decorator for easy task registration
@@ -64,14 +64,14 @@ from .factory import (
     register_task_class,
 )
 from .localizer_base import BaseLocalizerTask
-from .session import SessionState
+from .state import TaskState
 from .task_base import TaskBase
 from .task_registry import (
     NetworkRole,
     PostRunQuestion,
-    SessionStateField,
     TaskMetadata,
     TaskParameter,
+    TaskStateField,
     get_task_metadata,
     list_available_tasks,
     pineuro_task,
@@ -235,7 +235,7 @@ __all__ = [
     "RNTTask",
     "RNTExperienceSamplingTask",
     "RNTTriggeredBallTask",
-    "SessionState",
+    "TaskState",
     "ActivationSmoother",
     "ActivationNormalizer",
     # Task designs
@@ -246,7 +246,7 @@ __all__ = [
     # Task registry
     "TaskMetadata",
     "TaskParameter",
-    "SessionStateField",
+    "TaskStateField",
     "PostRunQuestion",
     "NetworkRole",
     "register_task",

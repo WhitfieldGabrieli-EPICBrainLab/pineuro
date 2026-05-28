@@ -24,7 +24,7 @@ Examples
 >>> config.QC_BROWSER_SCREEN = 0  # Use primary monitor for QC
 >>>
 >>> # Now import and use pineuro
->>> from pineuro import run_feedback_session
+>>> from pineuro import run_feedback_task
 """
 
 import os

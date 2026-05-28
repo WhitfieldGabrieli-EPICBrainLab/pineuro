@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **Terminology unification: `session` ↔ `task` ↔ `visit`.** Aligned the codebase on a single hierarchy — `study → participant → session (= scanner appointment, BIDS ses-XX) → task (one localizer or feedback paradigm) → run`. Renames:
+  - **visit → session** (BIDS-aligned): `VisitConfig` → `SessionMetadata`, `visit_id` → `session_id`, `visit_number` → `session_number`, `mask_source_visit` → `mask_source_session`, `detect_existing_visits()` → `detect_existing_sessions()`, `next_visit_id()` → `next_session_id()`, `migrate_to_multi_visit()` → `migrate_to_multi_session()`, `is_single_visit_data()` → `is_single_session_data()`, `setup_visit_with_reused_masks()` → `setup_session_with_reused_masks()`, `VisitSelectionDialog` → `SessionSelectionDialog` (file `gui/components/visit_selection_dialog.py` → `session_selection_dialog.py`), study-config YAML key `multi_visit_enabled` → `multi_session_enabled` and per-session block `visit:` → `session:`, doc `docs/user-guide/multi-visit.md` → `multi-session.md`.
+  - **session → task** (for things that were per-task, not per-session): `run_feedback_session()` → `run_feedback_task()`, `SessionState` → `TaskState` (file `pineuro/tasks/session.py` → `pineuro/tasks/state.py`), on-disk state file `session_state.json` → `task_state.json`, `reset_session_state()` → `reset_task_state()`, `PathConfig.session_dir` → `PathConfig.feedback_dir` (it was always the feedback workspace, never the session dir), the `session_dir=` parameter on `TaskState.load/reset/create_for_task` → `feedback_dir=`. GUI section headers "Localizer Session" / "Feedback Session" → "Localizer Tasks" / "Feedback Tasks"; doc `docs/user-guide/feedback-sessions.md` → `feedback-tasks.md`.
+  - **Existing study configs in `~/.pineuro/studies/` are auto-migrated** in this commit (`multi_visit_enabled` → `multi_session_enabled` across active configs, version snapshots, and archives). Existing on-disk `session_state.json` files in per-participant data directories are **not** migrated (per the user's direction — they were test data). To carry old data forward, rename the file by hand.
+  - No legacy aliases. Imports of the old names will fail with `ImportError`.
+
 ## [0.9.0] - 2026-05-22
 
 ### Added
@@ -35,14 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The feedback QC report crashed on logs missing optional columns.** It raised a `KeyError` when a feedback log lacked `dvars`/`tsnr` columns, and the ICA component-grid plot raised an `AttributeError` for a single component. Both are guarded, and reports no longer print `nan` for all-missing motion metrics.
 - **Task-mask extraction could select a network from a `NaN` correlation.** The ICA spatial-correlation step divided by zero for a zero-variance component or an empty network mask; those cases are now detected and handled explicitly.
 - **Resource leaks in the participant-workflow GUI.** The per-session log file handler was never removed or closed (handlers accumulated on the `pineuro` logger across sessions), and the feedback-monitor thread was not stopped when a pipeline step failed. Both are now cleaned up.
-- **Numerous robustness fixes.** Runtime `assert`s used for input validation (silently stripped under `python -O`) are replaced with explicit errors; guards were added for empty `feedback_runs`, malformed visit IDs, 3-D inputs to temporal filtering, empty ROI masks, and non-finite activation values; the task factory now verifies a registered task class subclasses `BaseTask`. The collection-run-number helper now matches the actual `acq-NN_run-NN` directory naming.
+- **Numerous robustness fixes.** Runtime `assert`s used for input validation (silently stripped under `python -O`) are replaced with explicit errors; guards were added for empty `feedback_runs`, malformed session IDs, 3-D inputs to temporal filtering, empty ROI masks, and non-finite activation values; the task factory now verifies a registered task class subclasses `BaseTask`. The collection-run-number helper now matches the actual `acq-NN_run-NN` directory naming.
 
 ## [0.8.0] - 2026-05-13
 
 ### Breaking
 
 - **Study config schema restructured.** The legacy top-level blocks `mask`, `feedback`, `task`, `scan`, and `localizer_task` are removed. Per-run configuration now lives exclusively in `localizers[*]` and `feedback_runs[*]`; environment/setup config moves to dedicated top-level blocks (`simulator`, `scanner`, `reference`, `study`). YAMLs saved by 0.7.0 and earlier will not load — `SessionConfig.from_yaml` and the GUI's `StudyConfig.from_dict` both raise `ValueError` with a clear message instructing you to regenerate via the study editor.
-- **`network_assignment` is the single source of truth for role-to-mask mapping.** The YAML keys `differential_pair`, `target_mask`, `top_network`, `bottom_network`, and `mask_names` are gone. For 2-network tasks, `network_assignment[role[0]] = positive` and `network_assignment[role[1]] = negative`; the `differential_pair` passed to `run_feedback_session` is now derived from this at runtime.
+- **`network_assignment` is the single source of truth for role-to-mask mapping.** The YAML keys `differential_pair`, `target_mask`, `top_network`, `bottom_network`, and `mask_names` are gone. For 2-network tasks, `network_assignment[role[0]] = positive` and `network_assignment[role[1]] = negative`; the `differential_pair` passed to `run_feedback_task` is now derived from this at runtime.
 - **`task_type` → `task`** on `feedback_runs[*]`; **`yeo_targets` → `networks`** on `localizers[*]`.
 - **Dataclass API**: `MaskConfig`, `FeedbackConfig`, `TaskConfig`, and `ScanConfig` are deleted from `pineuro.session`. Replace with the new dataclasses: `LocalizerConfig` (with its `extraction: LocalizerExtractionConfig` sub-block), `FeedbackRunConfig` (with `qc: QCConfig`, `glm: GLMConfig`, `connectivity: ConnectivityConfig`, `intermittent: IntermittentConfig` sub-blocks), and the new top-level blocks `SimulatorConfig` / `ScannerConfig` / `ReferenceConfig` / `StudyInfoConfig`.
 - **Per-run `reference_realtime_*` overrides on `FeedbackRunConfig` are dropped.** The top-level `reference:` block applies to every run.
@@ -157,7 +165,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Activation plot colors**: Target network is now red and Non-Target is blue (was previously reversed)
 - **Software motion correction in QC monitor**: Siemens mosaic DICOMs (2D tiled images) are now properly unpacked to 3D volumes before ANTsPy rigid registration — previously FD was always 0 when using software MoCo
 - **Brain slice flicker**: Fixed race condition where raw mosaic DICOM and properly unpacked single-slice images alternated in the localizer monitoring panel
-- **Localizer-only UI**: Mask Extraction and Feedback Session panels are now hidden when no feedback runs are configured
+- **Localizer-only UI**: Mask Extraction and Feedback Tasks panels are now hidden when no feedback runs are configured
 
 ## [0.1.0] - 2026-03-23
 
@@ -175,7 +183,7 @@ Initial beta release.
 - **Spatial smoothing**: Optional real-time Gaussian smoothing with configurable FWHM
 - **Task framework**: PsychoPy-based plugin system with `@pineuro_task` decorator and `register_task()` for external tasks
 - **Built-in tasks**: Ball (dual-network, adaptive difficulty), Thermometer, Gauge, Fixation, Self-Other localizer, RNT localizer, RNT experience sampling, RNT triggered ball
-- **Session orchestration**: Multi-run, multi-visit support with persistent session state and numbered output directories
+- **Session orchestration**: Multi-run, multi-session support with persistent session state and numbered output directories
 - **Sham/control conditions**: Replay-based and synthetic sham providers, randomization generator, blind operator mode
 - **Volume simulator**: Offline replay at configurable TR intervals for development and testing
 - **Flet GUI**: Study editor (6-tab configuration), participant workflow, real-time monitoring (activation plot, FD plot, DVARS chart, tSNR indicator, task mirror, QC viewer)

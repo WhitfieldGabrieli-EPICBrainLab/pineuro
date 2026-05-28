@@ -13,7 +13,7 @@ from pineuro.gui.models import StudyConfig, StudyMetadata
 def make_study(name="Test Study", description="A test study", session_config=None):
     if session_config is None:
         session_config = {
-            "study": {"multi_visit_enabled": False},
+            "study": {"multi_session_enabled": False},
             "feedback_runs": [{"task": "ball", "tr": 1.5, "n_volumes": 200}],
         }
     return StudyConfig(
@@ -153,7 +153,7 @@ class TestDuplicateStudy:
 
     def test_preserves_session_config(self, manager):
         session = {
-            "study": {"multi_visit_enabled": False},
+            "study": {"multi_session_enabled": False},
             "feedback_runs": [{"task": "ball", "tr": 2.0, "n_volumes": 100}],
         }
         manager.save_study(make_study(session_config=session))
@@ -193,7 +193,7 @@ class TestExportImport:
 
     def test_import_roundtrip(self, manager, tmp_path):
         session = {
-            "study": {"multi_visit_enabled": False},
+            "study": {"multi_session_enabled": False},
             "feedback_runs": [{"task": "ball", "tr": 1.2, "n_volumes": 150}],
         }
         manager.save_study(make_study(session_config=session))
@@ -364,7 +364,7 @@ class TestRenameViaSave:
 
     def test_rename_then_load_by_new_name_returns_full_config(self, manager):
         session = {
-            "study": {"multi_visit_enabled": False},
+            "study": {"multi_session_enabled": False},
             "feedback_runs": [{"task": "ball", "tr": 1.5, "n_volumes": 200, "n_baseline": 25}],
         }
         study = make_study("Original (Copy)", session_config=session)

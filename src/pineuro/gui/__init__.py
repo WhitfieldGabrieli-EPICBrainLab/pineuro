@@ -45,7 +45,7 @@ UI elements for the participant workflow:
 - QCViewer : Interactive QC report browser
 - MaskSelectionDialog : ICA component selection for masks
 - RunSelectionDialog : Feedback run selection and configuration
-- VisitSelectionDialog : Multi-visit session management
+- SessionSelectionDialog : Multi-session session management
 - FeedbackSummary : Post-run summary statistics
 
 Usage

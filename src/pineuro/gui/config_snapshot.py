@@ -1,11 +1,11 @@
 """Study configuration snapshot for participant folders.
 
-Saves a copy of the study configuration into each participant-visit
+Saves a copy of the study configuration into each participant-session
 directory for reproducibility. On re-run, compares the saved snapshot
 against the current config and warns the user if protocol-relevant
 fields have changed.
 
-Snapshot file: ``study_config.yaml`` at the participant-visit level.
+Snapshot file: ``study_config.yaml`` at the participant-session level.
 
 This module is intentionally lightweight (stdlib + yaml only) so it
 can be imported at the top level of GUI modules without violating
@@ -48,16 +48,16 @@ def save_config_snapshot(
     study_config: Any,
     participant_dir: Path,
     participant_id: str,
-    visit_id: str | None = None,
+    session_id: str | None = None,
 ) -> Path:
     """Save a study config snapshot to the participant directory.
 
     Args:
         study_config: A ``StudyConfig`` instance (or any object with a
             ``to_dict()`` method).
-        participant_dir: The participant-visit directory.
+        participant_dir: The participant-session directory.
         participant_id: Participant identifier.
-        visit_id: Visit identifier, or ``None`` for single-visit.
+        session_id: Session identifier, or ``None`` for single-session.
 
     Returns:
         Path to the written snapshot file.
@@ -68,7 +68,7 @@ def save_config_snapshot(
     config_dict["_snapshot"] = {
         "saved_at": datetime.now().isoformat(),
         "participant_id": participant_id,
-        "visit_id": visit_id,
+        "session_id": session_id,
         "pineuro_version": __version__,
     }
 

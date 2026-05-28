@@ -49,7 +49,7 @@ from .task_registry import (
 from .utils import make_bids_run_prefix
 
 if TYPE_CHECKING:
-    from .session import SessionState
+    from .state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class ThermometerTask(BaseTask):
         Upper clamp for thermometer bar height.
     activation_min : float
         Lower clamp for thermometer bar height.
-    session_state : SessionState, optional
+    task_state : TaskState, optional
         Session state for persistence across runs.
     trigger_keys : list of str
         Keys that trigger acquisition start.
@@ -140,7 +140,7 @@ class ThermometerTask(BaseTask):
         left_button: str = "1",
         right_button: str = "2",
         confirm_button: str = "3",
-        session_state: SessionState | None = None,
+        task_state: TaskState | None = None,
         trigger_keys: list[str] | None = None,
         presenter_monitor: str = "right",
         **kwargs,
@@ -151,7 +151,7 @@ class ThermometerTask(BaseTask):
             coordinator=coordinator,
             mask_name=mask_names[0],
             feedback_mode=feedback_mode,
-            session_state=session_state,
+            task_state=task_state,
             **kwargs,
         )
 
@@ -1367,7 +1367,7 @@ THERMOMETER_METADATA = TaskMetadata(
             hint="Key for confirming rating and advancing instructions (ring finger)",
         ),
     ],
-    session_state_fields=[],
+    task_state_fields=[],
     post_run_questions=[],
 )
 

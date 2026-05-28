@@ -6,7 +6,7 @@ from pineuro.session import (
     PathConfig,
     SessionConfig,
     _build_run_sequence,
-    reset_session_state,
+    reset_task_state,
 )
 
 # =============================================================================
@@ -18,8 +18,8 @@ def _make_config(tmp_path, task_params=None, use_transfer_runs=True):
     """Build a minimal SessionConfig for testing."""
     base_dir = tmp_path / "study"
     base_dir.mkdir(parents=True, exist_ok=True)
-    session_dir = base_dir / "sub-01"
-    session_dir.mkdir(exist_ok=True)
+    participant_dir = base_dir / "sub-01"
+    participant_dir.mkdir(exist_ok=True)
 
     paths = PathConfig(base_dir=base_dir, participant_id="sub-01")
 
@@ -167,18 +167,18 @@ class TestFeedbackRunConfig:
 
 
 # =============================================================================
-# reset_session_state
+# reset_task_state
 # =============================================================================
 
 
-class TestResetSessionState:
+class TestResetTaskState:
     def test_creates_fresh_state(self, tmp_path):
         config = _make_config(tmp_path)
-        # Ensure session_dir exists
-        session_dir = config.paths.session_dir
-        session_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure feedback_dir exists
+        feedback_dir = config.paths.feedback_dir
+        feedback_dir.mkdir(parents=True, exist_ok=True)
 
-        state = reset_session_state(config)
+        state = reset_task_state(config)
         assert state.completed_runs == []
 
 
@@ -190,14 +190,14 @@ class TestResetSessionState:
 class TestRunNextTaskComplete:
     def test_returns_none_when_all_runs_done(self, tmp_path):
         from pineuro.session import run_next_task
-        from pineuro.tasks.session import RunInfo, SessionState
+        from pineuro.tasks.state import RunInfo, TaskState
 
         config = _make_config(tmp_path, task_params={"use_transfer_runs": False}, use_transfer_runs=False)
-        session_dir = config.paths.session_dir
-        session_dir.mkdir(parents=True, exist_ok=True)
+        feedback_dir = config.paths.feedback_dir
+        feedback_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create session state with completed runs matching sequence length
-        state = SessionState.reset(session_dir, task_id="ball")
+        # Create task state with completed runs matching sequence length
+        state = TaskState.reset(feedback_dir, task_id="ball")
         state.max_feedback_runs = 1
         # Manually add completed run
         state.completed_runs.append(RunInfo(run_number=1, run_type="feedback", volumes_processed=0, acq=1))

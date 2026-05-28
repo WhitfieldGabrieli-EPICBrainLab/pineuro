@@ -187,7 +187,7 @@ Each task produces standardized output:
 |------|-------------|
 | `*_psychopylog.tsv` | Per-frame (~60 Hz) task state: condition, score, feedback active, button presses |
 | `*_events.tsv` | BIDS-format event file with onset, duration, trial_type for each block |
-| `session_state.json` | Persistent state across runs (adaptive difficulty, hit counts, etc.) |
+| `task_state.json` | Persistent state across runs (adaptive difficulty, hit counts, etc.) |
 
 ## Custom Tasks
 

@@ -215,8 +215,8 @@ tests/
 ├── test_feedback.py                  # IncrementalGLM, FeedbackEstimator
 ├── test_preprocessing.py             # Pipeline steps (concat, smoothing, filtering)
 ├── test_mask_extraction.py           # ICA, GLM, atlas workflows
-├── test_session.py                   # Config dataclasses, visit management
-├── test_session_orchestration.py     # Multi-run/multi-visit orchestration
+├── test_session.py                   # Config dataclasses, session management
+├── test_session_orchestration.py     # Multi-run/multi-session orchestration
 ├── test_sham.py                      # Randomization, replay providers
 ├── test_simulator.py                 # Volume simulator
 ├── test_tasks.py                     # Plugin registry, designs, session state

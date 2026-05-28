@@ -85,7 +85,7 @@ tests/validation/
 ├── test_collection_qc.py             FD/DVARS hand-calculated; Siemens MoCo DICOM parser
 ├── test_connectivity_estimator.py    sliding-window Pearson on hand-calculated signals
 ├── test_qc_helpers.py                summarize_mask (voxels, volume_ml, centroid), _pick_slices
-├── test_session_state_persistence.py SessionState / RunInfo JSON round-trip
+├── test_task_state_persistence.py TaskState / RunInfo JSON round-trip
 ├── test_sham_randomization.py        randomization generation, load, condition lookup
 ├── test_simulator_roundtrip.py       file copy contract (data + sidecars)
 ├── test_tasks_lifecycle.py           plugin registration, parameter validation, error aggregation
@@ -173,7 +173,7 @@ received, so motion-correction accuracy never enters the comparison).
 - **Synthetic DICOM** — dcm2niix is too strict for robust synthetic-DICOM
   generation; the suite starts from NIfTI (every stage downstream of DICOM
   conversion operates on NIfTI anyway).
-- **Real-time orchestration threading** (`run_feedback_session` coordinator) —
+- **Real-time orchestration threading** (`run_feedback_task` coordinator) —
   the feedback *computation* is validated directly via
   `FeedbackEstimator.process_volume`; the simulator's *data round-trip*
   contract IS covered by `test_simulator_roundtrip.py`. The coordinator

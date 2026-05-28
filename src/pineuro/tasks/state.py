@@ -1,21 +1,21 @@
 """
-Session state management for multi-run neurofeedback sessions.
+Task state management for multi-run neurofeedback tasks.
 
 Summary
 -------
 Persists adaptive task state across runs via JSON in the session directory.
 Session state is config-driven: tasks declare their state fields in
-TaskMetadata, and SessionState stores them dynamically via get()/set().
+TaskMetadata, and TaskState stores them dynamically via get()/set().
 
 Components
 ----------
-- SessionState: Persistent state container with save/load/reset helpers
+- TaskState: Persistent state container with save/load/reset helpers
 - RunInfo: Metadata for completed runs
 
 Workflow
 --------
-- Create SessionState via create_for_task() with task-specific defaults
-- Or load existing session_state.json via load()
+- Create TaskState via create_for_task() with task-specific defaults
+- Or load existing task_state.json via load()
 - Access state fields via get()/set()
 - Save updated state to disk after each run
 
@@ -77,16 +77,16 @@ class RunInfo:
 
 
 @dataclass
-class SessionState:
-    """Persistent state for multi-run neurofeedback sessions.
+class TaskState:
+    """Persistent state for multi-run neurofeedback tasks.
 
     Now config-driven: tasks declare their state fields in TaskMetadata,
     and this class stores them dynamically in task_state dict.
 
     Parameters
     ----------
-    session_dir : Path
-        Directory where session_state.json will be stored
+    feedback_dir : Path
+        Directory where task_state.json will be stored
     task_id : str
         Identifier of the task type (e.g., "ball", "thermometer")
     task_state : dict
@@ -99,18 +99,18 @@ class SessionState:
     Examples
     --------
     >>> # Create new session state with task-specific defaults
-    >>> state = SessionState.create_for_task(session_dir, "my_task")
+    >>> state = TaskState.create_for_task(feedback_dir, "my_task")
     >>> state.get("threshold")  # Access task state
     0.5
     >>> state.set("threshold", 0.8)  # Update task state
 
     >>> # Or load existing state
-    >>> state = SessionState.load(session_dir, task_id="my_task")
+    >>> state = TaskState.load(feedback_dir, task_id="my_task")
 
     >>> state.set("scale_factor", 15.0)  # Update a field
     """
 
-    session_dir: Path
+    feedback_dir: Path
     task_id: str = "ball"
     task_state: dict[str, Any] = field(default_factory=dict)
     completed_runs: list[RunInfo] = field(default_factory=list)
@@ -128,7 +128,7 @@ class SessionState:
                 from .task_registry import get_task_metadata
 
                 metadata = get_task_metadata(self.task_id)
-                self.task_state = {f.key: f.default for f in metadata.session_state_fields}
+                self.task_state = {f.key: f.default for f in metadata.task_state_fields}
             except (ValueError, ImportError):
                 pass
 
@@ -171,8 +171,8 @@ class SessionState:
 
     @property
     def state_file(self) -> Path:
-        """Path to session_state.json file."""
-        return self.session_dir / "session_state.json"
+        """Path to task_state.json file."""
+        return self.feedback_dir / "task_state.json"
 
     @property
     def next_run_number(self) -> int:
@@ -285,8 +285,8 @@ class SessionState:
     # -------------------------------------------------------------------------
 
     def save(self) -> None:
-        """Save current state to session_state.json."""
-        self.session_dir.mkdir(parents=True, exist_ok=True)
+        """Save current state to task_state.json."""
+        self.feedback_dir.mkdir(parents=True, exist_ok=True)
 
         data = {
             "task_id": self.task_id,
@@ -302,58 +302,58 @@ class SessionState:
         logger.info(f"Session state saved to {self.state_file}")
 
     @classmethod
-    def create_for_task(cls, session_dir: Path, task_id: str) -> "SessionState":
+    def create_for_task(cls, feedback_dir: Path, task_id: str) -> "TaskState":
         """Create session state with defaults from task metadata.
 
         Parameters
         ----------
-        session_dir : Path
+        feedback_dir : Path
             Directory for session state file
         task_id : str
             Task identifier (e.g., "ball", "thermometer")
 
         Returns
         -------
-        SessionState
+        TaskState
             New session state initialized with task-specific defaults
         """
         from .task_registry import get_task_metadata
 
-        session_dir = Path(session_dir)
+        feedback_dir = Path(feedback_dir)
 
         try:
             metadata = get_task_metadata(task_id)
-            defaults = {f.key: f.default for f in metadata.session_state_fields}
+            defaults = {f.key: f.default for f in metadata.task_state_fields}
         except ValueError:
             logger.warning(f"Task '{task_id}' not registered, using empty state defaults")
             defaults = {}
 
         return cls(
-            session_dir=session_dir,
+            feedback_dir=feedback_dir,
             task_id=task_id,
             task_state=defaults,
         )
 
     @classmethod
-    def load(cls, session_dir: Path, task_id: str = "unknown") -> "SessionState":
-        """Load state from session_state.json, or create new if not exists.
+    def load(cls, feedback_dir: Path, task_id: str = "unknown") -> "TaskState":
+        """Load state from task_state.json, or create new if not exists.
 
         Handles both old format (direct fields) and new format (task_state dict).
 
         Parameters
         ----------
-        session_dir : Path
-            Directory containing (or that will contain) session_state.json
+        feedback_dir : Path
+            Directory containing (or that will contain) task_state.json
         task_id : str
             Task identifier for creating fresh state
 
         Returns
         -------
-        SessionState
+        TaskState
             Loaded state, or fresh state if file doesn't exist
         """
-        session_dir = Path(session_dir)
-        state_file = session_dir / "session_state.json"
+        feedback_dir = Path(feedback_dir)
+        state_file = feedback_dir / "task_state.json"
 
         if state_file.exists():
             with open(state_file) as f:
@@ -370,8 +370,8 @@ class SessionState:
                     from .task_registry import get_task_metadata
 
                     metadata = get_task_metadata(loaded_task_id)
-                    _known_keys = {f.key for f in metadata.session_state_fields}
-                    task_state = {f.key: data.get(f.key, f.default) for f in metadata.session_state_fields}
+                    _known_keys = {f.key for f in metadata.task_state_fields}
+                    task_state = {f.key: data.get(f.key, f.default) for f in metadata.task_state_fields}
                     logger.info(f"Migrated legacy session state for '{loaded_task_id}': {list(task_state.keys())}")
                 except (ValueError, ImportError):
                     # Task not registered: pull any non-framework keys as best-effort
@@ -392,7 +392,7 @@ class SessionState:
             slot_base_state = {int(k): v for k, v in slot_base_state_raw.items()}
 
             state = cls(
-                session_dir=session_dir,
+                feedback_dir=feedback_dir,
                 task_id=data.get("task_id", task_id),
                 task_state=task_state,
                 completed_runs=[RunInfo.from_dict(r) for r in data.get("completed_runs", [])],
@@ -408,32 +408,32 @@ class SessionState:
             return state
         else:
             logger.info(f"No existing session state at {state_file}, creating fresh state")
-            return cls.create_for_task(session_dir, task_id)
+            return cls.create_for_task(feedback_dir, task_id)
 
     @classmethod
-    def reset(cls, session_dir: Path, task_id: str = "unknown") -> "SessionState":
+    def reset(cls, feedback_dir: Path, task_id: str = "unknown") -> "TaskState":
         """Reset session state by deleting existing state file.
 
         Parameters
         ----------
-        session_dir : Path
-            Directory containing session_state.json
+        feedback_dir : Path
+            Directory containing task_state.json
         task_id : str
             Task identifier for fresh state
 
         Returns
         -------
-        SessionState
+        TaskState
             Fresh session state
         """
-        session_dir = Path(session_dir)
-        state_file = session_dir / "session_state.json"
+        feedback_dir = Path(feedback_dir)
+        state_file = feedback_dir / "task_state.json"
 
         if state_file.exists():
             state_file.unlink()
             logger.info(f"Reset session state: deleted {state_file}")
 
-        return cls.create_for_task(session_dir, task_id)
+        return cls.create_for_task(feedback_dir, task_id)
 
     # -------------------------------------------------------------------------
     # Run recording
@@ -513,7 +513,7 @@ class SessionState:
             from .task_registry import get_task_metadata
 
             metadata = get_task_metadata(self.task_id)
-            known_keys = {f.key for f in metadata.session_state_fields}
+            known_keys = {f.key for f in metadata.task_state_fields}
             # Also keep any keys from the current snapshot (task may use
             # ad-hoc keys not declared in metadata)
             known_keys.update(task_state_snapshot.keys())

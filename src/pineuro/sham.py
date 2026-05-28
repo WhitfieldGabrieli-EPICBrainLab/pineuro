@@ -32,11 +32,11 @@ TSV file with columns:
 - subject_id: Participant identifier (e.g., "sub-01")
 - condition: "real" or "sham"
 - matched_participant: For replay method - which participant's data to replay
-- matched_visit: For replay method - which visit's data (optional, defaults to same)
+- matched_session: For replay method - which session's data (optional, defaults to same)
 - notes: Optional notes/comments
 
 Example:
-    subject_id    condition    matched_participant    matched_visit    notes
+    subject_id    condition    matched_participant    matched_session    notes
     sub-01        real                                                 First participant
     sub-02        sham         sub-01                 ses-01           Replay sub-01 data
     sub-03        real
@@ -192,12 +192,12 @@ def load_randomization(file_path: Path) -> dict[str, dict]:
             "sub-01": {
                 "condition": "real",
                 "matched_participant": None,
-                "matched_visit": None,
+                "matched_session": None,
             },
             "sub-02": {
                 "condition": "sham",
                 "matched_participant": "sub-01",
-                "matched_visit": "ses-01",
+                "matched_session": "ses-01",
             },
             ...
         }
@@ -233,12 +233,12 @@ def load_randomization(file_path: Path) -> dict[str, dict]:
             raise ValueError(f"Invalid condition '{condition}' for {subject_id}. Must be 'real' or 'sham'")
 
         matched_participant = _nan_to_str(row.get("matched_participant"))
-        matched_visit = _nan_to_str(row.get("matched_visit"))
+        matched_session = _nan_to_str(row.get("matched_session"))
 
         result[subject_id] = {
             "condition": condition,
             "matched_participant": matched_participant,
-            "matched_visit": matched_visit,
+            "matched_session": matched_session,
         }
 
     logger.info(f"Loaded randomization for {len(result)} participants from {file_path}")
@@ -249,7 +249,7 @@ def generate_randomization(
     participant_ids: list[str],
     n_sham: int,
     method: str = "simple",
-    matched_visit: str | None = None,
+    matched_session: str | None = None,
     output_path: Path | None = None,
     seed: int | None = None,
 ) -> pd.DataFrame:
@@ -272,8 +272,8 @@ def generate_randomization(
           matching for feedbacklog replay (round-robin if more sham than real).
           The first participant (participant_ids[0]) is always assigned "real"
           since replay requires prior data to exist.
-    matched_visit : str, optional
-        Visit ID to populate the matched_visit column for replay participants.
+    matched_session : str, optional
+        Session ID to populate the matched_session column for replay participants.
         Ignored when method="simple".
     output_path : Path, optional
         If provided, write the randomization table to this path as TSV.
@@ -284,7 +284,7 @@ def generate_randomization(
     -------
     pd.DataFrame
         Randomization table with columns: subject_id, condition,
-        matched_participant, matched_visit, notes.
+        matched_participant, matched_session, notes.
 
     Raises
     ------
@@ -319,7 +319,7 @@ def generate_randomization(
 
     # --- Build matched_participant column for replay method ---
     matched_participants: list[str | None] = [None] * len(participant_ids)
-    matched_visits: list[str | None] = [None] * len(participant_ids)
+    matched_sessions: list[str | None] = [None] * len(participant_ids)
 
     if method == "replay":
         real_ids = [participant_ids[i] for i in range(len(participant_ids)) if conditions[i] == "real"]
@@ -328,8 +328,8 @@ def generate_randomization(
         # Round-robin match sham → real
         for j, sham_idx in enumerate(sham_indices):
             matched_participants[sham_idx] = real_ids[j % len(real_ids)]
-            if matched_visit:
-                matched_visits[sham_idx] = matched_visit
+            if matched_session:
+                matched_sessions[sham_idx] = matched_session
 
     # --- Build DataFrame ---
     df = pd.DataFrame(
@@ -337,7 +337,7 @@ def generate_randomization(
             "subject_id": participant_ids,
             "condition": conditions,
             "matched_participant": matched_participants,
-            "matched_visit": matched_visits,
+            "matched_session": matched_sessions,
             "notes": [""] * len(participant_ids),
         }
     )
@@ -355,7 +355,7 @@ def generate_randomization(
 def get_condition_for_participant(
     randomization: dict[str, dict],
     participant_id: str,
-    visit_id: str | None = None,
+    session_id: str | None = None,
     default_condition: str = "real",
 ) -> dict:
     """Look up condition assignment for a participant.
@@ -366,28 +366,28 @@ def get_condition_for_participant(
         Randomization mapping from load_randomization()
     participant_id : str
         Participant identifier (e.g., "sub-01")
-    visit_id : str, optional
-        Current visit identifier (used as default for matched_visit)
+    session_id : str, optional
+        Current session identifier (used as default for matched_session)
     default_condition : str
         Condition to use if participant not in randomization (default: "real")
 
     Returns
     -------
     dict
-        Condition info with keys: condition, matched_participant, matched_visit
+        Condition info with keys: condition, matched_participant, matched_session
     """
     if participant_id in randomization:
         info = randomization[participant_id].copy()
-        # Default matched_visit to current visit if not specified
-        if info.get("matched_visit") is None and visit_id is not None:
-            info["matched_visit"] = visit_id
+        # Default matched_session to current session if not specified
+        if info.get("matched_session") is None and session_id is not None:
+            info["matched_session"] = session_id
         return info
 
     logger.warning(f"Participant {participant_id} not in randomization, defaulting to '{default_condition}'")
     return {
         "condition": default_condition,
         "matched_participant": None,
-        "matched_visit": None,
+        "matched_session": None,
     }
 
 
@@ -495,7 +495,7 @@ def resolve_sham_masks(
 def find_feedbacklog_for_replay(
     source_dir: Path,
     matched_participant: str,
-    matched_visit: str | None,
+    matched_session: str | None,
     task: str,
     run: int,
 ) -> Path:
@@ -507,8 +507,8 @@ def find_feedbacklog_for_replay(
         Base directory containing participant data
     matched_participant : str
         Participant ID to replay from (e.g., "sub-01")
-    matched_visit : str, optional
-        Visit ID to replay from (e.g., "ses-01"). If None, searches without visit.
+    matched_session : str, optional
+        Session ID to replay from (e.g., "ses-01"). If None, searches without session.
     task : str
         Task name (e.g., "feedback", "transfer")
     run : int
@@ -526,12 +526,12 @@ def find_feedbacklog_for_replay(
     """
     source_dir = Path(source_dir)
 
-    # Build search patterns based on whether visit is specified
-    if matched_visit:
-        # Multi-visit: source_dir/participant/visit/feedback/02_feedback_output/
-        base_path = source_dir / matched_participant / matched_visit / "feedback" / "02_feedback_output"
+    # Build search patterns based on whether session is specified
+    if matched_session:
+        # Multi-session: source_dir/participant/session/feedback/02_feedback_output/
+        base_path = source_dir / matched_participant / matched_session / "feedback" / "02_feedback_output"
     else:
-        # Single-visit: source_dir/participant/feedback/02_feedback_output/
+        # Single-session: source_dir/participant/feedback/02_feedback_output/
         base_path = source_dir / matched_participant / "feedback" / "02_feedback_output"
 
     # Try various naming patterns
@@ -564,5 +564,5 @@ def find_feedbacklog_for_replay(
         f"Feedbacklog not found for replay. "
         f"Searched in: {base_path} "
         f"Matched participant: {matched_participant}, "
-        f"Visit: {matched_visit}, Task: {task}, Run: {run}"
+        f"Session: {matched_session}, Task: {task}, Run: {run}"
     )

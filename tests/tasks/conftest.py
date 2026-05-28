@@ -2,7 +2,7 @@
 
 Provides a `mock_coordinator` fixture that satisfies `CoordinatorProtocol`
 without requiring the heavy `NeurofeedbackCoordinator` to be instantiated,
-and a `task_session_state` factory for tests that need a saved SessionState.
+and a `task_task_state` factory for tests that need a saved TaskState.
 """
 
 from unittest.mock import MagicMock
@@ -49,19 +49,19 @@ def mock_coordinator():
 
 
 @pytest.fixture
-def task_session_state(tmp_path):
-    """Factory fixture: create a `SessionState` rooted at a temp directory.
+def task_task_state(tmp_path):
+    """Factory fixture: create a `TaskState` rooted at a temp directory.
 
     Usage::
 
-        def test_something(task_session_state):
-            state = task_session_state("ball")
+        def test_something(task_task_state):
+            state = task_task_state("ball")
             state.record_run(run_type="feedback", volumes_processed=100)
     """
 
     def _make(task_id="ball", base_dir=None):
-        from pineuro.tasks.session import SessionState
+        from pineuro.tasks.state import TaskState
 
-        return SessionState.create_for_task(base_dir or tmp_path, task_id)
+        return TaskState.create_for_task(base_dir or tmp_path, task_id)
 
     return _make

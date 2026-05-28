@@ -60,15 +60,15 @@ This will:
 - Select best ICA component for each target network
 - Threshold and save masks
 
-## 3. Run a Feedback Session (Simulation)
+## 3. Run a Feedback Task (Simulation)
 
 Test the feedback pipeline with simulated data:
 
 ```python
-from pineuro import run_feedback_session
+from pineuro import run_feedback_task
 
 # Run simulated feedback session
-results = run_feedback_session(
+results = run_feedback_task(
     mask_paths=list(mask_files.values()),
     subject='sub-01',
     task='nback',

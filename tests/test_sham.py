@@ -34,12 +34,12 @@ class TestGenerateRandomization:
 
     def test_replay_has_matched_participant(self):
         ids = [f"sub-{i:02d}" for i in range(1, 7)]
-        df = generate_randomization(ids, n_sham=2, method="replay", matched_visit="ses-01", seed=42)
+        df = generate_randomization(ids, n_sham=2, method="replay", matched_session="ses-01", seed=42)
 
         sham_rows = df[df["condition"] == "sham"]
         for _, row in sham_rows.iterrows():
             assert pd.notna(row["matched_participant"])
-            assert row["matched_visit"] == "ses-01"
+            assert row["matched_session"] == "ses-01"
 
     def test_balanced_split(self):
         ids = [f"sub-{i:02d}" for i in range(1, 21)]
@@ -125,14 +125,14 @@ class TestLoadRandomization:
 class TestGetConditionForParticipant:
     def test_real_participant(self):
         randomization = {
-            "sub-01": {"condition": "real", "matched_participant": None, "matched_visit": None},
+            "sub-01": {"condition": "real", "matched_participant": None, "matched_session": None},
         }
         result = get_condition_for_participant(randomization, "sub-01")
         assert result["condition"] == "real"
 
     def test_sham_participant(self):
         randomization = {
-            "sub-02": {"condition": "sham", "matched_participant": "sub-01", "matched_visit": "ses-01"},
+            "sub-02": {"condition": "sham", "matched_participant": "sub-01", "matched_session": "ses-01"},
         }
         result = get_condition_for_participant(randomization, "sub-02")
         assert result["condition"] == "sham"

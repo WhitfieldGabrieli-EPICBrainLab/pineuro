@@ -21,10 +21,10 @@ from __future__ import annotations
 import pytest
 
 from pineuro.tasks.task_registry import (
-    SessionStateField,
     TaskConfigError,
     TaskMetadata,
     TaskParameter,
+    TaskStateField,
     get_task_metadata,
     list_available_tasks,
     register_task,
@@ -40,7 +40,7 @@ def _make_metadata(task_id, **overrides):
         "display_name": f"Test Task {task_id}",
         "description": "validation-suite test task",
         "parameters": [TaskParameter(key="amplitude", label="Amplitude", type="float", default=1.0)],
-        "session_state_fields": [SessionStateField(key="hits", type="int", default=0)],
+        "task_state_fields": [TaskStateField(key="hits", type="int", default=0)],
     }
     defaults.update(overrides)
     return TaskMetadata(**defaults)

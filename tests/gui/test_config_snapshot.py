@@ -16,7 +16,7 @@ def _make_study_config(**overrides) -> StudyConfig:
     """Create a minimal StudyConfig (new schema) for testing."""
     session_config = {
         "paths": {"base_dir": "/tmp/data", "participant_id": ""},
-        "study": {"multi_visit_enabled": False},
+        "study": {"multi_session_enabled": False},
         "simulator": {"enabled": True, "collection_speed": 1.0, "feedback_speed": 1.0},
         "scanner": {"dicom_dir": "/BOLD_DICOM", "ip": "192.168.1.1"},
         "reference": {
@@ -81,21 +81,21 @@ class TestSaveLoad:
 
     def test_snapshot_metadata_present(self, tmp_path):
         config = _make_study_config()
-        save_config_snapshot(config, tmp_path, "sub-001", visit_id="ses-01")
+        save_config_snapshot(config, tmp_path, "sub-001", session_id="ses-01")
 
         loaded = load_config_snapshot(tmp_path)
         snap = loaded["_snapshot"]
         assert snap["participant_id"] == "sub-001"
-        assert snap["visit_id"] == "ses-01"
+        assert snap["session_id"] == "ses-01"
         assert "saved_at" in snap
         assert "pineuro_version" in snap
 
-    def test_snapshot_no_visit(self, tmp_path):
+    def test_snapshot_no_session(self, tmp_path):
         config = _make_study_config()
         save_config_snapshot(config, tmp_path, "sub-002")
 
         loaded = load_config_snapshot(tmp_path)
-        assert loaded["_snapshot"]["visit_id"] is None
+        assert loaded["_snapshot"]["session_id"] is None
 
     def test_load_missing_returns_none(self, tmp_path):
         assert load_config_snapshot(tmp_path) is None

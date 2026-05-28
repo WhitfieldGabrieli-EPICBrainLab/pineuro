@@ -89,20 +89,20 @@ def test_generate_replay_first_subject_is_real():
 def test_generate_replay_every_sham_has_matched_participant():
     """method='replay' assigns a matched real participant to every sham participant."""
     ids = [f"sub-{i:02d}" for i in range(1, 11)]
-    df = generate_randomization(participant_ids=ids, n_sham=4, method="replay", matched_visit="ses-01", seed=7)
+    df = generate_randomization(participant_ids=ids, n_sham=4, method="replay", matched_session="ses-01", seed=7)
     sham_rows = df[df["condition"] == "sham"]
     real_ids = set(df[df["condition"] == "real"]["subject_id"])
     for _, row in sham_rows.iterrows():
         assert row["matched_participant"] in real_ids
-        assert row["matched_visit"] == "ses-01"
+        assert row["matched_session"] == "ses-01"
 
 
 def test_generate_simple_method_leaves_matched_columns_empty():
-    """method='simple' produces no matched_participant / matched_visit values."""
+    """method='simple' produces no matched_participant / matched_session values."""
     ids = [f"sub-{i:02d}" for i in range(1, 6)]
     df = generate_randomization(participant_ids=ids, n_sham=2, method="simple", seed=0)
     assert df["matched_participant"].isna().all()
-    assert df["matched_visit"].isna().all()
+    assert df["matched_session"].isna().all()
 
 
 def test_generate_writes_tsv_when_path_given(tmp_path):
@@ -113,7 +113,7 @@ def test_generate_writes_tsv_when_path_given(tmp_path):
         participant_ids=ids,
         n_sham=2,
         method="replay",
-        matched_visit="ses-01",
+        matched_session="ses-01",
         output_path=path,
         seed=99,
     )
@@ -149,13 +149,13 @@ def test_load_round_trips_verbatim(tmp_path):
             "subject_id": "sub-01",
             "condition": "real",
             "matched_participant": "",
-            "matched_visit": "",
+            "matched_session": "",
         },
         {
             "subject_id": "sub-02",
             "condition": "sham",
             "matched_participant": "sub-01",
-            "matched_visit": "ses-02",
+            "matched_session": "ses-02",
         },
     ]
     path = _write_tsv(tmp_path / "r.tsv", rows)
@@ -165,14 +165,14 @@ def test_load_round_trips_verbatim(tmp_path):
     assert loaded["sub-01"]["matched_participant"] is None  # empty cell -> None
     assert loaded["sub-02"]["condition"] == "sham"
     assert loaded["sub-02"]["matched_participant"] == "sub-01"
-    assert loaded["sub-02"]["matched_visit"] == "ses-02"
+    assert loaded["sub-02"]["matched_session"] == "ses-02"
 
 
 def test_load_rejects_invalid_condition(tmp_path):
     """A condition outside {'real', 'sham'} raises ValueError."""
     path = _write_tsv(
         tmp_path / "bad.tsv",
-        [{"subject_id": "sub-01", "condition": "placebo", "matched_participant": "", "matched_visit": ""}],
+        [{"subject_id": "sub-01", "condition": "placebo", "matched_participant": "", "matched_session": ""}],
     )
     with pytest.raises(ValueError, match="Invalid condition"):
         load_randomization(path)
@@ -199,14 +199,14 @@ def test_load_missing_file_raises(tmp_path):
 def test_lookup_known_participant_returns_their_assignment():
     """A known participant's stored condition is returned verbatim."""
     randomization = {
-        "sub-01": {"condition": "real", "matched_participant": None, "matched_visit": None},
-        "sub-02": {"condition": "sham", "matched_participant": "sub-01", "matched_visit": "ses-01"},
+        "sub-01": {"condition": "real", "matched_participant": None, "matched_session": None},
+        "sub-02": {"condition": "sham", "matched_participant": "sub-01", "matched_session": "ses-01"},
     }
-    info = get_condition_for_participant(randomization, "sub-02", visit_id="ses-02")
+    info = get_condition_for_participant(randomization, "sub-02", session_id="ses-02")
     assert info["condition"] == "sham"
     assert info["matched_participant"] == "sub-01"
-    # matched_visit was already set in the dict, so visit_id does not override.
-    assert info["matched_visit"] == "ses-01"
+    # matched_session was already set in the dict, so session_id does not override.
+    assert info["matched_session"] == "ses-01"
 
 
 def test_lookup_unknown_participant_returns_default():
@@ -214,13 +214,13 @@ def test_lookup_unknown_participant_returns_default():
     info = get_condition_for_participant({}, "sub-99", default_condition="real")
     assert info["condition"] == "real"
     assert info["matched_participant"] is None
-    assert info["matched_visit"] is None
+    assert info["matched_session"] is None
 
 
-def test_lookup_inherits_visit_id_when_unset():
-    """If matched_visit is unset in the randomization, the lookup uses visit_id."""
+def test_lookup_inherits_session_id_when_unset():
+    """If matched_session is unset in the randomization, the lookup uses session_id."""
     randomization = {
-        "sub-02": {"condition": "sham", "matched_participant": "sub-01", "matched_visit": None},
+        "sub-02": {"condition": "sham", "matched_participant": "sub-01", "matched_session": None},
     }
-    info = get_condition_for_participant(randomization, "sub-02", visit_id="ses-03")
-    assert info["matched_visit"] == "ses-03"
+    info = get_condition_for_participant(randomization, "sub-02", session_id="ses-03")
+    assert info["matched_session"] == "ses-03"

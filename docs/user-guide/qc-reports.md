@@ -19,17 +19,17 @@ Contains:
 - **Correlation heatmap** — Spatial correlation between each ICA component and each atlas network. Shows which component was selected for each target.
 - **Selected mask overlays** — Thresholded masks overlaid on the participant's anatomy in axial/coronal/sagittal views
 - **Alternative component overlays** — All other ICA components for each target network, so you can verify the auto-selection or identify a better match
-- **Reference coregistered overlays** — Masks after coregistration to the feedback session reference, verifying alignment
+- **Reference coregistered overlays** — Masks after coregistration to the feedback task reference, verifying alignment
 
 The Participant Workflow GUI also shows overlay thumbnails for quick visual verification before proceeding to feedback.
 
-## Feedback Session QC
+## Feedback Tasks QC
 
 **File:** `feedback/02_feedback_output/qc/sub-001_task-feedback_acq-01_run-01_feedback_qc.html`
 
 Contains:
 - **Activation timeseries** — Per-volume activation for each network mask, with baseline period shaded
-- **FD timeseries** — Framewise displacement during the feedback session
+- **FD timeseries** — Framewise displacement during the feedback task
 - **DVARS timeseries** — Standardized signal intensity changes
 - **Design matrix heatmap** — The GLM design matrix used for real-time estimation
 - **Summary statistics** — Mean activation, motion summary, tSNR, outlier count
@@ -82,13 +82,13 @@ BIDS-format event file with one row per block or trial:
 | `duration` | Block duration in seconds |
 | `trial_type` | Condition label |
 
-### Session State (`session_state.json`)
+### Task State (`task_state.json`)
 
 Persistent state that carries across runs within a session. Includes:
 - Run completion status
 - Adaptive difficulty parameters (ball task)
 - Hit counters and circle sizes
-- Current visit/run tracking
+- Current session/run tracking
 
 ## Locating Output Files
 
@@ -103,7 +103,7 @@ base_dir/sub-001/
 │   ├── *_design.tsv           # GLM design matrix
 │   ├── *_psychopylog.tsv      # Task display log
 │   ├── *_events.tsv           # Block events
-│   ├── session_state.json     # Session persistence
+│   ├── task_state.json     # Task state persistence
 │   └── qc/                    # Feedback QC report
 └── logs/                      # Session logs (timestamped)
 ```

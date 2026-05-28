@@ -1,4 +1,4 @@
-"""Tests for pineuro.session — configuration dataclasses and visit management."""
+"""Tests for pineuro.session — configuration dataclasses and session management."""
 
 import pytest
 
@@ -14,12 +14,12 @@ from pineuro.session import (
     ReferenceConfig,
     ScannerConfig,
     SessionConfig,
+    SessionMetadata,
     ShamConfig,
     SimulatorConfig,
     StudyInfoConfig,
-    VisitConfig,
-    detect_existing_visits,
-    next_visit_id,
+    detect_existing_sessions,
+    next_session_id,
 )
 
 # =============================================================================
@@ -32,11 +32,11 @@ class TestPathConfig:
         config = PathConfig(base_dir=tmp_path, participant_id="sub-01")
         assert config.base_dir == tmp_path
         assert config.participant_id == "sub-01"
-        assert config.visit_id is None  # single-visit mode
+        assert config.session_id is None  # single-session mode
 
-    def test_with_visit(self, tmp_path):
-        config = PathConfig(base_dir=tmp_path, participant_id="sub-01", visit_id="ses-01")
-        assert config.visit_id == "ses-01"
+    def test_with_session(self, tmp_path):
+        config = PathConfig(base_dir=tmp_path, participant_id="sub-01", session_id="ses-01")
+        assert config.session_id == "ses-01"
 
     def test_example_participant_id(self, tmp_path):
         config = PathConfig(base_dir=tmp_path, participant_id="sub-01", example_participant_id="sub-XXX")
@@ -191,8 +191,8 @@ class TestFeedbackRunConfig:
 
 class TestNewTopLevelBlocks:
     def test_study_info(self):
-        cfg = StudyInfoConfig(multi_visit_enabled=True)
-        assert cfg.multi_visit_enabled is True
+        cfg = StudyInfoConfig(multi_session_enabled=True)
+        assert cfg.multi_session_enabled is True
 
     def test_simulator(self):
         cfg = SimulatorConfig(enabled=False, feedback_speed=5.0)
@@ -312,67 +312,67 @@ class TestShamConfig:
 
 
 # =============================================================================
-# VisitConfig
+# SessionMetadata
 # =============================================================================
 
 
-class TestVisitConfig:
+class TestSessionMetadata:
     def test_construction(self):
-        config = VisitConfig(visit_id="ses-01", visit_number=1)
-        assert config.visit_id == "ses-01"
-        assert config.visit_number == 1
+        config = SessionMetadata(session_id="ses-01", session_number=1)
+        assert config.session_id == "ses-01"
+        assert config.session_number == 1
         assert config.mask_source == "compute"
 
     def test_reuse_masks(self):
-        config = VisitConfig(
-            visit_id="ses-02",
-            visit_number=2,
+        config = SessionMetadata(
+            session_id="ses-02",
+            session_number=2,
             mask_source="reuse",
-            mask_source_visit="ses-01",
+            mask_source_session="ses-01",
         )
         assert config.mask_source == "reuse"
-        assert config.mask_source_visit == "ses-01"
+        assert config.mask_source_session == "ses-01"
 
 
 # =============================================================================
-# detect_existing_visits / next_visit_id
+# detect_existing_sessions / next_session_id
 # =============================================================================
 
 
-class TestVisitDetection:
-    def test_detect_existing_visits(self, tmp_path):
+class TestSessionDetection:
+    def test_detect_existing_sessions(self, tmp_path):
         participant_dir = tmp_path / "sub-01"
         (participant_dir / "ses-01").mkdir(parents=True)
         (participant_dir / "ses-02").mkdir()
         (participant_dir / "ses-03").mkdir()
 
-        visits = detect_existing_visits(tmp_path, "sub-01")
-        # Returns list of dicts with visit_id key
-        visit_ids = sorted(v["visit_id"] for v in visits)
-        assert visit_ids == ["ses-01", "ses-02", "ses-03"]
+        sessions = detect_existing_sessions(tmp_path, "sub-01")
+        # Returns list of dicts with session_id key
+        session_ids = sorted(v["session_id"] for v in sessions)
+        assert session_ids == ["ses-01", "ses-02", "ses-03"]
 
     def test_detect_empty(self, tmp_path):
         participant_dir = tmp_path / "sub-01"
         participant_dir.mkdir()
 
-        visits = detect_existing_visits(tmp_path, "sub-01")
-        assert visits == []
+        sessions = detect_existing_sessions(tmp_path, "sub-01")
+        assert sessions == []
 
     def test_detect_no_participant_dir(self, tmp_path):
-        visits = detect_existing_visits(tmp_path, "sub-nonexistent")
-        assert visits == []
+        sessions = detect_existing_sessions(tmp_path, "sub-nonexistent")
+        assert sessions == []
 
-    def test_next_visit_id_first(self, tmp_path):
+    def test_next_session_id_first(self, tmp_path):
         participant_dir = tmp_path / "sub-01"
         participant_dir.mkdir()
 
-        result = next_visit_id(tmp_path, "sub-01")
+        result = next_session_id(tmp_path, "sub-01")
         assert result == "ses-01"
 
-    def test_next_visit_id_increment(self, tmp_path):
+    def test_next_session_id_increment(self, tmp_path):
         participant_dir = tmp_path / "sub-01"
         (participant_dir / "ses-01").mkdir(parents=True)
         (participant_dir / "ses-02").mkdir()
 
-        result = next_visit_id(tmp_path, "sub-01")
+        result = next_session_id(tmp_path, "sub-01")
         assert result == "ses-03"

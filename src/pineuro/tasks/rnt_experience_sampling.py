@@ -57,7 +57,7 @@ from .task_registry import (
 from .utils import make_bids_run_prefix
 
 if TYPE_CHECKING:
-    from .session import SessionState
+    from .state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ class RNTExperienceSamplingTask(BaseTask):
         Scanner button mappings for the rating scale.
     feedback_mode : bool
         True for feedback runs, False for transfer runs.
-    session_state : SessionState, optional
+    task_state : TaskState, optional
         Session state for persistence across runs.
     trigger_keys : list of str
         Keys that trigger volume acquisition.
@@ -152,7 +152,7 @@ class RNTExperienceSamplingTask(BaseTask):
         right_key: str = "2",
         confirm_key: str = "3",
         feedback_mode: bool = True,
-        session_state: SessionState | None = None,
+        task_state: TaskState | None = None,
         trigger_keys: list[str] | None = None,
         presenter_monitor: str = "right",
         **kwargs,
@@ -165,7 +165,7 @@ class RNTExperienceSamplingTask(BaseTask):
             coordinator=coordinator,
             mask_name=mask_names[0],
             feedback_mode=feedback_mode,
-            session_state=session_state,
+            task_state=task_state,
             trigger_keys=trigger_keys or ["t", "+", "5", "equal"],
             **kwargs,
         )
@@ -1044,7 +1044,7 @@ RNT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
             hint="Scanner button for confirming rating",
         ),
     ],
-    session_state_fields=[],
+    task_state_fields=[],
     post_run_questions=[],
     live_metrics=[
         LiveMetric(key="triggered", label="Triggered", column_pattern="triggered_prompts"),

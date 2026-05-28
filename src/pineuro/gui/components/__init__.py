@@ -29,7 +29,7 @@ Data Polling
 FeedbackLogPoller : Background TSV file watcher
     Polls feedbacklog.tsv for new rows and triggers callbacks.
 
-FeedbackMonitor : High-level feedback session monitor
+FeedbackMonitor : High-level feedback task monitor
     Combines log polling with activation/FD plotting.
 
 QC Integration
@@ -53,8 +53,8 @@ RunSelectionDialog : Feedback run selection
 MaskSelectionDialog : ICA component review
     Review and optionally modify network mask assignments.
 
-VisitSelectionDialog : Multi-visit session management
-    Select existing visits or create new ones for longitudinal studies.
+SessionSelectionDialog : Multi-session session management
+    Select existing sessions or create new ones for longitudinal studies.
 
 FeedbackSummaryDialog : Post-run summary
     Display hit counts, motion statistics, and run completion status.
@@ -82,9 +82,9 @@ from .mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
 from .pipeline_runner import PipelineRunner
 from .qc_plots import FDData, FDPlot
 from .qc_viewer import QCReportManager, open_qc_report
+from .session_selection_dialog import SessionSelectionDialog
 from .task_mirror import TaskMirror
 from .unified_acq_dialog import RunGroup, UnifiedAcqDialog
-from .visit_selection_dialog import VisitSelectionDialog
 
 __all__ = [
     "BaseDialog",
@@ -103,7 +103,7 @@ __all__ = [
     "RunGroup",
     "MaskSelectionDialog",
     "MaskReviewInfo",
-    "VisitSelectionDialog",
+    "SessionSelectionDialog",
     "FeedbackSummaryDialog",
     "FeedbackSummaryData",
     "compute_feedback_summary",

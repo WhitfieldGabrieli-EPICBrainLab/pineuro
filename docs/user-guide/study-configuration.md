@@ -58,7 +58,7 @@ When testing offline (no scanner), the simulator replays pre-collected DICOMs:
 
 ### Feedback
 
-See [Feedback Sessions](feedback-sessions.md) for full details.
+See [Feedback Tasks](feedback-tasks.md) for full details.
 
 - **Baseline Volumes** — Volumes for baseline statistics (typically 15-25)
 - **Motion Correction** — `software` (ANTsPy), `siemens_moco` (parse from DICOM sidecar), or `none`
@@ -90,9 +90,9 @@ See [Display Setup](display-setup.md).
 - **Control Monitor** — `left` or `right` (operator GUI)
 - **Presenter Monitor** — `left` or `right` (participant PsychoPy display)
 
-### Multi-Visit
+### Multi-Session
 
-- **Enable Multi-Visit** — Toggle longitudinal mode (see [Multi-Visit](multi-visit.md))
+- **Enable Multi-Session** — Toggle longitudinal mode (see [Multi-Session](multi-session.md))
 
 ## Study File Format
 

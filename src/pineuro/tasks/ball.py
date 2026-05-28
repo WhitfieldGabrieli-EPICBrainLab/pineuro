@@ -37,7 +37,7 @@ from .base import BaseTask
 from .utils import is_activation_outlier, make_bids_run_prefix
 
 if TYPE_CHECKING:
-    from .session import SessionState
+    from .state import TaskState
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -186,8 +186,8 @@ class BallTask(BaseTask):
 
     Examples
     --------
-    >>> from pineuro import run_feedback_session, BallTask
-    >>> session_info = run_feedback_session(..., run_in_background=True)
+    >>> from pineuro import run_feedback_task, BallTask
+    >>> session_info = run_feedback_task(..., run_in_background=True)
     >>> task = BallTask(session_info['coordinator'], mask_names=['CEN', 'DMN'])
     >>> task.run()
 
@@ -210,8 +210,8 @@ class BallTask(BaseTask):
         feedback_mode: bool = True,
         run_number: int = 1,
         is_first_of_type: bool = True,
-        session_state: Optional["SessionState"] = None,
-        # Adaptive difficulty parameters (passed to SessionState.record_run)
+        task_state: Optional["TaskState"] = None,
+        # Adaptive difficulty parameters (passed to TaskState.record_run)
         min_hits_threshold: int = 3,
         max_hits_threshold: int = 5,
         scale_adjust_factor: float = 0.25,
@@ -222,7 +222,7 @@ class BallTask(BaseTask):
         **kwargs,  # Accept additional kwargs for factory compatibility
     ):
         self.coordinator = coordinator
-        self._session_state = session_state
+        self._task_state = task_state
         self.run_number = run_number
         self.is_first_of_type = is_first_of_type
         self._signal_mode = signal_mode
@@ -248,7 +248,7 @@ class BallTask(BaseTask):
             coordinator,
             mask_name=mask_names[0],
             feedback_mode=feedback_mode,
-            session_state=session_state,
+            task_state=task_state,
             **kwargs,
         )
 
@@ -276,8 +276,8 @@ class BallTask(BaseTask):
         self._slot_run_number = coordinator.run_number
         self._acq = coordinator.acq
 
-        if session_state is not None:
-            slot_state = session_state.get_state_for_slot(self._slot_run_number, self._acq)
+        if task_state is not None:
+            slot_state = task_state.get_state_for_slot(self._slot_run_number, self._acq)
             self.scale_factor = slot_state.get("scale_factor", self.scale_factor)
             logger.info(
                 f"Restored scale_factor from session: {self.scale_factor} (slot={self._slot_run_number}, acq={self._acq})"
@@ -805,16 +805,16 @@ class BallTask(BaseTask):
         for circle in self.circles:
             circle.fillColor = None
 
-    def save_state(self, session_state: Optional["SessionState"] = None) -> None:
+    def save_state(self, task_state: Optional["TaskState"] = None) -> None:
         """Save current task state to session state for multi-run continuity.
 
         Parameters
         ----------
-        session_state : SessionState, optional
-            Session state to save to. If None, uses the session_state passed
+        task_state : TaskState, optional
+            Session state to save to. If None, uses the task_state passed
             to __init__. If neither is available, does nothing.
         """
-        state = session_state or self._session_state
+        state = task_state or self._task_state
         if state is None:
             logger.debug("No session state provided, skipping save")
             return
@@ -858,7 +858,7 @@ class BallTask(BaseTask):
         - Only adjusts for feedback runs, not transfer runs
         - Only adjusts for new run slots, not retries (acq > 1)
         """
-        if self._session_state is None:
+        if self._task_state is None:
             return
 
         run_type = "feedback" if self.feedback_mode else "transfer"
@@ -866,7 +866,7 @@ class BallTask(BaseTask):
         # Check if this is a retry
         is_retry = False
         if self._slot_run_number is not None:
-            for r in self._session_state.completed_runs:
+            for r in self._task_state.completed_runs:
                 if r.slot_run_number == self._slot_run_number:
                     is_retry = True
                     break
@@ -912,7 +912,7 @@ class BallTask(BaseTask):
             return  # Already recorded; prevent double-recording from super().cleanup()
         self._run_recorded = True
 
-        if self._session_state is None:
+        if self._task_state is None:
             return
 
         # Apply adaptive difficulty before recording
@@ -926,7 +926,7 @@ class BallTask(BaseTask):
         }
 
         run_type = "feedback" if self.feedback_mode else "transfer"
-        self._session_state.record_run(
+        self._task_state.record_run(
             run_type=run_type,
             volumes_processed=self.current_volume,
             task_state_snapshot=snapshot,
@@ -1180,9 +1180,9 @@ from .task_registry import (
     LiveMetric,
     NetworkRole,
     PostRunQuestion,
-    SessionStateField,
     TaskMetadata,
     TaskParameter,
+    TaskStateField,
     register_task,
 )
 
@@ -1281,20 +1281,20 @@ BALL_TASK_METADATA = TaskMetadata(
         NetworkRole("top_network", "Top Network (upward)", "Ball moves up when this network is more active"),
         NetworkRole("bottom_network", "Bottom Network (downward)", "Ball moves down when this network is more active"),
     ],
-    session_state_fields=[
-        SessionStateField(
+    task_state_fields=[
+        TaskStateField(
             key="scale_factor",
             type="float",
             default=10.0,
             description="Adaptive difficulty scale factor for ball movement",
         ),
-        SessionStateField(
+        TaskStateField(
             key="hit_counters",
             type="list[int]",
             default=[0, 0],
             description="Cumulative hit counts per network [top, bottom]",
         ),
-        SessionStateField(
+        TaskStateField(
             key="circle_radii",
             type="list[float]",
             default=[0.15, 0.15],
