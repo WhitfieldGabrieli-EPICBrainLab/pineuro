@@ -4,13 +4,15 @@ Preprocessing converts raw DICOM data into analysis-ready NIfTI volumes. pineuro
 
 ## Pipeline Steps
 
+Intermediate filenames (Steps 1–4) include both the acquisition attempt and the run number as `acq-{AA}_run-{NN}`. This lets you re-preprocess a different attempt of the same run (e.g. after re-collecting due to motion) without colliding with the prior attempt's files, and keeps `{1: [2, 3]}`-style multi-acq-per-run selections distinguishable on disk. The final `_preproc`, `_preproc_mask`, and `_boldref` outputs do not carry `acq-` — they represent the canonical merged result for `(participant, session, task)`.
+
 ### Step 1: DICOM to NIfTI (`01_nifti/`)
 
 Converts DICOM files to compressed NIfTI format using dcm2niix. Also produces a JSON sidecar with acquisition parameters (TR, echo time, slice timing, etc.).
 
 **Output:**
-- `sub-001_task-rest_run-01.nii.gz` — 4D NIfTI timeseries
-- `sub-001_task-rest_run-01.json` — Acquisition metadata
+- `sub-001_ses-01_task-rest_acq-01_run-01.nii.gz` — 4D NIfTI timeseries
+- `sub-001_ses-01_task-rest_acq-01_run-01.json` — Acquisition metadata
 
 ### Step 2: Motion Correction (`02_motion_correction/`)
 
@@ -29,7 +31,7 @@ Aligns all volumes to a reference (typically the first volume or temporal mean).
 - When motion correction is disabled, motion regressors are automatically excluded from the GLM.
 
 **Output:**
-- `sub-001_task-rest_run-01_mcf.nii.gz` — Motion-corrected 4D
+- `sub-001_ses-01_task-rest_acq-01_run-01_mcf.nii.gz` — Motion-corrected 4D
 - Motion parameter files (`.par` format: 3 translations + 3 rotations per volume)
 
 ### Step 3: Brain Extraction (`03_brain_extraction/`)
@@ -37,16 +39,16 @@ Aligns all volumes to a reference (typically the first volume or temporal mean).
 Creates a binary brain mask using ANTsPy's `get_mask()` with conservative erosion to exclude non-brain voxels.
 
 **Output:**
-- `sub-001_task-rest_run-01_mean.nii.gz` — Temporal mean image
-- `sub-001_task-rest_run-01_mean_brain.nii.gz` — Skull-stripped mean
-- `sub-001_task-rest_run-01_mean_brain_mask.nii.gz` — Binary brain mask
+- `sub-001_ses-01_task-rest_acq-01_run-01_mean.nii.gz` — Temporal mean image
+- `sub-001_ses-01_task-rest_acq-01_run-01_mean_brain.nii.gz` — Skull-stripped mean
+- `sub-001_ses-01_task-rest_acq-01_run-01_mean_brain_mask.nii.gz` — Binary brain mask
 
 ### Step 4: Multi-Run Coregistration (`04_coregistered/`)
 
-When multiple localizer runs are collected, this step aligns all runs to a common reference using ANTs rigid registration, then concatenates into a single 4D timeseries.
+When multiple inputs are processed, this step aligns each to the first input's coordinate space using ANTs rigid registration, then concatenates into a single 4D timeseries.
 
-**Output (only when >1 run):**
-- `sub-001_task-rest_run-01_to_ref.nii.gz` — Per-run aligned data
+**Output (only when >1 input):**
+- `sub-001_ses-01_task-rest_acq-01_run-02_to_acq-01_run-01.nii.gz` — Per-input aligned data (filename encodes both source and reference `acq-NN_run-NN`)
 - Concatenated 4D timeseries for mask extraction
 
 ## Final Preprocessing Outputs
@@ -58,12 +60,12 @@ preprocessing/
 ├── 01_nifti/
 ├── 02_motion_correction/
 ├── 03_brain_extraction/
-├── 04_coregistered/                    # Only if >1 run
-├── sub-001_task-rest_preproc.nii.gz    # Final masked 4D timeseries
-├── sub-001_task-rest_preproc_mask.nii.gz  # Brain mask
-├── sub-001_task-rest_boldref.nii.gz    # BOLD reference image
+├── 04_coregistered/                            # Only if >1 input
+├── sub-001_ses-01_task-rest_preproc.nii.gz     # Final masked 4D timeseries
+├── sub-001_ses-01_task-rest_preproc_mask.nii.gz  # Brain mask
+├── sub-001_ses-01_task-rest_boldref.nii.gz     # BOLD reference image
 └── qc/
-    └── sub-001_task-rest_preprocessing_qc.html
+    └── sub-001_ses-01_task-rest_preprocessing_qc.html
 ```
 
 ## Reference Scans
@@ -78,7 +80,9 @@ Both are configured in the Study Editor Scan tab. The reference scan (typically 
 
 ## Overwrite Behavior
 
-All preprocessing steps default to `overwrite=False`. If output files already exist, the step is skipped. This enables efficient re-runs when only later stages need recomputation. Force recomputation by deleting the relevant output directory.
+All preprocessing steps default to `overwrite=False`. If output files already exist, the step is skipped. This enables efficient re-runs when only later stages need recomputation.
+
+With `overwrite=True`, Step 1 also deletes any prior dcm2niix outputs for the current `(acq, run)` label before re-running — including the primary file, collision-suffixed variants (`...a.nii.gz`, `...b.nii.gz` that dcm2niix produces under its default `-w 2` behavior), and multi-echo / phase splits (`..._e1.nii.gz`, `..._ph.nii.gz`). This prevents stale files from accumulating across re-runs. Cleanup is scoped to the current label only; siblings (other runs / other acqs) are untouched.
 
 ## Configuration
 

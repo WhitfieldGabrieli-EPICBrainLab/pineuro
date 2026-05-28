@@ -1053,10 +1053,12 @@ def generate_preprocessing_report(
     mask_file = preprocessing_dir / mask_pattern
     ref_file = preprocessing_dir / ref_pattern
 
-    # Check for multi-run coregistered data
+    # Check for multi-run coregistered data. Preprocessing writes per-input
+    # coreg outputs as {bids_prefix}_task-{task}_acq-NN_run-NN_to_acq-NN_run-NN.nii.gz
+    # (intermediate files), so we glob with the acq-aware pattern.
     coreg_files = []
     if coreg_dir.exists():
-        coreg_files = sorted(glob(str(coreg_dir / f"{bids_prefix}_task-{task}_run-*.nii.gz")))
+        coreg_files = sorted(glob(str(coreg_dir / f"{bids_prefix}_task-{task}_acq-*_run-*.nii.gz")))
 
     # Build QC sections
     sections: list[dict[str, Any]] = []

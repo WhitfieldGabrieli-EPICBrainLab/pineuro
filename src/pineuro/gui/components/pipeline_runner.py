@@ -817,7 +817,9 @@ class PipelineRunner:
         logger.info(f"Dispatched localizer task '{task_id}' to main thread")
         return _DispatchedTask(future)
 
-    def _resolve_acq_paths(self, task_name: str, runs_to_process: list[int], rest_volumes: list[int]) -> list[Path]:
+    def _resolve_acq_paths(
+        self, task_name: str, runs_to_process: list[int], rest_volumes: list[int]
+    ) -> list[tuple[Path, int, int]]:
         """Resolve collection folder paths using selected acqs.
 
         Uses self._selected_acqs if set (from GUI dialog), otherwise
@@ -834,14 +836,18 @@ class PipelineRunner:
 
         Returns
         -------
-        list[Path]
-            Selected DICOM folder paths
+        list[tuple[Path, int, int]]
+            ``(path, acq, run)`` triples in selection order. ``acq`` and
+            ``run`` are the integers the GUI assigned; callers forward them
+            to ``preprocessing()`` so intermediate filenames carry the
+            ``acq-NN_run-NN`` identity (and ``{1: [2, 3]}``-style multi-acq
+            selections don't get mis-numbered into run-01/run-02).
         """
         config = self.config
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
 
-        selected_paths = []
+        selected: list[tuple[Path, int, int]] = []
         for run_num in runs_to_process:
             expected_vols = rest_volumes[run_num - 1] if len(rest_volumes) >= run_num else rest_volumes[0]
 
@@ -853,7 +859,7 @@ class PipelineRunner:
                     acq_path = collection_dir / f"task-{task_name}_acq-{acq_num:02d}_run-{run_num:02d}"
                     if acq_path.exists():
                         self._emit_progress(f"Run {run_num}: Using selected acq-{acq_num:02d}")
-                        selected_paths.append(acq_path)
+                        selected.append((acq_path, acq_num, run_num))
                         found_any = True
                     else:
                         logger.warning(f"Selected acq-{acq_num:02d} for run {run_num} not found")
@@ -870,11 +876,11 @@ class PipelineRunner:
                 continue
 
             complete = [c for c in collections if c["is_complete"]]
-            selected = complete[0] if complete else collections[0]
-            self._emit_progress(f"Run {run_num}: Using acq-{selected['acq']:02d} ({selected['n_volumes']} volumes)")
-            selected_paths.append(selected["path"])
+            picked = complete[0] if complete else collections[0]
+            self._emit_progress(f"Run {run_num}: Using acq-{picked['acq']:02d} ({picked['n_volumes']} volumes)")
+            selected.append((picked["path"], int(picked["acq"]), run_num))
 
-        return selected_paths
+        return selected
 
     def _run_preprocessing(self) -> None:
         """Run preprocessing on collected rest runs."""
@@ -914,15 +920,19 @@ class PipelineRunner:
                     runs_to_process.append(run_num)
 
         # Select acquisitions (uses GUI selections if set, else auto-selects)
-        input_dicoms = self._resolve_acq_paths(
+        resolved = self._resolve_acq_paths(
             task_name=task_name, runs_to_process=runs_to_process, rest_volumes=rest_volumes
         )
 
-        if not input_dicoms:
+        if not resolved:
             raise ValueError(f"No {task_name} collection directories selected for preprocessing")
 
+        input_paths = [path for path, _acq, _run in resolved]
+        acq_per_input = [acq for _path, acq, _run in resolved]
+        run_per_input = [run for _path, _acq, run in resolved]
+
         # Log selected acquisitions
-        for path in input_dicoms:
+        for path in input_paths:
             self._emit_progress(f"Using: {path.name}")
 
         # Set up progress callback for preprocessing to show in GUI log console
@@ -937,10 +947,12 @@ class PipelineRunner:
             session_id=self.session_id,
             task=task_name,
             root_dir=preprocessing_dir,
-            input_dicoms=[str(d) for d in input_dicoms],
+            input_dicoms=[str(d) for d in input_paths],
             overwrite=self.overwrite,
             qc_enabled=True,  # Generate QC report
             progress_callback=progress_callback,
+            acq_per_input=acq_per_input,
+            run_per_input=run_per_input,
         )
 
     def _manual_reference_file(self, base_dir: Path, root_dir: Path, loc: dict) -> Path:
@@ -1325,16 +1337,20 @@ class PipelineRunner:
 
         # Select acquisitions
         rest_volumes = [n_volumes] * n_runs
-        input_dicoms = self._resolve_acq_paths(
+        resolved = self._resolve_acq_paths(
             task_name=task_name,
             runs_to_process=runs_to_process,
             rest_volumes=rest_volumes,
         )
 
-        if not input_dicoms:
+        if not resolved:
             raise ValueError(f"No {task_name} collection directories found for preprocessing")
 
-        for path in input_dicoms:
+        input_paths = [path for path, _acq, _run in resolved]
+        acq_per_input = [acq for _path, acq, _run in resolved]
+        run_per_input = [run for _path, _acq, run in resolved]
+
+        for path in input_paths:
             self._emit_progress(f"Using: {path.name}")
 
         def progress_callback(step: str, detail: str = ""):
@@ -1348,10 +1364,12 @@ class PipelineRunner:
             session_id=self.session_id,
             task=task_name,
             root_dir=preprocessing_dir,
-            input_dicoms=[str(d) for d in input_dicoms],
+            input_dicoms=[str(d) for d in input_paths],
             overwrite=self.overwrite,
             qc_enabled=True,
             progress_callback=progress_callback,
+            acq_per_input=acq_per_input,
+            run_per_input=run_per_input,
         )
 
     def _run_localizer_extraction(self, loc_idx: int) -> None:

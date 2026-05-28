@@ -99,6 +99,7 @@ References
 import contextlib
 import heapq  # Priority queue for ordered volume collection
 import logging  # Structured logging throughout the pipeline
+import re  # Parse acq/run numbers from collection folder names
 import shutil  # File operations (copy during DICOM collection)
 import threading  # Multi-threading for volume collection with watchdog
 import time  # Timing for collection timeout and progress tracking
@@ -658,6 +659,25 @@ def brain_extraction(
 # =============================================================================
 
 
+# Regex matching collection folder names like "task-rest_acq-02_run-01" or
+# "rest_acq-02_run-01". Used by preprocessing() to recover the (acq, run) pair
+# the GUI assigned when the user picked acquisitions via UnifiedAcqDialog, so
+# that intermediate output filenames preserve which attempt produced them.
+_ACQ_RUN_RE = re.compile(r"acq-(\d+)_run-(\d+)")
+
+
+def _parse_acq_run_from_path(p: Path) -> tuple[int | None, int | None]:
+    """Extract (acq, run) ints from a collection folder path, or (None, None)."""
+    for part in reversed(p.parts):
+        m = _ACQ_RUN_RE.search(part)
+        if m:
+            try:
+                return int(m.group(1)), int(m.group(2))
+            except ValueError:
+                return None, None
+    return None, None
+
+
 def preprocessing(
     participant_id: str,
     session_id: str,
@@ -668,6 +688,8 @@ def preprocessing(
     n_jobs: int = -1,
     qc_enabled: bool = True,
     progress_callback: Callable[[str, str], None] | None = None,
+    acq_per_input: list[int] | None = None,
+    run_per_input: list[int] | None = None,
 ) -> tuple[Path, Path, Path]:
     """
     Run the complete preprocessing pipeline for fMRI data.
@@ -709,6 +731,17 @@ def preprocessing(
         Callback function for progress updates with signature:
         ``callback(step: str, detail: str)``.
         Used by GUI to display real-time progress.
+    acq_per_input : list of int, optional
+        Acquisition attempt number for each entry in ``input_dicoms``. Used in
+        intermediate output filenames so re-preprocessing a different attempt
+        of the same run does not collide. If omitted, each input's acq is
+        parsed from its folder name (``..._acq-NN_run-NN``); folders without
+        that pattern default to ``acq=1``.
+    run_per_input : list of int, optional
+        Run number for each entry in ``input_dicoms``. Lets the caller pass
+        ``{1: [2, 3]}``-style multi-acq-per-run selections without losing the
+        run identity (otherwise both entries enumerate as run-01/run-02). If
+        omitted, parsed from folder names, falling back to enumeration order.
 
     Returns
     -------
@@ -732,21 +765,27 @@ def preprocessing(
 
         root_dir/
         ├── 01_nifti/                    # DICOM → NIfTI conversion
-        │   └── {participant}_task-{task}_run-{N}.nii.gz
+        │   └── {participant}_{session}_task-{task}_acq-{A}_run-{N}.nii.gz
         ├── 02_motion_correction/        # Motion-corrected volumes
-        │   ├── {participant}_task-{task}_run-{N}_mcf.nii.gz
-        │   └── {participant}_task-{task}_run-{N}_mcf.nii.gz.par
+        │   ├── {participant}_{session}_task-{task}_acq-{A}_run-{N}_mcf.nii.gz
+        │   └── {participant}_{session}_task-{task}_acq-{A}_run-{N}_mcf.nii.gz.par
         ├── 03_brain_extraction/         # Temporal means and brain mask
-        │   ├── {participant}_task-{task}_run-{N}_mean.nii.gz
-        │   └── {participant}_task-{task}_run-01_mean_brain_mask.nii.gz
+        │   ├── {participant}_{session}_task-{task}_acq-{A}_run-{N}_mean.nii.gz
+        │   └── {participant}_{session}_task-{task}_acq-{A}_run-01_mean_brain_mask.nii.gz
         ├── 04_coregistered/             # Multi-run alignment (if >1 run)
-        │   ├── {participant}_task-{task}.nii.gz
+        │   ├── {participant}_{session}_task-{task}.nii.gz
         │   └── xfm/                     # ANTs transform files
-        ├── {participant}_task-{task}_preproc.nii.gz      # Final masked output
-        ├── {participant}_task-{task}_preproc_mask.nii.gz # Eroded brain mask
-        ├── {participant}_task-{task}_boldref.nii.gz      # BOLD reference
+        ├── {participant}_{session}_task-{task}_preproc.nii.gz      # Final masked output
+        ├── {participant}_{session}_task-{task}_preproc_mask.nii.gz # Eroded brain mask
+        ├── {participant}_{session}_task-{task}_boldref.nii.gz      # BOLD reference
         └── qc/                          # QC report (if enabled)
             └── preprocessing_qc.html
+
+    Intermediate filenames include ``acq-{A}_run-{N}`` so that re-preprocessing
+    a different acquisition attempt of the same run does not overwrite or
+    collide with the first attempt's files. The final ``_preproc``, ``_mask``,
+    and ``_boldref`` outputs do not carry ``acq-`` because they represent the
+    canonical merged result for ``(participant, session, task)``.
 
     **Multi-Run Coregistration:**
     When multiple DICOM folders are provided, all runs are registered to the
@@ -842,6 +881,37 @@ def preprocessing(
         input_paths.append(str(path))
         logger.info(f"  {str(path)}")
 
+    # -------------------------------------------------------------------------
+    # Resolve (acq, run) for each input
+    # -------------------------------------------------------------------------
+    # The GUI's UnifiedAcqDialog lets the user map ``{run: [acq, ...]}``, then
+    # _resolve_acq_paths flattens that into ``input_dicoms`` paths whose folder
+    # names encode acq/run as ``..._acq-NN_run-NN``. We recover those numbers
+    # here so intermediate filenames (Steps 1-4) carry ``acq-NN_run-NN`` and
+    # don't collide across re-attempts of the same run.
+    if acq_per_input is not None and len(acq_per_input) != len(input_paths):
+        raise ValueError(
+            f"acq_per_input has {len(acq_per_input)} entries but {len(input_paths)} input_dicoms were provided"
+        )
+    if run_per_input is not None and len(run_per_input) != len(input_paths):
+        raise ValueError(
+            f"run_per_input has {len(run_per_input)} entries but {len(input_paths)} input_dicoms were provided"
+        )
+
+    acqs: list[int] = []
+    runs: list[int] = []
+    for idx, path_str in enumerate(input_paths):
+        parsed_acq, parsed_run = _parse_acq_run_from_path(Path(path_str))
+        acq_val = acq_per_input[idx] if acq_per_input is not None else (parsed_acq if parsed_acq is not None else 1)
+        run_val = (
+            run_per_input[idx] if run_per_input is not None else (parsed_run if parsed_run is not None else idx + 1)
+        )
+        acqs.append(acq_val)
+        runs.append(run_val)
+
+    def _label(idx: int) -> str:
+        return f"{bids_prefix}_task-{task}_acq-{acqs[idx]:02d}_run-{runs[idx]:02d}"
+
     # =========================================================================
     # STEP 1: DICOM TO NIFTI CONVERSION
     # =========================================================================
@@ -856,7 +926,23 @@ def preprocessing(
 
     emit_progress("Step 1/4: DICOM to NIfTI conversion")
     nifti_dir = root_dir / "01_nifti"
-    nifti_files = []
+    nifti_files: list[Path] = []
+
+    # Pre-clean stale dcm2niix outputs for the current (acq, run) labels when
+    # overwriting. dicom_to_nifti() does this internally on the sequential
+    # path; we replicate it here so the parallel path (which builds the cmd
+    # inline and calls parallel_run_command directly) gets the same hygiene.
+    if overwrite and n_jobs != 1 and len(input_paths) > 1:
+        nifti_dir.mkdir(parents=True, exist_ok=True)
+        for idx in range(len(input_paths)):
+            base = _label(idx)
+            for ext_ in ("nii.gz", "nii", "json", "bval", "bvec"):
+                for pattern in (f"{base}.{ext_}", f"{base}[a-z].{ext_}", f"{base}_*.{ext_}"):
+                    for stale in nifti_dir.glob(pattern):
+                        try:
+                            stale.unlink()
+                        except OSError as e:
+                            logger.warning(f"Could not remove stale dcm2niix output {stale}: {e}")
 
     # --- Parallel Conversion (for multi-run datasets) ---
     # When we have multiple runs AND parallel processing is enabled,
@@ -868,9 +954,8 @@ def preprocessing(
         # Build job specifications for parallel execution
         dcm_jobs = []
         nifti_file_paths = []
-        for run, dicom_dir in enumerate(input_paths):
-            # BIDS-style naming: sub-XX_task-YY_run-01.nii.gz
-            output_name = f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}"
+        for idx, dicom_dir in enumerate(input_paths):
+            output_name = _label(idx)
             nifti_file_path = nifti_dir / f"{output_name}.nii.gz"
             nifti_file_paths.append(nifti_file_path)
 
@@ -878,7 +963,7 @@ def preprocessing(
                 {
                     "cmd_name": "dcm2niix",
                     "cmd": ["dcm2niix", "-z", "y", "-o", str(nifti_dir), "-f", output_name, str(dicom_dir)],
-                    "description": f"DICOM to NIfTI conversion run {run + 1}",
+                    "description": f"DICOM to NIfTI conversion acq-{acqs[idx]:02d}_run-{runs[idx]:02d}",
                     "inputs": dicom_dir,
                     "outputs": nifti_file_path,
                     "overwrite": overwrite,
@@ -892,12 +977,14 @@ def preprocessing(
 
     else:
         # --- Sequential Conversion (single run or n_jobs=1) ---
-        for run, dicom_dir in enumerate(input_paths):
-            emit_progress("Step 1/4", f"Converting run {run + 1}/{len(input_paths)}...")
+        for idx, dicom_dir in enumerate(input_paths):
+            emit_progress(
+                "Step 1/4", f"Converting {idx + 1}/{len(input_paths)} (acq-{acqs[idx]:02d}_run-{runs[idx]:02d})..."
+            )
             nifti_file = dicom_to_nifti(
                 dicom_dir=dicom_dir,
                 output_dir=nifti_dir,
-                output_name=f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}",
+                output_name=_label(idx),
                 overwrite=overwrite,
             )
             nifti_files.append(nifti_file)
@@ -921,11 +1008,14 @@ def preprocessing(
 
     emit_progress("Step 2/4: Motion correction (ANTsPy)")
     mcf_dir = root_dir / "02_motion_correction"
-    mcf_files = []
+    mcf_files: list[Path] = []
 
-    for run, nifti in enumerate(nifti_files):
-        emit_progress("Step 2/4", f"Running motion correction on run {run + 1}/{len(nifti_files)}...")
-        mcf_file = mcf_dir / Path(f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}_mcf.nii.gz")
+    for idx, nifti in enumerate(nifti_files):
+        emit_progress(
+            "Step 2/4",
+            f"Running motion correction on {idx + 1}/{len(nifti_files)} (acq-{acqs[idx]:02d}_run-{runs[idx]:02d})...",
+        )
+        mcf_file = mcf_dir / Path(f"{_label(idx)}_mcf.nii.gz")
         motion_correction(input_file=nifti, output_file=mcf_file, overwrite=overwrite)
         mcf_files.append(mcf_file)
 
@@ -954,9 +1044,9 @@ def preprocessing(
     # easier to find accurate brain boundaries. These means also
     # serve as reference images for multi-run coregistration.
     emit_progress("Step 3/4", "Computing temporal mean images...")
-    mean_files = []
-    for run, nifti in enumerate(mcf_files):
-        mean_file = bet_dir / Path(f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}_mean.nii.gz")
+    mean_files: list[Path] = []
+    for idx, nifti in enumerate(mcf_files):
+        mean_file = bet_dir / Path(f"{_label(idx)}_mean.nii.gz")
         compute_mean(input_file=nifti, output_file=mean_file, overwrite=overwrite)
         mean_files.append(mean_file)
 
@@ -999,29 +1089,30 @@ def preprocessing(
         coreg_file = mcf_files[0]
 
     else:
-        # --- Multiple Runs: Coregister to First Run ---
-        # Run-01 serves as the reference. All subsequent runs are aligned to it.
-        emit_progress("Step 4/4", f"Coregistering {len(mcf_files)} runs to run 1...")
-        sub_ref = mean_files[0]  # Run-01 mean is the target for registration
+        # --- Multiple Runs: Coregister to First Input ---
+        # The first input serves as the reference. All subsequent inputs are
+        # aligned to it. With multi-acq-per-run selections the "first input"
+        # may be e.g. acq-02_run-01; its acq/run pair is the reference label.
+        ref_label = f"acq-{acqs[0]:02d}_run-{runs[0]:02d}"
+        emit_progress("Step 4/4", f"Coregistering {len(mcf_files)} inputs to {ref_label}...")
+        sub_ref = mean_files[0]  # First input's mean is the registration target
         concat_files = []
 
-        for run, mean_file in enumerate(mean_files):
-            if run == 0:
-                # First run IS the reference - no transformation needed
+        for idx, mean_file in enumerate(mean_files):
+            if idx == 0:
+                # First input IS the reference - no transformation needed
                 # Just add its motion-corrected data to the concatenation list
-                concat_files.append(mcf_files[run])
+                concat_files.append(mcf_files[idx])
 
             else:
                 # --- Compute Rigid Transform ---
                 # Estimate the 6 rigid-body parameters (3 translation, 3 rotation)
-                # that align this run's mean to run-01's mean
-                emit_progress("Step 4/4", f"Computing transform for run {run + 1}/{len(mean_files)}...")
-                output_prefix = xfm_dir / Path(
-                    f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}_mean_to_run-01_mean"
-                )
+                # that align this input's mean to the reference mean
+                emit_progress("Step 4/4", f"Computing transform for {idx + 1}/{len(mean_files)} ({_label(idx)})...")
+                output_prefix = xfm_dir / Path(f"{_label(idx)}_mean_to_{ref_label}_mean")
                 _, xfm_files = compute_xfm(
-                    moving=mean_file,  # This run's mean (to be transformed)
-                    fixed=sub_ref,  # Run-01 mean (target space)
+                    moving=mean_file,  # This input's mean (to be transformed)
+                    fixed=sub_ref,  # Reference mean (target space)
                     output_prefix=output_prefix,
                     type_of_transform="Rigid",  # 6 DOF: preserves brain shape
                     overwrite=overwrite,
@@ -1030,12 +1121,10 @@ def preprocessing(
                 # --- Apply Transform to Full 4D Timeseries ---
                 # The transform was computed on the mean, but we apply it to the
                 # full 4D timeseries so all volumes are in the same space
-                emit_progress("Step 4/4", f"Applying transform to run {run + 1}/{len(mean_files)}...")
-                output_file = coreg_dir / Path(
-                    f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}_to_run-01.nii.gz"
-                )
+                emit_progress("Step 4/4", f"Applying transform to {idx + 1}/{len(mean_files)} ({_label(idx)})...")
+                output_file = coreg_dir / Path(f"{_label(idx)}_to_{ref_label}.nii.gz")
                 apply_xfm(
-                    moving=mcf_files[run],  # Full 4D timeseries
+                    moving=mcf_files[idx],  # Full 4D timeseries
                     fixed=sub_ref,  # Reference space
                     transform_files=xfm_files,
                     output_file=output_file,

@@ -218,6 +218,240 @@ class TestPreprocessingPipeline:
 
 
 # =============================================================================
+# preprocessing — acq/run-aware intermediate file naming
+# =============================================================================
+
+
+class TestParseAcqRunFromPath:
+    def test_matches_collection_folder(self):
+        from pineuro.preprocessing import _parse_acq_run_from_path
+
+        assert _parse_acq_run_from_path(Path("/x/y/task-rest_acq-02_run-01")) == (2, 1)
+
+    def test_matches_with_extra_path_components(self):
+        from pineuro.preprocessing import _parse_acq_run_from_path
+
+        assert _parse_acq_run_from_path(Path("/study/collection/task-rest_acq-03_run-02/dcm")) == (3, 2)
+
+    def test_no_match_returns_nones(self):
+        from pineuro.preprocessing import _parse_acq_run_from_path
+
+        assert _parse_acq_run_from_path(Path("/external/source_dicoms/run1")) == (None, None)
+
+
+class TestPreprocessingAcqAwareNaming:
+    """preprocessing() must thread (acq, run) into intermediate filenames so that
+    re-preprocessing a different acq attempt does not collide, and multi-acq-per-run
+    selections ({1: [2, 3]}) keep their run identity."""
+
+    def _make_dicom_dirs(self, tmp_path, names):
+        dirs = []
+        for n in names:
+            d = tmp_path / "collection" / n
+            d.mkdir(parents=True)
+            (d / "fake.dcm").touch()
+            dirs.append(d)
+        return dirs
+
+    def _patch_steps(self, monkeypatch, nifti_dir):
+        """Replace heavy steps with thin stubs that just record call paths and
+        materialize empty output files so existence checks pass downstream."""
+
+        call_log: dict[str, list[Path]] = {
+            "dicom_to_nifti": [],
+            "motion_correction": [],
+            "compute_mean": [],
+            "brain_extraction": [],
+            "compute_xfm": [],
+            "apply_xfm": [],
+            "concat": [],
+            "erode_mask": [],
+            "apply_mask": [],
+        }
+
+        def fake_dicom_to_nifti(dicom_dir, output_dir, output_name, overwrite=False, **_kw):
+            out = Path(output_dir) / f"{output_name}.nii.gz"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"x")
+            call_log["dicom_to_nifti"].append(out)
+            return out
+
+        def fake_motion_correction(input_file, output_file, **_kw):
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_file).write_bytes(b"x")
+            Path(str(output_file) + ".par").write_text("0 0 0 0 0 0\n")
+            call_log["motion_correction"].append(Path(output_file))
+
+        def fake_compute_mean(input_file, output_file, **_kw):
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_file).write_bytes(b"x")
+            call_log["compute_mean"].append(Path(output_file))
+
+        def fake_brain_extraction(input_file, output_dir, **_kw):
+            stem = Path(input_file).with_suffix("").stem
+            brain = Path(output_dir) / f"{stem}_brain.nii.gz"
+            mask = Path(output_dir) / f"{stem}_brain_mask.nii.gz"
+            brain.write_bytes(b"x")
+            mask.write_bytes(b"x")
+            call_log["brain_extraction"].append(mask)
+            return brain, mask
+
+        def fake_compute_xfm(moving, fixed, output_prefix, **_kw):
+            Path(output_prefix).parent.mkdir(parents=True, exist_ok=True)
+            xfm = Path(str(output_prefix) + "0GenericAffine.mat")
+            xfm.write_text("xfm")
+            call_log["compute_xfm"].append(Path(output_prefix))
+            return None, [xfm]
+
+        def fake_apply_xfm(moving, fixed, transform_files, output_file, **_kw):
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_file).write_bytes(b"x")
+            call_log["apply_xfm"].append(Path(output_file))
+
+        def fake_concat(input_files, output_file, **_kw):
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_file).write_bytes(b"x")
+            call_log["concat"].append(Path(output_file))
+
+        def fake_erode_mask(mask, output, **_kw):
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            Path(output).write_bytes(b"x")
+            call_log["erode_mask"].append(Path(output))
+
+        def fake_apply_mask(input_file, mask_file, output_file, **_kw):
+            Path(output_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_file).write_bytes(b"x")
+            call_log["apply_mask"].append(Path(output_file))
+
+        import pineuro.preprocessing as pp
+
+        monkeypatch.setattr(pp, "dicom_to_nifti", fake_dicom_to_nifti)
+        monkeypatch.setattr(pp, "motion_correction", fake_motion_correction)
+        monkeypatch.setattr(pp, "compute_mean", fake_compute_mean)
+        monkeypatch.setattr(pp, "brain_extraction", fake_brain_extraction)
+        monkeypatch.setattr(pp, "compute_xfm", fake_compute_xfm)
+        monkeypatch.setattr(pp, "apply_xfm", fake_apply_xfm)
+        monkeypatch.setattr(pp, "concat", fake_concat)
+        monkeypatch.setattr(pp, "erode_mask", fake_erode_mask)
+        monkeypatch.setattr(pp, "apply_mask", fake_apply_mask)
+
+        return call_log
+
+    def test_intermediates_carry_acq_when_parsed_from_folder(self, tmp_path, monkeypatch):
+        from pineuro.preprocessing import preprocessing
+
+        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_acq-03_run-01", "task-rest_acq-01_run-02"])
+        root_dir = tmp_path / "preproc"
+        root_dir.mkdir()
+        log = self._patch_steps(monkeypatch, root_dir / "01_nifti")
+
+        preprocessing(
+            "sub-01",
+            "ses-01",
+            "rest",
+            root_dir,
+            [str(d) for d in dirs],
+            n_jobs=1,  # force sequential path
+            qc_enabled=False,
+        )
+
+        nifti_names = sorted(p.name for p in log["dicom_to_nifti"])
+        assert nifti_names == [
+            "sub-01_ses-01_task-rest_acq-01_run-02.nii.gz",
+            "sub-01_ses-01_task-rest_acq-03_run-01.nii.gz",
+        ]
+        mcf_names = sorted(p.name for p in log["motion_correction"])
+        assert mcf_names == [
+            "sub-01_ses-01_task-rest_acq-01_run-02_mcf.nii.gz",
+            "sub-01_ses-01_task-rest_acq-03_run-01_mcf.nii.gz",
+        ]
+        mean_names = sorted(p.name for p in log["compute_mean"])
+        assert mean_names == [
+            "sub-01_ses-01_task-rest_acq-01_run-02_mean.nii.gz",
+            "sub-01_ses-01_task-rest_acq-03_run-01_mean.nii.gz",
+        ]
+
+    def test_multi_acq_per_run_keeps_run_identity(self, tmp_path, monkeypatch):
+        """{1: [2, 3]} selection: two inputs at run-01 with different acqs
+        must produce acq-02_run-01 and acq-03_run-01, NOT run-01/run-02."""
+        from pineuro.preprocessing import preprocessing
+
+        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_acq-02_run-01", "task-rest_acq-03_run-01"])
+        root_dir = tmp_path / "preproc"
+        root_dir.mkdir()
+        log = self._patch_steps(monkeypatch, root_dir / "01_nifti")
+
+        preprocessing(
+            "sub-01",
+            "ses-01",
+            "rest",
+            root_dir,
+            [str(d) for d in dirs],
+            n_jobs=1,
+            qc_enabled=False,
+            acq_per_input=[2, 3],
+            run_per_input=[1, 1],
+        )
+
+        nifti_names = sorted(p.name for p in log["dicom_to_nifti"])
+        assert nifti_names == [
+            "sub-01_ses-01_task-rest_acq-02_run-01.nii.gz",
+            "sub-01_ses-01_task-rest_acq-03_run-01.nii.gz",
+        ]
+        # No "run-02" should appear in any per-input artifact
+        all_names = [
+            p.name for key in ("dicom_to_nifti", "motion_correction", "compute_mean", "apply_xfm") for p in log[key]
+        ]
+        assert not any("run-02" in n for n in all_names), all_names
+
+    def test_external_paths_fall_back_to_enumeration(self, tmp_path, monkeypatch):
+        """Folders that don't match the acq-NN_run-NN convention default to
+        acq=1 and run=enumerate_index+1 (covers skip_collection paths)."""
+        from pineuro.preprocessing import preprocessing
+
+        dirs = self._make_dicom_dirs(tmp_path, ["raw_run_one", "raw_run_two"])
+        root_dir = tmp_path / "preproc"
+        root_dir.mkdir()
+        log = self._patch_steps(monkeypatch, root_dir / "01_nifti")
+
+        preprocessing(
+            "sub-01",
+            "ses-01",
+            "rest",
+            root_dir,
+            [str(d) for d in dirs],
+            n_jobs=1,
+            qc_enabled=False,
+        )
+
+        nifti_names = sorted(p.name for p in log["dicom_to_nifti"])
+        assert nifti_names == [
+            "sub-01_ses-01_task-rest_acq-01_run-01.nii.gz",
+            "sub-01_ses-01_task-rest_acq-01_run-02.nii.gz",
+        ]
+
+    def test_explicit_lengths_must_match(self, tmp_path, monkeypatch):
+        from pineuro.preprocessing import preprocessing
+
+        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_acq-01_run-01"])
+        root_dir = tmp_path / "preproc"
+        root_dir.mkdir()
+        self._patch_steps(monkeypatch, root_dir / "01_nifti")
+
+        with pytest.raises(ValueError, match="acq_per_input has 2 entries"):
+            preprocessing(
+                "sub-01",
+                "ses-01",
+                "rest",
+                root_dir,
+                [str(d) for d in dirs],
+                n_jobs=1,
+                qc_enabled=False,
+                acq_per_input=[1, 2],
+            )
+
+
+# =============================================================================
 # collect_volumes — recursive subfolder watching
 # =============================================================================
 

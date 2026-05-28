@@ -1311,8 +1311,13 @@ def dicom_to_nifti(
     output_name : str
         Base name for output file (without extension)
     overwrite : bool, default=False
-        If True, always run command and overwrite existing outputs.
-        If False, skip command if all output files already exist.
+        If True, delete any prior dcm2niix outputs for ``output_name`` in
+        ``output_dir`` (primary file, collision-suffixed variants like
+        ``outputa.nii.gz``, and multi-echo / phase splits like ``output_e2.nii.gz``)
+        before re-running. Necessary because dcm2niix's default ``-w 2`` appends
+        a letter on collision instead of overwriting, which otherwise leaves
+        stale files behind.
+        If False, skip command if the primary output file already exists.
     verbose : bool, default=True
         If False, suppresses dcm2niix output messages.
     compress : bool, default=True
@@ -1339,6 +1344,26 @@ def dicom_to_nifti(
     compress_flag = "y" if compress else "n"
     ext = ".nii.gz" if compress else ".nii"
     nifti_path = output_dir / f"{output_name}{ext}"
+
+    # When overwriting, remove prior dcm2niix artifacts for this output_name first.
+    # dcm2niix's default (-w 2) appends a letter suffix (a, b, ...) on filename
+    # collision instead of overwriting, and multi-echo / phase series produce
+    # _e1/_e2/_ph/_ADC variants. Without cleanup, stale files persist and the
+    # primary nifti_path may end up holding old data while fresh output sits
+    # next to it with a suffix.
+    if overwrite:
+        sidecar_exts = ("nii.gz", "nii", "json", "bval", "bvec")
+        for ext_ in sidecar_exts:
+            for pattern in (
+                f"{output_name}.{ext_}",  # primary
+                f"{output_name}[a-z].{ext_}",  # collision suffix (a, b, ...)
+                f"{output_name}_*.{ext_}",  # multi-echo / phase variants (_e1, _ph, ...)
+            ):
+                for stale in output_dir.glob(pattern):
+                    try:
+                        stale.unlink()
+                    except OSError as e:
+                        logger.warning(f"Could not remove stale dcm2niix output {stale}: {e}")
 
     # Handle single file vs directory
     # If a single file is given, copy it to a temp directory to avoid converting
