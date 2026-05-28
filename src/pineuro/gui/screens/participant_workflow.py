@@ -2112,7 +2112,7 @@ class ParticipantWorkflowScreen:
             return StepStatus.PENDING
 
     def _check_feedback_slot_status(
-        self, step_id: str, output_dir: Path, participant_id: str, expected_volumes: int
+        self, step_id: str, output_dir: Path, participant_id: str, session_id: str, expected_volumes: int
     ) -> StepStatus:
         """Check status of a feedback/transfer slot using acq-based naming.
 
@@ -2123,6 +2123,7 @@ class ParticipantWorkflowScreen:
             step_id: Workflow step ID (e.g., 'transfer_1', 'feedback_2')
             output_dir: Feedback output directory
             participant_id: Participant ID
+            session_id: Session identifier (e.g., 'ses-01')
             expected_volumes: Expected number of volumes
 
         Returns:
@@ -2141,7 +2142,7 @@ class ParticipantWorkflowScreen:
             return StepStatus.PENDING
 
         # Search for any acq-* files for this slot's run number
-        pattern = f"{participant_id}_task-{task_type}_acq-*_run-{run_num:02d}_feedbacklog.tsv"
+        pattern = f"{participant_id}_{session_id}_task-{task_type}_acq-*_run-{run_num:02d}_feedbacklog.tsv"
         log_files = list(output_dir.glob(pattern))
 
         if not log_files:
@@ -2439,6 +2440,7 @@ class ParticipantWorkflowScreen:
                 step_id=step_id,
                 output_dir=feedback_output_dir,
                 participant_id=participant_id,
+                session_id=self.session_id,
                 expected_volumes=expected_vols,
             )
             self.step_statuses[step_id] = status
@@ -6120,13 +6122,18 @@ class ParticipantWorkflowScreen:
             title=ft.Text("Discard this attempt?"),
             content=ft.Container(content=body, width=420),
             actions=[
-                ft.TextButton("Keep", on_click=on_keep),
-                ft.FilledButton(
+                ft.TextButton(
                     "Discard",
                     icon=ft.Icons.DELETE_FOREVER,
-                    color=ft.Colors.WHITE,
-                    bgcolor=ft.Colors.RED_700,
+                    style=ft.ButtonStyle(color=ft.Colors.RED_700),
                     on_click=on_discard,
+                ),
+                ft.FilledButton(
+                    "Keep",
+                    icon=ft.Icons.CHECK,
+                    color=ft.Colors.WHITE,
+                    bgcolor=ft.Colors.GREEN_700,
+                    on_click=on_keep,
                 ),
             ],
         )
