@@ -5,7 +5,7 @@ All notable changes to pineuro will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-05-28
 
 ### Breaking
 
@@ -14,6 +14,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **session → task** (for things that were per-task, not per-session): `run_feedback_session()` → `run_feedback_task()`, `SessionState` → `TaskState` (file `pineuro/tasks/session.py` → `pineuro/tasks/state.py`), on-disk state file `session_state.json` → `task_state.json`, `reset_session_state()` → `reset_task_state()`, `PathConfig.session_dir` → `PathConfig.feedback_dir` (it was always the feedback workspace, never the session dir), the `session_dir=` parameter on `TaskState.load/reset/create_for_task` → `feedback_dir=`. GUI section headers "Localizer Session" / "Feedback Session" → "Localizer Tasks" / "Feedback Tasks"; doc `docs/user-guide/feedback-sessions.md` → `feedback-tasks.md`.
   - **Existing study configs in `~/.pineuro/studies/` are auto-migrated** in this commit (`multi_visit_enabled` → `multi_session_enabled` across active configs, version snapshots, and archives). Existing on-disk `session_state.json` files in per-participant data directories are **not** migrated (per the user's direction — they were test data). To carry old data forward, rename the file by hand.
   - No legacy aliases. Imports of the old names will fail with `ImportError`.
+- **`ses-XX` is now always present in output paths and filenames.** Every participant's data is organized under `sub-XX/ses-XX/` and every output filename embeds `_ses-XX_` right after the subject id (e.g. `sub-01_ses-01_task-rest_run-01_preproc.nii.gz`), regardless of how many sessions the study has. The per-study `multi_session_enabled` flag is removed; the session-selection dialog now always runs (new participants default to `ses-01`). `PathConfig.session_id` is now required, and `StudyInfoConfig`, `is_single_session_data`, and `migrate_to_multi_session` are deleted. Existing `sub-XX/` directories without a `ses-XX/` level are unsupported.
+- **The acquisition-retry counter is now the `attempt` entity, placed after `run`.** Output filenames use `run-NN_attempt-NN` (e.g. `run-01_attempt-02`) instead of the former `acq-NN_run-NN`. The retry counter had been labeled with the BIDS `acq` entity, which inverts BIDS semantics and put the inner counter before the outer run; `attempt` is a pineuro-specific entity that reads as `session → run → attempt`. `acq` is removed across construction, parsers, `TaskState`/`RunInfo` fields, GUI labels, and the selection dialog (`unified_acq_dialog` → `unified_attempt_dialog`). No on-disk migration.
+- **Rest localizer renamed `FixationTask` → `RestTask`.** The class was named after its fixation-cross stimulus rather than its protocol role, leaving the YAML config (`type: rest`) and the BIDS task entity (`task-fixation`) inconsistent. The event-file task entity is now `task-rest`; `tasks/fixation.py` → `tasks/rest.py`, `FixationTask` → `RestTask`, `FIXATION_METADATA` → `REST_METADATA`, `task_id` `"fixation"` → `"rest"`. (The fixation-cross UI helpers are unchanged — they describe the stimulus, not the task.)
+- **Rumination tasks renamed RNT → RIT (Rumination Induction Task).** Matches Shreiner et al. (2025) and the on-disk `RIT_keywords` / `task-rit` convention. Task IDs `rnt` → `rit`; covers file names, class names, display names, tests, and docs. Paradigm-content terms (rumination, distraction) are unchanged.
+- **`network_atlas` is the single source of truth for the network count; `yeo_targets` → `networks`.** The `n_yeo` parameter is removed — the count is derived from `network_atlas` via `ATLAS_SOURCES[...]["n_networks"]`, so it works for Schaefer atlases too, not just Yeo. (This also fixes `validate_session_config`, which read the count from a missing key and so always failed.)
+- **Scanner trigger keys moved to study-level `ScannerConfig`.** Trigger keys are determined by the scanner, not the task, so they are declared once on the study (in the renamed "Scanner & Simulator" study-tab section) rather than per feedback task. Previously only the 5 feedback tasks exposed the field; localizers silently fell back to the hardcoded `["t", "+", "5", "equal"]` default, so changing the keys in a feedback tab had no effect on localizers in the same session. Both the feedback orchestrator and the localizer launcher now read the study-wide value.
+
+### Added
+
+- **Discard-on-stop for partial acquisitions.** Stopping a localizer or feedback run mid-acquisition now prompts Keep (files stay; the next attempt increments) or Discard (delete the partial files so the next attempt reuses the same number). Keep is the recommended default (green button); Discard is de-emphasized.
+- **Stop now interrupts long-running steps.** `preprocessing()` checks for a stop request at step boundaries and before each motion-correction volume, and mask extraction runs the non-interruptible CanICA fit in a killable subprocess (its process tree is terminated via `psutil`, a new dependency). A requested stop is reported as a clean stop, not an error. Completed preprocessing / mask-extraction steps now offer a "Re-run" affordance.
+- **Per-task state is now universal.** Every localizer (not just feedback tasks) gets a `task_state.json` run ledger, lifted from `BaseTask` onto the shared `TaskBase`. RIT persists its per-run selection (target pass, keywords, prompts) and restores it exactly on a retry/resume of the same run, warning and recomputing if a keyword file was edited in the meantime.
+
+### Changed
+
+- **The generated `reproduce_masks.py` script is generalized to all extraction modes.** It was rest/ICA-only and had drifted from the core API (it dropped `network_atlas` and `sham_hemisphere_network`; its task path was dead code and it had no MNI support). A single mode-agnostic generator now serializes the resolved call and replays it through a shared `run_mask_extraction_from_config` dispatcher (rest/task/MNI); the pipeline runner routes all extraction call sites through that same dispatcher and rewrites the script after every extraction, so it can no longer drift from the `mask_extraction_*` signatures.
+
+### Removed
+
+- **Migration shims and legacy accommodations** (pineuro is pre-rollout, so config-schema changes need none): the hard-fail top-level-key validators, the silent migration shims (`use_efficiency_weights`, old `TaskState` format, `MaskSelection` secondary-field defaulting, boldref/Yeo-CSV fallbacks, GUI flat-key fallbacks), and the public-API aliases `DicomSimulator`, `collect_dicoms`, `FDData`, and the `ball.py` HRF re-export. Also gone: the dead `atlas_name` path, the single-localizer-else branch, and the vestigial `n_feedback_runs` parameter.
+
+### Fixed
+
+- **GUI launched the wrong task on migrated study configs.** The participant workflow and pipeline runner still read the removed legacy top-level YAML blocks (`scan`/`mask`/`feedback`/`task`/`localizer_task`), so on a migrated config every read fell through to defaults — most visibly launching a rest task instead of the configured RIT localizer. ~50 reads were swept to the new `localizers[*]` / `feedback_runs[*]` / top-level `simulator`/`scanner`/`reference` schema.
+- **Participant-workflow paths dropped the session component.** Step-completion detection, QC-report lookup, mask-extraction inputs, and feedback-log paths were built from a bare `participant_id` without `ses-XX`, so preprocessing never registered COMPLETE (locking mask extraction), mask extraction could not find its input, and several status globs / QC / feedback-metric lookups silently missed their files. All now use the consistent `{participant}_{session}` BIDS prefix.
+- **`preprocessing(overwrite=True)` left stale `01_nifti/` files.** `dcm2niix` appends a letter suffix on filename collision rather than overwriting, so the canonical path kept old data while fresh output sat beside it with a suffix and downstream steps silently consumed the stale file. Prior outputs for the current label (primary, suffixed, multi-echo/phase splits, sidecars) are now removed first.
+- **Stopped runs stayed PENDING instead of INTERRUPTED.** The feedback-slot status glob still used the pre-`ses-XX` filename pattern, so stopped feedback/transfer runs never matched and missed their INTERRUPTED (caution) flag.
 
 ## [0.9.0] - 2026-05-22
 
