@@ -3426,7 +3426,7 @@ def generate_feedback_report(
         summary_data["Status"] = "NO DATA"
 
     # Locate the matching PsychoPy log for declared live metrics.
-    psychopy_pattern = f"{subject}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_psychopylog.tsv"
+    psychopy_pattern = f"{bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_psychopylog.tsv"
     psychopy_log = feedback_dir / psychopy_pattern
 
     if live_metrics and psychopy_log.exists():

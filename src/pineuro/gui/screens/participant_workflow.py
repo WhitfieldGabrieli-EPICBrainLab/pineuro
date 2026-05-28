@@ -2319,7 +2319,7 @@ class ParticipantWorkflowScreen:
                     # Check extraction (per-localizer subdirectory)
                     step_id = f"localizer_{loc_idx}_extraction"
                     loc_masks = loc_dir / "03_masks"
-                    if loc_masks.exists() and len(list(loc_masks.glob(f"{participant_id}_*.nii.gz"))) > 0:
+                    if loc_masks.exists() and len(list(loc_masks.glob(f"{self._bids_prefix}_*.nii.gz"))) > 0:
                         self.step_statuses[step_id] = StepStatus.COMPLETE
 
                     # Check per-localizer approval marker
@@ -2328,7 +2328,7 @@ class ParticipantWorkflowScreen:
                         self.step_statuses[f"localizer_{loc_idx}_approval"] = StepStatus.COMPLETE
             elif config.get("localizers") and config["localizers"][0].get("type") == "manual":
                 # Single manual localizer: only the import (mask_extraction) step.
-                if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
+                if masks_dir.exists() and len(list(masks_dir.glob(f"{self._bids_prefix}_*.nii.gz"))) > 0:
                     self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
             else:
                 # Single localizer (legacy)
@@ -2359,7 +2359,7 @@ class ParticipantWorkflowScreen:
                 if preproc_file.exists() and mask_file.exists() and ref_file.exists():
                     self.step_statuses["preprocessing"] = StepStatus.COMPLETE
 
-                if masks_dir.exists() and len(list(masks_dir.glob(f"{participant_id}_*.nii.gz"))) > 0:
+                if masks_dir.exists() and len(list(masks_dir.glob(f"{self._bids_prefix}_*.nii.gz"))) > 0:
                     self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
 
             # Check if masks were created via MNI atlas fallback
@@ -5303,7 +5303,7 @@ class ParticipantWorkflowScreen:
                     "Output": base_dir / "mask_extraction" / "03_masks",
                 },
                 "output_path": base_dir / "mask_extraction" / "03_masks",
-                "output_pattern": f"{participant_id}_*_thr.nii.gz",
+                "output_pattern": f"{self._bids_prefix}_*_thr.nii.gz",
             },
             "coregistration": {
                 "label": "Coregister to Reference",
@@ -5489,7 +5489,7 @@ class ParticipantWorkflowScreen:
                 "description": f"Extract network masks from {loc_display.lower()} localizer using {method}.",
                 "parameters": params,
                 "output_path": base_dir / "mask_extraction" / loc_dir_name / "03_masks",
-                "output_pattern": f"{participant_id}_*.nii.gz",
+                "output_pattern": f"{self._bids_prefix}_*.nii.gz",
             }
 
         # Handle dynamic rest_run_* steps (single-localizer)

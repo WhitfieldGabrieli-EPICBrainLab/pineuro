@@ -1874,7 +1874,7 @@ class PipelineRunner:
             # Map each mask file to its localizer index by matching mask names
             loc_groups: dict[int, list[Path]] = {}
             unmatched: list[Path] = []
-            prefix = f"{self.participant_id}_"
+            prefix = f"{self._bids_prefix}_"
             suffix = "_thr.nii.gz"
             for mask_file in all_mask_files:
                 name = mask_file.name
