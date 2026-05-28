@@ -34,6 +34,7 @@ def test_rest_script_is_syntactically_valid():
     """Generated rest script parses cleanly via ast.parse (no SyntaxError)."""
     script = generate_mask_extraction_script(
         participant_id="sub-01",
+        session_id="ses-01",
         mask_extraction_dir="/data/sub-01/mask_extraction",
         input_file="/data/sub-01/preproc.nii.gz",
         mask_file="/data/sub-01/mask.nii.gz",
@@ -60,6 +61,7 @@ def test_rest_script_contains_every_parameter_literal():
     """
     script = generate_mask_extraction_script(
         participant_id="sub-42",
+        session_id="ses-01",
         mask_extraction_dir="/data/sub-42/mask_extraction_xyz",
         input_file="/data/sub-42/unique_preproc.nii.gz",
         mask_file="/data/sub-42/unique_mask.nii.gz",
@@ -101,6 +103,7 @@ def test_task_script_is_syntactically_valid():
     """Generated task script parses cleanly via ast.parse."""
     script = generate_task_mask_extraction_script(
         participant_id="sub-01",
+        session_id="ses-01",
         mask_extraction_dir="/data/sub-01/mask_extraction",
         input_file="/data/sub-01/preproc.nii.gz",
         mask_file="/data/sub-01/mask.nii.gz",
@@ -126,6 +129,7 @@ def test_task_script_contains_contrast_expressions_verbatim():
     }
     script = generate_task_mask_extraction_script(
         participant_id="sub-99",
+        session_id="ses-01",
         mask_extraction_dir="/data/sub-99/mask_extraction",
         input_file="/data/sub-99/preproc.nii.gz",
         mask_file="/data/sub-99/mask.nii.gz",
@@ -144,6 +148,7 @@ def test_task_script_threshold_method_propagates():
     for method in ("top_n", "cluster"):
         script = generate_task_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir="/data/sub-01/mask_extraction",
             input_file="/data/sub-01/preproc.nii.gz",
             mask_file="/data/sub-01/mask.nii.gz",

@@ -988,7 +988,12 @@ def plot_registration_overlay(ref_path: Path, moving_path: Path, out_path: Path,
 
 
 def generate_preprocessing_report(
-    preprocessing_dir: Path, participant_id: str, task: str, output_dir: Path | None = None, overwrite: bool = False
+    preprocessing_dir: Path,
+    participant_id: str,
+    session_id: str,
+    task: str,
+    output_dir: Path | None = None,
+    overwrite: bool = False,
 ) -> Path:
     """
     Generate comprehensive QC report for preprocessing outputs.
@@ -1030,7 +1035,8 @@ def generate_preprocessing_report(
     output_dir = Path(output_dir) if output_dir is not None else preprocessing_dir / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Generating preprocessing QC report for {participant_id}, task={task}")
+    bids_prefix = f"{participant_id}_{session_id}"
+    logger.info(f"Generating preprocessing QC report for {bids_prefix}, task={task}")
 
     # Auto-discover outputs
     mcf_dir = preprocessing_dir / "02_motion_correction"
@@ -1041,8 +1047,8 @@ def generate_preprocessing_report(
     par_files = sorted(glob(str(mcf_dir / "*.par")))
 
     # Find brain mask and reference
-    mask_pattern = f"{participant_id}_task-{task}_preproc_mask.nii.gz"
-    ref_pattern = f"{participant_id}_task-{task}_boldref.nii.gz"
+    mask_pattern = f"{bids_prefix}_task-{task}_preproc_mask.nii.gz"
+    ref_pattern = f"{bids_prefix}_task-{task}_boldref.nii.gz"
 
     mask_file = preprocessing_dir / mask_pattern
     ref_file = preprocessing_dir / ref_pattern
@@ -1050,7 +1056,7 @@ def generate_preprocessing_report(
     # Check for multi-run coregistered data
     coreg_files = []
     if coreg_dir.exists():
-        coreg_files = sorted(glob(str(coreg_dir / f"{participant_id}_task-{task}_run-*.nii.gz")))
+        coreg_files = sorted(glob(str(coreg_dir / f"{bids_prefix}_task-{task}_run-*.nii.gz")))
 
     # Build QC sections
     sections: list[dict[str, Any]] = []
@@ -1058,6 +1064,7 @@ def generate_preprocessing_report(
     # Summary box
     summary_data = {
         "Participant": participant_id,
+        "Session": session_id,
         "Task": task,
         "Number of runs": str(len(par_files)) if par_files else "N/A",
         "Multi-run coregistration": "Yes" if coreg_files else "No",
@@ -1161,11 +1168,11 @@ def generate_preprocessing_report(
         sections.append({"type": "grid", "content": reg_plots})
 
     # Generate HTML report
-    html_report = output_dir / f"{participant_id}_task-{task}_preprocessing_qc.html"
+    html_report = output_dir / f"{bids_prefix}_task-{task}_preprocessing_qc.html"
     html = _generate_html_template(
-        title=f"Preprocessing QC - {participant_id}",
+        title=f"Preprocessing QC - {bids_prefix}",
         participant_id=participant_id,
-        stage=f"Preprocessing (task: {task})",
+        stage=f"Preprocessing (task: {task}, session: {session_id})",
         sections=sections,
     )
     html_report.write_text(html)
@@ -1382,6 +1389,7 @@ def summarize_mask(mask_path: Path, name: str, chosen_component: int = -1, corre
 def generate_mask_extraction_report(
     mask_extraction_dir: Path,
     participant_id: str,
+    session_id: str,
     network_names: Sequence[str],
     output_dir: Path | None = None,
     n_yeo: int | None = None,
@@ -1438,7 +1446,8 @@ def generate_mask_extraction_report(
     output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Generating mask extraction QC report for {participant_id}")
+    bids_prefix = f"{participant_id}_{session_id}"
+    logger.info(f"Generating mask extraction QC report for {bids_prefix}")
 
     # Auto-discover outputs
     ica_dir = mask_extraction_dir / "01_ica"
@@ -1456,7 +1465,7 @@ def generate_mask_extraction_report(
         is_manual = any(isinstance(v, dict) and v.get("source_type") == "manual_import" for v in sel_data.values())
 
     # Find ICA components and reference
-    components_file = ica_dir / f"{participant_id}_components.nii.gz"
+    components_file = ica_dir / f"{bids_prefix}_components.nii.gz"
     # Use explicitly passed ref_file, or auto-discover from preprocessing
     if ref_file is not None:
         ref_file = Path(ref_file)
@@ -1486,7 +1495,7 @@ def generate_mask_extraction_report(
     # Find network masks
     network_masks = {}
     for network in network_names:
-        mask_file = masks_dir / f"{participant_id}_{network}_thr.nii.gz"
+        mask_file = masks_dir / f"{bids_prefix}_{network}_thr.nii.gz"
         if mask_file.exists():
             network_masks[network] = mask_file
 
@@ -1501,18 +1510,21 @@ def generate_mask_extraction_report(
     if is_mni_atlas:
         summary_data = {
             "Participant": participant_id,
+            "Session": session_id,
             "Mask source": "MNI Atlas (no localizer)",
             "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
         }
     elif is_manual:
         summary_data = {
             "Participant": participant_id,
+            "Session": session_id,
             "Mask source": "Manual import (user-supplied masks)",
             "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
         }
     else:
         summary_data = {
             "Participant": participant_id,
+            "Session": session_id,
             "ICA components": str(components_file.exists()),
             "Networks extracted": f"{len(network_masks)} / {len(network_names)}",
             "Correlation matrix": str(corr_file.exists()),
@@ -1592,7 +1604,7 @@ def generate_mask_extraction_report(
         yeo2sub = Path(yeo2sub_files[0]) if yeo2sub_files else None
 
         for network, mask_path in network_masks.items():
-            overlay_png = subject_overlay_dir / f"{participant_id}_{network}_overlay.png"
+            overlay_png = subject_overlay_dir / f"{bids_prefix}_{network}_overlay.png"
             if overwrite or not overlay_png.exists():
                 logger.info(f"Generating {network} overlay (BOLD reference)")
 
@@ -1633,7 +1645,7 @@ def generate_mask_extraction_report(
         reference_overlay_dir.mkdir(parents=True, exist_ok=True)
 
         # Find reference mean files (one per feedback run)
-        reference_mean_files = sorted(glob(str(reference_dir / f"{participant_id}_task-reference_run-*_mean.nii.gz")))
+        reference_mean_files = sorted(glob(str(reference_dir / f"{bids_prefix}_task-reference_run-*_mean.nii.gz")))
 
         if reference_mean_files:
             # Find Yeo atlas warped to reference space
@@ -1653,15 +1665,14 @@ def generate_mask_extraction_report(
                 for network, mask_path in network_masks.items():
                     # Find warped mask for this run
                     mask_reference = (
-                        reference_masks_dir
-                        / f"{participant_id}_{network}_thr_to_task-reference_run-{run_str}_mean.nii.gz"
+                        reference_masks_dir / f"{bids_prefix}_{network}_thr_to_task-reference_run-{run_str}_mean.nii.gz"
                     )
 
                     if not mask_reference.exists():
                         logger.warning(f"Reference mask not found for {network}, run {run_str}: {mask_reference}")
                         continue
 
-                    overlay_png = reference_overlay_dir / f"{participant_id}_{network}_run-{run_str}_overlay.png"
+                    overlay_png = reference_overlay_dir / f"{bids_prefix}_{network}_run-{run_str}_overlay.png"
                     if overwrite or not overlay_png.exists():
                         logger.info(f"Generating {network} overlay (reference run {run_str})")
 
@@ -1690,7 +1701,7 @@ def generate_mask_extraction_report(
 
     for space_name, overlay_dir in overlay_spaces:
         if overlay_dir.exists():
-            overlays = sorted(glob(str(overlay_dir / f"{participant_id}_*_overlay.png")))
+            overlays = sorted(glob(str(overlay_dir / f"{bids_prefix}_*_overlay.png")))
             if overlays:
                 sections.append({"type": "heading", "content": f"Mask Overlays ({space_name})"})
                 grid_items = []
@@ -1699,7 +1710,7 @@ def generate_mask_extraction_report(
                     # For reference, network name includes run info
                     if space_name == "Reference feedback":
                         # Extract network_run-XX from filename
-                        stem = overlay_file.stem.replace(f"{participant_id}_", "").replace("_overlay", "")
+                        stem = overlay_file.stem.replace(f"{bids_prefix}_", "").replace("_overlay", "")
                         grid_items.append(
                             {
                                 "title": stem,
@@ -1708,7 +1719,7 @@ def generate_mask_extraction_report(
                             }
                         )
                     else:
-                        network_name = overlay_file.stem.replace(f"{participant_id}_", "").replace("_overlay", "")
+                        network_name = overlay_file.stem.replace(f"{bids_prefix}_", "").replace("_overlay", "")
                         grid_items.append(
                             {
                                 "title": network_name,
@@ -1810,11 +1821,11 @@ def generate_mask_extraction_report(
             )
 
     # Generate HTML report
-    html_report = output_dir / f"{participant_id}_mask_extraction_qc.html"
+    html_report = output_dir / f"{bids_prefix}_mask_extraction_qc.html"
     html = _generate_html_template(
-        title=f"Mask Extraction QC - {participant_id}",
+        title=f"Mask Extraction QC - {bids_prefix}",
         participant_id=participant_id,
-        stage="Mask Extraction",
+        stage=f"Mask Extraction ({session_id})",
         sections=sections,
     )
     html_report.write_text(html)
@@ -1830,6 +1841,7 @@ def generate_mask_extraction_report(
 def generate_task_mask_extraction_report(
     mask_extraction_dir: Path,
     participant_id: str,
+    session_id: str,
     mask_names: Sequence[str],
     contrasts: dict[str, str],
     stat_type: str = "t",
@@ -1877,7 +1889,8 @@ def generate_task_mask_extraction_report(
     output_dir = Path(output_dir) if output_dir is not None else mask_extraction_dir.parent / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Generating task-based mask extraction QC report for {participant_id}")
+    bids_prefix = f"{participant_id}_{session_id}"
+    logger.info(f"Generating task-based mask extraction QC report for {bids_prefix}")
 
     glm_dir = mask_extraction_dir / "01_glm"
     masks_dir = mask_extraction_dir / "03_masks"
@@ -1896,7 +1909,7 @@ def generate_task_mask_extraction_report(
         ref_file = Path(ref_files[0]) if ref_files else None
 
     # Find GLM metadata
-    glm_info_file = glm_dir / f"{participant_id}_glm_info.json"
+    glm_info_file = glm_dir / f"{bids_prefix}_glm_info.json"
     glm_info = None
     if glm_info_file.exists():
         import json
@@ -1907,7 +1920,7 @@ def generate_task_mask_extraction_report(
     # Find network masks
     network_masks = {}
     for mask_name in mask_names:
-        mask_file = masks_dir / f"{participant_id}_{mask_name}_thr.nii.gz"
+        mask_file = masks_dir / f"{bids_prefix}_{mask_name}_thr.nii.gz"
         if mask_file.exists():
             network_masks[mask_name] = mask_file
 
@@ -1917,6 +1930,7 @@ def generate_task_mask_extraction_report(
     # Summary box
     summary_data = {
         "Participant": participant_id,
+        "Session": session_id,
         "Extraction method": "GLM contrast (task localizer)",
         "Stat type": stat_type,
         "Masks extracted": f"{len(network_masks)} / {len(mask_names)}",
@@ -1961,7 +1975,7 @@ def generate_task_mask_extraction_report(
     sections.append({"type": "table", "headers": ["Mask Name", "Contrast Expression"], "rows": contrast_rows})
 
     # Design matrix visualization
-    design_file = glm_dir / f"{participant_id}_design_matrix.tsv"
+    design_file = glm_dir / f"{bids_prefix}_design_matrix.tsv"
     if design_file.exists():
         sections.append({"type": "heading", "content": "Design Matrix"})
 
@@ -1980,11 +1994,11 @@ def generate_task_mask_extraction_report(
         subject_overlay_dir.mkdir(parents=True, exist_ok=True)
 
         for mask_name in mask_names:
-            _stat_map_path = glm_dir / f"{participant_id}_{mask_name}_{stat_type}map.nii.gz"
+            _stat_map_path = glm_dir / f"{bids_prefix}_{mask_name}_{stat_type}map.nii.gz"
             mask_path = network_masks.get(mask_name)
 
             if mask_path and mask_path.exists():
-                overlay_png = subject_overlay_dir / f"{participant_id}_{mask_name}_overlay.png"
+                overlay_png = subject_overlay_dir / f"{bids_prefix}_{mask_name}_overlay.png"
                 if overwrite or not overlay_png.exists():
                     logger.info(f"Generating {mask_name} mask overlay")
 
@@ -2006,13 +2020,13 @@ def generate_task_mask_extraction_report(
     # Display overlays
     subject_overlay_dir = output_dir / "overlays" / "subject"
     if subject_overlay_dir.exists():
-        overlays = sorted(glob(str(subject_overlay_dir / f"{participant_id}_*_overlay.png")))
+        overlays = sorted(glob(str(subject_overlay_dir / f"{bids_prefix}_*_overlay.png")))
         if overlays:
             sections.append({"type": "heading", "content": "Mask Overlays (BOLD reference)"})
             grid_items = []
             for overlay_path in overlays:
                 overlay_file = Path(overlay_path)
-                mask_name = overlay_file.stem.replace(f"{participant_id}_", "").replace("_overlay", "")
+                mask_name = overlay_file.stem.replace(f"{bids_prefix}_", "").replace("_overlay", "")
                 grid_items.append(
                     {
                         "title": mask_name,
@@ -2099,11 +2113,11 @@ def generate_task_mask_extraction_report(
                 )
 
     # Generate HTML report
-    html_report = output_dir / f"{participant_id}_mask_extraction_qc.html"
+    html_report = output_dir / f"{bids_prefix}_mask_extraction_qc.html"
     html = _generate_html_template(
-        title=f"Task Mask Extraction QC - {participant_id}",
+        title=f"Task Mask Extraction QC - {bids_prefix}",
         participant_id=participant_id,
-        stage="Mask Extraction (GLM)",
+        stage=f"Mask Extraction (GLM, {session_id})",
         sections=sections,
     )
     html_report.write_text(html)
@@ -2150,6 +2164,7 @@ def _plot_task_design_matrix(design_file: Path, out_path: Path) -> None:
 def generate_alternative_overlays(
     mask_extraction_dir: Path,
     participant_id: str,
+    session_id: str,
     network_names: Sequence[str],
     n_alternatives: int = 3,
     output_dir: Path | None = None,
@@ -2200,7 +2215,8 @@ def generate_alternative_overlays(
     alternatives_dir = output_dir / "overlays" / "alternatives"
     alternatives_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Generating alternative overlays for {participant_id}")
+    bids_prefix = f"{participant_id}_{session_id}"
+    logger.info(f"Generating alternative overlays for {bids_prefix}")
 
     # Find required files
     ica_dir = mask_extraction_dir / "01_ica"
@@ -2279,7 +2295,7 @@ def generate_alternative_overlays(
             comp_idx = int(comp_idx)
             corr_val = float(correlations.iloc[comp_idx])
 
-            overlay_png = alternatives_dir / f"{participant_id}_{network}_IC{comp_idx}_overlay.png"
+            overlay_png = alternatives_dir / f"{bids_prefix}_{network}_IC{comp_idx}_overlay.png"
 
             if not overwrite and overlay_png.exists():
                 result[network][comp_idx] = overlay_png
@@ -2331,6 +2347,7 @@ def generate_alternative_overlays(
 def generate_yeo_network_overlay(
     mask_extraction_dir: Path,
     participant_id: str,
+    session_id: str,
     network_name: str,
     output_dir: Path | None = None,
     n_yeo: int = 17,
@@ -2374,7 +2391,7 @@ def generate_yeo_network_overlay(
     alternatives_dir = output_dir / "overlays" / "alternatives"
     alternatives_dir.mkdir(parents=True, exist_ok=True)
 
-    overlay_png = alternatives_dir / f"{participant_id}_{network_name}_yeo_overlay.png"
+    overlay_png = alternatives_dir / f"{participant_id}_{session_id}_{network_name}_yeo_overlay.png"
 
     if not overwrite and overlay_png.exists():
         return overlay_png
@@ -2452,6 +2469,7 @@ def generate_atlas_region_overlay(
     ref_path: Path,
     output_dir: Path,
     participant_id: str,
+    session_id: str,
     atlas_name: str,
     overwrite: bool = False,
 ) -> Path | None:
@@ -2488,7 +2506,7 @@ def generate_atlas_region_overlay(
 
     overlays_dir = Path(output_dir) / "overlays" / "subject"
     overlays_dir.mkdir(parents=True, exist_ok=True)
-    overlay_png = overlays_dir / f"{participant_id}_atlas_{atlas_name}_overlay.png"
+    overlay_png = overlays_dir / f"{participant_id}_{session_id}_atlas_{atlas_name}_overlay.png"
 
     if not overwrite and overlay_png.exists():
         return overlay_png
@@ -2641,6 +2659,7 @@ def generate_mask_overlay(
 def generate_hemisphere_overlays(
     mask_extraction_dir: Path,
     participant_id: str,
+    session_id: str,
     hemisphere_network: str,
     output_dir: Path | None = None,
     n_yeo: int = 17,
@@ -2687,10 +2706,11 @@ def generate_hemisphere_overlays(
     overlays_dir.mkdir(parents=True, exist_ok=True)
 
     masks_dir = mask_extraction_dir / "03_masks"
+    bids_prefix = f"{participant_id}_{session_id}"
 
     # Find required files
-    left_mask = masks_dir / f"{participant_id}_{hemisphere_network}_left_thr.nii.gz"
-    right_mask = masks_dir / f"{participant_id}_{hemisphere_network}_right_thr.nii.gz"
+    left_mask = masks_dir / f"{bids_prefix}_{hemisphere_network}_left_thr.nii.gz"
+    right_mask = masks_dir / f"{bids_prefix}_{hemisphere_network}_right_thr.nii.gz"
 
     if not left_mask.exists() or not right_mask.exists():
         logger.warning(
@@ -2726,7 +2746,7 @@ def generate_hemisphere_overlays(
     result: dict[str, Path] = {}
 
     for hemisphere, mask_path in [("left", left_mask), ("right", right_mask)]:
-        overlay_png = overlays_dir / f"{participant_id}_{hemisphere_network}_{hemisphere}_overlay.png"
+        overlay_png = overlays_dir / f"{bids_prefix}_{hemisphere_network}_{hemisphere}_overlay.png"
 
         if not overwrite and overlay_png.exists():
             result[hemisphere] = overlay_png
@@ -3250,6 +3270,7 @@ def plot_tsnr_timeseries(
 def generate_feedback_report(
     feedback_dir: Path,
     subject: str,
+    session: str,
     task: str,
     run: int,
     output_dir: Path | None = None,
@@ -3319,10 +3340,11 @@ def generate_feedback_report(
     output_dir = Path(output_dir) if output_dir is not None else feedback_dir / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Generating feedback QC report for {subject}, task={task}, run={run}, acq={acq:02d}")
+    bids_prefix = f"{subject}_{session}"
+    logger.info(f"Generating feedback QC report for {bids_prefix}, task={task}, run={run}, acq={acq:02d}")
 
-    feedback_log_pattern = f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedbacklog.tsv"
-    design_pattern = f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}_design.tsv"
+    feedback_log_pattern = f"{bids_prefix}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedbacklog.tsv"
+    design_pattern = f"{bids_prefix}_task-{task}_acq-{acq:02d}_run-{run:02d}_design.tsv"
 
     feedback_log = feedback_dir / feedback_log_pattern
     design_file = feedback_dir / design_pattern
@@ -3333,6 +3355,7 @@ def generate_feedback_report(
     # Summary box
     summary_data = {
         "Subject": subject,
+        "Session": session,
         "Task": task,
         "Run": f"{run:02d}",
         "Acquisition": f"{acq:02d}" if isinstance(acq, int) else (acq if acq else "N/A"),
@@ -3580,10 +3603,10 @@ def generate_feedback_report(
         )
 
     # Generate HTML report with acq entity
-    html_report = output_dir / f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedback_qc.html"
-    stage_str = f"Feedback (task: {task}, run: {run}, acq: {acq:02d})"
+    html_report = output_dir / f"{bids_prefix}_task-{task}_acq-{acq:02d}_run-{run:02d}_feedback_qc.html"
+    stage_str = f"Feedback (session: {session}, task: {task}, run: {run}, acq: {acq:02d})"
     html = _generate_html_template(
-        title=f"Feedback QC - {subject}", participant_id=subject, stage=stage_str, sections=sections
+        title=f"Feedback QC - {bids_prefix}", participant_id=subject, stage=stage_str, sections=sections
     )
     html_report.write_text(html)
 

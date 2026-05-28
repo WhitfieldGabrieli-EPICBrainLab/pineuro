@@ -278,6 +278,7 @@ class RNTTask(BaseLocalizerTask):
         self,
         output_dir: Union[str, Path],
         participant_id: str,
+        session_id: str,
         keywords_dir: Union[str, Path] = "",
         run: int = 1,
         memory_display_duration: float = 5.0,
@@ -297,6 +298,7 @@ class RNTTask(BaseLocalizerTask):
         super().__init__(
             output_dir=output_dir,
             participant_id=participant_id,
+            session_id=session_id,
             run=run,
             simulator=simulator,
             **kwargs,

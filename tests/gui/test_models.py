@@ -62,7 +62,6 @@ class TestStudyConfig:
         if session_config is None:
             session_config = {
                 "paths": {"base_dir": "/data", "participant_id": ""},
-                "study": {"multi_session_enabled": False},
                 "localizers": [{"id": "rest", "type": "rest", "networks": ["DefaultA", "ContA"]}],
                 "feedback_runs": [{"task": "ball", "mask_source": "rest"}],
             }
@@ -92,16 +91,16 @@ class TestStudyConfig:
 
     def test_from_dict_does_not_mutate_input(self):
         """from_dict must not pop/delete the _metadata key from the caller's dict."""
-        d = {"_metadata": {"name": "Alpha"}, "study": {"multi_session_enabled": False}}
+        d = {"_metadata": {"name": "Alpha"}, "simulator": {"enabled": True}}
         original_keys = set(d.keys())
         StudyConfig.from_dict(d)
         assert set(d.keys()) == original_keys
 
     def test_from_dict_missing_metadata(self):
-        d = {"study": {"multi_session_enabled": True}}
+        d = {"simulator": {"enabled": True}}
         config = StudyConfig.from_dict(d)
         assert config.metadata.name == ""
-        assert config.session_config == {"study": {"multi_session_enabled": True}}
+        assert config.session_config == {"simulator": {"enabled": True}}
 
     def test_from_dict_rejects_legacy_top_level_keys(self):
         for legacy_key in ("mask", "feedback", "task", "localizer_task", "scan"):
@@ -123,10 +122,10 @@ class TestStudyConfig:
         assert "file_path" not in d
 
     def test_session_config_excludes_metadata_key(self):
-        d = {"_metadata": {"name": "X"}, "study": {"multi_session_enabled": False}}
+        d = {"_metadata": {"name": "X"}, "simulator": {"enabled": False}}
         config = StudyConfig.from_dict(d)
         assert "_metadata" not in config.session_config
-        assert config.session_config == {"study": {"multi_session_enabled": False}}
+        assert config.session_config == {"simulator": {"enabled": False}}
 
     def test_empty_session_config(self):
         config = StudyConfig(

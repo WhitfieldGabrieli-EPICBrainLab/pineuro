@@ -372,27 +372,18 @@ class PyrtnfApp:
 
             self.page.pop_dialog()
 
-            # Check if multi-session mode is enabled for this study
-            multi_session_enabled = study_config.session_config.get("study", {}).get("multi_session_enabled", False)
+            base_dir = Path(study_config.session_config["paths"]["base_dir"])
 
-            if multi_session_enabled:
-                # Get base directory from config
-                base_dir = Path(study_config.session_config["paths"]["base_dir"])
+            def on_session_selected(session_id, session_metadata):
+                self.show_participant_workflow(study_config, participant_id, session_id, session_metadata)
 
-                # Show session selection dialog
-                def on_session_selected(session_id, session_metadata):
-                    self.show_participant_workflow(study_config, participant_id, session_id, session_metadata)
-
-                session_dialog = SessionSelectionDialog(
-                    page=self.page,
-                    participant_id=participant_id,
-                    base_dir=base_dir,
-                    on_select=on_session_selected,
-                )
-                session_dialog.show()
-            else:
-                # Single-session mode - go directly to workflow
-                self.show_participant_workflow(study_config, participant_id)
+            session_dialog = SessionSelectionDialog(
+                page=self.page,
+                participant_id=participant_id,
+                base_dir=base_dir,
+                on_select=on_session_selected,
+            )
+            session_dialog.show()
 
         def cancel_start(e):
             self.page.pop_dialog()
@@ -667,7 +658,7 @@ class PyrtnfApp:
             study_config=self.current_study,
             on_cancel=lambda: self.show_study_manager(),
             on_save=lambda: self.show_study_manager(),
-            on_start_session=lambda participant_id, session_id=None, session_metadata=None: (
+            on_start_session=lambda participant_id, session_id, session_metadata: (
                 self.show_participant_workflow(self.current_study, participant_id, session_id, session_metadata)
                 if self.current_study is not None
                 else None
@@ -682,7 +673,7 @@ class PyrtnfApp:
         self,
         study_config: StudyConfig,
         participant_id: str,
-        session_id: str | None = None,
+        session_id: str,
         session_metadata: "SessionMetadata | None" = None,
     ):
         """Show the participant workflow screen.
@@ -690,13 +681,12 @@ class PyrtnfApp:
         Args:
             study_config: Study configuration to use
             participant_id: Participant ID
-            session_id: Session identifier (e.g., 'ses-01'). None for single-session mode.
+            session_id: Session identifier (e.g., 'ses-01').
             session_metadata: SessionMetadata for new sessions. None when continuing existing session.
         """
         from .screens.participant_workflow import ParticipantWorkflowScreen
 
-        session_str = f", session: {session_id}" if session_id else ""
-        logger.info(f"Navigating to Participant Workflow (participant: {participant_id}{session_str})")
+        logger.info(f"Navigating to Participant Workflow (participant: {participant_id}, session: {session_id})")
 
         self.current_study = study_config
 

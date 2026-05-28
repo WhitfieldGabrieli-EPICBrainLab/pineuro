@@ -128,7 +128,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "SimulatorConfig": (".session", "SimulatorConfig"),
     "ScannerConfig": (".session", "ScannerConfig"),
     "ReferenceConfig": (".session", "ReferenceConfig"),
-    "StudyInfoConfig": (".session", "StudyInfoConfig"),
     "SessionMetadata": (".session", "SessionMetadata"),
     "ShamConfig": (".session", "ShamConfig"),
     "SimulatorSourceMapping": (".session", "SimulatorSourceMapping"),
@@ -140,8 +139,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "resolve_mask_source": (".session", "resolve_mask_source"),
     "detect_existing_sessions": (".session", "detect_existing_sessions"),
     "next_session_id": (".session", "next_session_id"),
-    "is_single_session_data": (".session", "is_single_session_data"),
-    "migrate_to_multi_session": (".session", "migrate_to_multi_session"),
     "setup_session_with_reused_masks": (".session", "setup_session_with_reused_masks"),
     # --- sham.py ---
     "ShamActivationProvider": (".sham", "ShamActivationProvider"),
@@ -240,7 +237,6 @@ __all__ = [
     "SimulatorConfig",
     "ScannerConfig",
     "ReferenceConfig",
-    "StudyInfoConfig",
     "SessionMetadata",
     "ShamConfig",
     "SimulatorSourceMapping",
@@ -262,8 +258,6 @@ __all__ = [
     "resolve_mask_source",
     "detect_existing_sessions",
     "next_session_id",
-    "is_single_session_data",
-    "migrate_to_multi_session",
     "setup_session_with_reused_masks",
     # Timing functions
     "enable_timing",

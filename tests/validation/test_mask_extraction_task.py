@@ -58,6 +58,7 @@ def test_task_mask_recovers_activation_roi(tmp_path, record):
 
     mask_files = mask_extraction_task(
         participant_id="sub-val",
+        session_id="ses-01",
         root_dir=tmp_path / "mask_extraction",
         input_file=func_path,
         mask_file=mask_path,

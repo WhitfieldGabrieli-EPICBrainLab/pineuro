@@ -8,15 +8,21 @@ from pineuro.tasks.utils import (
     ActivationSmoother,
     is_activation_outlier,
     make_bids_run_prefix,
+    make_bids_subject_prefix,
 )
+
+
+class TestMakeBidsSubjectPrefix:
+    def test_combines_subject_and_session(self):
+        assert make_bids_subject_prefix("sub-01", "ses-02") == "sub-01_ses-02"
 
 
 class TestMakeBidsRunPrefix:
     def test_pads_run_and_acq_to_two_digits(self):
-        assert make_bids_run_prefix("sub-01", "ball", run=2, acq=3) == "sub-01_task-ball_acq-03_run-02"
+        assert make_bids_run_prefix("sub-01", "ses-01", "ball", run=2, acq=3) == "sub-01_ses-01_task-ball_acq-03_run-02"
 
     def test_run_padding(self):
-        assert make_bids_run_prefix("sub-01", "ball", run=1, acq=1).endswith("acq-01_run-01")
+        assert make_bids_run_prefix("sub-01", "ses-01", "ball", run=1, acq=1).endswith("acq-01_run-01")
 
 
 class TestIsActivationOutlier:

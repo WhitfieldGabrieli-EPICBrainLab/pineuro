@@ -121,7 +121,7 @@ class ParticipantWorkflowScreen:
         config_manager: ConfigManager,
         study_config: StudyConfig,
         participant_id: str,
-        session_id: str | None = None,
+        session_id: str,
         session_metadata: Optional["SessionMetadata"] = None,
         on_back=None,
     ):
@@ -132,7 +132,7 @@ class ParticipantWorkflowScreen:
             config_manager: ConfigManager instance
             study_config: Study configuration to use
             participant_id: Participant ID (e.g., "sub-01")
-            session_id: Session identifier (e.g., "ses-01"). None for single-session mode.
+            session_id: Session identifier (e.g., "ses-01").
             session_metadata: SessionMetadata for new sessions. None when continuing existing session.
             on_back: Callback when back button is clicked
         """
@@ -140,6 +140,7 @@ class ParticipantWorkflowScreen:
         self.config_manager = config_manager
         self.participant_id = participant_id
         self.session_id = session_id
+        self._bids_prefix = f"{participant_id}_{session_id}"
         self.session_metadata = session_metadata
         self.on_back_callback = on_back
 
@@ -158,12 +159,7 @@ class ParticipantWorkflowScreen:
             idx = parts.index(participant_id)
             base_dir = Path(*parts[:idx])
 
-        if session_id:
-            # Multi-session mode: base_dir/participant_id/session_id/
-            participant_base_dir = base_dir / participant_id / session_id
-        else:
-            # Single-session mode: base_dir/participant_id/
-            participant_base_dir = base_dir / participant_id
+        participant_base_dir = base_dir / participant_id / session_id
 
         # Update the session config with participant-specific base directory
         self.study_config.session_config["paths"]["base_dir"] = str(participant_base_dir)
@@ -209,14 +205,12 @@ class ParticipantWorkflowScreen:
             self._config_differences = compare_protocol_configs(saved_snapshot, self.study_config.to_dict())
             if self._config_differences:
                 logger.warning(
-                    "Study config changed since last run for %s%s:\n%s",
+                    "Study config changed since last run for %s (%s):\n%s",
                     participant_id,
-                    f" ({session_id})" if session_id else "",
+                    session_id,
                     format_differences(self._config_differences),
                 )
         self._participant_base_dir = participant_base_dir
-
-        _session_str = f" ({session_id})" if session_id else ""
 
         # Mask approval state (must be initialized before _detect_completed_steps)
         self._initial_qc_approved = self._check_qc_approval("initial")
@@ -389,7 +383,7 @@ class ParticipantWorkflowScreen:
 
         # Check boldref from preprocessing
         preprocessing_dir = base_dir / "preprocessing"
-        boldref = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+        boldref = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_boldref.nii.gz"
         if boldref.exists():
             return True, "boldref from preprocessing"
 
@@ -749,7 +743,7 @@ class ParticipantWorkflowScreen:
         preprocessing_dir = base_dir / "preprocessing"
         idx = loc_idx if (loc_idx is not None and len(localizers) > 1) else 0
         loc_task = _loc(config, idx).get("type", "rest")
-        ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
+        ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task}_boldref.nii.gz"
 
         # Generate overlays only for RECOMMENDED (best) components initially
         # Alternative overlays will be generated on-demand when user rejects a mask
@@ -762,6 +756,7 @@ class ParticipantWorkflowScreen:
         alternative_overlays = qc.generate_alternative_overlays(
             mask_extraction_dir=mask_extraction_dir,
             participant_id=self.participant_id,
+            session_id=self.session_id,
             network_names=network_names,
             n_alternatives=1,  # Only generate overlay for top component per network
             output_dir=qc_dir,
@@ -780,6 +775,7 @@ class ParticipantWorkflowScreen:
             hemisphere_overlays = qc.generate_hemisphere_overlays(
                 mask_extraction_dir=mask_extraction_dir,
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 hemisphere_network=sham_hemisphere_network,
                 output_dir=qc_dir,
                 n_yeo=n_yeo,
@@ -809,7 +805,7 @@ class ParticipantWorkflowScreen:
             alternatives = get_alternative_components(corr_df, network, top_n=n_components)
 
             # Find overlay paths
-            overlay_candidate = overlays_dir / f"{self.participant_id}_{network}_overlay.png"
+            overlay_candidate = overlays_dir / f"{self._bids_prefix}_{network}_overlay.png"
             overlay_path: Path | None = overlay_candidate if overlay_candidate.exists() else None
 
             info = MaskReviewInfo(
@@ -837,8 +833,8 @@ class ParticipantWorkflowScreen:
 
         # Find preprocessing outputs for script generation
         # (preprocessing_dir, loc_task, ref_file already resolved above)
-        input_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_preproc.nii.gz"
-        brain_mask_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_preproc_mask.nii.gz"
+        input_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task}_preproc.nii.gz"
+        brain_mask_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task}_preproc_mask.nii.gz"
 
         # Get ICA parameters from config
         n_components = (
@@ -860,7 +856,7 @@ class ParticipantWorkflowScreen:
                 tissue_files = list(tissue_dir.glob(f"*_tissue_{tissue_type}_mask.nii.gz"))
                 if not tissue_files:
                     continue
-                overlay_path = overlays_dir / f"{self.participant_id}_tissue_{tissue_type}_overlay.png"
+                overlay_path = overlays_dir / f"{self._bids_prefix}_tissue_{tissue_type}_overlay.png"
                 if not overlay_path.exists():
                     try:
                         from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
@@ -892,6 +888,7 @@ class ParticipantWorkflowScreen:
             page=self.page,
             masks_info=masks_info,
             participant_id=self.participant_id,
+            session_id=self.session_id,
             masks_dir=masks_dir,
             components_file=components_file,
             yeo_subject_space=yeo_subject_space,
@@ -941,7 +938,7 @@ class ParticipantWorkflowScreen:
             return
 
         mask_files = sorted(
-            masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"),
+            masks_dir.glob(f"{self._bids_prefix}_*_thr.nii.gz"),
             key=lambda p: ("_reverse" in p.name, p.name),  # Forward first, reverse after
         )
         if not mask_files:
@@ -958,10 +955,10 @@ class ParticipantWorkflowScreen:
         idx = loc_idx if (loc_idx is not None and len(localizers) > 1) else 0
         loc_task = _loc(config, idx).get("type", "rest")
         preprocessing_dir = base_dir / "preprocessing"
-        ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task}_boldref.nii.gz"
+        ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task}_boldref.nii.gz"
 
         # Find QC report
-        qc_report_path = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
+        qc_report_path = qc_dir / f"{self._bids_prefix}_mask_extraction_qc.html"
         qc_report: Path | None = qc_report_path
         if not qc_report_path.exists():
             # Try glob fallback
@@ -987,7 +984,7 @@ class ParticipantWorkflowScreen:
         for mask_file in mask_files:
             # Strip full .nii.gz suffix then participant prefix and _thr suffix
             bare = mask_file.name.replace(".nii.gz", "").replace(".nii", "")
-            mask_name = bare.replace(f"{self.participant_id}_", "").replace("_thr", "")
+            mask_name = bare.replace(f"{self._bids_prefix}_", "").replace("_thr", "")
 
             # Add divider before first reverse contrast mask
             if "_reverse" in mask_name and not added_reverse_divider:
@@ -1026,7 +1023,7 @@ class ParticipantWorkflowScreen:
             stat_text = "  |  ".join(parts)
 
             # Find overlay image — generate on-demand if missing or stale (mask newer than overlay)
-            overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
+            overlay_path = overlays_dir / f"{self._bids_prefix}_{mask_name}_overlay.png"
             needs_overlay = not overlay_path.exists() or (
                 overlay_path.exists()
                 and mask_file.exists()
@@ -1169,7 +1166,7 @@ class ParticipantWorkflowScreen:
         tissue_dir = mask_extraction_dir / "05_tissue"
         if tissue_dir.exists():
             tissue_labels = {"wm": "White Matter", "csf": "CSF"}
-            tissue_files = list(tissue_dir.glob(f"{self.participant_id}_tissue_*_mask.nii.gz"))
+            tissue_files = list(tissue_dir.glob(f"{self._bids_prefix}_tissue_*_mask.nii.gz"))
             if tissue_files:
                 mask_cards.append(ft.Divider(height=2, color=ft.Colors.PURPLE_200))
                 mask_cards.append(
@@ -1195,7 +1192,7 @@ class ParticipantWorkflowScreen:
                     tissue_label = tissue_labels.get(tissue_type, tissue_type.upper())
 
                     # Generate overlay on-demand
-                    tissue_overlay = overlays_dir / f"{self.participant_id}_tissue_{tissue_type}_overlay.png"
+                    tissue_overlay = overlays_dir / f"{self._bids_prefix}_tissue_{tissue_type}_overlay.png"
                     if not tissue_overlay.exists() and ref_file.exists():
                         try:
                             from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
@@ -1289,9 +1286,9 @@ class ParticipantWorkflowScreen:
                 return
 
             # Find atlas in subject space
-            atlas_subject_file = masks_dir / f"{self.participant_id}_atlas_{atlas_name}.nii.gz"
+            atlas_subject_file = masks_dir / f"{self._bids_prefix}_atlas_{atlas_name}.nii.gz"
             if not atlas_subject_file.exists():
-                atlas_subject_file = mask_extraction_dir / "02_mnireg" / f"{atlas_name}_to_{self.participant_id}.nii.gz"
+                atlas_subject_file = mask_extraction_dir / "02_mnireg" / f"{atlas_name}_to_{self._bids_prefix}.nii.gz"
 
             if not atlas_subject_file.exists() or not ref_file.exists():
                 self._add_log("[INFO] Masks rejected — atlas in subject space not available")
@@ -1305,6 +1302,7 @@ class ParticipantWorkflowScreen:
                 ref_path=ref_file,
                 output_dir=qc_dir,
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 atlas_name=atlas_name,
             )
 
@@ -1525,7 +1523,7 @@ class ParticipantWorkflowScreen:
             self.page.update()
             return
 
-        mask_files = sorted(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
+        mask_files = sorted(masks_dir.glob(f"{self._bids_prefix}_*_thr.nii.gz"))
         if not mask_files:
             _snack = ft.SnackBar(
                 ft.Text(f"No thresholded masks found. Run {_step_hint} first."), bgcolor=ft.Colors.ORANGE
@@ -1561,7 +1559,7 @@ class ParticipantWorkflowScreen:
                 ref_file = Path(manual_ref)
 
         # Find QC report
-        qc_report_path = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
+        qc_report_path = qc_dir / f"{self._bids_prefix}_mask_extraction_qc.html"
         qc_report: Path | None = qc_report_path
         if not qc_report_path.exists():
             matches = list(qc_dir.glob("*mask_extraction_qc.html"))
@@ -1576,7 +1574,7 @@ class ParticipantWorkflowScreen:
 
         for mask_file in mask_files:
             bare = mask_file.name.replace(".nii.gz", "").replace(".nii", "")
-            mask_name = bare.replace(f"{self.participant_id}_", "").replace("_thr", "")
+            mask_name = bare.replace(f"{self._bids_prefix}_", "").replace("_thr", "")
 
             # Get stats from selections
             sel = selections_data.get(mask_name, {})
@@ -1588,7 +1586,7 @@ class ParticipantWorkflowScreen:
                 stat_text = f"{n_voxels} voxels  |  Atlas: {atlas_name}"
 
             # Find or generate overlay (regenerate if mask is newer than existing overlay)
-            overlay_path = overlays_dir / f"{self.participant_id}_{mask_name}_overlay.png"
+            overlay_path = overlays_dir / f"{self._bids_prefix}_{mask_name}_overlay.png"
             needs_overlay = not overlay_path.exists() or (
                 overlay_path.exists()
                 and mask_file.exists()
@@ -4205,8 +4203,8 @@ class ParticipantWorkflowScreen:
         qc_dir = output_dir / "qc"
         qc_dir.mkdir(parents=True, exist_ok=True)
 
-        activation_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_activation.png"
-        connectivity_plot_path = qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_connectivity.png"
+        activation_plot_path = qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_activation.png"
+        connectivity_plot_path = qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_connectivity.png"
 
         try:
             # In blind mode, always regenerate plots to ensure display names are applied
@@ -4236,6 +4234,7 @@ class ParticipantWorkflowScreen:
                 qc.generate_feedback_report(
                     feedback_dir=output_dir,
                     subject=self.participant_id,
+                    session=self.session_id,
                     task=task,
                     run=run,
                     acq=acq,
@@ -4276,7 +4275,7 @@ class ParticipantWorkflowScreen:
         Returns:
             Path to the most recent matching file, or None if not found
         """
-        pattern = f"{self.participant_id}_task-{task}_acq-*_run-{run:02d}_{suffix}"
+        pattern = f"{self._bids_prefix}_task-{task}_acq-*_run-{run:02d}_{suffix}"
         matches = list(output_dir.glob(pattern))
 
         if matches:
@@ -5579,6 +5578,7 @@ class ParticipantWorkflowScreen:
             run_info = get_slot_run_info(
                 output_dir=output_dir,
                 subject=participant_id,
+                session=self.session_id,
                 task=task_type,
                 step_id=step_id,
             )
@@ -5928,6 +5928,7 @@ class ParticipantWorkflowScreen:
             self.pipeline_runner = PipelineRunner(
                 config=self.study_config.session_config,
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 on_progress=self._on_pipeline_progress,
                 on_complete=self._on_pipeline_complete,
                 on_error=self._on_pipeline_error,
@@ -6091,6 +6092,7 @@ class ParticipantWorkflowScreen:
                 removed = discard_attempt(
                     base_dir,
                     subject=subject,
+                    session=self.session_id,
                     task=task,
                     acq=acq,
                     run=run,
@@ -7263,6 +7265,7 @@ class ParticipantWorkflowScreen:
         run_info = get_slot_run_info(
             output_dir=output_dir,
             subject=self.participant_id,
+            session=self.session_id,
             task=task_type,
             step_id=step_id,
         )
@@ -7270,7 +7273,7 @@ class ParticipantWorkflowScreen:
         # Construct log file path with acq entity (format as 2-digit number)
         log_path = (
             output_dir
-            / f"{self.participant_id}_task-{task_type}_acq-{run_info['acq']:02d}_run-{run_info['run']:02d}_feedbacklog.tsv"
+            / f"{self._bids_prefix}_task-{task_type}_acq-{run_info['acq']:02d}_run-{run_info['run']:02d}_feedbacklog.tsv"
         )
         # Store psychopylog path for hit count reading (same pattern but psychopylog.tsv)
         self._psychopylog_path = output_dir / log_path.name.replace("feedbacklog.tsv", "psychopylog.tsv")

@@ -145,6 +145,7 @@ def create_localizer_task(
     task_id: str,
     output_dir,
     participant_id: str,
+    session_id: str,
     config: dict[str, Any],
     **kwargs,
 ):
@@ -158,6 +159,8 @@ def create_localizer_task(
         Directory for events TSV output
     participant_id : str
         Participant identifier (e.g., 'sub-01')
+    session_id : str
+        BIDS session identifier (e.g., 'ses-01')
     config : dict
         Task configuration parameters (validated against metadata)
     **kwargs
@@ -185,11 +188,12 @@ def create_localizer_task(
     # Filter config to metadata-defined parameters only
     filtered = {p.key: config.get(p.key, p.default) for p in metadata.parameters}
 
-    logger.info(f"Creating localizer task '{task_id}' for {participant_id}")
+    logger.info(f"Creating localizer task '{task_id}' for {participant_id} / {session_id}")
 
     return task_class(
         output_dir=output_dir,
         participant_id=participant_id,
+        session_id=session_id,
         **filtered,
         **kwargs,
     )

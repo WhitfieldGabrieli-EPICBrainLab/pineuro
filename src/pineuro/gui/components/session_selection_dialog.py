@@ -30,7 +30,7 @@ class SessionSelectionDialog:
         page: ft.Page,
         participant_id: str,
         base_dir: Path,
-        on_select: Callable[[str | None, SessionMetadata | None], None],
+        on_select: Callable[[str, SessionMetadata | None], None],
     ):
         """Initialize the session selection dialog.
 
@@ -39,9 +39,8 @@ class SessionSelectionDialog:
             participant_id: Participant ID
             base_dir: Study base directory
             on_select: Callback when session is selected/created.
-                       Called with (session_id, session_metadata) where:
-                       - session_id is None for single-session mode
-                       - session_metadata is None when continuing existing session
+                       Called with (session_id, session_metadata) where
+                       session_metadata is None when continuing an existing session.
         """
         self.page = page
         self.participant_id = participant_id
@@ -54,21 +53,13 @@ class SessionSelectionDialog:
 
     def show(self):
         """Show the session selection dialog."""
-        # Check if participant has any existing sessions
         if not self.existing_sessions:
-            # No existing data - offer single-session vs multi-session choice
             self._show_new_participant_dialog()
-        elif len(self.existing_sessions) == 1 and self.existing_sessions[0]["session_id"] is None:
-            # Single-session mode data exists - continue or migrate
-            self._show_single_session_dialog()
         else:
-            # Multi-session data exists - select or create new
             self._show_multi_session_dialog()
 
     def _show_new_participant_dialog(self):
         """Show dialog for new participant without existing data."""
-        # For new participants, just start with ses-01 in multi-session mode
-        # This simplifies the UX while maintaining the new structure
         default_session_id = "ses-01"
 
         content = ft.Column(
@@ -117,80 +108,13 @@ class SessionSelectionDialog:
         )
         self.page.show_dialog(self.dialog)
 
-    def _show_single_session_dialog(self):
-        """Show dialog when single-session data exists."""
-        session_info = self.existing_sessions[0]
-
-        status_items = []
-        if session_info["has_masks"]:
-            status_items.append("Masks: extracted")
-            if session_info["masks_approved"]:
-                status_items.append("(approved)")
-        if session_info["has_feedback"]:
-            status_items.append("Feedback: started")
-
-        status_text = ", ".join(status_items) if status_items else "No completed steps"
-
-        content = ft.Column(
-            [
-                ft.Text(
-                    f"Participant: {self.participant_id}",
-                    size=14,
-                    weight=ft.FontWeight.BOLD,
-                ),
-                ft.Divider(),
-                ft.Text(
-                    "Existing single-session session found.",
-                    size=12,
-                ),
-                ft.Text(
-                    f"Status: {status_text}",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                ),
-                ft.Container(height=10),
-                ft.Text(
-                    "Choose an option:",
-                    size=12,
-                    weight=ft.FontWeight.W_500,
-                ),
-            ],
-            tight=True,
-            spacing=8,
-        )
-
-        def continue_session(e):
-            self.page.pop_dialog()
-            # Continue in single-session mode (backward compatible)
-            self.on_select(None, None)
-
-        def cancel(e):
-            self.page.pop_dialog()
-
-        self.dialog = ft.AlertDialog(
-            title=ft.Text("Continue Session"),
-            content=ft.Container(content=content, width=400),
-            actions=[
-                ft.TextButton("Cancel", on_click=cancel),
-                ft.FilledButton(
-                    "Continue",
-                    icon=ft.Icons.PLAY_ARROW,
-                    on_click=continue_session,
-                ),
-            ],
-        )
-        self.page.show_dialog(self.dialog)
-
     def _show_multi_session_dialog(self):
-        """Show dialog when multi-session data exists."""
-        # Build session list
+        """Show dialog when one or more sessions already exist for this participant."""
         session_tiles: list[ft.Control] = []
         sessions_with_approved_masks = []
 
         for session in self.existing_sessions:
             session_id = session["session_id"]
-            if session_id is None:
-                continue  # Skip single-session entries in multi-session mode
 
             status_parts = []
             if session["has_masks"]:

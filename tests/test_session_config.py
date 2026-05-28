@@ -17,7 +17,6 @@ from pineuro.session import (
     SessionMetadata,
     ShamConfig,
     SimulatorConfig,
-    StudyInfoConfig,
     detect_existing_sessions,
     next_session_id,
 )
@@ -32,15 +31,20 @@ class TestPathConfig:
         config = PathConfig(base_dir=tmp_path, participant_id="sub-01")
         assert config.base_dir == tmp_path
         assert config.participant_id == "sub-01"
-        assert config.session_id is None  # single-session mode
+        assert config.session_id == "ses-01"  # default
 
     def test_with_session(self, tmp_path):
-        config = PathConfig(base_dir=tmp_path, participant_id="sub-01", session_id="ses-01")
-        assert config.session_id == "ses-01"
+        config = PathConfig(base_dir=tmp_path, participant_id="sub-01", session_id="ses-02")
+        assert config.session_id == "ses-02"
+        assert config.preprocessing_dir == tmp_path / "sub-01" / "ses-02" / "preprocessing"
 
     def test_example_participant_id(self, tmp_path):
         config = PathConfig(base_dir=tmp_path, participant_id="sub-01", example_participant_id="sub-XXX")
         assert config.example_participant_id == "sub-XXX"
+
+    def test_invalid_session_id_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="session_id"):
+            PathConfig(base_dir=tmp_path, participant_id="sub-01", session_id="bogus")
 
 
 # =============================================================================
@@ -190,10 +194,6 @@ class TestFeedbackRunConfig:
 
 
 class TestNewTopLevelBlocks:
-    def test_study_info(self):
-        cfg = StudyInfoConfig(multi_session_enabled=True)
-        assert cfg.multi_session_enabled is True
-
     def test_simulator(self):
         cfg = SimulatorConfig(enabled=False, feedback_speed=5.0)
         assert cfg.enabled is False

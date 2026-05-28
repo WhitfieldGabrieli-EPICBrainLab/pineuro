@@ -275,6 +275,7 @@ class RNTTriggeredBallTask(BaseTask):
         # Per-volume psychopylog for live monitoring
         prefix = make_bids_run_prefix(
             coordinator.subject,
+            coordinator.session,
             coordinator.task,
             coordinator.run_number,
             acq=coordinator.acq,
@@ -610,10 +611,11 @@ class RNTTriggeredBallTask(BaseTask):
 
         output_dir = Path(output_dir)
         subject = getattr(self.coordinator, "subject", "unknown")
+        session = getattr(self.coordinator, "session", "ses-01")
         run_number = getattr(self.coordinator, "run_number", 1)
         run_str = f"run-{run_number:02d}"
 
-        path = output_dir / f"{subject}_task-{self.task_id}_{run_str}_events.tsv"
+        path = output_dir / f"{subject}_{session}_task-{self.task_id}_{run_str}_events.tsv"
 
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(

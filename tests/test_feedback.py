@@ -465,18 +465,18 @@ class TestGetNextRunNumber:
     def test_empty_dir(self, tmp_path):
         from pineuro.feedback import get_next_run_number
 
-        assert get_next_run_number(tmp_path, "sub-01", "feedback") == 1
+        assert get_next_run_number(tmp_path, "sub-01", "ses-01", "feedback") == 1
 
     def test_existing_runs(self, tmp_path):
         from pineuro.feedback import get_next_run_number
 
-        (tmp_path / "sub-01_task-feedback_run-01_feedbacklog.tsv").touch()
-        (tmp_path / "sub-01_task-feedback_run-02_feedbacklog.tsv").touch()
-        assert get_next_run_number(tmp_path, "sub-01", "feedback") == 3
+        (tmp_path / "sub-01_ses-01_task-feedback_run-01_feedbacklog.tsv").touch()
+        (tmp_path / "sub-01_ses-01_task-feedback_run-02_feedbacklog.tsv").touch()
+        assert get_next_run_number(tmp_path, "sub-01", "ses-01", "feedback") == 3
 
     def test_noncontiguous_runs(self, tmp_path):
         from pineuro.feedback import get_next_run_number
 
-        (tmp_path / "sub-01_task-feedback_run-01_feedbacklog.tsv").touch()
-        (tmp_path / "sub-01_task-feedback_run-03_feedbacklog.tsv").touch()
-        assert get_next_run_number(tmp_path, "sub-01", "feedback") == 4
+        (tmp_path / "sub-01_ses-01_task-feedback_run-01_feedbacklog.tsv").touch()
+        (tmp_path / "sub-01_ses-01_task-feedback_run-03_feedbacklog.tsv").touch()
+        assert get_next_run_number(tmp_path, "sub-01", "ses-01", "feedback") == 4

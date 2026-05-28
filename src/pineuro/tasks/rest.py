@@ -75,6 +75,7 @@ class RestTask(BaseLocalizerTask):
         self,
         output_dir: Union[str, Path],
         participant_id: str,
+        session_id: str,
         run: int = 1,
         duration: float = 200.0,
         simulator=None,
@@ -83,6 +84,7 @@ class RestTask(BaseLocalizerTask):
         super().__init__(
             output_dir=output_dir,
             participant_id=participant_id,
+            session_id=session_id,
             run=run,
             simulator=simulator,
             **kwargs,

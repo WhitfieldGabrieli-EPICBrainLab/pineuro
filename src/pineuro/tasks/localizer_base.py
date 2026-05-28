@@ -56,6 +56,8 @@ class BaseLocalizerTask(TaskBase):
         Directory for events TSV and any other output files.
     participant_id : str
         Participant identifier (e.g., "sub-01").
+    session_id : str
+        Session identifier (e.g., "ses-01").
     run : int
         Run number (1-based).
     trigger_keys : list of str, optional
@@ -74,6 +76,7 @@ class BaseLocalizerTask(TaskBase):
         self,
         output_dir: Union[str, Path],
         participant_id: str,
+        session_id: str,
         acq: int,
         run: int = 1,
         trigger_keys: list[str] | None = None,
@@ -89,6 +92,7 @@ class BaseLocalizerTask(TaskBase):
 
         self.output_dir = Path(output_dir)
         self.participant_id = participant_id
+        self.session_id = session_id
         self.run_number = run
         self.acq_number = acq
         self.monitor_position = monitor_position
@@ -165,7 +169,8 @@ class BaseLocalizerTask(TaskBase):
         Parameters
         ----------
         path : Path, optional
-            Output path. Defaults to {output_dir}/{participant}_task-{task_id}_acq-{acq}_run-{run}_events.tsv.
+            Output path. Defaults to
+            {output_dir}/{participant}_{session}_task-{task_id}_acq-{acq}_run-{run}_events.tsv.
 
         Returns
         -------
@@ -178,6 +183,7 @@ class BaseLocalizerTask(TaskBase):
             self.output_dir.mkdir(parents=True, exist_ok=True)
             prefix = make_bids_run_prefix(
                 self.participant_id,
+                self.session_id,
                 self.task_id,
                 self.run_number,
                 acq=self.acq_number,

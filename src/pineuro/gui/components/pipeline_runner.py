@@ -73,6 +73,7 @@ class PipelineRunner:
         self,
         config: dict[str, Any],
         participant_id: str,
+        session_id: str,
         on_progress: Callable[[str], None] | None = None,
         on_complete: Callable[[bool, str | None], None] | None = None,
         on_error: Callable[[Exception], None] | None = None,
@@ -84,6 +85,7 @@ class PipelineRunner:
         Args:
             config: Session configuration dictionary
             participant_id: Participant ID
+            session_id: BIDS session identifier (e.g., 'ses-01')
             on_progress: Callback for progress updates (message)
             on_complete: Callback when step completes (success, result_message)
             on_error: Callback when step fails (exception)
@@ -94,6 +96,7 @@ class PipelineRunner:
         """
         self.config = config
         self.participant_id = participant_id
+        self.session_id = session_id
         self.on_progress = on_progress
         self.on_complete = on_complete
         self.on_error = on_error
@@ -770,6 +773,7 @@ class PipelineRunner:
             task_id=task_id,
             output_dir=events_dir,
             participant_id=self.participant_id,
+            session_id=self.session_id,
             config=localizer_params,
             run=run_num,
             acq=acq,  # Pass acq for events file naming
@@ -930,6 +934,7 @@ class PipelineRunner:
 
         preproc_file, mask_file, ref_file = preprocessing(
             participant_id=self.participant_id,
+            session_id=self.session_id,
             task=task_name,
             root_dir=preprocessing_dir,
             input_dicoms=[str(d) for d in input_dicoms],
@@ -1009,6 +1014,7 @@ class PipelineRunner:
         self._emit_progress(f"Importing {len(mask_paths)} user-supplied mask(s) ({mask_space} space)")
         return import_manual_masks(
             participant_id=self.participant_id,
+            session_id=self.session_id,
             root_dir=root_dir,
             mask_paths=mask_paths,
             mask_names=names,
@@ -1120,6 +1126,7 @@ class PipelineRunner:
 
             _mask_files = mask_extraction_task(
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 root_dir=mask_extraction_dir,
                 input_file=preproc_file,
                 mask_file=mask_file,
@@ -1184,6 +1191,7 @@ class PipelineRunner:
 
             _mask_files = mask_extraction_rest(
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 root_dir=mask_extraction_dir,
                 input_file=preproc_file,
                 mask_file=mask_file,
@@ -1244,6 +1252,7 @@ class PipelineRunner:
             ref_file=str(ref_file),
             output_dir=tissue_dir,
             participant_id=self.participant_id,
+            session_id=self.session_id,
             inv_transform_files=inv_xfm,
             overwrite=self.overwrite,
             progress_callback=progress_callback,
@@ -1336,6 +1345,7 @@ class PipelineRunner:
 
         preprocessing(
             participant_id=self.participant_id,
+            session_id=self.session_id,
             task=task_name,
             root_dir=preprocessing_dir,
             input_dicoms=[str(d) for d in input_dicoms],
@@ -1410,6 +1420,7 @@ class PipelineRunner:
 
             mask_files = mask_extraction_rest(
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 root_dir=loc_dir,
                 input_file=preproc_file,
                 mask_file=mask_file,
@@ -1455,6 +1466,7 @@ class PipelineRunner:
 
             mask_files = mask_extraction_task(
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 root_dir=loc_dir,
                 input_file=preproc_file,
                 mask_file=mask_file,
@@ -1635,6 +1647,7 @@ class PipelineRunner:
 
         _mask_files = mask_extraction_mni(
             participant_id=self.participant_id,
+            session_id=self.session_id,
             root_dir=mask_extraction_dir,
             ref_file=ref_file,
             n_yeo=n_yeo,
@@ -1672,6 +1685,7 @@ class PipelineRunner:
                 ref_file=str(ref_file),
                 output_dir=tissue_dir,
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 inv_transform_files=inv_xfm,
                 overwrite=self.overwrite,
                 progress_callback=progress_callback,
@@ -1801,7 +1815,8 @@ class PipelineRunner:
 
             # Group masks by localizer, each with its own boldref
             # Masks live in shared 03_masks/ but originated from different localizer spaces
-            all_mask_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
+            bids_prefix_multi = f"{self.participant_id}_{self.session_id}"
+            all_mask_files = list(masks_dir.glob(f"{bids_prefix_multi}_*_thr.nii.gz"))
 
             # Filter sham hemisphere masks
             sham_config = config.get("sham", {})
@@ -1810,7 +1825,7 @@ class PipelineRunner:
                 mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
                 if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
                     hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                    combined_mask_name = f"{self.participant_id}_{hemisphere_network}_thr.nii.gz"
+                    combined_mask_name = f"{bids_prefix_multi}_{hemisphere_network}_thr.nii.gz"
                     all_mask_files = [f for f in all_mask_files if f.name != combined_mask_name]
 
             # Map each mask file to its localizer index by matching mask names
@@ -1834,7 +1849,9 @@ class PipelineRunner:
             tissue_mask_files = []
             tissue_masks_dir = mask_extraction_dir / "05_tissue"
             if tissue_masks_dir.exists():
-                tissue_mask_files = list(tissue_masks_dir.glob(f"{self.participant_id}_tissue_*_mask.nii.gz"))
+                tissue_mask_files = list(
+                    tissue_masks_dir.glob(f"{self.participant_id}_{self.session_id}_tissue_*_mask.nii.gz")
+                )
                 if tissue_mask_files:
                     self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
 
@@ -1867,6 +1884,7 @@ class PipelineRunner:
 
                 coreg_result = coregister_reference(
                     participant_id=self.participant_id,
+                    session_id=self.session_id,
                     root_dir=root_dir,
                     input_dicom=reference_dicom,
                     network_files=group_files,
@@ -1881,7 +1899,8 @@ class PipelineRunner:
             self._emit_progress(f"Coregistered {len(coreg_masks)} masks across {len(loc_groups)} localizers")
         else:
             # Single localizer (or mask reuse): all masks use the same boldref
-            network_files = list(masks_dir.glob(f"{self.participant_id}_*_thr.nii.gz"))
+            bids_prefix = f"{self.participant_id}_{self.session_id}"
+            network_files = list(masks_dir.glob(f"{bids_prefix}_*_thr.nii.gz"))
 
             # Filter out combined hemisphere network mask if using hemisphere_split sham mode
             sham_config = config.get("sham", {})
@@ -1890,14 +1909,16 @@ class PipelineRunner:
                 mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
                 if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
                     hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                    combined_mask_name = f"{self.participant_id}_{hemisphere_network}_thr.nii.gz"
+                    combined_mask_name = f"{bids_prefix}_{hemisphere_network}_thr.nii.gz"
                     network_files = [f for f in network_files if f.name != combined_mask_name]
 
             # Include tissue masks for nuisance regression (WM/CSF) if they exist
             tissue_mask_files = []
             tissue_masks_dir = mask_extraction_dir / "05_tissue"
             if tissue_masks_dir.exists():
-                tissue_mask_files = list(tissue_masks_dir.glob(f"{self.participant_id}_tissue_*_mask.nii.gz"))
+                tissue_mask_files = list(
+                    tissue_masks_dir.glob(f"{self.participant_id}_{self.session_id}_tissue_*_mask.nii.gz")
+                )
                 if tissue_mask_files:
                     self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
 
@@ -1906,6 +1927,7 @@ class PipelineRunner:
 
             coreg_masks = coregister_reference(
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 root_dir=root_dir,
                 input_dicom=reference_dicom,
                 network_files=all_mask_files_for_coreg,
@@ -1935,6 +1957,7 @@ class PipelineRunner:
 
             generate_reference_qc_overlays(
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 session_dir=session_dir,
                 ref_file=ref_file,
                 mask_extraction_dir=qc_mask_extraction_dir,
@@ -2106,6 +2129,7 @@ class PipelineRunner:
         run_info = get_slot_run_info(
             output_dir=output_dir,
             subject=self.participant_id,
+            session=self.session_id,
             task=task_type,
             step_id=step_id,
         )
@@ -2391,7 +2415,7 @@ class PipelineRunner:
                                 feedbacklog_path = find_feedbacklog_for_replay(
                                     source_dir=study_base_dir,
                                     matched_participant=matched_participant,
-                                    matched_session=matched_session,
+                                    matched_session=matched_session or self.session_id,
                                     task=task_type,
                                     run=task_run_number,
                                 )
@@ -2476,6 +2500,7 @@ class PipelineRunner:
             session_info = run_feedback_task(
                 mask_paths=[str(f) for f in all_mask_files],
                 subject=self.participant_id,
+                session=self.session_id,
                 task=task_type,
                 run=task_run_number,
                 output_dir=output_dir,

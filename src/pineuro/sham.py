@@ -395,6 +395,7 @@ def resolve_sham_masks(
     alternative_mask_targets: list[str],
     mask_extraction_dir: Path,
     participant_id: str,
+    session_id: str,
     reference_subdir: str = "04_reference",
     sham_mask_mode: str = "two_networks",
     hemisphere_network: str | None = None,
@@ -466,12 +467,13 @@ def resolve_sham_masks(
         # two_networks mode (legacy)
         targets = alternative_mask_targets
 
+    bids_prefix = f"{participant_id}_{session_id}"
     mask_files = []
     for target in targets:
         # Look for thresholded mask file with various naming patterns
         patterns = [
-            f"{participant_id}_{target}_thr_to_*.nii.gz",  # reference coregistered
-            f"{participant_id}_{target}_thr.nii.gz",  # Non-coregistered
+            f"{bids_prefix}_{target}_thr_to_*.nii.gz",  # reference coregistered
+            f"{bids_prefix}_{target}_thr.nii.gz",  # Non-coregistered
             f"*_{target}_thr*.nii.gz",  # Any matching pattern
         ]
 
@@ -495,7 +497,7 @@ def resolve_sham_masks(
 def find_feedbacklog_for_replay(
     source_dir: Path,
     matched_participant: str,
-    matched_session: str | None,
+    matched_session: str,
     task: str,
     run: int,
 ) -> Path:
@@ -507,8 +509,8 @@ def find_feedbacklog_for_replay(
         Base directory containing participant data
     matched_participant : str
         Participant ID to replay from (e.g., "sub-01")
-    matched_session : str, optional
-        Session ID to replay from (e.g., "ses-01"). If None, searches without session.
+    matched_session : str
+        Session ID to replay from (e.g., "ses-01").
     task : str
         Task name (e.g., "feedback", "transfer")
     run : int
@@ -525,20 +527,15 @@ def find_feedbacklog_for_replay(
         If feedbacklog is not found
     """
     source_dir = Path(source_dir)
-
-    # Build search patterns based on whether session is specified
-    if matched_session:
-        # Multi-session: source_dir/participant/session/feedback/02_feedback_output/
-        base_path = source_dir / matched_participant / matched_session / "feedback" / "02_feedback_output"
-    else:
-        # Single-session: source_dir/participant/feedback/02_feedback_output/
-        base_path = source_dir / matched_participant / "feedback" / "02_feedback_output"
+    base_path = source_dir / matched_participant / matched_session / "feedback" / "02_feedback_output"
 
     # Try various naming patterns
     run_str = f"run-{run:02d}"
+    bids_prefix = f"{matched_participant}_{matched_session}"
     patterns = [
-        f"{matched_participant}_task-{task}_{run_str}_feedbacklog.tsv",
-        f"{matched_participant}_task-{task}_{run_str}_acq-*_feedbacklog.tsv",
+        f"{bids_prefix}_task-{task}_{run_str}_feedbacklog.tsv",
+        f"{bids_prefix}_task-{task}_{run_str}_acq-*_feedbacklog.tsv",
+        f"{bids_prefix}_task-{task}_acq-*_{run_str}_feedbacklog.tsv",
         f"*_task-{task}_{run_str}*_feedbacklog.tsv",
     ]
 

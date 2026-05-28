@@ -28,18 +28,18 @@ class TestRestConstructor:
     def test_duration_stored(self, tmp_path):
         from pineuro.tasks.rest import RestTask
 
-        task = RestTask(output_dir=tmp_path, participant_id="sub-01", acq=1, run=1, duration=120.0)
+        task = RestTask(output_dir=tmp_path, participant_id="sub-01", session_id="ses-01", acq=1, run=1, duration=120.0)
         assert task.duration == 120.0
 
     def test_default_duration(self, tmp_path):
         from pineuro.tasks.rest import RestTask
 
-        task = RestTask(output_dir=tmp_path, participant_id="sub-01", acq=1)
+        task = RestTask(output_dir=tmp_path, participant_id="sub-01", session_id="ses-01", acq=1)
         # Default from REST_METADATA is 200.0
         assert task.duration == 200.0
 
     def test_run_number_propagates(self, tmp_path):
         from pineuro.tasks.rest import RestTask
 
-        task = RestTask(output_dir=tmp_path, participant_id="sub-01", acq=1, run=3)
+        task = RestTask(output_dir=tmp_path, participant_id="sub-01", session_id="ses-01", acq=1, run=3)
         assert task.run_number == 3

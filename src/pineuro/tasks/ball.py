@@ -295,6 +295,7 @@ class BallTask(BaseTask):
         output_dir = Path(coordinator.output_dir)
         prefix = make_bids_run_prefix(
             coordinator.subject,
+            coordinator.session,
             coordinator.task,
             coordinator.run_number,
             acq=coordinator.acq,
@@ -423,9 +424,8 @@ class BallTask(BaseTask):
         # Setup questions CSV file with BIDS-style naming
         output_dir = Path(self.coordinator.output_dir)
         run_acq_str = f"acq-{self.coordinator.acq:02d}_run-{self.coordinator.run_number:02d}"
-        self._questions_file_path = (
-            output_dir / f"{self.coordinator.subject}_task-{self.coordinator.task}_{run_acq_str}_questions.tsv"
-        )
+        subj_ses = f"{self.coordinator.subject}_{self.coordinator.session}"
+        self._questions_file_path = output_dir / f"{subj_ses}_task-{self.coordinator.task}_{run_acq_str}_questions.tsv"
         self._questions_file = open(self._questions_file_path, "w", newline="", encoding="utf-8")  # noqa: SIM115
         self._questions_writer = csv.writer(self._questions_file, delimiter="\t")
         self._questions_writer.writerow(["subject", "run", "feedback_mode", "question_text", "response", "rt"])

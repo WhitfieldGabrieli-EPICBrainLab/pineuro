@@ -16,7 +16,6 @@ def _make_study_config(**overrides) -> StudyConfig:
     """Create a minimal StudyConfig (new schema) for testing."""
     session_config = {
         "paths": {"base_dir": "/tmp/data", "participant_id": ""},
-        "study": {"multi_session_enabled": False},
         "simulator": {"enabled": True, "collection_speed": 1.0, "feedback_speed": 1.0},
         "scanner": {"dicom_dir": "/BOLD_DICOM", "ip": "192.168.1.1"},
         "reference": {

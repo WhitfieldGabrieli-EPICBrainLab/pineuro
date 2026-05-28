@@ -65,6 +65,7 @@ from pineuro.mask_extraction import MaskSelection
 
 def generate_mask_extraction_script(
     participant_id: str,
+    session_id: str,
     mask_extraction_dir: Union[str, Path],
     input_file: Union[str, Path],
     mask_file: Union[str, Path],
@@ -183,6 +184,7 @@ def clean_stale_outputs(root_dir: Path):
 # INPUT FILES
 # =============================================================================
 participant_id = {repr(participant_id)}
+session_id = {repr(session_id)}
 root_dir = Path({repr(str(mask_extraction_dir))})
 input_file = Path({repr(str(input_file))})
 mask_file = Path({repr(str(mask_file))})
@@ -239,6 +241,7 @@ def main():
 
         mask_files = mask_extraction_rest(
             participant_id=participant_id,
+            session_id=session_id,
             root_dir=root_dir,
             input_file=input_file,
             mask_file=mask_file,
@@ -273,6 +276,7 @@ def main():
     generate_alternative_overlays(
         mask_extraction_dir=root_dir,
         participant_id=participant_id,
+        session_id=session_id,
         network_names=yeo_targets,
         n_alternatives=n_components,  # All ICA components
         output_dir=qc_dir,
@@ -286,6 +290,7 @@ def main():
         generate_yeo_network_overlay(
             mask_extraction_dir=root_dir,
             participant_id=participant_id,
+            session_id=session_id,
             network_name=network_name,
             output_dir=qc_dir,
             n_yeo=n_yeo,
@@ -304,6 +309,7 @@ def main():
     qc.generate_mask_extraction_report(
         mask_extraction_dir=root_dir,
         participant_id=participant_id,
+        session_id=session_id,
         network_names=yeo_targets,
         n_yeo=n_yeo,
         overwrite=True,
@@ -441,6 +447,7 @@ def _generate_selection_code(
         #
         #     regenerate_mask_from_selection(
         #         participant_id=participant_id,
+        #         session_id=session_id,
         #         masks_dir=masks_dir,
         #         selection=selection,
         #         components_file=components_file,
@@ -460,6 +467,7 @@ def _generate_selection_code(
 
 def generate_task_mask_extraction_script(
     participant_id: str,
+    session_id: str,
     mask_extraction_dir: Union[str, Path],
     input_file: Union[str, Path],
     mask_file: Union[str, Path],
@@ -602,6 +610,7 @@ def clean_stale_outputs(root_dir: Path):
 # INPUT FILES
 # =============================================================================
 participant_id = {repr(participant_id)}
+session_id = {repr(session_id)}
 root_dir = Path({repr(str(mask_extraction_dir))})
 input_file = Path({repr(str(input_file))})
 mask_file = Path({repr(str(mask_file))})
@@ -654,6 +663,7 @@ def main():
 
     mask_files = mask_extraction_task(
         participant_id=participant_id,
+        session_id=session_id,
         root_dir=root_dir,
         input_file=input_file,
         mask_file=mask_file,

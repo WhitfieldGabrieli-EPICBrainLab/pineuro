@@ -19,6 +19,7 @@ class TestGenerateMaskExtractionScript:
     def test_returns_valid_python(self, tmp_path):
         script = generate_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path / "masks",
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -31,6 +32,7 @@ class TestGenerateMaskExtractionScript:
     def test_contains_participant_id(self, tmp_path):
         script = generate_mask_extraction_script(
             participant_id="sub-42",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -41,6 +43,7 @@ class TestGenerateMaskExtractionScript:
     def test_contains_parameters(self, tmp_path):
         script = generate_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -59,6 +62,7 @@ class TestGenerateMaskExtractionScript:
     def test_default_yeo_targets(self, tmp_path):
         script = generate_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -70,6 +74,7 @@ class TestGenerateMaskExtractionScript:
     def test_smoothing_and_filtering(self, tmp_path):
         script = generate_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -85,6 +90,7 @@ class TestGenerateMaskExtractionScript:
     def test_no_selections_generates_placeholder(self, tmp_path):
         script = generate_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -105,6 +111,7 @@ class TestGenerateMaskExtractionScript:
         )
         script = generate_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -125,6 +132,7 @@ class TestGenerateTaskMaskExtractionScript:
     def test_returns_valid_python(self, tmp_path):
         script = generate_task_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -138,6 +146,7 @@ class TestGenerateTaskMaskExtractionScript:
     def test_contains_contrasts(self, tmp_path):
         script = generate_task_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",
@@ -151,6 +160,7 @@ class TestGenerateTaskMaskExtractionScript:
     def test_cluster_method_params(self, tmp_path):
         script = generate_task_mask_extraction_script(
             participant_id="sub-01",
+            session_id="ses-01",
             mask_extraction_dir=tmp_path,
             input_file=tmp_path / "preproc.nii.gz",
             mask_file=tmp_path / "mask.nii.gz",

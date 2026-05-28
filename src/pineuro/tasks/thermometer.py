@@ -385,6 +385,7 @@ class ThermometerTask(BaseTask):
         output_dir = Path(self.coordinator.output_dir)
         prefix = make_bids_run_prefix(
             self.coordinator.subject,
+            self.coordinator.session,
             self.coordinator.task,
             self.coordinator.run_number,
             acq=self.coordinator.acq,

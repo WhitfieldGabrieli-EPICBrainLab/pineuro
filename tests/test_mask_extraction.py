@@ -370,6 +370,7 @@ class TestCoregisterReference:
 
             coregister_reference(
                 "sub-01",
+                "ses-01",
                 root_dir,
                 dicom_dir,
                 [mask_file],
@@ -419,6 +420,7 @@ class TestImportManualMasks:
 
         out = import_manual_masks(
             participant_id="sub-01",
+            session_id="ses-01",
             root_dir=root,
             mask_paths=[m1, m2],
             mask_names=["DMN", "FPN"],
@@ -448,6 +450,7 @@ class TestImportManualMasks:
 
         out = import_manual_masks(
             participant_id="sub-01",
+            session_id="ses-01",
             root_dir=tmp_path / "mask_extraction",
             mask_paths=[mask],
             mask_names=["ROI"],
@@ -462,7 +465,7 @@ class TestImportManualMasks:
 
         ref = synthetic_nifti_3d(shape=(6, 6, 6), name="ref.nii.gz")
         with pytest.raises(ValueError, match="at least one"):
-            import_manual_masks("sub-01", tmp_path, [], [], ref, mask_space="native")
+            import_manual_masks("sub-01", "ses-01", tmp_path, [], [], ref, mask_space="native")
 
     def test_duplicate_names_raises(self, sample_mask, synthetic_nifti_3d, tmp_path):
         from pineuro.mask_extraction import import_manual_masks
@@ -471,7 +474,7 @@ class TestImportManualMasks:
         m2 = sample_mask(shape=(6, 6, 6), name="b.nii.gz")
         ref = synthetic_nifti_3d(shape=(6, 6, 6), name="ref.nii.gz")
         with pytest.raises(ValueError, match="unique"):
-            import_manual_masks("sub-01", tmp_path, [m1, m2], ["X", "X"], ref, mask_space="native")
+            import_manual_masks("sub-01", "ses-01", tmp_path, [m1, m2], ["X", "X"], ref, mask_space="native")
 
     def test_anat_requires_anat_file(self, sample_mask, synthetic_nifti_3d, tmp_path):
         from pineuro.mask_extraction import import_manual_masks
@@ -479,7 +482,7 @@ class TestImportManualMasks:
         mask = sample_mask(shape=(6, 6, 6), name="a.nii.gz")
         ref = synthetic_nifti_3d(shape=(6, 6, 6), name="ref.nii.gz")
         with pytest.raises(ValueError, match="anat_file"):
-            import_manual_masks("sub-01", tmp_path, [mask], ["A"], ref, mask_space="anat")
+            import_manual_masks("sub-01", "ses-01", tmp_path, [mask], ["A"], ref, mask_space="anat")
 
     def test_qc_report_invoked_when_enabled(self, sample_mask, synthetic_nifti_3d, tmp_path):
         """qc_enabled routes through generate_mask_extraction_report with the imported mask names."""
@@ -490,7 +493,7 @@ class TestImportManualMasks:
         root = tmp_path / "mask_extraction"
 
         with patch("pineuro.qc.generate_mask_extraction_report") as mock_qc:
-            import_manual_masks("sub-01", root, [mask], ["A"], ref, mask_space="native", qc_enabled=True)
+            import_manual_masks("sub-01", "ses-01", root, [mask], ["A"], ref, mask_space="native", qc_enabled=True)
 
         mock_qc.assert_called_once()
         kwargs = mock_qc.call_args.kwargs
@@ -506,7 +509,14 @@ class TestImportManualMasks:
 
         with patch("pineuro.qc.generate_mask_extraction_report", side_effect=RuntimeError("boom")):
             out = import_manual_masks(
-                "sub-01", tmp_path / "mask_extraction", [mask], ["A"], ref, mask_space="native", qc_enabled=True
+                "sub-01",
+                "ses-01",
+                tmp_path / "mask_extraction",
+                [mask],
+                ["A"],
+                ref,
+                mask_space="native",
+                qc_enabled=True,
             )
 
         assert len(out) == 1 and out[0].exists()
@@ -530,6 +540,7 @@ class TestImportManualMasks:
         ):
             out = import_manual_masks(
                 "sub-01",
+                "ses-01",
                 tmp_path / "mask_extraction",
                 [mask],
                 ["ROI"],

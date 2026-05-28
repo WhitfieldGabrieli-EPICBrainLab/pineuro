@@ -789,6 +789,7 @@ def combine_ica_components_unthresholded(
 
 def regenerate_mask_from_selection(
     participant_id: str,
+    session_id: str,
     masks_dir: Union[str, Path],
     selection: MaskSelection,
     components_file: Union[str, Path],
@@ -806,6 +807,8 @@ def regenerate_mask_from_selection(
     ----------
     participant_id : str
         Participant ID
+    session_id : str
+        BIDS session identifier (e.g., 'ses-01')
     masks_dir : str or Path
         Directory containing masks (typically 03_masks/)
     selection : MaskSelection
@@ -826,10 +829,11 @@ def regenerate_mask_from_selection(
     """
     masks_dir = Path(masks_dir)
     network_name = selection.network_name
+    bids_prefix = f"{participant_id}_{session_id}"
 
     # Output files
-    network_file = masks_dir / f"{participant_id}_{network_name}.nii.gz"
-    thr_file = masks_dir / f"{participant_id}_{network_name}_thr.nii.gz"
+    network_file = masks_dir / f"{bids_prefix}_{network_name}.nii.gz"
+    thr_file = masks_dir / f"{bids_prefix}_{network_name}_thr.nii.gz"
 
     if selection.source_type in ("yeo_atlas", "mni_atlas"):
         # Use Yeo/MNI atlas mask
@@ -1379,6 +1383,7 @@ def _register_atlas_to_subject(
 
 def mask_extraction_rest(
     participant_id: str,
+    session_id: str,
     root_dir: Union[str, Path],
     input_file: Union[str, Path],
     mask_file: Union[str, Path],
@@ -1481,7 +1486,8 @@ def mask_extraction_rest(
             progress_callback(step, detail)
 
     # Log the command
-    emit_progress(f"Mask extraction for {participant_id}")
+    emit_progress(f"Mask extraction for {participant_id} / {session_id}")
+    bids_prefix = f"{participant_id}_{session_id}"
 
     # Convert to Path object and validate
     root_dir = Path(root_dir)
@@ -1594,7 +1600,7 @@ def mask_extraction_rest(
     emit_progress("Step 3/3", "Selecting best ICA components for each network...")
     network_files = []
     for target in yeo_targets:
-        network_file = masks_dir / Path(f"{participant_id}_{target}.nii.gz")
+        network_file = masks_dir / Path(f"{bids_prefix}_{target}.nii.gz")
         if not network_file.exists() or overwrite:
             # Find component index with maximum correlation for this network
             ic_ind = chosen_components[target]
@@ -1639,7 +1645,7 @@ def mask_extraction_rest(
         emit_progress("Generating hemisphere-split masks", f"Network: {sham_hemisphere_network}")
 
         # Check if this network was already extracted (unthresholded)
-        network_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}.nii.gz"
+        network_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}.nii.gz"
 
         if not network_file.exists():
             # Network not in yeo_targets, need to extract it first
@@ -1660,8 +1666,8 @@ def mask_extraction_rest(
 
         # Now split into hemispheres (using unthresholded mask, thresholding each hemisphere)
         if network_file.exists():
-            left_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_left_thr.nii.gz"
-            right_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_right_thr.nii.gz"
+            left_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}_left_thr.nii.gz"
+            right_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}_right_thr.nii.gz"
             split_mask_by_hemisphere(network_file, left_file, right_file, threshold=threshold, overwrite=overwrite)
             emit_progress(
                 "Hemisphere split", f"Created {left_file.name} and {right_file.name} ({threshold} voxels each)"
@@ -1679,6 +1685,7 @@ def mask_extraction_rest(
         report_path = qc.generate_mask_extraction_report(
             mask_extraction_dir=root_dir,
             participant_id=participant_id,
+            session_id=session_id,
             network_names=network_names,
             output_dir=qc_output_dir,
             n_yeo=n_networks,
@@ -1693,6 +1700,7 @@ def mask_extraction_rest(
 
 def mask_extraction_mni(
     participant_id: str,
+    session_id: str,
     root_dir: Union[str, Path],
     ref_file: Union[str, Path],
     n_yeo: int = 17,
@@ -1766,7 +1774,8 @@ def mask_extraction_mni(
         if progress_callback:
             progress_callback(step, detail)
 
-    emit_progress(f"MNI atlas mask extraction for {participant_id}")
+    emit_progress(f"MNI atlas mask extraction for {participant_id} / {session_id}")
+    bids_prefix = f"{participant_id}_{session_id}"
 
     # Convert to Path and validate
     root_dir = Path(root_dir)
@@ -1819,7 +1828,7 @@ def mask_extraction_mni(
 
     network_thr_files: list[Path] = []
     for target in yeo_targets:
-        thr_file = masks_dir / f"{participant_id}_{target}_thr.nii.gz"
+        thr_file = masks_dir / f"{bids_prefix}_{target}_thr.nii.gz"
         if not thr_file.exists() or overwrite:
             extract_yeo_mask_for_network(
                 yeo_subject_space=atlas2sub,
@@ -1856,7 +1865,7 @@ def mask_extraction_mni(
             )
         else:
             # Extract sham network from atlas (unthresholded for splitting)
-            sham_network_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}.nii.gz"
+            sham_network_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}.nii.gz"
             network_index = labels.index(sham_hemisphere_network) + 1
             atlas_img = cast(Nifti1Image, load(atlas2sub))
             atlas_data = atlas_img.get_fdata()
@@ -1865,7 +1874,7 @@ def mask_extraction_mni(
 
             # Also save the thresholded version if not already in targets
             if sham_hemisphere_network not in yeo_targets:
-                sham_thr_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_thr.nii.gz"
+                sham_thr_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}_thr.nii.gz"
                 extract_yeo_mask_for_network(
                     yeo_subject_space=atlas2sub,
                     network_name=sham_hemisphere_network,
@@ -1875,8 +1884,8 @@ def mask_extraction_mni(
                     overwrite=overwrite,
                 )
 
-            left_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_left_thr.nii.gz"
-            right_file = masks_dir / f"{participant_id}_{sham_hemisphere_network}_right_thr.nii.gz"
+            left_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}_left_thr.nii.gz"
+            right_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}_right_thr.nii.gz"
             split_mask_by_hemisphere(sham_network_file, left_file, right_file, threshold=threshold, overwrite=overwrite)
             emit_progress(
                 "Hemisphere split", f"Created {left_file.name} and {right_file.name} ({threshold} voxels each)"
@@ -1891,6 +1900,7 @@ def mask_extraction_mni(
         report_path = qc.generate_mask_extraction_report(
             mask_extraction_dir=root_dir,
             participant_id=participant_id,
+            session_id=session_id,
             network_names=network_names,
             output_dir=qc_output_dir,
             n_yeo=n_networks,
@@ -1916,6 +1926,7 @@ def create_tissue_masks(
     ref_file: Union[str, Path],
     output_dir: Union[str, Path],
     participant_id: str,
+    session_id: str,
     inv_transform_files: list[str] | None = None,
     overwrite: bool = False,
     progress_callback: Callable[[str, str], None] | None = None,
@@ -1935,6 +1946,8 @@ def create_tissue_masks(
         Directory for tissue mask outputs (typically mask_extraction/05_tissue/).
     participant_id : str
         Participant ID for file naming.
+    session_id : str
+        BIDS session identifier (e.g., 'ses-01') for file naming.
     inv_transform_files : list of str, optional
         Inverse ANTs transform files (MNI → subject direction) from a prior
         ``compute_xfm_to_mni`` call. If provided, the MNI registration step
@@ -1965,11 +1978,12 @@ def create_tissue_masks(
         if progress_callback is not None:
             progress_callback(step, detail)
 
+    bids_prefix = f"{participant_id}_{session_id}"
     # Output file paths
-    wm_prob_file = output_dir / f"{participant_id}_tissue_wm_prob.nii.gz"
-    csf_prob_file = output_dir / f"{participant_id}_tissue_csf_prob.nii.gz"
-    wm_mask_file = output_dir / f"{participant_id}_tissue_wm_mask.nii.gz"
-    csf_mask_file = output_dir / f"{participant_id}_tissue_csf_mask.nii.gz"
+    wm_prob_file = output_dir / f"{bids_prefix}_tissue_wm_prob.nii.gz"
+    csf_prob_file = output_dir / f"{bids_prefix}_tissue_csf_prob.nii.gz"
+    wm_mask_file = output_dir / f"{bids_prefix}_tissue_wm_mask.nii.gz"
+    csf_mask_file = output_dir / f"{bids_prefix}_tissue_csf_mask.nii.gz"
 
     # Check if final outputs exist (skip if not overwriting)
     if not overwrite and wm_mask_file.exists() and csf_mask_file.exists():
@@ -2923,6 +2937,7 @@ def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str,
 
 def mask_extraction_task(
     participant_id: str,
+    session_id: str,
     root_dir: Union[str, Path],
     input_file: Union[str, Path],
     mask_file: Union[str, Path],
@@ -3197,6 +3212,7 @@ def mask_extraction_task(
             raise ValueError(f"Unknown atlas_name '{atlas_name}'. Available: {available}")
 
     n_steps = 3  # 01_glm, 02_mnireg, 03_masks
+    bids_prefix = f"{participant_id}_{session_id}"
 
     # =========================================================================
     # Step 1/{n_steps}: GLM Fit
@@ -3210,7 +3226,7 @@ def mask_extraction_task(
     stat_map_paths = {}
     all_exist = True
     for mask_name in contrasts:
-        stat_path = glm_dir / f"{participant_id}_{mask_name}_{stat_type}map.nii.gz"
+        stat_path = glm_dir / f"{bids_prefix}_{mask_name}_{stat_type}map.nii.gz"
         stat_map_paths[mask_name] = stat_path
         if not stat_path.exists():
             all_exist = False
@@ -3237,7 +3253,7 @@ def mask_extraction_task(
 
             # Save design matrix for QC and reproducibility
             design_matrix = model.design_matrices_[0]
-            design_file = glm_dir / f"{participant_id}_design_matrix.tsv"
+            design_file = glm_dir / f"{bids_prefix}_design_matrix.tsv"
             design_matrix.to_csv(design_file, sep="\t", index=True)
 
             # Compute and save each contrast
@@ -3259,6 +3275,7 @@ def mask_extraction_task(
             # Save GLM metadata
             glm_info = {
                 "participant_id": participant_id,
+                "session_id": session_id,
                 "input_file": str(input_file),
                 "tr": tr,
                 "n_volumes": design_matrix.shape[0],
@@ -3271,7 +3288,7 @@ def mask_extraction_task(
                 "smoothing_fwhm": smoothing_fwhm,
                 "design_matrix_columns": list(design_matrix.columns),
             }
-            info_file = glm_dir / f"{participant_id}_glm_info.json"
+            info_file = glm_dir / f"{bids_prefix}_glm_info.json"
             with open(info_file, "w") as f:
                 json.dump(glm_info, f, indent=2, default=_json_default)
 
@@ -3282,7 +3299,7 @@ def mask_extraction_task(
         for mask_name in list(contrasts.keys()):
             reverse_name = f"{mask_name}_reverse"
             forward_path = stat_map_paths[mask_name]
-            reverse_path = glm_dir / f"{participant_id}_{reverse_name}_{stat_type}map.nii.gz"
+            reverse_path = glm_dir / f"{bids_prefix}_{reverse_name}_{stat_type}map.nii.gz"
             stat_map_paths[reverse_name] = reverse_path
 
             if reverse_path.exists() and not overwrite:
@@ -3349,7 +3366,7 @@ def mask_extraction_task(
             emit_progress(f"Step 2/{n_steps}", f"Fetched {fetch_label} atlas in MNI space")
 
             # Sub-step: Register to subject space via ANTs
-            xfm_prefix = mnireg_dir / f"{participant_id}_to_MNI_boldref"
+            xfm_prefix = mnireg_dir / f"{bids_prefix}_to_MNI_boldref"
             mni_ref_file, sub2mni_fwd_xfm, sub2mni_inv_xfm = compute_xfm_to_mni(
                 input_file=ref_file,
                 output_prefix=xfm_prefix,
@@ -3357,7 +3374,7 @@ def mask_extraction_task(
             )
 
             # Sub-step: Apply inverse transform (MNI -> subject space)
-            atlas_subject_path = mnireg_dir / f"{fetch_label}_to_{participant_id}.nii.gz"
+            atlas_subject_path = mnireg_dir / f"{fetch_label}_to_{bids_prefix}.nii.gz"
             apply_xfm(
                 moving=atlas_mni_path,
                 fixed=ref_file,
@@ -3380,7 +3397,7 @@ def mask_extraction_task(
         # Save atlas-in-subject-space for QC
         masks_dir = root_dir / "03_masks"
         masks_dir.mkdir(parents=True, exist_ok=True)
-        atlas_qc_path = masks_dir / f"{participant_id}_atlas_{atlas_label}.nii.gz"
+        atlas_qc_path = masks_dir / f"{bids_prefix}_atlas_{atlas_label}.nii.gz"
         save(
             Nifti1Image(
                 atlas_subject_space_data.astype(np.uint8),
@@ -3415,7 +3432,7 @@ def mask_extraction_task(
 
         # Compute MNI <-> subject transforms (fast if cached from cluster step above)
         ref_file_path = Path(ref_file)
-        xfm_prefix = mnireg_dir / f"{participant_id}_to_MNI_boldref"
+        xfm_prefix = mnireg_dir / f"{bids_prefix}_to_MNI_boldref"
         _mni_ref, _fwd_xfm, inv_xfm = compute_xfm_to_mni(
             input_file=ref_file_path,
             output_prefix=xfm_prefix,
@@ -3423,7 +3440,7 @@ def mask_extraction_task(
         )
 
         # Apply inverse transform: MNI -> subject space (nearestNeighbor preserves labels)
-        ho_subject_path = mnireg_dir / f"harvard_oxford_cort_to_{participant_id}.nii.gz"
+        ho_subject_path = mnireg_dir / f"harvard_oxford_cort_to_{bids_prefix}.nii.gz"
         apply_xfm(
             moving=ho_mni_path,
             fixed=ref_file_path,
@@ -3470,8 +3487,8 @@ def mask_extraction_task(
         stat_map_path = stat_map_paths[mask_name]
 
         # Save unthresholded map to masks dir
-        unthr_file = masks_dir / f"{participant_id}_{mask_name}.nii.gz"
-        thr_file = masks_dir / f"{participant_id}_{mask_name}_thr.nii.gz"
+        unthr_file = masks_dir / f"{bids_prefix}_{mask_name}.nii.gz"
+        thr_file = masks_dir / f"{bids_prefix}_{mask_name}_thr.nii.gz"
 
         if thr_file.exists() and not overwrite:
             logger.info(f"Thresholded mask exists and overwrite=False: {thr_file.name}")
@@ -3599,7 +3616,7 @@ def mask_extraction_task(
 
             # Save atlas-masked stat map for QC
             atlas_masked_stat = stat_data * atlas_subject_space_data
-            atlas_masked_file = masks_dir / f"{participant_id}_{mask_name}_atlas_masked.nii.gz"
+            atlas_masked_file = masks_dir / f"{bids_prefix}_{mask_name}_atlas_masked.nii.gz"
             save(
                 Nifti1Image(atlas_masked_stat, stat_img.affine, stat_img.header),
                 atlas_masked_file,
@@ -3699,6 +3716,7 @@ def mask_extraction_task(
         report_path = qc.generate_task_mask_extraction_report(
             mask_extraction_dir=root_dir,
             participant_id=participant_id,
+            session_id=session_id,
             mask_names=mask_names,
             contrasts=all_contrasts,
             stat_type=stat_type,
@@ -3727,6 +3745,7 @@ def mask_extraction_task(
 
 def import_manual_masks(
     participant_id: str,
+    session_id: str,
     root_dir: Union[str, Path],
     mask_paths: list[Union[str, Path]],
     mask_names: list[str],
@@ -3800,6 +3819,7 @@ def import_manual_masks(
     """
     root_dir = Path(root_dir)
     ref_file = Path(ref_file)
+    bids_prefix = f"{participant_id}_{session_id}"
 
     from nilearn.image import resample_to_img
 
@@ -3841,7 +3861,7 @@ def import_manual_masks(
         reg_dir.mkdir(parents=True, exist_ok=True)
 
         emit_progress("Registration", "Computing T1→EPI rigid transform...")
-        xfm_prefix = reg_dir / f"{participant_id}_anat_to_epi"
+        xfm_prefix = reg_dir / f"{bids_prefix}_anat_to_epi"
         _, xfm_files = compute_xfm(
             moving=anat_file,
             fixed=ref_file,
@@ -3856,7 +3876,7 @@ def import_manual_masks(
         reg_dir.mkdir(parents=True, exist_ok=True)
 
         emit_progress("Registration", "Computing EPI→MNI SyN transform...")
-        xfm_prefix = reg_dir / f"{participant_id}_epi_to_mni"
+        xfm_prefix = reg_dir / f"{bids_prefix}_epi_to_mni"
         _, _fwd_xfm, inv_xfm_files = compute_xfm_to_mni(
             input_file=ref_file,
             output_prefix=xfm_prefix,
@@ -3871,7 +3891,7 @@ def import_manual_masks(
 
     for i, (mask_path, mask_name) in enumerate(zip(mask_paths, mask_names, strict=False), 1):
         mask_path = Path(mask_path)
-        out_file = masks_dir / f"{participant_id}_{mask_name}_thr.nii.gz"
+        out_file = masks_dir / f"{bids_prefix}_{mask_name}_thr.nii.gz"
 
         if out_file.exists() and not overwrite:
             logger.info(f"Output exists, skipping: {out_file.name}")
@@ -3910,7 +3930,7 @@ def import_manual_masks(
             # anat or mni: apply registration transform
             assert xfm_files is not None
 
-            transformed_file = masks_dir / f"{participant_id}_{mask_name}_transformed.nii.gz"
+            transformed_file = masks_dir / f"{bids_prefix}_{mask_name}_transformed.nii.gz"
             apply_xfm(
                 moving=mask_path,
                 fixed=ref_file,
@@ -3966,6 +3986,7 @@ def import_manual_masks(
             report_path = qc.generate_mask_extraction_report(
                 mask_extraction_dir=root_dir,
                 participant_id=participant_id,
+                session_id=session_id,
                 network_names=list(mask_names),
                 output_dir=Path(qc_dir) if qc_dir is not None else None,
                 overwrite=overwrite,
@@ -3997,6 +4018,7 @@ def import_manual_masks(
 
 def coregister_reference(
     participant_id: str,
+    session_id: str,
     root_dir: Union[str, Path],
     input_dicom: Union[str, Path],
     network_files: Union[str, Path, Sequence[Union[str, Path]]],
@@ -4046,7 +4068,8 @@ def coregister_reference(
     """
 
     # Log the command
-    logger.info(f"Running preprocessing for {participant_id}...")
+    logger.info(f"Running preprocessing for {participant_id} / {session_id}...")
+    bids_prefix = f"{participant_id}_{session_id}"
 
     # Convert to Path object
     root_dir = Path(root_dir)
@@ -4096,7 +4119,7 @@ def coregister_reference(
 
     pattern = re.compile(r"run-(\d+)")
     existing_runs: list[int] = []
-    for file in reference_dir.glob(f"{participant_id}_task-reference_run-*.nii.gz"):
+    for file in reference_dir.glob(f"{bids_prefix}_task-reference_run-*.nii.gz"):
         match = pattern.search(file.stem)
         if match:
             try:
@@ -4123,18 +4146,18 @@ def coregister_reference(
     nifti_file = dicom_to_nifti(
         dicom_dir=input_path,
         output_dir=reference_dir,
-        output_name=f"{participant_id}_task-reference_run-{run_str}",
+        output_name=f"{bids_prefix}_task-reference_run-{run_str}",
         overwrite=overwrite,
     )
 
     # Step 3: Compute mean
-    mean_file = reference_dir / Path(f"{participant_id}_task-reference_run-{run_str}_mean.nii.gz")
+    mean_file = reference_dir / Path(f"{bids_prefix}_task-reference_run-{run_str}_mean.nii.gz")
     compute_mean(input_file=nifti_file, output_file=mean_file, overwrite=overwrite)
 
     # Step 4: Compute transformation (ANTs, ~28x faster than FLIRT)
     xfm_dir = reference_dir / "xfm"
     ref_stem = ref_file.stem.replace(".nii", "")
-    output_prefix = xfm_dir / Path(f"{participant_id}_{ref_stem}_to_task-reference_run-{run_str}_mean")
+    output_prefix = xfm_dir / Path(f"{bids_prefix}_{ref_stem}_to_task-reference_run-{run_str}_mean")
     _, xfm_files = compute_xfm(
         moving=ref_file, fixed=mean_file, output_prefix=output_prefix, type_of_transform="Rigid", overwrite=overwrite
     )
@@ -4159,6 +4182,7 @@ def coregister_reference(
 
 def generate_reference_qc_overlays(
     participant_id: str,
+    session_id: str,
     session_dir: Path,
     ref_file: Path,
     mask_extraction_dir: Path,
@@ -4199,17 +4223,18 @@ def generate_reference_qc_overlays(
         return
 
     reference_dir = session_dir / reference_subdir
-    mean_file = reference_dir / f"{participant_id}_task-reference_run-{run_str}_mean.nii.gz"
+    bids_prefix = f"{participant_id}_{session_id}"
+    mean_file = reference_dir / f"{bids_prefix}_task-reference_run-{run_str}_mean.nii.gz"
     if not mean_file.exists():
         logger.info(f"Skipping reference QC overlays; mean file not found at {mean_file}")
         return
 
     xfm_dir = reference_dir / "xfm"
     ref_stem = ref_file.stem.replace(".nii", "")
-    xfm_files = sorted(xfm_dir.glob(f"{participant_id}_{ref_stem}_to_task-reference_run-{run_str}_mean_*"))
+    xfm_files = sorted(xfm_dir.glob(f"{bids_prefix}_{ref_stem}_to_task-reference_run-{run_str}_mean_*"))
     if not xfm_files:
         # Fall back to legacy naming pattern (boldref instead of ref_stem)
-        xfm_files = sorted(xfm_dir.glob(f"{participant_id}_boldref_to_task-reference_run-{run_str}_mean_*"))
+        xfm_files = sorted(xfm_dir.glob(f"{bids_prefix}_boldref_to_task-reference_run-{run_str}_mean_*"))
     if not xfm_files:
         logger.info(f"Skipping reference QC overlays; transforms not found in {xfm_dir}")
         return
@@ -4242,7 +4267,7 @@ def generate_reference_qc_overlays(
     for network in network_coreg_files:
         stem = network.stem
         try:
-            target = stem.split(f"{participant_id}_", 1)[1].split("_thr")[0]
+            target = stem.split(f"{bids_prefix}_", 1)[1].split("_thr")[0]
         except IndexError:
             target = stem
 
@@ -4278,6 +4303,7 @@ def generate_reference_qc_overlays(
         qc.generate_mask_extraction_report(
             mask_extraction_dir=mask_extraction_dir,
             participant_id=participant_id,
+            session_id=session_id,
             network_names=network_names,
             output_dir=qc_dir,
             n_yeo=n_yeo,

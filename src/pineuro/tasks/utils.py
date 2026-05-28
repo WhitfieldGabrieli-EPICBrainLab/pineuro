@@ -41,8 +41,20 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def make_bids_subject_prefix(subject: str, session: str) -> str:
+    """Return ``{subject}_{session}`` — the base prefix shared by all output filenames.
+
+    Examples
+    --------
+    >>> make_bids_subject_prefix("sub-01", "ses-01")
+    'sub-01_ses-01'
+    """
+    return f"{subject}_{session}"
+
+
 def make_bids_run_prefix(
     subject: str,
+    session: str,
     task: str,
     run: int,
     acq: int,
@@ -53,6 +65,8 @@ def make_bids_run_prefix(
     ----------
     subject : str
         Subject label (e.g., 'sub-01' or '01')
+    session : str
+        Session label (e.g., 'ses-01')
     task : str
         Task label (e.g., 'ball', 'thermometer')
     run : int
@@ -64,14 +78,14 @@ def make_bids_run_prefix(
     Returns
     -------
     str
-        Filename prefix like ``{subject}_task-{task}_acq-01_run-01``.
+        Filename prefix like ``{subject}_{session}_task-{task}_acq-01_run-01``.
 
     Examples
     --------
-    >>> make_bids_run_prefix("sub-01", "ball", run=2, acq=3)
-    'sub-01_task-ball_acq-03_run-02'
+    >>> make_bids_run_prefix("sub-01", "ses-01", "ball", run=2, acq=3)
+    'sub-01_ses-01_task-ball_acq-03_run-02'
     """
-    return f"{subject}_task-{task}_acq-{acq:02d}_run-{run:02d}"
+    return f"{subject}_{session}_task-{task}_acq-{acq:02d}_run-{run:02d}"
 
 
 def is_activation_outlier(acts: list[float] | float, threshold: float) -> bool:

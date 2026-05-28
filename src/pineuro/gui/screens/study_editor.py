@@ -107,7 +107,6 @@ class StudyEditorScreen:
                 "base_dir": "/data/pineuro",
                 "example_participant_id": "sub-001",
             },
-            "study": {"multi_session_enabled": False},
             "simulator": {
                 "enabled": True,
                 "collection_speed": 1.0,
@@ -230,12 +229,6 @@ class StudyEditorScreen:
             label="Example Participant ID",
             value=config["paths"].get("example_participant_id", "sub-001"),
             hint_text="Shown as hint when starting a session (e.g., sub-001)",
-        )
-
-        # Multi-session
-        self.multi_session_enabled_checkbox = ft.Checkbox(
-            label="Enable Multiple Sessions",
-            value=config.get("study", {}).get("multi_session_enabled", False),
         )
 
         # Simulator mode
@@ -864,14 +857,6 @@ class StudyEditorScreen:
                     ft.Text("Feedback Tasks", size=14, weight=ft.FontWeight.W_500),
                     *fb_rows,
                     add_fb_btn,
-                    ft.Divider(),
-                    self.multi_session_enabled_checkbox,
-                    ft.Text(
-                        "When enabled, participants can have multiple sessions (ses-01, ses-02, etc.).",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
                     ft.Divider(),
                     ft.Text("Reference Scans", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text(
@@ -1625,25 +1610,19 @@ class StudyEditorScreen:
             self.page.pop_dialog()
             logger.info(f"Starting session for participant: {participant_id}")
 
-            multi_session_enabled = self.multi_session_enabled_checkbox.value
+            base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
 
-            if multi_session_enabled:
-                base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
-
-                def on_session_selected(session_id, session_metadata):
-                    if self.on_start_session_callback:
-                        self.on_start_session_callback(participant_id, session_id, session_metadata)
-
-                session_dialog = SessionSelectionDialog(
-                    page=self.page,
-                    participant_id=participant_id,
-                    base_dir=base_dir,
-                    on_select=on_session_selected,
-                )
-                session_dialog.show()
-            else:
+            def on_session_selected(session_id, session_metadata):
                 if self.on_start_session_callback:
-                    self.on_start_session_callback(participant_id, None, None)
+                    self.on_start_session_callback(participant_id, session_id, session_metadata)
+
+            session_dialog = SessionSelectionDialog(
+                page=self.page,
+                participant_id=participant_id,
+                base_dir=base_dir,
+                on_select=on_session_selected,
+            )
+            session_dialog.show()
 
         dialog.actions = [
             ft.TextButton("Cancel", on_click=lambda e: self.page.pop_dialog()),
@@ -1666,10 +1645,7 @@ class StudyEditorScreen:
         config["paths"]["example_participant_id"] = self.example_participant_id_field.value.strip() or "sub-001"
         config["paths"]["base_dir"] = self.base_dir_field.value.strip() or "/data/pineuro"
 
-        # Multi-session (study block)
-        if "study" not in config:
-            config["study"] = {}
-        config["study"]["multi_session_enabled"] = self.multi_session_enabled_checkbox.value
+        config.pop("study", None)
 
         # Reference scans
         if "reference" not in config:

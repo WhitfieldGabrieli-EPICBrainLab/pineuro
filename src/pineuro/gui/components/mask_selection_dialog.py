@@ -63,6 +63,7 @@ class MaskSelectionDialog:
         page: ft.Page,
         masks_info: list[MaskReviewInfo],
         participant_id: str,
+        session_id: str,
         masks_dir: Path,
         components_file: Path,
         yeo_subject_space: Path,
@@ -120,6 +121,8 @@ class MaskSelectionDialog:
         self.page = page
         self.masks_info = {m.network_name: m for m in masks_info}
         self.participant_id = participant_id
+        self.session_id = session_id
+        self._bids_prefix = f"{participant_id}_{session_id}"
         self.masks_dir = masks_dir
         self.components_file = components_file
         self.yeo_subject_space = yeo_subject_space
@@ -588,6 +591,7 @@ class MaskSelectionDialog:
                     logger.info(f"Regenerating {name} mask for report preview")
                     regenerate_mask_from_selection(
                         participant_id=self.participant_id,
+                        session_id=self.session_id,
                         masks_dir=self.masks_dir,
                         selection=selection,
                         components_file=self.components_file,
@@ -605,6 +609,7 @@ class MaskSelectionDialog:
             report_path = qc.generate_mask_extraction_report(
                 mask_extraction_dir=self.mask_extraction_dir,
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 network_names=self.yeo_targets,
                 n_yeo=self.n_yeo,
                 overwrite=True,
@@ -643,6 +648,7 @@ class MaskSelectionDialog:
             new_overlays = qc.generate_alternative_overlays(
                 mask_extraction_dir=self.mask_extraction_dir,
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 network_names=[network_name],
                 n_alternatives=self.n_components,  # Generate for all components
                 output_dir=qc_dir,
@@ -665,6 +671,7 @@ class MaskSelectionDialog:
             yeo_overlay = qc.generate_yeo_network_overlay(
                 mask_extraction_dir=self.mask_extraction_dir,
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 network_name=network_name,
                 output_dir=qc_dir,
                 n_yeo=self.n_yeo,
@@ -1038,7 +1045,7 @@ class MaskSelectionDialog:
             temp_dir = self.mask_extraction_dir / "qc" / "temp"
             temp_dir.mkdir(parents=True, exist_ok=True)
             temp_mask = (
-                temp_dir / f"{self.participant_id}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
+                temp_dir / f"{self._bids_prefix}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
             )
 
             logger.info(f"Generating combined mask: {temp_mask}")
@@ -1221,7 +1228,7 @@ class MaskSelectionDialog:
                 temp_dir = self.mask_extraction_dir / "qc" / "temp"
                 temp_dir.mkdir(parents=True, exist_ok=True)
                 temp_mask = (
-                    temp_dir / f"{self.participant_id}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
+                    temp_dir / f"{self._bids_prefix}_{network_name}_combined_IC{comp_idx_1}_IC{comp_idx_2}_thr.nii.gz"
                 )
 
                 if not temp_mask.exists():
@@ -1359,7 +1366,7 @@ class MaskSelectionDialog:
 
         try:
             # First, regenerate the unthresholded mask from the selected component
-            network_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}.nii.gz"
+            network_file = self.masks_dir / f"{self._bids_prefix}_{self.hemisphere_network}.nii.gz"
 
             if selection.source_type == "ica" and selection.component_index is not None:
                 # Extract the selected ICA component
@@ -1381,8 +1388,8 @@ class MaskSelectionDialog:
                 save(Nifti1Image(network_mask, atlas_img.affine, atlas_img.header), network_file)  # type: ignore[attr-defined]
 
             # Now split into hemispheres
-            left_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_left_thr.nii.gz"
-            right_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_right_thr.nii.gz"
+            left_file = self.masks_dir / f"{self._bids_prefix}_{self.hemisphere_network}_left_thr.nii.gz"
+            right_file = self.masks_dir / f"{self._bids_prefix}_{self.hemisphere_network}_right_thr.nii.gz"
 
             split_mask_by_hemisphere(network_file, left_file, right_file, threshold=self.threshold, overwrite=True)
 
@@ -1391,6 +1398,7 @@ class MaskSelectionDialog:
             new_overlays = qc.generate_hemisphere_overlays(
                 mask_extraction_dir=self.mask_extraction_dir,
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 hemisphere_network=self.hemisphere_network,
                 output_dir=qc_dir,
                 n_yeo=self.n_yeo,
@@ -1470,9 +1478,7 @@ class MaskSelectionDialog:
                         info.current_component = sel.component_index
 
                         # Update overlay path for the current selection
-                        overlay_path = (
-                            overlays_dir / f"{self.participant_id}_{name}_IC{sel.component_index}_overlay.png"
-                        )
+                        overlay_path = overlays_dir / f"{self._bids_prefix}_{name}_IC{sel.component_index}_overlay.png"
                         if overlay_path.exists():
                             info.overlay_path = overlay_path
 
@@ -1483,13 +1489,13 @@ class MaskSelectionDialog:
                 # Re-discover alternative overlay paths
                 new_alt_paths = {}
                 for ic_idx in range(self.n_components):
-                    alt_path = overlays_dir / f"{self.participant_id}_{name}_IC{ic_idx}_overlay.png"
+                    alt_path = overlays_dir / f"{self._bids_prefix}_{name}_IC{ic_idx}_overlay.png"
                     if alt_path.exists():
                         new_alt_paths[ic_idx] = alt_path
                 info.alternative_overlay_paths = new_alt_paths
 
                 # Re-discover Yeo overlay path
-                yeo_path = overlays_dir / f"{self.participant_id}_{name}_yeo_overlay.png"
+                yeo_path = overlays_dir / f"{self._bids_prefix}_{name}_yeo_overlay.png"
                 if yeo_path.exists():
                     info.yeo_overlay_path = yeo_path
 
@@ -1553,6 +1559,7 @@ class MaskSelectionDialog:
             # Generate script content
             script_content = generate_mask_extraction_script(
                 participant_id=self.participant_id,
+                session_id=self.session_id,
                 mask_extraction_dir=self.mask_extraction_dir,
                 input_file=self.input_file,
                 mask_file=self.brain_mask_file,
@@ -1676,8 +1683,8 @@ class MaskSelectionDialog:
                 labels = get_yeo_labels(self.n_yeo)
 
                 for name in modified_networks:
-                    thr_file = self.masks_dir / f"{self.participant_id}_{name}_thr.nii.gz"
-                    overlay_png = subject_overlay_dir / f"{self.participant_id}_{name}_overlay.png"
+                    thr_file = self.masks_dir / f"{self._bids_prefix}_{name}_thr.nii.gz"
+                    overlay_png = subject_overlay_dir / f"{self._bids_prefix}_{name}_overlay.png"
                     if thr_file.exists():
                         logger.info(f"Regenerating subject space overlay for {name}")
                         atlas_slices = select_slices_from_atlas(
@@ -1709,9 +1716,9 @@ class MaskSelectionDialog:
                 from pineuro.mask_extraction import split_mask_by_hemisphere
 
                 # The unthresholded mask should have been regenerated above
-                network_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}.nii.gz"
-                left_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_left_thr.nii.gz"
-                right_file = self.masks_dir / f"{self.participant_id}_{self.hemisphere_network}_right_thr.nii.gz"
+                network_file = self.masks_dir / f"{self._bids_prefix}_{self.hemisphere_network}.nii.gz"
+                left_file = self.masks_dir / f"{self._bids_prefix}_{self.hemisphere_network}_left_thr.nii.gz"
+                right_file = self.masks_dir / f"{self._bids_prefix}_{self.hemisphere_network}_right_thr.nii.gz"
 
                 if network_file.exists():
                     split_mask_by_hemisphere(
@@ -1727,6 +1734,7 @@ class MaskSelectionDialog:
                     new_overlays = qc.generate_hemisphere_overlays(
                         mask_extraction_dir=self.mask_extraction_dir,
                         participant_id=self.participant_id,
+                        session_id=self.session_id,
                         hemisphere_network=self.hemisphere_network,
                         output_dir=qc_dir,
                         n_yeo=self.n_yeo,

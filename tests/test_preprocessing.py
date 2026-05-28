@@ -202,7 +202,7 @@ class TestPreprocessingPipeline:
         root_dir.mkdir()
 
         with pytest.raises(FileNotFoundError, match="Folder not found"):
-            preprocessing("sub-01", "rest", root_dir, tmp_path / "nonexistent_dicoms")
+            preprocessing("sub-01", "ses-01", "rest", root_dir, tmp_path / "nonexistent_dicoms")
 
     def test_validates_empty_dicom_dir(self, tmp_path):
         """preprocessing should raise FileNotFoundError for empty input_dicoms dir."""
@@ -214,7 +214,7 @@ class TestPreprocessingPipeline:
         empty_dicoms.mkdir()
 
         with pytest.raises(FileNotFoundError, match="Directory is empty"):
-            preprocessing("sub-01", "rest", root_dir, empty_dicoms)
+            preprocessing("sub-01", "ses-01", "rest", root_dir, empty_dicoms)
 
 
 # =============================================================================

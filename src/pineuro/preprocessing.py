@@ -660,6 +660,7 @@ def brain_extraction(
 
 def preprocessing(
     participant_id: str,
+    session_id: str,
     task: str,
     root_dir: Union[str, Path],
     input_dicoms: Union[str, Path, list[Union[str, Path]]],
@@ -680,6 +681,8 @@ def preprocessing(
     ----------
     participant_id : str
         Participant identifier (e.g., 'sub-01'). Used in output filenames.
+    session_id : str
+        Session identifier (e.g., 'ses-01'). Used in output filenames.
     task : str
         Task name (e.g., 'rest', 'nback'). Used in output filenames following
         BIDS naming conventions.
@@ -760,8 +763,9 @@ def preprocessing(
 
     >>> preproc_file, mask_file, ref_file = preprocessing(
     ...     participant_id='sub-01',
+    ...     session_id='ses-01',
     ...     task='rest',
-    ...     root_dir='/data/sub-01/preproc',
+    ...     root_dir='/data/sub-01/ses-01/preproc',
     ...     input_dicoms='/scanner/sub-01/rest_dicoms',
     ... )
 
@@ -769,8 +773,9 @@ def preprocessing(
 
     >>> preproc_file, mask_file, ref_file = preprocessing(
     ...     participant_id='sub-01',
+    ...     session_id='ses-01',
     ...     task='rest',
-    ...     root_dir='/data/sub-01/preproc',
+    ...     root_dir='/data/sub-01/ses-01/preproc',
     ...     input_dicoms=[
     ...         '/scanner/sub-01/rest_run1_dicoms',
     ...         '/scanner/sub-01/rest_run2_dicoms',
@@ -800,7 +805,8 @@ def preprocessing(
         if progress_callback:
             progress_callback(step, detail)
 
-    emit_progress(f"Running preprocessing for {participant_id}")
+    emit_progress(f"Running preprocessing for {participant_id} / {session_id}")
+    bids_prefix = f"{participant_id}_{session_id}"
 
     # -------------------------------------------------------------------------
     # Input Validation
@@ -864,7 +870,7 @@ def preprocessing(
         nifti_file_paths = []
         for run, dicom_dir in enumerate(input_paths):
             # BIDS-style naming: sub-XX_task-YY_run-01.nii.gz
-            output_name = f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}"
+            output_name = f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}"
             nifti_file_path = nifti_dir / f"{output_name}.nii.gz"
             nifti_file_paths.append(nifti_file_path)
 
@@ -891,7 +897,7 @@ def preprocessing(
             nifti_file = dicom_to_nifti(
                 dicom_dir=dicom_dir,
                 output_dir=nifti_dir,
-                output_name=f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}",
+                output_name=f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}",
                 overwrite=overwrite,
             )
             nifti_files.append(nifti_file)
@@ -919,7 +925,7 @@ def preprocessing(
 
     for run, nifti in enumerate(nifti_files):
         emit_progress("Step 2/4", f"Running motion correction on run {run + 1}/{len(nifti_files)}...")
-        mcf_file = mcf_dir / Path(f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}_mcf.nii.gz")
+        mcf_file = mcf_dir / Path(f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}_mcf.nii.gz")
         motion_correction(input_file=nifti, output_file=mcf_file, overwrite=overwrite)
         mcf_files.append(mcf_file)
 
@@ -950,7 +956,7 @@ def preprocessing(
     emit_progress("Step 3/4", "Computing temporal mean images...")
     mean_files = []
     for run, nifti in enumerate(mcf_files):
-        mean_file = bet_dir / Path(f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}_mean.nii.gz")
+        mean_file = bet_dir / Path(f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}_mean.nii.gz")
         compute_mean(input_file=nifti, output_file=mean_file, overwrite=overwrite)
         mean_files.append(mean_file)
 
@@ -982,7 +988,7 @@ def preprocessing(
 
     emit_progress("Step 4/4: Coregistration and finalization")
     coreg_dir = root_dir / "04_coregistered"
-    coreg_file = coreg_dir / Path(f"{participant_id}_task-{task}.nii.gz")
+    coreg_file = coreg_dir / Path(f"{bids_prefix}_task-{task}.nii.gz")
     xfm_dir = coreg_dir / "xfm"  # Store ANTs transform files
 
     if len(mcf_files) == 1:
@@ -1011,7 +1017,7 @@ def preprocessing(
                 # that align this run's mean to run-01's mean
                 emit_progress("Step 4/4", f"Computing transform for run {run + 1}/{len(mean_files)}...")
                 output_prefix = xfm_dir / Path(
-                    f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}_mean_to_run-01_mean"
+                    f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}_mean_to_run-01_mean"
                 )
                 _, xfm_files = compute_xfm(
                     moving=mean_file,  # This run's mean (to be transformed)
@@ -1026,7 +1032,7 @@ def preprocessing(
                 # full 4D timeseries so all volumes are in the same space
                 emit_progress("Step 4/4", f"Applying transform to run {run + 1}/{len(mean_files)}...")
                 output_file = coreg_dir / Path(
-                    f"{participant_id}_task-{task}_run-{str(run + 1).zfill(2)}_to_run-01.nii.gz"
+                    f"{bids_prefix}_task-{task}_run-{str(run + 1).zfill(2)}_to_run-01.nii.gz"
                 )
                 apply_xfm(
                     moving=mcf_files[run],  # Full 4D timeseries
@@ -1057,13 +1063,13 @@ def preprocessing(
     # Erosion by 2 voxels removes these unreliable edge voxels, which
     # improves GLM estimation by excluding noisy boundary regions.
     emit_progress("Step 4/4", "Eroding and saving brain mask...")
-    mask_file = root_dir / Path(f"{participant_id}_task-{task}_preproc_mask.nii.gz")
+    mask_file = root_dir / Path(f"{bids_prefix}_task-{task}_preproc_mask.nii.gz")
     erode_mask(mean_mask, mask_file, overwrite=overwrite)
 
     # --- Apply Mask to Preprocessed Timeseries ---
     # Zero out non-brain voxels to reduce file size and exclude them from
     # downstream analysis. This creates the final analysis-ready 4D file.
-    preproc_file = root_dir / Path(f"{participant_id}_task-{task}_preproc.nii.gz")
+    preproc_file = root_dir / Path(f"{bids_prefix}_task-{task}_preproc.nii.gz")
     if not preproc_file.exists() or overwrite:
         apply_mask(input_file=coreg_file, mask_file=mask_file, output_file=preproc_file, overwrite=overwrite)
 
@@ -1072,7 +1078,7 @@ def preprocessing(
     # - Registration to MNI space (mask extraction)
     # - Overlay visualization (QC reports)
     # - 2-volume coregistration (feedback tasks)
-    ref_file = root_dir / Path(f"{participant_id}_task-{task}_boldref.nii.gz")
+    ref_file = root_dir / Path(f"{bids_prefix}_task-{task}_boldref.nii.gz")
     if not ref_file.exists() or overwrite:
         apply_mask(input_file=sub_ref, mask_file=mask_file, output_file=ref_file, overwrite=overwrite)
 
@@ -1093,7 +1099,11 @@ def preprocessing(
             from . import qc
 
             qc_report = qc.generate_preprocessing_report(
-                preprocessing_dir=root_dir, participant_id=participant_id, task=task, overwrite=overwrite
+                preprocessing_dir=root_dir,
+                participant_id=participant_id,
+                session_id=session_id,
+                task=task,
+                overwrite=overwrite,
             )
             emit_progress("QC report", f"Saved to {qc_report.name}")
         except Exception as e:
