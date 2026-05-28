@@ -715,7 +715,7 @@ class LocalizerConfig:
     ----------
     type : str
         ``"rest"`` for ICA-based extraction, or a registered task ID
-        (e.g. ``"rnt"``) for GLM-based extraction.
+        (e.g. ``"rit"``) for GLM-based extraction.
     tr : float
         Repetition time in seconds for this localizer.
     n_volumes : int
@@ -1744,7 +1744,7 @@ def run_preprocessing(
         If True, rerun preprocessing even if outputs exist
     task_name : str, optional
         Explicit task name for output file naming (e.g. ``"rest"``,
-        ``"rnt"``). If None, inferred from ``config.scan.localizer_task_type``.
+        ``"rit"``). If None, inferred from ``config.scan.localizer_task_type``.
 
     Returns
     -------

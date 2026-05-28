@@ -69,7 +69,7 @@ See [Feedback Tasks](feedback-tasks.md) for full details.
 
 ### Task
 
-- **Task Type** — Any registered task (`gauge`, `ball`, `thermometer`, `rnt_triggered_ball`, etc. — see [Tasks](tasks.md))
+- **Task Type** — Any registered task (`gauge`, `ball`, `thermometer`, `rit_triggered_ball`, etc. — see [Tasks](tasks.md))
 - **Max Feedback Runs** — Number of feedback runs per session
 - **Transfer Runs** — Enable/disable practice runs without real feedback
 - **Task-Specific Parameters** — Dynamically populated based on selected task type

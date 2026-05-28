@@ -1,4 +1,4 @@
-"""Tests for pineuro.tasks.rnt_experience_sampling — trigger logic and registration."""
+"""Tests for pineuro.tasks.rit_experience_sampling — trigger logic and registration."""
 
 
 # =============================================================================
@@ -6,19 +6,19 @@
 # =============================================================================
 
 
-class TestRNTExperienceSamplingRegistration:
+class TestRITExperienceSamplingRegistration:
     def test_task_registered_in_feedback_tasks(self):
         from pineuro.tasks.task_registry import list_available_tasks
 
         tasks = list_available_tasks(role="feedback")
-        assert "rnt_experience_sampling" in tasks
+        assert "rit_experience_sampling" in tasks
 
     def test_task_metadata(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rnt_experience_sampling")
-        assert meta.task_id == "rnt_experience_sampling"
-        assert meta.display_name == "RNT Experience Sampling"
+        meta = get_task_metadata("rit_experience_sampling")
+        assert meta.task_id == "rit_experience_sampling"
+        assert meta.display_name == "RIT Experience Sampling"
         assert meta.n_networks == 1
         assert meta.design_type == "nuisance_only"
         assert "feedback" in meta.roles
@@ -26,7 +26,7 @@ class TestRNTExperienceSamplingRegistration:
     def test_task_parameters_defined(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rnt_experience_sampling")
+        meta = get_task_metadata("rit_experience_sampling")
         param_keys = {p.key for p in meta.parameters}
         assert "activation_contrast" in param_keys
         assert "consecutive_volumes" in param_keys
@@ -40,12 +40,12 @@ class TestRNTExperienceSamplingRegistration:
         from pineuro.tasks.factory import get_registered_task_ids
 
         ids = get_registered_task_ids()
-        assert "rnt_experience_sampling" in ids
+        assert "rit_experience_sampling" in ids
 
     def test_import_from_tasks_package(self):
-        from pineuro.tasks import RNTExperienceSamplingTask
+        from pineuro.tasks import RITExperienceSamplingTask
 
-        assert RNTExperienceSamplingTask.task_id == "rnt_experience_sampling"
+        assert RITExperienceSamplingTask.task_id == "rit_experience_sampling"
 
 
 # =============================================================================
@@ -55,7 +55,7 @@ class TestRNTExperienceSamplingRegistration:
 
 class TestTriggerState:
     def test_default_values(self):
-        from pineuro.tasks.rnt_experience_sampling import TriggerState
+        from pineuro.tasks.rit_experience_sampling import TriggerState
 
         state = TriggerState()
         assert state.last_prompt_time == -float("inf")
@@ -65,7 +65,7 @@ class TestTriggerState:
         assert len(state.activation_history) == 0
 
     def test_activation_history_maxlen(self):
-        from pineuro.tasks.rnt_experience_sampling import TriggerState
+        from pineuro.tasks.rit_experience_sampling import TriggerState
 
         state = TriggerState()
         for i in range(100):
@@ -81,16 +81,16 @@ class TestTriggerState:
 class TestTriggerDetection:
     """Test the trigger detection algorithm in isolation.
 
-    We create an RNTExperienceSamplingTask-like object with just enough state
+    We create an RITExperienceSamplingTask-like object with just enough state
     to test _check_trigger() without needing PsychoPy or a coordinator.
     """
 
     def _make_task_stub(self, **kwargs):
         """Create a minimal stub with trigger detection capability."""
-        from pineuro.tasks.rnt_experience_sampling import RNTExperienceSamplingTask, TriggerState
+        from pineuro.tasks.rit_experience_sampling import RITExperienceSamplingTask, TriggerState
 
         class TriggerStub:
-            """Minimal stub mimicking RNTExperienceSamplingTask for trigger testing."""
+            """Minimal stub mimicking RITExperienceSamplingTask for trigger testing."""
 
             pass
 
@@ -104,7 +104,7 @@ class TestTriggerDetection:
         stub._trigger_state = TriggerState()
 
         # Bind the method
-        stub._check_trigger = RNTExperienceSamplingTask._check_trigger.__get__(stub)
+        stub._check_trigger = RITExperienceSamplingTask._check_trigger.__get__(stub)
         return stub
 
     def test_cooldown_blocks_trigger(self):
@@ -277,7 +277,7 @@ class TestSlopeModeTriggerDetection:
     """Slope-mode coverage; shares the stub-builder shape with TestTriggerDetection."""
 
     def _make_task_stub(self, **kwargs):
-        from pineuro.tasks.rnt_experience_sampling import RNTExperienceSamplingTask, TriggerState
+        from pineuro.tasks.rit_experience_sampling import RITExperienceSamplingTask, TriggerState
 
         class TriggerStub:
             pass
@@ -290,7 +290,7 @@ class TestSlopeModeTriggerDetection:
         stub.min_prompt_interval = kwargs.get("min_prompt_interval", 30.0)
         stub.timeout_duration = kwargs.get("timeout_duration", 60.0)
         stub._trigger_state = TriggerState()
-        stub._check_trigger = RNTExperienceSamplingTask._check_trigger.__get__(stub)
+        stub._check_trigger = RITExperienceSamplingTask._check_trigger.__get__(stub)
         return stub
 
     def test_strict_rejects_blip(self):
@@ -360,8 +360,8 @@ class TestConstructorValidation:
     def test_invalid_trend_method_raises(self, mock_coordinator):
         import pytest
 
-        from pineuro.tasks.rnt_experience_sampling import RNTExperienceSamplingTask
+        from pineuro.tasks.rit_experience_sampling import RITExperienceSamplingTask
 
-        coord = mock_coordinator(mask_names=["RNT"])
+        coord = mock_coordinator(mask_names=["RIT"])
         with pytest.raises(ValueError, match="trend_method"):
-            RNTExperienceSamplingTask(coord, trend_method="bogus")
+            RITExperienceSamplingTask(coord, trend_method="bogus")

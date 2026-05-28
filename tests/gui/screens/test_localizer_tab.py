@@ -27,11 +27,11 @@ def _stub_builder(loc_type, *, tr="1.2", task_params=None, info_visible=True):
 
 
 class TestRefreshNVolumesInfoForVariableDurationTask:
-    def test_writes_ceiling_message_for_rnt(self):
-        # RNT exposes compute_max_run_seconds (worst-case duration depends on params).
-        builder = _stub_builder("rnt", tr="1.5", task_params={"n_trials_per_run": 4})
+    def test_writes_ceiling_message_for_rit(self):
+        # RIT exposes compute_max_run_seconds (worst-case duration depends on params).
+        builder = _stub_builder("rit", tr="1.5", task_params={"n_trials_per_run": 4})
         builder._refresh_n_volumes_info()
-        # Default RNT 4-trial run ~670s @ TR=1.5 → ceil(447) volumes
+        # Default RIT 4-trial run ~670s @ TR=1.5 → ceil(447) volumes
         assert "Auto-computed:" in builder.n_volumes_info_text.value
         assert "volumes" in builder.n_volumes_info_text.value
         assert "TR=1.5" in builder.n_volumes_info_text.value
@@ -39,8 +39,8 @@ class TestRefreshNVolumesInfoForVariableDurationTask:
 
     def test_scales_inversely_with_tr(self):
         # Halving TR doubles the volume count for the same task duration.
-        b1 = _stub_builder("rnt", tr="2.0", task_params={})
-        b2 = _stub_builder("rnt", tr="1.0", task_params={})
+        b1 = _stub_builder("rit", tr="2.0", task_params={})
+        b2 = _stub_builder("rit", tr="1.0", task_params={})
         b1._refresh_n_volumes_info()
         b2._refresh_n_volumes_info()
 
@@ -54,17 +54,17 @@ class TestRefreshNVolumesInfoForVariableDurationTask:
         assert v_tr_1 == pytest.approx(2 * v_tr_2, abs=1)
 
     def test_invalid_tr_shows_helper_message(self):
-        builder = _stub_builder("rnt", tr="not-a-number")
+        builder = _stub_builder("rit", tr="not-a-number")
         builder._refresh_n_volumes_info()
         assert "set a valid TR" in builder.n_volumes_info_text.value
 
     def test_zero_tr_shows_helper_message(self):
-        builder = _stub_builder("rnt", tr="0")
+        builder = _stub_builder("rit", tr="0")
         builder._refresh_n_volumes_info()
         assert "set a valid TR" in builder.n_volumes_info_text.value
 
     def test_negative_tr_shows_helper_message(self):
-        builder = _stub_builder("rnt", tr="-1.0")
+        builder = _stub_builder("rit", tr="-1.0")
         builder._refresh_n_volumes_info()
         assert "set a valid TR" in builder.n_volumes_info_text.value
 
@@ -81,7 +81,7 @@ class TestRefreshNVolumesInfoForFixedDurationTask:
 class TestRefreshNVolumesInfoEarlyReturns:
     def test_invisible_info_text_skips_recompute(self):
         # When the info text is hidden, the method should short-circuit before computing.
-        builder = _stub_builder("rnt", tr="1.5", info_visible=False)
+        builder = _stub_builder("rit", tr="1.5", info_visible=False)
         builder.n_volumes_info_text.value = "(unchanged)"
         builder._refresh_n_volumes_info()
         assert builder.n_volumes_info_text.value == "(unchanged)"

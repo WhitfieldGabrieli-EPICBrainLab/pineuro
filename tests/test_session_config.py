@@ -71,11 +71,11 @@ class TestLocalizerConfig:
         assert config.mask_names == ["ContA", "DefaultA"]
 
     def test_mask_names_task(self):
-        config = LocalizerConfig(type="rnt", contrasts={"rumination": "rum - dist"})
+        config = LocalizerConfig(type="rit", contrasts={"rumination": "rum - dist"})
         assert config.mask_names == ["rumination"]
 
     def test_mask_names_task_reverse(self):
-        config = LocalizerConfig(type="rnt", contrasts={"rumination": "rum - dist"}, include_reverse_contrasts=True)
+        config = LocalizerConfig(type="rit", contrasts={"rumination": "rum - dist"}, include_reverse_contrasts=True)
         assert config.mask_names == ["rumination", "rumination_reverse"]
 
     def test_manual_requires_names_when_no_paths(self):

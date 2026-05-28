@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Motion correction is now deterministic.** `motion_correction()` seeds ANTs' rigid-registration metric sampling (new `random_seed` parameter, default `0`), so re-running preprocessing on identical input yields identical motion parameters. Previously the metric's random sampling was unseeded, giving small run-to-run variation.
-- **The RNT localizer's per-participant randomization is now reproducible.** It seeded its RNG with the builtin `hash()`, which is salted per process (`PYTHONHASHSEED`) — the same participant got a different trial order on every run. It now derives the seed from a stable `hashlib` digest.
+- **The RIT localizer's per-participant randomization is now reproducible.** It seeded its RNG with the builtin `hash()`, which is salted per process (`PYTHONHASHSEED`) — the same participant got a different trial order on every run. It now derives the seed from a stable `hashlib` digest.
 - **`pineuro.__version__` now reflects the installed package metadata** (via `importlib.metadata`) instead of a hardcoded string, which had drifted to `0.2.0`. It can no longer go stale.
 - **`pipeline_runner` no longer special-cases task IDs.** The fixation localizer's parameter handling branched on `task_id == "fixation"`; that decision now reads a `TaskMetadata.localizer_params_from_scan` flag, so fixed-duration localizers work without editing shared GUI code.
 - **FD/DVARS/Siemens-MoCo motion parsing deduplicated.** Framewise displacement, DVARS, and Siemens MoCo motion-string parsing were copy-pasted between `feedback.py` and `collection_qc.py`, so a fix to one copy would silently not reach the other. `compute_fd`, `compute_dvars`, and `parse_siemens_motion_comment` now live once in `pineuro.utils`; both modules delegate to them.
@@ -79,12 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Declarative live metrics**: Each task now declares what to surface in the participant workflow monitoring panel via a `live_metrics: list[LiveMetric]` field on its `TaskMetadata`. The GUI, end-of-run summary dialog, and saved QC HTML report all iterate these declarations — no `task_id` branches in shared infra. Ball surfaces Hits, Gauge surfaces Score, RNT triggered-ball / experience-sampling surface cumulative trigger and prompt counts, and tasks declaring nothing hide the row entirely instead of showing a stale "Hits: --".
-- **Slope-based trend option for RNT trigger detection** as an alternative to threshold-based triggering.
+- **Declarative live metrics**: Each task now declares what to surface in the participant workflow monitoring panel via a `live_metrics: list[LiveMetric]` field on its `TaskMetadata`. The GUI, end-of-run summary dialog, and saved QC HTML report all iterate these declarations — no `task_id` branches in shared infra. Ball surfaces Hits, Gauge surfaces Score, RIT triggered-ball / experience-sampling surface cumulative trigger and prompt counts, and tasks declaring nothing hide the row entirely instead of showing a stale "Hits: --".
+- **Slope-based trend option for RIT trigger detection** as an alternative to threshold-based triggering.
 - **Brain slice live view during task-localizer runs**: task and rest localizers now share the same monitoring panel, so task runs get the live brain slice alongside the task mirror and QC plots.
 - **Auto-computed localizer `n_volumes` for variable-duration tasks**: localizer setup derives the volume count from task duration instead of requiring a manual entry.
 - **Save prompt before starting a session**: clicking Start Session with unsaved study-editor edits now opens a Cancel / Start without Saving / Save and Start dialog instead of silently using the in-memory config while the on-disk YAML stays stale.
-- **Per-participant RNT memory prompts** with randomized trial order.
+- **Per-participant RIT memory prompts** with randomized trial order.
 
 ### Changed
 
@@ -182,7 +182,7 @@ Initial beta release.
 - **Real-time QC**: Framewise displacement with in-run alerts, DVARS (RMS temporal derivative), tSNR (Welford's online algorithm) — all logged per-volume
 - **Spatial smoothing**: Optional real-time Gaussian smoothing with configurable FWHM
 - **Task framework**: PsychoPy-based plugin system with `@pineuro_task` decorator and `register_task()` for external tasks
-- **Built-in tasks**: Ball (dual-network, adaptive difficulty), Thermometer, Gauge, Fixation, Self-Other localizer, RNT localizer, RNT experience sampling, RNT triggered ball
+- **Built-in tasks**: Ball (dual-network, adaptive difficulty), Thermometer, Gauge, Fixation, Self-Other localizer, RIT localizer, RIT experience sampling, RIT triggered ball
 - **Session orchestration**: Multi-run, multi-session support with persistent session state and numbered output directories
 - **Sham/control conditions**: Replay-based and synthetic sham providers, randomization generator, blind operator mode
 - **Volume simulator**: Offline replay at configurable TR intervals for development and testing

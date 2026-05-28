@@ -22,7 +22,7 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 - **QC reports**: HTML quality reports for each pipeline stage
 
 **Task framework**
-- **Built-in tasks**: Gauge (dual-network block design), ball (dual-network adaptive), thermometer (single-network), and RNT variants
+- **Built-in tasks**: Gauge (dual-network block design), ball (dual-network adaptive), thermometer (single-network), and RIT variants
 - **Task plugin system**: `@pineuro_task` decorator and entry-point registration
 - **Simulation mode**: Offline DICOM replay at configurable speed
 

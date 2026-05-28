@@ -68,7 +68,7 @@ class TestDiscardLocalizer:
         # Sibling files from other attempts/tasks/runs must survive.
         other_attempt = _touch(preproc / "sub-01_ses-01_task-rest_run-01_attempt-02_events.tsv")
         other_run = _touch(preproc / "sub-01_ses-01_task-rest_run-02_attempt-01_events.tsv")
-        other_task = _touch(preproc / "sub-01_ses-01_task-rnt_run-01_attempt-01_events.tsv")
+        other_task = _touch(preproc / "sub-01_ses-01_task-rit_run-01_attempt-01_events.tsv")
 
         removed = discard_attempt(
             tmp_path, subject="sub-01", session="ses-01", task="rest", attempt=1, run=1, kind="localizer"

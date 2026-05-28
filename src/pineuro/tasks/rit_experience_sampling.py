@@ -1,4 +1,4 @@
-"""RNT experience sampling neurofeedback task.
+"""RIT experience sampling neurofeedback task.
 
 Summary
 -------
@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from .base import BaseTask
 from .factory import register_task_class
-from .rnt_triggered_ball import _least_squares_slope
+from .rit_triggered_ball import _least_squares_slope
 from .task_registry import (
     LiveMetric,
     NetworkRole,
@@ -96,8 +96,8 @@ _RATINGS = [
 ]
 
 
-class RNTExperienceSamplingTask(BaseTask):
-    """RNT experience sampling neurofeedback task.
+class RITExperienceSamplingTask(BaseTask):
+    """RIT experience sampling neurofeedback task.
 
     Uses the base class run()/update() loop.  All display logic lives in
     update(), which is called every frame by the base class at refresh_rate Hz.
@@ -135,7 +135,7 @@ class RNTExperienceSamplingTask(BaseTask):
         Monitor position for task window.
     """
 
-    task_id = "rnt_experience_sampling"
+    task_id = "rit_experience_sampling"
 
     def __init__(
         self,
@@ -242,7 +242,7 @@ class RNTExperienceSamplingTask(BaseTask):
         self._frame_counter: int = 0
 
         logger.info(
-            f"RNTExperienceSamplingTask initialized: mask={self.mask_name}, "
+            f"RITExperienceSamplingTask initialized: mask={self.mask_name}, "
             f"contrast={activation_contrast}, consecutive={consecutive_volumes}, "
             f"trend={activation_trend}, method={trend_method}, "
             f"cooldown={min_prompt_interval}s, timeout={timeout_duration}s"
@@ -384,7 +384,7 @@ class RNTExperienceSamplingTask(BaseTask):
         return None
 
     # =========================================================================
-    # Rating display (RNT-style 1-5 scale)
+    # Rating display (RIT-style 1-5 scale)
     # =========================================================================
 
     def _create_stimuli(self) -> None:
@@ -400,7 +400,7 @@ class RNTExperienceSamplingTask(BaseTask):
             color="white",
         )
 
-        # Rating scale components (1-5 scale, matching RNT pattern)
+        # Rating scale components (1-5 scale, matching RIT pattern)
         scale_y = -0.15
         scale_width = 0.5
         n_ticks = 5
@@ -884,7 +884,7 @@ class RNTExperienceSamplingTask(BaseTask):
             logger.info(f"Prompt #{self._prompt_number} incomplete (run ended): sadness={sadness[0]}, focus={focus[0]}")
 
         logger.info(
-            f"RNTExperienceSamplingTask cleanup: "
+            f"RITExperienceSamplingTask cleanup: "
             f"{self._trigger_state.n_prompts_triggered} triggered, "
             f"{self._trigger_state.n_prompts_timeout} timeout, "
             f"{self._prompt_number} total prompts"
@@ -939,9 +939,9 @@ class RNTExperienceSamplingTask(BaseTask):
 # Task metadata and registration
 # ============================================================================
 
-RNT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
-    task_id="rnt_experience_sampling",
-    display_name="RNT Experience Sampling",
+RIT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
+    task_id="rit_experience_sampling",
+    display_name="RIT Experience Sampling",
     description=(
         "Triggered experience sampling: monitors rumination network activation "
         "and prompts sadness/focus ratings when threshold + trend conditions are met"
@@ -1054,5 +1054,5 @@ RNT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
     ],
 )
 
-register_task(RNT_EXPERIENCE_SAMPLING_METADATA)
-register_task_class("rnt_experience_sampling", RNTExperienceSamplingTask)
+register_task(RIT_EXPERIENCE_SAMPLING_METADATA)
+register_task_class("rit_experience_sampling", RITExperienceSamplingTask)

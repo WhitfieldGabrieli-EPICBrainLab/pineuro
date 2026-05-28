@@ -1,4 +1,4 @@
-"""RNT triggered ball neurofeedback task.
+"""RIT triggered ball neurofeedback task.
 
 Summary
 -------
@@ -20,7 +20,7 @@ Task Flow (per run)
 
 Network Setup (3 networks)
 --------------------------
-- mask_names[0]: Trigger network (e.g. RNT) — monitored for threshold/trend
+- mask_names[0]: Trigger network (e.g. RIT) — monitored for threshold/trend
 - mask_names[1]: Top ball network (e.g. ContA) — ball moves up when more active
 - mask_names[2]: Bottom ball network (e.g. DefaultA) — ball moves down when more active
 
@@ -114,8 +114,8 @@ _PHASE_MONITORING = "monitoring"
 _PHASE_BALL_EPISODE = "ball_episode"
 
 
-class RNTTriggeredBallTask(BaseTask):
-    """RNT triggered ball neurofeedback task.
+class RITTriggeredBallTask(BaseTask):
+    """RIT triggered ball neurofeedback task.
 
     Monitors a trigger network and launches timed ball feedback episodes
     when activation conditions are met. The ball moves between two target
@@ -160,7 +160,7 @@ class RNTTriggeredBallTask(BaseTask):
         Monitor position for task window.
     """
 
-    task_id = "rnt_triggered_ball"
+    task_id = "rit_triggered_ball"
 
     def __init__(
         self,
@@ -188,7 +188,7 @@ class RNTTriggeredBallTask(BaseTask):
             mask_names = coordinator.mask_names[:3]
         if len(mask_names) < 3:
             raise ValueError(
-                f"RNTTriggeredBallTask requires 3 mask names [trigger, top_ball, bottom_ball], got {len(mask_names)}"
+                f"RITTriggeredBallTask requires 3 mask names [trigger, top_ball, bottom_ball], got {len(mask_names)}"
             )
         if trend_method not in ("strict", "slope"):
             raise ValueError(f"trend_method must be 'strict' or 'slope', got {trend_method!r}")
@@ -286,7 +286,7 @@ class RNTTriggeredBallTask(BaseTask):
         self._frame_counter: int = 0
 
         logger.info(
-            f"RNTTriggeredBallTask initialized: trigger={self.mask_name}, "
+            f"RITTriggeredBallTask initialized: trigger={self.mask_name}, "
             f"ball=[{self._ball_mask_names[0]}, {self._ball_mask_names[1]}], "
             f"contrast={activation_contrast}, consecutive={consecutive_volumes}, "
             f"trend={activation_trend}, method={trend_method}, "
@@ -974,7 +974,7 @@ class RNTTriggeredBallTask(BaseTask):
             )
 
         logger.info(
-            f"RNTTriggeredBallTask cleanup: "
+            f"RITTriggeredBallTask cleanup: "
             f"{self._trigger_state.n_episodes_triggered} triggered, "
             f"{self._trigger_state.n_episodes_timeout} timeout, "
             f"{self._episode_number} total episodes, "
@@ -1023,9 +1023,9 @@ class RNTTriggeredBallTask(BaseTask):
 # Task metadata and registration
 # ============================================================================
 
-RNT_TRIGGERED_BALL_METADATA = TaskMetadata(
-    task_id="rnt_triggered_ball",
-    display_name="RNT Triggered Ball",
+RIT_TRIGGERED_BALL_METADATA = TaskMetadata(
+    task_id="rit_triggered_ball",
+    display_name="RIT Triggered Ball",
     description=(
         "Monitors rumination network activation and triggers ball feedback "
         "episodes when threshold + trend conditions are met. Ball movement "
@@ -1152,5 +1152,5 @@ RNT_TRIGGERED_BALL_METADATA = TaskMetadata(
     ],
 )
 
-register_task(RNT_TRIGGERED_BALL_METADATA)
-register_task_class("rnt_triggered_ball", RNTTriggeredBallTask)
+register_task(RIT_TRIGGERED_BALL_METADATA)
+register_task_class("rit_triggered_ball", RITTriggeredBallTask)

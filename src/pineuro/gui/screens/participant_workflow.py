@@ -96,7 +96,12 @@ def _build_feedback_step_ids(config: dict[str, Any]) -> list[tuple[str, str]]:
     tf_counter = 0
     for frc in feedback_runs:
         task_type = frc.get("task", "?")
-        label_suffix = task_type.replace("_", " ").title()
+        try:
+            from pineuro.tasks import get_task_metadata
+
+            label_suffix = get_task_metadata(task_type).display_name
+        except (ValueError, ImportError):
+            label_suffix = task_type.replace("_", " ").title()
         use_transfers = frc.get("use_transfer_runs", False)
         max_runs = frc.get("max_runs", 1)
 

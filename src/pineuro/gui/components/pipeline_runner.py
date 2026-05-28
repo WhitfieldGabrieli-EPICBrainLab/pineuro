@@ -665,7 +665,7 @@ class PipelineRunner:
         trigger_event = threading.Event()
 
         # Event set when the localizer task's paradigm finishes.
-        # For variable-duration tasks (e.g., RNT), this signals collect_dicoms
+        # For variable-duration tasks (e.g., RIT), this signals collect_dicoms
         # to drain remaining volumes and stop, rather than waiting for n_volumes.
         task_done_event = threading.Event()
 

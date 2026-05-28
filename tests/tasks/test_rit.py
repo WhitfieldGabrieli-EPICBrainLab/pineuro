@@ -1,26 +1,26 @@
-"""Tests for pineuro.tasks.rnt — RNT localizer task metadata, keyword loading, prompts, duration."""
+"""Tests for pineuro.tasks.rit — RIT localizer task metadata, keyword loading, prompts, duration."""
 
 import json
 
 import pytest
 
 # =============================================================================
-# RNT task — metadata and registration
+# RIT task — metadata and registration
 # =============================================================================
 
 
-class TestRNTTaskMetadata:
+class TestRITTaskMetadata:
     def test_registered_in_registry(self):
         from pineuro.tasks.task_registry import list_available_tasks
 
         tasks = list_available_tasks()
-        assert "rnt" in tasks
+        assert "rit" in tasks
 
     def test_metadata_fields(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rnt")
-        assert meta.task_id == "rnt"
+        meta = get_task_metadata("rit")
+        assert meta.task_id == "rit"
         assert "localizer" in meta.roles
         assert meta.n_networks == 0
         assert "rumination_network" in meta.default_contrasts
@@ -28,7 +28,7 @@ class TestRNTTaskMetadata:
     def test_has_parameters(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rnt")
+        meta = get_task_metadata("rit")
         param_keys = [p.key for p in meta.parameters]
         assert "keywords_dir" in param_keys
         assert "rumination_duration" in param_keys
@@ -36,13 +36,13 @@ class TestRNTTaskMetadata:
 
 
 # =============================================================================
-# RNT keyword parsing — file resolution and JSON parsing
+# RIT keyword parsing — file resolution and JSON parsing
 # =============================================================================
 
 
-class TestRNTKeywordParsing:
+class TestRITKeywordParsing:
     def test_parse_json_keywords(self, tmp_path):
-        from pineuro.tasks.rnt import RNTTask
+        from pineuro.tasks.rit import RITTask
 
         keywords = {
             "memories": [
@@ -62,10 +62,10 @@ class TestRNTKeywordParsing:
                 {"keyword": "sad", "pass": 2, "memory_prompt": "Remember a time you felt sad."},
             ]
         }
-        kw_file = tmp_path / "sub-01_rnt_keywords.json"
+        kw_file = tmp_path / "sub-01_rit_keywords.json"
         kw_file.write_text(json.dumps(keywords))
 
-        task = RNTTask.__new__(RNTTask)
+        task = RITTask.__new__(RITTask)
         result = task._parse_keywords_file(kw_file)
 
         assert len(result) == 8
@@ -77,23 +77,23 @@ class TestRNTKeywordParsing:
         assert result[4]["trial"] == 5
 
     def test_parse_rejects_missing_memory_prompt(self, tmp_path):
-        from pineuro.tasks.rnt import RNTTask
+        from pineuro.tasks.rit import RITTask
 
         keywords = {"memories": [{"keyword": "loss", "pass": 1}]}  # no memory_prompt
-        kw_file = tmp_path / "sub-01_rnt_keywords.json"
+        kw_file = tmp_path / "sub-01_rit_keywords.json"
         kw_file.write_text(json.dumps(keywords))
 
-        task = RNTTask.__new__(RNTTask)
+        task = RITTask.__new__(RITTask)
         with pytest.raises(ValueError, match="memory_prompt"):
             task._parse_keywords_file(kw_file)
 
     def test_resolve_keywords_file_direct(self, tmp_path):
-        from pineuro.tasks.rnt import RNTTask
+        from pineuro.tasks.rit import RITTask
 
         kw_file = tmp_path / "keywords.json"
         kw_file.write_text(json.dumps({"memories": [{"keyword": "test", "pass": 1, "memory_prompt": "Test prompt."}]}))
 
-        task = RNTTask.__new__(RNTTask)
+        task = RITTask.__new__(RITTask)
         task.keywords_dir = None
         task._keywords_file_override = kw_file
         task.participant_id = "sub-01"
@@ -102,9 +102,9 @@ class TestRNTKeywordParsing:
         assert result == kw_file
 
     def test_resolve_keywords_file_missing_raises(self, tmp_path):
-        from pineuro.tasks.rnt import RNTTask
+        from pineuro.tasks.rit import RITTask
 
-        task = RNTTask.__new__(RNTTask)
+        task = RITTask.__new__(RITTask)
         task.keywords_dir = None
         task._keywords_file_override = tmp_path / "nonexistent.json"
         task.participant_id = "sub-01"
@@ -113,14 +113,14 @@ class TestRNTKeywordParsing:
             task._resolve_keywords_file()
 
     def test_resolve_keywords_file_by_glob(self, tmp_path):
-        from pineuro.tasks.rnt import RNTTask
+        from pineuro.tasks.rit import RITTask
 
         kw_dir = tmp_path / "keywords"
         kw_dir.mkdir()
-        kw_file = kw_dir / "sub-01_rnt_keywords.json"
+        kw_file = kw_dir / "sub-01_rit_keywords.json"
         kw_file.write_text(json.dumps({"memories": [{"keyword": "test", "pass": 1, "memory_prompt": "Test prompt."}]}))
 
-        task = RNTTask.__new__(RNTTask)
+        task = RITTask.__new__(RITTask)
         task.keywords_dir = kw_dir
         task._keywords_file_override = None
         task.participant_id = "sub-01"
@@ -130,14 +130,14 @@ class TestRNTKeywordParsing:
 
     def test_resolve_keywords_file_by_glob_keywords_first(self, tmp_path):
         """Glob should also find files where 'keywords' appears before the participant ID."""
-        from pineuro.tasks.rnt import RNTTask
+        from pineuro.tasks.rit import RITTask
 
         kw_dir = tmp_path / "keywords"
         kw_dir.mkdir()
         kw_file = kw_dir / "RIT_keywords_sub-01.json"
         kw_file.write_text(json.dumps({"memories": [{"keyword": "test", "pass": 1, "memory_prompt": "Test prompt."}]}))
 
-        task = RNTTask.__new__(RNTTask)
+        task = RITTask.__new__(RITTask)
         task.keywords_dir = kw_dir
         task._keywords_file_override = None
         task.participant_id = "sub-01"
@@ -147,11 +147,11 @@ class TestRNTKeywordParsing:
 
 
 # =============================================================================
-# RNT keyword loading — randomization behavior
+# RIT keyword loading — randomization behavior
 # =============================================================================
 
 
-class TestRNTKeywordLoading:
+class TestRITKeywordLoading:
     """Tests for _load_keywords pass-assignment and within-pass shuffles."""
 
     @staticmethod
@@ -161,15 +161,15 @@ class TestRNTKeywordLoading:
             for p in (1, 2)
             for i in range(1, 5)
         ]
-        kw_file = tmp_path / "sub-01_rnt_keywords.json"
+        kw_file = tmp_path / "sub-01_rit_keywords.json"
         kw_file.write_text(json.dumps({"memories": memories}))
         return kw_file
 
     @staticmethod
     def _make_task(kw_file, participant_id, run):
-        from pineuro.tasks.rnt import RNTTask
+        from pineuro.tasks.rit import RITTask
 
-        task = RNTTask.__new__(RNTTask)
+        task = RITTask.__new__(RITTask)
         task.keywords_dir = None
         task._keywords_file_override = kw_file
         task.participant_id = participant_id
@@ -225,59 +225,59 @@ class TestRNTKeywordLoading:
 
 
 # =============================================================================
-# RNT prompts
+# RIT prompts
 # =============================================================================
 
 
-class TestRNTPrompts:
+class TestRITPrompts:
     def test_rumination_prompts_not_empty(self):
-        from pineuro.tasks.rnt import RUMINATION_PROMPTS
+        from pineuro.tasks.rit import RUMINATION_PROMPTS
 
         assert len(RUMINATION_PROMPTS) >= 4
 
     def test_distraction_prompts_not_empty(self):
-        from pineuro.tasks.rnt import DISTRACTION_PROMPTS
+        from pineuro.tasks.rit import DISTRACTION_PROMPTS
 
         assert len(DISTRACTION_PROMPTS) >= 4
 
 
 # =============================================================================
-# RNT volume computation — TaskMetadata.compute_max_run_seconds
+# RIT volume computation — TaskMetadata.compute_max_run_seconds
 # =============================================================================
 
 
-class TestRNTVolumeComputation:
-    """Tests for the worst-case run-duration calculator on RNT."""
+class TestRITVolumeComputation:
+    """Tests for the worst-case run-duration calculator on RIT."""
 
     def test_compute_max_run_seconds_defaults(self):
-        from pineuro.tasks.rnt import HEAD_TAIL_BUFFER_S, _rnt_max_run_seconds
+        from pineuro.tasks.rit import HEAD_TAIL_BUFFER_S, _rit_max_run_seconds
 
         # 4 trials * (5 + 25 + 60 + 60 + 15) + 10 buffer = 670s with defaults
         expected = 4 * (5.0 + 25.0 + 2 * 30.0 + 4 * 15.0 + 15.0) + HEAD_TAIL_BUFFER_S
-        assert _rnt_max_run_seconds({}) == pytest.approx(expected)
+        assert _rit_max_run_seconds({}) == pytest.approx(expected)
 
     def test_compute_max_run_seconds_scales_with_trials(self):
-        from pineuro.tasks.rnt import HEAD_TAIL_BUFFER_S, _rnt_max_run_seconds
+        from pineuro.tasks.rit import HEAD_TAIL_BUFFER_S, _rit_max_run_seconds
 
-        d4 = _rnt_max_run_seconds({"n_trials_per_run": 4})
-        d8 = _rnt_max_run_seconds({"n_trials_per_run": 8})
+        d4 = _rit_max_run_seconds({"n_trials_per_run": 4})
+        d8 = _rit_max_run_seconds({"n_trials_per_run": 8})
         # Doubling trials doubles the per-trial portion (buffer unchanged)
         per_trial_portion_4 = d4 - HEAD_TAIL_BUFFER_S
         per_trial_portion_8 = d8 - HEAD_TAIL_BUFFER_S
         assert per_trial_portion_8 == pytest.approx(2 * per_trial_portion_4)
 
     def test_compute_max_run_seconds_respects_rating_timeout(self):
-        from pineuro.tasks.rnt import _rnt_max_run_seconds
+        from pineuro.tasks.rit import _rit_max_run_seconds
 
-        base = _rnt_max_run_seconds({})  # rating_timeout=15
-        bumped = _rnt_max_run_seconds({"rating_timeout": 30.0})
+        base = _rit_max_run_seconds({})  # rating_timeout=15
+        bumped = _rit_max_run_seconds({"rating_timeout": 30.0})
         # 4 ratings per trial * 4 trials = 16 rating phases; each grows by 15s
         assert bumped - base == pytest.approx(16 * 15.0)
 
-    def test_rnt_metadata_exposes_callable(self):
+    def test_rit_metadata_exposes_callable(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rnt")
+        meta = get_task_metadata("rit")
         assert meta.compute_max_run_seconds is not None
         result = meta.compute_max_run_seconds({})
         assert isinstance(result, float)
@@ -285,12 +285,12 @@ class TestRNTVolumeComputation:
 
 
 # =============================================================================
-# RNT task-state persistence — audit + read-on-retry
+# RIT task-state persistence — audit + read-on-retry
 # =============================================================================
 
 
-class TestRNTTaskStatePersistence:
-    """RNT records its per-run selection and restores it exactly on retry."""
+class TestRITTaskStatePersistence:
+    """RIT records its per-run selection and restores it exactly on retry."""
 
     @staticmethod
     def _write_keywords(tmp_path):
@@ -299,15 +299,15 @@ class TestRNTTaskStatePersistence:
             for p in (1, 2)
             for i in range(1, 5)
         ]
-        kw_file = tmp_path / "sub-01_rnt_keywords.json"
+        kw_file = tmp_path / "sub-01_rit_keywords.json"
         kw_file.write_text(json.dumps({"memories": memories}))
         return kw_file
 
     @staticmethod
     def _make_task(kw_file, participant_id, run, task_state):
-        from pineuro.tasks.rnt import RNTTask
+        from pineuro.tasks.rit import RITTask
 
-        task = RNTTask.__new__(RNTTask)
+        task = RITTask.__new__(RITTask)
         task.keywords_dir = None
         task._keywords_file_override = kw_file
         task.participant_id = participant_id
@@ -320,7 +320,7 @@ class TestRNTTaskStatePersistence:
         from pineuro.tasks.state import TaskState
 
         kw_file = self._write_keywords(tmp_path)
-        state = TaskState.create_for_task(tmp_path / "ts", "rnt")
+        state = TaskState.create_for_task(tmp_path / "ts", "rit")
         task = self._make_task(kw_file, "sub-001", 1, state)
 
         task._load_keywords()
@@ -336,7 +336,7 @@ class TestRNTTaskStatePersistence:
         from pineuro.tasks.state import TaskState
 
         kw_file = self._write_keywords(tmp_path)
-        state = TaskState.create_for_task(tmp_path / "ts", "rnt")
+        state = TaskState.create_for_task(tmp_path / "ts", "rit")
         # A cross-pass keyword set that a fresh compute can NEVER produce
         # (fresh always draws all 4 from a single pass) -- proves restore reads
         # the recorded selection rather than recomputing.
@@ -370,7 +370,7 @@ class TestRNTTaskStatePersistence:
         from pineuro.tasks.state import TaskState
 
         kw_file = self._write_keywords(tmp_path)
-        state = TaskState.create_for_task(tmp_path / "ts", "rnt")
+        state = TaskState.create_for_task(tmp_path / "ts", "rit")
         state.record_run(
             run_type="localizer",
             volumes_processed=0,
@@ -383,7 +383,7 @@ class TestRNTTaskStatePersistence:
         )
 
         task = self._make_task(kw_file, "sub-001", 1, state)
-        with caplog.at_level(logging.WARNING, logger="pineuro.tasks.rnt"):
+        with caplog.at_level(logging.WARNING, logger="pineuro.tasks.rit"):
             task._load_keywords()
 
         # Fell back to a fresh, valid single-pass selection.

@@ -1,24 +1,24 @@
-"""Tests for pineuro.tasks.rnt_triggered_ball — metadata, trigger detection, TriggerState."""
+"""Tests for pineuro.tasks.rit_triggered_ball — metadata, trigger detection, TriggerState."""
 
 
-class TestRNTTriggeredBallMetadata:
+class TestRITTriggeredBallMetadata:
     def test_registered_in_registry(self):
         from pineuro.tasks.task_registry import list_available_tasks
 
         tasks = list_available_tasks()
-        assert "rnt_triggered_ball" in tasks
+        assert "rit_triggered_ball" in tasks
 
     def test_metadata_fields(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rnt_triggered_ball")
-        assert meta.task_id == "rnt_triggered_ball"
+        meta = get_task_metadata("rit_triggered_ball")
+        assert meta.task_id == "rit_triggered_ball"
         assert meta.n_networks == 3
 
     def test_has_network_roles(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rnt_triggered_ball")
+        meta = get_task_metadata("rit_triggered_ball")
         role_keys = [r.key for r in meta.network_roles]
         assert "trigger_network" in role_keys
         assert "top_network" in role_keys
@@ -27,7 +27,7 @@ class TestRNTTriggeredBallMetadata:
     def test_task_parameters_defined(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rnt_triggered_ball")
+        meta = get_task_metadata("rit_triggered_ball")
         param_keys = {p.key for p in meta.parameters}
         assert "activation_contrast" in param_keys
         assert "consecutive_volumes" in param_keys
@@ -38,9 +38,9 @@ class TestRNTTriggeredBallMetadata:
 
 
 def _make_task(**kwargs):
-    from pineuro.tasks.rnt_triggered_ball import RNTTriggeredBallTask, TriggerState
+    from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask, TriggerState
 
-    task = RNTTriggeredBallTask.__new__(RNTTriggeredBallTask)
+    task = RITTriggeredBallTask.__new__(RITTriggeredBallTask)
     task.activation_contrast = kwargs.get("activation_contrast", "positive")
     task.consecutive_volumes = kwargs.get("consecutive_volumes", 3)
     task.activation_trend = kwargs.get("activation_trend", "increasing")
@@ -51,7 +51,7 @@ def _make_task(**kwargs):
     return task
 
 
-class TestRNTTriggeredBallTriggerDetection:
+class TestRITTriggeredBallTriggerDetection:
     def _make_task(self, **kwargs):
         return _make_task(**kwargs)
 
@@ -118,7 +118,7 @@ class TestRNTTriggeredBallTriggerDetection:
 
 class TestTriggerState:
     def test_defaults(self):
-        from pineuro.tasks.rnt_triggered_ball import TriggerState
+        from pineuro.tasks.rit_triggered_ball import TriggerState
 
         state = TriggerState()
         assert state.n_episodes_triggered == 0
@@ -129,33 +129,33 @@ class TestTriggerState:
 
 class TestLeastSquaresSlope:
     def test_empty_returns_zero(self):
-        from pineuro.tasks.rnt_triggered_ball import _least_squares_slope
+        from pineuro.tasks.rit_triggered_ball import _least_squares_slope
 
         assert _least_squares_slope([]) == 0.0
 
     def test_single_value_returns_zero(self):
-        from pineuro.tasks.rnt_triggered_ball import _least_squares_slope
+        from pineuro.tasks.rit_triggered_ball import _least_squares_slope
 
         assert _least_squares_slope([0.5]) == 0.0
 
     def test_monotonic_increase_positive_slope(self):
-        from pineuro.tasks.rnt_triggered_ball import _least_squares_slope
+        from pineuro.tasks.rit_triggered_ball import _least_squares_slope
 
         assert _least_squares_slope([0.0, 1.0, 2.0]) > 0
 
     def test_monotonic_decrease_negative_slope(self):
-        from pineuro.tasks.rnt_triggered_ball import _least_squares_slope
+        from pineuro.tasks.rit_triggered_ball import _least_squares_slope
 
         assert _least_squares_slope([2.0, 1.0, 0.0]) < 0
 
     def test_blip_does_not_flip_sign(self):
         # Net rise with one down-blip: slope still positive.
-        from pineuro.tasks.rnt_triggered_ball import _least_squares_slope
+        from pineuro.tasks.rit_triggered_ball import _least_squares_slope
 
         assert _least_squares_slope([0.1, 0.4, 0.3]) > 0
 
 
-class TestRNTTriggeredBallSlopeMode:
+class TestRITTriggeredBallSlopeMode:
     """Slope-mode trend detection in _check_trigger."""
 
     def test_strict_rejects_blip(self):
@@ -236,8 +236,8 @@ class TestConstructorValidation:
     def test_invalid_trend_method_raises(self, mock_coordinator):
         import pytest
 
-        from pineuro.tasks.rnt_triggered_ball import RNTTriggeredBallTask
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
 
-        coord = mock_coordinator(mask_names=["RNT", "ContA", "DefaultA"])
+        coord = mock_coordinator(mask_names=["RIT", "ContA", "DefaultA"])
         with pytest.raises(ValueError, match="trend_method"):
-            RNTTriggeredBallTask(coord, trend_method="bogus")
+            RITTriggeredBallTask(coord, trend_method="bogus")

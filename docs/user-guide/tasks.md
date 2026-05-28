@@ -1,6 +1,6 @@
 # Feedback Tasks
 
-Tasks are the visual displays shown to participants during neurofeedback. pineuro includes three built-in feedback tasks, three RNT (Repetitive Negative Thinking) task variants, and two localizer tasks, with a plugin system for custom tasks.
+Tasks are the visual displays shown to participants during neurofeedback. pineuro includes three built-in feedback tasks, three RIT (Rumination Induction Task) task variants, and two localizer tasks, with a plugin system for custom tasks.
 
 ## Built-In Feedback Tasks
 
@@ -89,13 +89,13 @@ A block-design audio task with thermometer feedback. Participants listen to voic
 
 **Networks required:** 1
 
-## RNT (Repetitive Negative Thinking) Tasks
+## RIT (Rumination Induction Task) Tasks
 
-Three specialized tasks for studying rumination and repetitive negative thinking.
+Three specialized tasks for studying rumination.
 
-### RNT Localizer
+### RIT Localizer
 
-A rumination localizer task where participants view personal keywords and rate how much they ruminate about each one. Used to identify brain networks involved in repetitive negative thinking.
+A rumination localizer task where participants view personal keywords and rate how much they ruminate about each one. Used to identify brain networks involved in rumination.
 
 **Paradigm:** 9-stage trial protocol with keyword presentation, rumination induction, and 1–5 rating scales. Produces BIDS events TSV output.
 
@@ -107,7 +107,7 @@ A rumination localizer task where participants view personal keywords and rate h
 
 **Networks required:** 0 (localizer only)
 
-### RNT Experience Sampling
+### RIT Experience Sampling
 
 An activation-triggered experience sampling task. Monitors real-time brain activation and presents experience sampling probes (sadness + focus ratings) when activation exceeds a threshold.
 
@@ -120,7 +120,7 @@ An activation-triggered experience sampling task. Monitors real-time brain activ
 
 **Networks required:** 1
 
-### RNT Triggered Ball
+### RIT Triggered Ball
 
 A 3-network feedback task combining rumination detection with the ball game. When the trigger network exceeds a threshold, a ball feedback episode begins using the other two networks.
 

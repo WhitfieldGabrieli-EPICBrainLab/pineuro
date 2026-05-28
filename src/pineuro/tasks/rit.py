@@ -1,5 +1,5 @@
 """
-Repetitive Negative Thinking (RNT) localizer task.
+Rumination Induction Task (RIT) localizer task.
 
 Summary
 -------
@@ -97,11 +97,11 @@ DISTRACTION_PROMPTS = [
 HEAD_TAIL_BUFFER_S = 10.0
 
 
-def _rnt_max_run_seconds(params: dict[str, Any]) -> float:
-    """Worst-case duration of a single RNT run, in seconds.
+def _rit_max_run_seconds(params: dict[str, Any]) -> float:
+    """Worst-case duration of a single RIT run, in seconds.
 
     Assumes every rating phase runs to its full ``rating_timeout`` and the
-    rest jitter takes its ``rest_max``. Defaults match ``RNT_METADATA``.
+    rest jitter takes its ``rest_max``. Defaults match ``RIT_METADATA``.
     """
     n_trials = int(params.get("n_trials_per_run", 4))
     memory = float(params.get("memory_display_duration", 5.0))
@@ -118,10 +118,10 @@ def _rnt_max_run_seconds(params: dict[str, Any]) -> float:
 # Task metadata
 # ============================================================================
 
-RNT_METADATA = TaskMetadata(
-    task_id="rnt",
-    display_name="RNT Localizer (Rumination)",
-    description="Repetitive Negative Thinking: rumination vs distraction blocks for network ROI definition",
+RIT_METADATA = TaskMetadata(
+    task_id="rit",
+    display_name="RIT Localizer",
+    description="Rumination Induction Task: rumination vs distraction blocks for network ROI definition",
     roles={"localizer"},
     n_networks=0,
     default_contrasts={"rumination_network": "rumination - distraction"},
@@ -219,7 +219,7 @@ RNT_METADATA = TaskMetadata(
             hint="Number of trials per run (default: 4)",
         ),
     ],
-    compute_max_run_seconds=_rnt_max_run_seconds,
+    compute_max_run_seconds=_rit_max_run_seconds,
 )
 
 
@@ -228,9 +228,9 @@ RNT_METADATA = TaskMetadata(
 # ============================================================================
 
 
-@pineuro_task(RNT_METADATA)
-class RNTTask(BaseLocalizerTask):
-    """Repetitive Negative Thinking (RNT) localizer task.
+@pineuro_task(RIT_METADATA)
+class RITTask(BaseLocalizerTask):
+    """Rumination Induction Task (RIT) localizer task.
 
     Alternates rumination and distraction blocks around personalized
     memory prompts, with sadness/focus ratings after each block. Outputs
@@ -272,7 +272,7 @@ class RNTTask(BaseLocalizerTask):
         Volume simulator instance for offline testing.
     """
 
-    task_id = "rnt"
+    task_id = "rit"
 
     def __init__(
         self,
@@ -356,12 +356,12 @@ class RNTTask(BaseLocalizerTask):
             )
 
         patterns = [
-            f"*{self.participant_id}*rnt*keywords*",
-            f"*rnt*keywords*{self.participant_id}*",
+            f"*{self.participant_id}*rit*keywords*",
+            f"*rit*keywords*{self.participant_id}*",
             f"*{self.participant_id}*keywords*",
             f"*keywords*{self.participant_id}*",
-            f"*{self.participant_id}*rnt*",
-            f"*rnt*{self.participant_id}*",
+            f"*{self.participant_id}*rit*",
+            f"*rit*{self.participant_id}*",
         ]
 
         for pattern in patterns:
@@ -464,7 +464,7 @@ class RNTTask(BaseLocalizerTask):
         restored = [by_keyword[k] for k in snap["keywords"] if k in by_keyword]
         if len(restored) != len(snap["keywords"]):
             logger.warning(
-                "RNT run %d: prior keyword(s) missing from current file; recomputing selection fresh.",
+                "RIT run %d: prior keyword(s) missing from current file; recomputing selection fresh.",
                 self.run_number,
             )
             return False
@@ -474,7 +474,7 @@ class RNTTask(BaseLocalizerTask):
         self._rumination_prompts = list(snap.get("rumination_prompts", []))
         self._distraction_prompts = list(snap.get("distraction_prompts", []))
         logger.info(
-            "RNT run %d: restored prior selection (pass %d, %d memories) from task state.",
+            "RIT run %d: restored prior selection (pass %d, %d memories) from task state.",
             self.run_number,
             self._target_pass,
             len(self._memories),
@@ -692,7 +692,7 @@ class RNTTask(BaseLocalizerTask):
     # =========================================================================
 
     def _run_trial(self, trial_idx: int) -> None:
-        """Execute a single trial of the RNT paradigm.
+        """Execute a single trial of the RIT paradigm.
 
         Parameters
         ----------
@@ -841,7 +841,7 @@ class RNTTask(BaseLocalizerTask):
         self.create_window(monitor_position=self.monitor_position)
         self._create_stimuli()
 
-        logger.info(f"RNTTask setup: run={self.run_number}, {len(self._memories)} memories loaded")
+        logger.info(f"RITTask setup: run={self.run_number}, {len(self._memories)} memories loaded")
 
     def _create_stimuli(self) -> None:
         """Pre-create reusable PsychoPy stimuli to avoid GPU memory leaks."""
@@ -943,7 +943,7 @@ class RNTTask(BaseLocalizerTask):
         self._tick_spacing = tick_spacing
 
     def run_paradigm(self) -> None:
-        """Execute the RNT localizer paradigm."""
+        """Execute the RIT localizer paradigm."""
         from psychopy import core
 
         task_keys = [self.left_key, self.right_key, self.confirm_key]

@@ -181,9 +181,9 @@ def _load_builtin_tasks():
         ball,
         gauge,
         rest,
-        rnt,
-        rnt_experience_sampling,
-        rnt_triggered_ball,
+        rit,
+        rit_experience_sampling,
+        rit_triggered_ball,
         self_other,
         thermometer,
     )
@@ -202,9 +202,9 @@ _LAZY_TASK_CLASS_NAMES = {
     "ThermometerTask",
     "SelfOtherTask",
     "RestTask",
-    "RNTTask",
-    "RNTExperienceSamplingTask",
-    "RNTTriggeredBallTask",
+    "RITTask",
+    "RITExperienceSamplingTask",
+    "RITTriggeredBallTask",
 }
 
 
@@ -232,9 +232,9 @@ __all__ = [
     "ThermometerTask",
     "SelfOtherTask",
     "RestTask",
-    "RNTTask",
-    "RNTExperienceSamplingTask",
-    "RNTTriggeredBallTask",
+    "RITTask",
+    "RITExperienceSamplingTask",
+    "RITTriggeredBallTask",
     "TaskState",
     "ActivationSmoother",
     "ActivationNormalizer",
