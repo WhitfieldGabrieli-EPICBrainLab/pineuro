@@ -783,6 +783,13 @@ class PipelineRunner:
         events_dir = base_dir / "preprocessing"
         events_dir.mkdir(parents=True, exist_ok=True)
 
+        # Every localizer gets a TaskState: the completed_runs ledger (resume/audit)
+        # plus any adaptive per-run snapshot the task records. Lives in a per-task-id
+        # subdir of the (shared) preprocessing dir so localizer types don't collide.
+        from pineuro.tasks.state import TaskState
+
+        task_state = TaskState.load(events_dir / f"task_state_{task_id}", task_id=task_id)
+
         # Get presenter monitor from display config
         display_config = config.get("display", {})
         presenter_monitor = display_config.get("presenter_monitor", "right")
@@ -796,6 +803,7 @@ class PipelineRunner:
             participant_id=self.participant_id,
             session_id=self.session_id,
             config=localizer_params,
+            task_state=task_state,
             run=run_num,
             attempt=attempt,  # Pass attempt for events file naming
             watch_dir=str(watch_dir),  # Pass watch_dir for auto-trigger on first DICOM
@@ -2604,7 +2612,7 @@ class PipelineRunner:
             display_config = config.get("display", {})
             presenter_monitor = display_config.get("presenter_monitor", "right")
 
-            # Load session state for adaptive difficulty persistence across runs
+            # Load task state for adaptive difficulty persistence across runs
             task_state = TaskState.load(output_dir, task_id=feedback_task_type)
 
             # Update max_feedback_runs from config if different (sum across all feedback_runs)
@@ -2613,7 +2621,7 @@ class PipelineRunner:
                 task_state.max_feedback_runs = max_feedback_runs
                 task_state.save()
 
-            self._emit_progress(f"Session state: task={feedback_task_type}, runs={len(task_state.completed_runs)}")
+            self._emit_progress(f"Task state: task={feedback_task_type}, runs={len(task_state.completed_runs)}")
 
             # Build factory config with task parameters plus runtime settings
             signal_mode = _fb("feedback_mode", "activation")

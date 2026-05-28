@@ -25,7 +25,10 @@ import threading
 import time
 from abc import ABC
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .state import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +90,12 @@ class TaskBase(ABC):  # noqa: B024
         # Source of the most recently injected key (for trigger-path diagnostics).
         # Set by _poll_keys_* when they append to _keyBuffer; cleared on reset.
         self._last_inject_source: str | None = None
+
+        # Persistent task state (shared by feedback and localizer tasks).
+        # Stays None unless an orchestrator threads a TaskState in; subclasses
+        # populate _task_state_snapshot before cleanup to record adaptive state.
+        self._task_state: TaskState | None = None
+        self._task_state_snapshot: dict[str, Any] = {}
 
     # =========================================================================
     # Mirror callback support
@@ -1097,6 +1106,40 @@ class TaskBase(ABC):  # noqa: B024
     def stop(self) -> None:
         """Signal task to stop."""
         self._running = False
+
+    # =========================================================================
+    # Task state recording (shared by feedback and localizer tasks)
+    # =========================================================================
+
+    def _run_record_fields(self) -> dict[str, Any]:
+        """record_run() kwargs for this run. Default is localizer-style.
+
+        Sources run/attempt from instance attributes and reports the number of
+        recorded events as the run's "processed" count (localizers are
+        event-driven, not volume-driven). Localizers keep per-run data on the
+        RunInfo only (merge_into_task_state=False), so task_state stays empty.
+        BaseTask overrides this to source from its coordinator and to merge
+        adaptive params into task_state.
+        """
+        return {
+            "run_type": "localizer",
+            "volumes_processed": len(getattr(self, "_events", [])),
+            "attempt": getattr(self, "attempt_number", 1),
+            "slot_run_number": getattr(self, "run_number", 1),
+            "merge_into_task_state": False,
+        }
+
+    def _record_run_completion(self) -> None:
+        """Record this run into TaskState, if one is configured.
+
+        No-op when no TaskState was threaded in (e.g. a task that declares no
+        task_state_fields). Subclasses set self._task_state_snapshot before
+        cleanup to include task-specific adaptive state.
+        """
+        if self._task_state is None:
+            return
+        fields = self._run_record_fields()
+        self._task_state.record_run(task_state_snapshot=self._task_state_snapshot, **fields)
 
     def cleanup(self) -> None:
         """Release shared resources after task completes.

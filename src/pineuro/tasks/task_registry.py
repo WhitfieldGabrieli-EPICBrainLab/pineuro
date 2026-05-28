@@ -158,14 +158,14 @@ class TaskParameter:
 class TaskStateField:
     """Definition of a task-specific persistent state field.
 
-    Session state fields are persisted across runs and can be used to track
+    Task state fields are persisted across runs and can be used to track
     cumulative statistics, adaptive difficulty parameters, or any other
     state that should survive between task runs.
 
     Attributes:
-        key: Field name used in session state dictionary (e.g., "hit_counters")
+        key: Field name used in task state dictionary (e.g., "hit_counters")
         type: Data type for validation and serialization
-        default: Default value when session state is first created
+        default: Default value when task state is first created
         description: Documentation for this field (optional)
     """
 
@@ -290,7 +290,7 @@ class TaskMetadata:
     """Metadata for a task type.
 
     Defines everything a task needs to integrate with the pineuro framework:
-    parameters for GUI configuration, session state for persistence across runs,
+    parameters for GUI configuration, task state for persistence across runs,
     post-run questions for participant feedback, and network requirements.
 
     Attributes:

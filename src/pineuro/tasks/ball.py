@@ -182,7 +182,7 @@ class BallTask(BaseTask):
     --------
     - setup(): open window, create circles/ball, start log
     - update(): read latest activations, move ball, detect hits/shrink targets
-    - cleanup(): close window and persist per-run results to session state
+    - cleanup(): close window and persist per-run results to task state
 
     Examples
     --------
@@ -272,7 +272,7 @@ class BallTask(BaseTask):
         self.circle_radii = [0.15, 0.15]
         self.circle_colors = ["yellow", "#1E90FF"]
 
-        # Store slot info from coordinator for session state tracking
+        # Store slot info from coordinator for task state tracking
         self._slot_run_number = coordinator.run_number
         self._attempt = coordinator.attempt
 
@@ -808,17 +808,17 @@ class BallTask(BaseTask):
             circle.fillColor = None
 
     def save_state(self, task_state: Optional["TaskState"] = None) -> None:
-        """Save current task state to session state for multi-run continuity.
+        """Persist current adaptive parameters to the TaskState store for multi-run continuity.
 
         Parameters
         ----------
         task_state : TaskState, optional
-            Session state to save to. If None, uses the task_state passed
+            TaskState to save to. If None, uses the task_state passed
             to __init__. If neither is available, does nothing.
         """
         state = task_state or self._task_state
         if state is None:
-            logger.debug("No session state provided, skipping save")
+            logger.debug("No task state provided, skipping save")
             return
 
         run_type = "feedback" if self.feedback_mode else "transfer"

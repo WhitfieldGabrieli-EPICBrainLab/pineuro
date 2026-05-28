@@ -80,7 +80,7 @@ def create_task(
         - Parameters defined in TaskMetadata (validated)
         - Runtime parameters: mask_names, feedback_mode, presenter_monitor
     task_state : TaskState, optional
-        Session state for adaptive difficulty
+        Task state for adaptive difficulty
     output_dir : str, optional
         Output directory for task logs
     simulator : VolumeSimulator, optional
@@ -147,6 +147,7 @@ def create_localizer_task(
     participant_id: str,
     session_id: str,
     config: dict[str, Any],
+    task_state: Optional["TaskState"] = None,
     **kwargs,
 ):
     """Create a localizer task instance (no coordinator needed).
@@ -163,6 +164,9 @@ def create_localizer_task(
         BIDS session identifier (e.g., 'ses-01')
     config : dict
         Task configuration parameters (validated against metadata)
+    task_state : TaskState, optional
+        Persistent task state to thread in for localizers that declare
+        task_state_fields. None for stateless localizers (no persistence).
     **kwargs
         Additional keyword arguments passed to the task constructor
         (e.g., run, trigger_keys, monitor_position)
@@ -190,13 +194,16 @@ def create_localizer_task(
 
     logger.info(f"Creating localizer task '{task_id}' for {participant_id} / {session_id}")
 
-    return task_class(
+    task = task_class(
         output_dir=output_dir,
         participant_id=participant_id,
         session_id=session_id,
         **filtered,
         **kwargs,
     )
+    if task_state is not None:
+        task._task_state = task_state
+    return task
 
 
 def get_registered_task_ids() -> list[str]:

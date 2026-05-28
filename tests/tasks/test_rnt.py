@@ -175,6 +175,7 @@ class TestRNTKeywordLoading:
         task.participant_id = participant_id
         task.run_number = run
         task.n_trials_per_run = 4
+        task._task_state = None  # mirrors TaskBase.__init__ (bypassed by __new__)
         return task
 
     def test_load_keywords_deterministic_per_participant(self, tmp_path):
@@ -281,3 +282,111 @@ class TestRNTVolumeComputation:
         result = meta.compute_max_run_seconds({})
         assert isinstance(result, float)
         assert result > 0
+
+
+# =============================================================================
+# RNT task-state persistence — audit + read-on-retry
+# =============================================================================
+
+
+class TestRNTTaskStatePersistence:
+    """RNT records its per-run selection and restores it exactly on retry."""
+
+    @staticmethod
+    def _write_keywords(tmp_path):
+        memories = [
+            {"keyword": f"kw{i}_p{p}", "pass": p, "memory_prompt": f"Prompt {i} pass {p}"}
+            for p in (1, 2)
+            for i in range(1, 5)
+        ]
+        kw_file = tmp_path / "sub-01_rnt_keywords.json"
+        kw_file.write_text(json.dumps({"memories": memories}))
+        return kw_file
+
+    @staticmethod
+    def _make_task(kw_file, participant_id, run, task_state):
+        from pineuro.tasks.rnt import RNTTask
+
+        task = RNTTask.__new__(RNTTask)
+        task.keywords_dir = None
+        task._keywords_file_override = kw_file
+        task.participant_id = participant_id
+        task.run_number = run
+        task.n_trials_per_run = 4
+        task._task_state = task_state
+        return task
+
+    def test_fresh_run_stages_snapshot(self, tmp_path):
+        from pineuro.tasks.state import TaskState
+
+        kw_file = self._write_keywords(tmp_path)
+        state = TaskState.create_for_task(tmp_path / "ts", "rnt")
+        task = self._make_task(kw_file, "sub-001", 1, state)
+
+        task._load_keywords()
+
+        snap = task._task_state_snapshot
+        assert snap["target_pass"] in (1, 2)
+        assert snap["keywords"] == [m["keyword"] for m in task._memories]
+        assert len(snap["keywords"]) == 4
+        assert len(snap["rumination_prompts"]) == 4
+        assert len(snap["distraction_prompts"]) == 4
+
+    def test_restore_on_retry_reuses_stored_selection(self, tmp_path):
+        from pineuro.tasks.state import TaskState
+
+        kw_file = self._write_keywords(tmp_path)
+        state = TaskState.create_for_task(tmp_path / "ts", "rnt")
+        # A cross-pass keyword set that a fresh compute can NEVER produce
+        # (fresh always draws all 4 from a single pass) -- proves restore reads
+        # the recorded selection rather than recomputing.
+        stored_keywords = ["kw1_p1", "kw1_p2", "kw2_p1", "kw2_p2"]
+        state.record_run(
+            run_type="localizer",
+            volumes_processed=0,
+            attempt=1,
+            slot_run_number=1,
+            task_state_snapshot={
+                "target_pass": 2,
+                "keywords": stored_keywords,
+                "rumination_prompts": ["r1", "r2", "r3", "r4"],
+                "distraction_prompts": ["d1", "d2", "d3", "d4"],
+            },
+        )
+
+        task = self._make_task(kw_file, "sub-001", 1, state)
+        task._load_keywords()
+
+        assert task._target_pass == 2
+        assert [m["keyword"] for m in task._memories] == stored_keywords
+        assert task._rumination_prompts == ["r1", "r2", "r3", "r4"]
+        assert task._distraction_prompts == ["d1", "d2", "d3", "d4"]
+        # Re-stages the same selection so the retry records identically.
+        assert task._task_state_snapshot["keywords"] == stored_keywords
+
+    def test_missing_keyword_falls_back_to_fresh(self, tmp_path, caplog):
+        import logging
+
+        from pineuro.tasks.state import TaskState
+
+        kw_file = self._write_keywords(tmp_path)
+        state = TaskState.create_for_task(tmp_path / "ts", "rnt")
+        state.record_run(
+            run_type="localizer",
+            volumes_processed=0,
+            attempt=1,
+            slot_run_number=1,
+            task_state_snapshot={
+                "target_pass": 1,
+                "keywords": ["kw1_p1", "GONE_keyword", "kw2_p1", "kw3_p1"],
+            },
+        )
+
+        task = self._make_task(kw_file, "sub-001", 1, state)
+        with caplog.at_level(logging.WARNING, logger="pineuro.tasks.rnt"):
+            task._load_keywords()
+
+        # Fell back to a fresh, valid single-pass selection.
+        assert len(task._memories) == 4
+        assert len({m["pass"] for m in task._memories}) == 1
+        assert any("missing" in msg.lower() for msg in caplog.messages)

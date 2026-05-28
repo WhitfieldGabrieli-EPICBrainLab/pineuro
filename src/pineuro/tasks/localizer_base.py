@@ -222,6 +222,16 @@ class BaseLocalizerTask(TaskBase):
         """
         pass
 
+    def cleanup(self) -> None:
+        """Record run completion (if task state configured), then release resources.
+
+        Mirrors BaseTask.cleanup: records into TaskState before delegating to
+        TaskBase. A no-op for localizers that declare no task_state_fields
+        (then _task_state is None).
+        """
+        self._record_run_completion()
+        super().cleanup()
+
     def run(self) -> Path:
         """Full task lifecycle: setup → paradigm → save events → cleanup.
 

@@ -113,7 +113,7 @@ class ThermometerTask(BaseTask):
     activation_min : float
         Lower clamp for thermometer bar height.
     task_state : TaskState, optional
-        Session state for persistence across runs.
+        Task state for persistence across runs.
     trigger_keys : list of str
         Keys that trigger acquisition start.
     presenter_monitor : str

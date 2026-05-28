@@ -31,7 +31,7 @@ def test_round_trip_empty_state(tmp_path):
     save/load round-trip from the task-metadata default-injection path.
     """
     state = TaskState(
-        feedback_dir=tmp_path,
+        state_dir=tmp_path,
         task_id="_validation_test_unregistered_task",
         task_state={},
         completed_runs=[],
@@ -57,7 +57,7 @@ def test_round_trip_task_state_values(tmp_path):
         "active": True,
     }
     state = TaskState(
-        feedback_dir=tmp_path,
+        state_dir=tmp_path,
         task_id="thermometer",
         task_state=dict(original_state),
         completed_runs=[],
@@ -91,7 +91,7 @@ def test_round_trip_completed_runs(tmp_path):
         ),
     ]
     state = TaskState(
-        feedback_dir=tmp_path,
+        state_dir=tmp_path,
         task_id="ball",
         task_state={"some": "state"},
         completed_runs=runs,
@@ -113,7 +113,7 @@ def test_round_trip_completed_runs(tmp_path):
 def test_round_trip_slot_base_state(tmp_path):
     """slot_base_state keys (int) round-trip through JSON string-key conversion."""
     state = TaskState(
-        feedback_dir=tmp_path,
+        state_dir=tmp_path,
         task_id="ball",
         task_state={},
         completed_runs=[],
@@ -142,14 +142,14 @@ def test_load_missing_file_creates_fresh_state(tmp_path):
     loaded = TaskState.load(tmp_path, task_id="some_task")
     assert loaded.task_id == "some_task"
     assert loaded.completed_runs == []
-    # The default max_feedback_runs is 5 (class default); a fresh state inherits it.
-    assert loaded.max_feedback_runs == 5
+    # max_feedback_runs is feedback-only; a fresh state leaves it unset (None).
+    assert loaded.max_feedback_runs is None
 
 
 def test_round_trip_max_feedback_runs_value(tmp_path):
     """max_feedback_runs preserves its int value across the round trip."""
     state = TaskState(
-        feedback_dir=tmp_path,
+        state_dir=tmp_path,
         task_id="ball",
         task_state={},
         completed_runs=[],
@@ -164,7 +164,7 @@ def test_round_trip_max_feedback_runs_value(tmp_path):
 def test_save_then_reload_then_save_is_stable(tmp_path):
     """Two successive save→load→save cycles produce identical JSON content."""
     state1 = TaskState(
-        feedback_dir=tmp_path,
+        state_dir=tmp_path,
         task_id="ball",
         task_state={"a": 1, "b": [2, 3]},
         completed_runs=[RunInfo(1, "transfer", 50, attempt=1)],

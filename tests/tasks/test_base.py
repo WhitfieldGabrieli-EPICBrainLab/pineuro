@@ -100,6 +100,38 @@ class TestBlockAccumulation:
 
 
 # =============================================================================
+# Task state recording (coordinator-sourced run fields)
+# =============================================================================
+
+
+class TestRunRecordFields:
+    """Feedback tasks source run-completion coordinates from the coordinator."""
+
+    def _stub_task(self, mock_coordinator, feedback_mode):
+        from pineuro.tasks.base import BaseTask
+
+        class _StubTask(BaseTask):
+            def setup(self):  # pragma: no cover
+                pass
+
+            def update(self, data):  # pragma: no cover
+                pass
+
+        coord = mock_coordinator(run_number=2, attempt=3)
+        return _StubTask(coordinator=coord, feedback_mode=feedback_mode)
+
+    def test_feedback_run_type_and_coordinator_sourcing(self, mock_coordinator):
+        fields = self._stub_task(mock_coordinator, feedback_mode=True)._run_record_fields()
+        assert fields["run_type"] == "feedback"
+        assert fields["attempt"] == 3  # coordinator.attempt
+        assert fields["slot_run_number"] == 2  # coordinator.run_number
+
+    def test_transfer_run_type_when_not_feedback(self, mock_coordinator):
+        fields = self._stub_task(mock_coordinator, feedback_mode=False)._run_record_fields()
+        assert fields["run_type"] == "transfer"
+
+
+# =============================================================================
 # Mirror state + run results
 # =============================================================================
 
@@ -134,7 +166,7 @@ class TestRunResults:
 
 
 # =============================================================================
-# Session-state recording
+# Task-state recording
 # =============================================================================
 
 
@@ -158,6 +190,7 @@ class TestRecordRunCompletion:
             attempt=1,
             slot_run_number=1,
             task_state_snapshot={"hits": 5},
+            merge_into_task_state=True,
         )
 
     def test_records_transfer_when_not_feedback_mode(self, base_task):

@@ -320,6 +320,7 @@ class RNTTask(BaseLocalizerTask):
         self._memories: list[dict[str, Any]] = []
         self._rumination_prompts: list[str] = []
         self._distraction_prompts: list[str] = []
+        self._target_pass: int = 0
 
     # =========================================================================
     # Keywords loading
@@ -395,6 +396,12 @@ class RNTTask(BaseLocalizerTask):
 
         all_memories = self._parse_keywords_file(keywords_path)
 
+        # On a retry/resume of this run, re-use the exact selection recorded last
+        # time so a mid-session keywords-file edit can't change what is shown.
+        if self._restore_prior_selection(all_memories):
+            self._stage_task_state_snapshot()
+            return
+
         # Deterministic per-participant RNG. Use a stable hash (hashlib) rather
         # than the builtin hash(), which is salted per process (PYTHONHASHSEED)
         # and would give a different randomization on every run.
@@ -404,14 +411,14 @@ class RNTTask(BaseLocalizerTask):
         # 1. Randomize which pass this run draws from.
         pass_order = [1, 2]
         rng.shuffle(pass_order)
-        target_pass = pass_order[self.run_number - 1]
+        self._target_pass = pass_order[self.run_number - 1]
 
         # 2. Filter to this pass and shuffle within-pass order.
-        run_memories = [m for m in all_memories if m["pass"] == target_pass]
+        run_memories = [m for m in all_memories if m["pass"] == self._target_pass]
         if len(run_memories) < self.n_trials_per_run:
             raise ValueError(
                 f"Keywords file has {len(run_memories)} memories for pass "
-                f"{target_pass}, but n_trials_per_run={self.n_trials_per_run}. "
+                f"{self._target_pass}, but n_trials_per_run={self.n_trials_per_run}. "
                 f"Need at least {self.n_trials_per_run} memories per pass."
             )
         rng.shuffle(run_memories)
@@ -433,7 +440,55 @@ class RNTTask(BaseLocalizerTask):
             DISTRACTION_PROMPTS[distraction_order[i % len(DISTRACTION_PROMPTS)]] for i in range(start, end)
         ]
 
-        logger.info(f"Loaded {len(self._memories)} memories for run {self.run_number} (pass {target_pass})")
+        logger.info(f"Loaded {len(self._memories)} memories for run {self.run_number} (pass {self._target_pass})")
+        self._stage_task_state_snapshot()
+
+    def _restore_prior_selection(self, all_memories: list[dict[str, Any]]) -> bool:
+        """Restore a previously-recorded selection for this run, if one exists.
+
+        Returns True if the prior selection was fully restored. Returns False
+        (caller computes a fresh selection) when there is no task state, no prior
+        run for this slot, no recorded selection, or a recorded keyword is no
+        longer present in the keywords file.
+        """
+        if self._task_state is None:
+            return False
+        prior = self._task_state.get_run_for_slot(self.run_number)
+        if prior is None:
+            return False
+        snap = prior.task_state_snapshot
+        if "target_pass" not in snap or "keywords" not in snap:
+            return False
+
+        by_keyword = {m["keyword"]: m for m in all_memories}
+        restored = [by_keyword[k] for k in snap["keywords"] if k in by_keyword]
+        if len(restored) != len(snap["keywords"]):
+            logger.warning(
+                "RNT run %d: prior keyword(s) missing from current file; recomputing selection fresh.",
+                self.run_number,
+            )
+            return False
+
+        self._target_pass = snap["target_pass"]
+        self._memories = restored
+        self._rumination_prompts = list(snap.get("rumination_prompts", []))
+        self._distraction_prompts = list(snap.get("distraction_prompts", []))
+        logger.info(
+            "RNT run %d: restored prior selection (pass %d, %d memories) from task state.",
+            self.run_number,
+            self._target_pass,
+            len(self._memories),
+        )
+        return True
+
+    def _stage_task_state_snapshot(self) -> None:
+        """Record this run's selection so it persists and can be restored on retry."""
+        self._task_state_snapshot = {
+            "target_pass": self._target_pass,
+            "keywords": [m["keyword"] for m in self._memories],
+            "rumination_prompts": list(self._rumination_prompts),
+            "distraction_prompts": list(self._distraction_prompts),
+        }
 
     def _parse_keywords_file(self, path: Path) -> list[dict[str, Any]]:
         """Parse a keywords JSON file.

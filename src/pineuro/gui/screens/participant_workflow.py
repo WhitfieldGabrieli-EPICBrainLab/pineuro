@@ -5233,9 +5233,9 @@ class ParticipantWorkflowScreen:
         from pineuro.session import get_localizer_run_info
         from pineuro.tasks.state import TaskState
 
-        # Load session state for adaptive state display
+        # Load task state for adaptive state display
         feedback_dir = base_dir / "feedback" / "02_feedback_output"
-        # Cache session states per task type for multi-FRC support
+        # Cache task states per task type for multi-FRC support
         feedback_runs = config.get("feedback_runs", [])
         _task_states: dict[str, TaskState | None] = {}
         default_task_type = config["feedback_runs"][0].get("task", "ball") if config.get("feedback_runs") else "ball"

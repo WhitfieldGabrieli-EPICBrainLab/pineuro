@@ -88,7 +88,7 @@ class BaseTask(TaskBase):
     feedback_mode : bool, optional
         Whether feedback is active (default: True)
     task_state : TaskState, optional
-        Session state for persistence across runs
+        Task state for persistence across runs
     simulator : VolumeSimulator, optional
         Volume simulator for offline testing
 
@@ -103,7 +103,7 @@ class BaseTask(TaskBase):
     feedback_mode : bool
         Whether feedback is active
     _task_state : TaskState or None
-        Session state for persistence
+        Task state for persistence
 
     Examples
     --------
@@ -119,7 +119,7 @@ class BaseTask(TaskBase):
     """
 
     # Subclasses should set this to match their registered task_id
-    # Used for accessing task metadata (parameters, session state, questions)
+    # Used for accessing task metadata (parameters, task state, questions)
     task_id: str = "base"
 
     def __init__(
@@ -172,7 +172,7 @@ class BaseTask(TaskBase):
         Returns
         -------
         TaskMetadata
-            Metadata object with parameters, session state fields, and questions.
+            Metadata object with parameters, task state fields, and questions.
             Returns None if task is not registered.
         """
         from .task_registry import get_task_metadata
@@ -531,7 +531,7 @@ class BaseTask(TaskBase):
     # Should override (call super()):
     #   cleanup()                   Release resources. Call super().cleanup() at END.
     #   get_run_results()           Return run metrics. Merge with super().get_run_results().
-    #   _record_run_completion()    Custom session-state recording. Call super() first.
+    #   _record_run_completion()    Custom task-state recording. Call super() first.
     #
     # May override (no super() needed):
     #   get_mirror_state()          Return vector state for GUI mirror.
@@ -592,7 +592,7 @@ class BaseTask(TaskBase):
         """Clean up resources after task completes.
 
         Default implementation:
-        1. Records run completion to session state (if configured)
+        1. Records run completion to task state (if configured)
         2. Shows post-run questions (if defined in metadata)
         3. Delegates to TaskBase.cleanup() for window/simulator/pyglet cleanup
 
@@ -603,7 +603,7 @@ class BaseTask(TaskBase):
         For custom question behavior (like BallTask's instruction screen),
         override _show_post_run_questions() instead.
         """
-        # Record run completion (no-op if no session state)
+        # Record run completion (no-op if no task state)
         self._record_run_completion()
 
         # Show post-run questions if coordinator says to (respects stop() with show_questions flag)
@@ -663,25 +663,19 @@ class BaseTask(TaskBase):
             self.cleanup()
 
     # =========================================================================
-    # Automatic Session State Recording
+    # Automatic task state recording
     # =========================================================================
 
-    def _record_run_completion(self) -> None:
-        """Record run completion to session state.
+    def _run_record_fields(self) -> dict[str, Any]:
+        """Source run-completion coordinates from the coordinator.
 
-        Called automatically by cleanup() if session state is configured.
-        Subclasses should set self._task_state_snapshot dict before cleanup
-        to include task-specific state in the recording.
-
-        Override this method if you need custom recording logic.
+        Overrides TaskBase's instance-attribute default so feedback runs
+        record the correct run type and the coordinator's attempt/slot.
         """
-        if self._task_state is None:
-            return
-
-        self._task_state.record_run(
-            run_type="feedback" if self.feedback_mode else "transfer",
-            volumes_processed=getattr(self, "_volumes_processed", 0),
-            attempt=self.coordinator.attempt,
-            slot_run_number=self.coordinator.run_number,
-            task_state_snapshot=getattr(self, "_task_state_snapshot", {}),
-        )
+        return {
+            "run_type": "feedback" if self.feedback_mode else "transfer",
+            "volumes_processed": getattr(self, "_volumes_processed", 0),
+            "attempt": self.coordinator.attempt,
+            "slot_run_number": self.coordinator.run_number,
+            "merge_into_task_state": True,
+        }

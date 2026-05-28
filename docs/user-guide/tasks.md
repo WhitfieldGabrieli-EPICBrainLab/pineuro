@@ -41,7 +41,7 @@ A dual-network game where a white ball moves between two target circles. The bal
 - If hits > `max_hits_threshold` → speed decreases 25% (harder)
 - Circle size shrinks by `circle_shrink_factor` per hit
 
-**Session State:** Scale factor, hit counts, and circle sizes persist across runs within a session, enabling progressive difficulty.
+**Task State:** Scale factor, hit counts, and circle sizes persist across runs within a session, enabling progressive difficulty.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|

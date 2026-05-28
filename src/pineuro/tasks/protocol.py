@@ -136,7 +136,7 @@ class TaskProtocol(Protocol):
         ``get_run_results()``
             Return run metrics.  Merge with ``super().get_run_results()``.
         ``_record_run_completion()``
-            Custom session-state recording.  Call ``super()`` first.
+            Custom task-state recording.  Call ``super()`` first.
 
     May override (no super() needed):
         ``get_mirror_state()``

@@ -1,10 +1,10 @@
 """
-Task state management for multi-run neurofeedback tasks.
+Task state management for multi-run tasks (feedback and localizer).
 
 Summary
 -------
-Persists adaptive task state across runs via JSON in the session directory.
-Session state is config-driven: tasks declare their state fields in
+Persists adaptive task state across runs via JSON in a per-task state directory.
+Task state is config-driven: tasks declare their state fields in
 TaskMetadata, and TaskState stores them dynamically via get()/set().
 
 Components
@@ -85,7 +85,7 @@ class TaskState:
 
     Parameters
     ----------
-    feedback_dir : Path
+    state_dir : Path
         Directory where task_state.json will be stored
     task_id : str
         Identifier of the task type (e.g., "ball", "thermometer")
@@ -93,28 +93,31 @@ class TaskState:
         Dynamic storage for task-specific state fields
     completed_runs : list[RunInfo]
         Metadata for all completed runs
-    max_feedback_runs : int
-        Total expected number of feedback runs (for detecting last run)
+    max_feedback_runs : int | None
+        Total expected number of feedback runs (for detecting last run).
+        None for non-feedback tasks (localizers); omitted from their state file.
 
     Examples
     --------
-    >>> # Create new session state with task-specific defaults
-    >>> state = TaskState.create_for_task(feedback_dir, "my_task")
+    >>> # Create new task state with task-specific defaults
+    >>> state = TaskState.create_for_task(state_dir, "my_task")
     >>> state.get("threshold")  # Access task state
     0.5
     >>> state.set("threshold", 0.8)  # Update task state
 
     >>> # Or load existing state
-    >>> state = TaskState.load(feedback_dir, task_id="my_task")
+    >>> state = TaskState.load(state_dir, task_id="my_task")
 
     >>> state.set("scale_factor", 15.0)  # Update a field
     """
 
-    feedback_dir: Path
+    state_dir: Path
     task_id: str = "ball"
     task_state: dict[str, Any] = field(default_factory=dict)
     completed_runs: list[RunInfo] = field(default_factory=list)
-    max_feedback_runs: int = 5
+    # Feedback-only: total expected feedback runs (for "last feedback run" logic).
+    # Stays None for localizers and is omitted from their on-disk state.
+    max_feedback_runs: int | None = None
 
     # Slot-based tracking: maps slot_run_number to the task_state snapshot
     # at the START of that slot (before any runs). Enables retries to restore
@@ -172,7 +175,7 @@ class TaskState:
     @property
     def state_file(self) -> Path:
         """Path to task_state.json file."""
-        return self.feedback_dir / "task_state.json"
+        return self.state_dir / "task_state.json"
 
     @property
     def next_run_number(self) -> int:
@@ -213,8 +216,11 @@ class TaskState:
 
         Returns True when feedback_run_count >= max_feedback_runs,
         meaning all feedback runs are complete. This is used to determine
-        when to show "last_feedback_only" post-run questions.
+        when to show "last_feedback_only" post-run questions. Always False
+        when max_feedback_runs is unset (e.g. localizer tasks).
         """
+        if self.max_feedback_runs is None:
+            return False
         return self.feedback_run_count >= self.max_feedback_runs
 
     def get_state_for_slot(self, slot_run_number: int, attempt: int = 1) -> dict[str, Any]:
@@ -286,40 +292,42 @@ class TaskState:
 
     def save(self) -> None:
         """Save current state to task_state.json."""
-        self.feedback_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir.mkdir(parents=True, exist_ok=True)
 
-        data = {
+        data: dict[str, Any] = {
             "task_id": self.task_id,
             "task_state": self.task_state,
             "completed_runs": [r.to_dict() for r in self.completed_runs],
-            "max_feedback_runs": self.max_feedback_runs,
             "slot_base_state": {str(k): v for k, v in self.slot_base_state.items()},
         }
+        # Feedback-only field; omit entirely for tasks that don't set it (localizers).
+        if self.max_feedback_runs is not None:
+            data["max_feedback_runs"] = self.max_feedback_runs
 
         with open(self.state_file, "w") as f:
             json.dump(data, f, indent=2)
 
-        logger.info(f"Session state saved to {self.state_file}")
+        logger.info(f"Task state saved to {self.state_file}")
 
     @classmethod
-    def create_for_task(cls, feedback_dir: Path, task_id: str) -> "TaskState":
-        """Create session state with defaults from task metadata.
+    def create_for_task(cls, state_dir: Path, task_id: str) -> "TaskState":
+        """Create task state with defaults from task metadata.
 
         Parameters
         ----------
-        feedback_dir : Path
-            Directory for session state file
+        state_dir : Path
+            Directory for task state file
         task_id : str
             Task identifier (e.g., "ball", "thermometer")
 
         Returns
         -------
         TaskState
-            New session state initialized with task-specific defaults
+            New task state initialized with task-specific defaults
         """
         from .task_registry import get_task_metadata
 
-        feedback_dir = Path(feedback_dir)
+        state_dir = Path(state_dir)
 
         try:
             metadata = get_task_metadata(task_id)
@@ -329,20 +337,18 @@ class TaskState:
             defaults = {}
 
         return cls(
-            feedback_dir=feedback_dir,
+            state_dir=state_dir,
             task_id=task_id,
             task_state=defaults,
         )
 
     @classmethod
-    def load(cls, feedback_dir: Path, task_id: str = "unknown") -> "TaskState":
+    def load(cls, state_dir: Path, task_id: str = "unknown") -> "TaskState":
         """Load state from task_state.json, or create new if not exists.
-
-        Handles both old format (direct fields) and new format (task_state dict).
 
         Parameters
         ----------
-        feedback_dir : Path
+        state_dir : Path
             Directory containing (or that will contain) task_state.json
         task_id : str
             Task identifier for creating fresh state
@@ -352,71 +358,49 @@ class TaskState:
         TaskState
             Loaded state, or fresh state if file doesn't exist
         """
-        feedback_dir = Path(feedback_dir)
-        state_file = feedback_dir / "task_state.json"
+        state_dir = Path(state_dir)
+        state_file = state_dir / "task_state.json"
 
         if state_file.exists():
             with open(state_file) as f:
                 data = json.load(f)
 
-            # Handle both old and new formats
-            if "task_state" in data:
-                # New format: use task_state dict
-                task_state = data["task_state"]
-            else:
-                # Old format: migrate legacy fields using task metadata
-                loaded_task_id = data.get("task_id", task_id)
-                try:
-                    from .task_registry import get_task_metadata
-
-                    metadata = get_task_metadata(loaded_task_id)
-                    _known_keys = {f.key for f in metadata.task_state_fields}
-                    task_state = {f.key: data.get(f.key, f.default) for f in metadata.task_state_fields}
-                    logger.info(f"Migrated legacy session state for '{loaded_task_id}': {list(task_state.keys())}")
-                except (ValueError, ImportError):
-                    # Task not registered: pull any non-framework keys as best-effort
-                    framework_keys = {
-                        "task_id",
-                        "completed_runs",
-                        "max_feedback_runs",
-                        "slot_base_state",
-                        "slot_base_scale_factors",
-                    }
-                    task_state = {k: v for k, v in data.items() if k not in framework_keys}
-                    logger.warning(
-                        f"Task '{loaded_task_id}' not registered, migrated all extra keys: {list(task_state.keys())}"
-                    )
+            task_state = data["task_state"]
 
             # Load slot_base_state (convert string keys back to int)
             slot_base_state_raw = data.get("slot_base_state", {})
             slot_base_state = {int(k): v for k, v in slot_base_state_raw.items()}
 
             state = cls(
-                feedback_dir=feedback_dir,
+                state_dir=state_dir,
                 task_id=data.get("task_id", task_id),
                 task_state=task_state,
                 completed_runs=[RunInfo.from_dict(r) for r in data.get("completed_runs", [])],
-                max_feedback_runs=data.get("max_feedback_runs", 5),
+                max_feedback_runs=data.get("max_feedback_runs"),
                 slot_base_state=slot_base_state,
             )
-            logger.info(f"Loaded session state from {state_file}")
+            logger.info(f"Loaded task state from {state_file}")
+            feedback_progress = (
+                f", feedback: {state.feedback_run_count}/{state.max_feedback_runs}"
+                if state.max_feedback_runs is not None
+                else ""
+            )
             logger.info(
                 f"  Task: {state.task_id}, {len(state.completed_runs)} completed, "
-                f"next: run {state.next_run_number}, "
-                f"feedback: {state.feedback_run_count}/{state.max_feedback_runs}"
+                f"next: run {state.next_run_number}{feedback_progress}"
             )
             return state
         else:
-            logger.info(f"No existing session state at {state_file}, creating fresh state")
-            return cls.create_for_task(feedback_dir, task_id)
+            logger.info(f"No existing task state at {state_file}, creating fresh state")
+            return cls.create_for_task(state_dir, task_id)
 
     @classmethod
-    def reset(cls, feedback_dir: Path, task_id: str = "unknown") -> "TaskState":
-        """Reset session state by deleting existing state file.
+    def reset(cls, state_dir: Path, task_id: str = "unknown") -> "TaskState":
+        """Reset task state by deleting existing state file.
 
         Parameters
         ----------
-        feedback_dir : Path
+        state_dir : Path
             Directory containing task_state.json
         task_id : str
             Task identifier for fresh state
@@ -424,16 +408,16 @@ class TaskState:
         Returns
         -------
         TaskState
-            Fresh session state
+            Fresh task state
         """
-        feedback_dir = Path(feedback_dir)
-        state_file = feedback_dir / "task_state.json"
+        state_dir = Path(state_dir)
+        state_file = state_dir / "task_state.json"
 
         if state_file.exists():
             state_file.unlink()
-            logger.info(f"Reset session state: deleted {state_file}")
+            logger.info(f"Reset task state: deleted {state_file}")
 
-        return cls.create_for_task(feedback_dir, task_id)
+        return cls.create_for_task(state_dir, task_id)
 
     # -------------------------------------------------------------------------
     # Run recording
@@ -447,6 +431,7 @@ class TaskState:
         task_state_snapshot: dict[str, Any] | None = None,
         # Slot-based tracking parameters
         slot_run_number: int | None = None,
+        merge_into_task_state: bool = True,
     ) -> None:
         """Record a completed run and update task state.
 
@@ -464,10 +449,16 @@ class TaskState:
         attempt : int
             The attempt number (1, 2, 3, ...). Used for retry tracking.
         task_state_snapshot : dict, optional
-            Snapshot of task state at end of run. All keys in this dict
-            will be merged into the persistent task_state.
+            Snapshot of task state at end of run. Always recorded on the
+            RunInfo; merged into the persistent task_state only when
+            merge_into_task_state is True.
         slot_run_number : int, optional
             The run slot number (1 or 2). If provided, tracks runs by slot.
+        merge_into_task_state : bool, default True
+            Whether to fold the snapshot into the accumulating task_state dict.
+            True for feedback tasks (carry adaptive params to the next run).
+            False for localizers, whose per-run data lives only on the RunInfo
+            (read back per-slot via get_run_for_slot), keeping task_state empty.
         """
         if task_state_snapshot is None:
             task_state_snapshot = {}
@@ -504,26 +495,27 @@ class TaskState:
         else:
             self.completed_runs.append(run_info)
 
-        # Update persistent task_state from snapshot
-        self.task_state.update(task_state_snapshot)
+        if merge_into_task_state:
+            # Update persistent task_state from snapshot
+            self.task_state.update(task_state_snapshot)
 
-        # Filter to only metadata-declared keys (prevents stale keys from
-        # old task types or pre-refactor data from lingering)
-        try:
-            from .task_registry import get_task_metadata
+            # Filter to only metadata-declared keys (prevents stale keys from
+            # old task types or pre-refactor data from lingering)
+            try:
+                from .task_registry import get_task_metadata
 
-            metadata = get_task_metadata(self.task_id)
-            known_keys = {f.key for f in metadata.task_state_fields}
-            # Also keep any keys from the current snapshot (task may use
-            # ad-hoc keys not declared in metadata)
-            known_keys.update(task_state_snapshot.keys())
-            stale = set(self.task_state.keys()) - known_keys
-            if stale:
-                for k in stale:
-                    del self.task_state[k]
-                logger.info(f"Removed stale task state keys: {stale}")
-        except (ValueError, ImportError):
-            pass  # Task not registered -- keep everything
+                metadata = get_task_metadata(self.task_id)
+                known_keys = {f.key for f in metadata.task_state_fields}
+                # Also keep any keys from the current snapshot (task may use
+                # ad-hoc keys not declared in metadata)
+                known_keys.update(task_state_snapshot.keys())
+                stale = set(self.task_state.keys()) - known_keys
+                if stale:
+                    for k in stale:
+                        del self.task_state[k]
+                    logger.info(f"Removed stale task state keys: {stale}")
+            except (ValueError, ImportError):
+                pass  # Task not registered -- keep everything
 
         self.save()
 

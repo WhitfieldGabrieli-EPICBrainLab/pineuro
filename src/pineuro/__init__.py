@@ -221,7 +221,7 @@ __all__ = [
     # Task regressor computation
     "compute_hrf",
     "compute_boxcar_task_regressor",
-    # Session state
+    # Task state
     "TaskState",
     "RunInfo",
     # Configuration dataclasses

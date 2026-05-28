@@ -219,7 +219,7 @@ tests/
 ├── test_session_orchestration.py     # Multi-run/multi-session orchestration
 ├── test_sham.py                      # Randomization, replay providers
 ├── test_simulator.py                 # Volume simulator
-├── test_tasks.py                     # Plugin registry, designs, session state
+├── test_tasks.py                     # Plugin registry, designs, task state
 ├── test_newer_tasks.py               # Gauge, RNT task variants
 ├── test_rnt_experience_sampling.py   # RNT experience sampling task
 ├── test_qc.py                        # QC reports and plotting

@@ -2490,7 +2490,7 @@ def run_single_task(
     mask_files : list[Path]
         Paths to coregistered mask files
     task_state : TaskState
-        Session state for multi-run continuity
+        Task state for multi-run continuity
     run_type : str
         'transfer' or 'feedback'
     use_simulator : bool
@@ -2755,7 +2755,7 @@ def coregister_before_first_transfer(
     config : SessionConfig
         Session configuration
     task_state : TaskState
-        Session state (used to check if any runs completed)
+        Task state (used to check if any runs completed)
     mask_files : list[Path]
         Current mask files
     use_simulator : bool
@@ -2883,7 +2883,7 @@ def run_full_session(
     n_feedback_runs : int
         Number of feedback runs between transfer runs
     reset_session : bool
-        If True, reset session state before starting
+        If True, reset task state before starting
     use_simulator : bool
         If True, use DICOM simulator for testing
 
@@ -2972,7 +2972,7 @@ def run_next_task(
 ) -> dict[str, Any] | None:
     """Run the next task in the session sequence.
 
-    Loads session state, determines the next run type, executes it, and exits.
+    Loads task state, determines the next run type, executes it, and exits.
     Call this repeatedly (separate script invocations) to progress through the session.
 
     Parameters
@@ -3049,7 +3049,7 @@ def run_next_task(
 
 
 def reset_task_state(config: SessionConfig) -> TaskState:
-    """Reset session state for a new session.
+    """Reset task state for a new session.
 
     Parameters
     ----------
@@ -3059,12 +3059,12 @@ def reset_task_state(config: SessionConfig) -> TaskState:
     Returns
     -------
     TaskState
-        Fresh session state
+        Fresh task state
     """
     from .tasks.state import TaskState
 
     if not config.feedback_runs:
         raise ValueError("config.feedback_runs must be non-empty")
     if config.paths.feedback_dir is None:
-        raise RuntimeError("config.paths.feedback_dir must be set to reset session state")
+        raise RuntimeError("config.paths.feedback_dir must be set to reset task state")
     return TaskState.reset(config.paths.feedback_dir, task_id=config.feedback_runs[0].task)

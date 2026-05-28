@@ -153,7 +153,7 @@ class RNTTriggeredBallTask(BaseTask):
     feedback_mode : bool
         True for feedback runs, False for transfer runs.
     task_state : TaskState, optional
-        Session state for persistence across runs.
+        Task state for persistence across runs.
     trigger_keys : list of str
         Keys that trigger volume acquisition.
     presenter_monitor : str
