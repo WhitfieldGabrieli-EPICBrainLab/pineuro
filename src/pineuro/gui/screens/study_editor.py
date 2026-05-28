@@ -147,7 +147,6 @@ class StudyEditorScreen:
                     "motion_correction": "none",
                     "networks": ["ContA", "DefaultA"],
                     "extraction": {
-                        "n_yeo": 17,
                         "network_atlas": "yeo_17",
                         "n_components": 30,
                         "threshold": 2000,
@@ -156,7 +155,6 @@ class StudyEditorScreen:
                         "highpass": 0.01,
                         "lowpass": None,
                         "atlas_mask": None,
-                        "atlas_name": None,
                         "atlas_source": None,
                         "atlas_regions": None,
                         "cluster_start_threshold": 2.0,
@@ -490,14 +488,15 @@ class StudyEditorScreen:
                 "n_volumes": 250,
                 "n_runs": 2,
                 "motion_correction": "siemens_moco",
-                "network_atlas": "yeo_17",
-                "n_yeo": 17,
-                "yeo_targets": ["DefaultA", "ContA"],
-                "n_components": 30,
-                "smooth_fwhm": 5.0,
-                "highpass": 0.01,
-                "threshold": 2000,
-                "threshold_method": "top_n",
+                "networks": ["DefaultA", "ContA"],
+                "extraction": {
+                    "network_atlas": "yeo_17",
+                    "n_components": 30,
+                    "smooth_fwhm": 5.0,
+                    "highpass": 0.01,
+                    "threshold": 2000,
+                    "threshold_method": "top_n",
+                },
                 "source_dicoms": [],
             }
         )
@@ -523,11 +522,12 @@ class StudyEditorScreen:
         cfg["type"] = new_type
         if new_type == "rest" and old_type != "rest":
             # Switching to rest: set ICA defaults
-            cfg.setdefault("network_atlas", "yeo_17")
-            cfg.setdefault("n_components", 20)
-            cfg.setdefault("smooth_fwhm", 5.0)
-            cfg.setdefault("highpass", 0.01)
-            cfg.setdefault("yeo_targets", ["DefaultA", "ContA"])
+            cfg.setdefault("networks", ["DefaultA", "ContA"])
+            extraction = cfg.setdefault("extraction", {})
+            extraction.setdefault("network_atlas", "yeo_17")
+            extraction.setdefault("n_components", 20)
+            extraction.setdefault("smooth_fwhm", 5.0)
+            extraction.setdefault("highpass", 0.01)
         elif new_type == "manual":
             # Switching to manual import: seed the participant-agnostic fields.
             # The actual mask files are chosen per participant in the workflow.

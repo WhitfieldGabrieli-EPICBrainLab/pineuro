@@ -454,17 +454,7 @@ def load_mask_selections(masks_dir: Union[str, Path]) -> dict[str, MaskSelection
     if data.get("type") == "task":
         return {}
 
-    # Handle backward compatibility for older selections without combined fields
-    selections = {}
-    for name, sel_data in data.items():
-        # Add default values for new fields if missing
-        if "secondary_component_index" not in sel_data:
-            sel_data["secondary_component_index"] = None
-        if "secondary_correlation" not in sel_data:
-            sel_data["secondary_correlation"] = None
-        selections[name] = MaskSelection(**sel_data)
-
-    return selections
+    return {name: MaskSelection(**sel_data) for name, sel_data in data.items()}
 
 
 def get_alternative_components(
@@ -502,7 +492,7 @@ def compute_mask_network_correlation(
     mask_file: Union[str, Path],
     yeo_subject_space: Union[str, Path],
     network_name: str,
-    n_yeo: int = 17,
+    n_networks: int = 17,
 ) -> float:
     """Compute spatial correlation between a mask and a specific Yeo network.
 
@@ -517,7 +507,7 @@ def compute_mask_network_correlation(
         Path to Yeo atlas in subject space
     network_name : str
         Name of the target network (e.g., "DefaultA")
-    n_yeo : int
+    n_networks : int
         Yeo parcellation (7 or 17 networks)
 
     Returns
@@ -536,9 +526,9 @@ def compute_mask_network_correlation(
         raise FileNotFoundError(f"Yeo atlas not found: {yeo_subject_space}")
 
     # Get network label index
-    labels = get_yeo_labels(n_networks=n_yeo)
+    labels = get_yeo_labels(n_networks=n_networks)
     if network_name not in labels:
-        raise ValueError(f"Network '{network_name}' not in Yeo-{n_yeo} labels")
+        raise ValueError(f"Network '{network_name}' not in Yeo-{n_networks} labels")
     network_index = labels.index(network_name) + 1  # 1-based indexing
 
     # Load mask
@@ -574,7 +564,7 @@ def extract_yeo_mask_for_network(
     yeo_subject_space: Union[str, Path],
     network_name: str,
     output_file: Union[str, Path],
-    n_yeo: int = 17,
+    n_networks: int = 17,
     threshold: int = 2000,
     overwrite: bool = False,
 ) -> Path:
@@ -592,7 +582,7 @@ def extract_yeo_mask_for_network(
         Name of the target network (e.g., "DefaultA")
     output_file : str or Path
         Path to save the thresholded mask
-    n_yeo : int
+    n_networks : int
         Yeo parcellation (7 or 17 networks)
     threshold : int
         Number of voxels to keep in the thresholded mask
@@ -615,9 +605,9 @@ def extract_yeo_mask_for_network(
         raise FileNotFoundError(f"Yeo atlas not found: {yeo_subject_space}")
 
     # Get network label index from name
-    labels = get_yeo_labels(n_networks=n_yeo)
+    labels = get_yeo_labels(n_networks=n_networks)
     if network_name not in labels:
-        raise ValueError(f"Network '{network_name}' not in Yeo-{n_yeo} labels: {labels}")
+        raise ValueError(f"Network '{network_name}' not in Yeo-{n_networks} labels: {labels}")
 
     network_index = labels.index(network_name) + 1  # Yeo uses 1-based indexing
 
@@ -951,7 +941,7 @@ def regenerate_mask_from_selection(
     selection: MaskSelection,
     components_file: Union[str, Path],
     yeo_subject_space: Union[str, Path],
-    n_yeo: int = 17,
+    n_networks: int = 17,
     threshold: int = 2000,
 ) -> Path:
     """Regenerate a single network mask based on user's selection.
@@ -974,7 +964,7 @@ def regenerate_mask_from_selection(
         Path to ICA components file (4D NIfTI)
     yeo_subject_space : str or Path
         Path to Yeo atlas in subject space
-    n_yeo : int
+    n_networks : int
         Yeo parcellation (7 or 17 networks)
     threshold : int
         Number of voxels to keep in the thresholded mask
@@ -1000,12 +990,12 @@ def regenerate_mask_from_selection(
             yeo_subject_space=yeo_subject_space,
             network_name=network_name,
             output_file=thr_file,
-            n_yeo=n_yeo,
+            n_networks=n_networks,
             threshold=threshold,
             overwrite=True,
         )
         # Also save an unthresholded version (full atlas region)
-        labels = get_yeo_labels(n_networks=n_yeo)
+        labels = get_yeo_labels(n_networks=n_networks)
         network_index = labels.index(network_name) + 1
         atlas_img = cast(Nifti1Image, load(yeo_subject_space))
         atlas_data = atlas_img.get_fdata()
@@ -1541,8 +1531,7 @@ def mask_extraction_rest(
     input_file: Union[str, Path],
     mask_file: Union[str, Path],
     ref_file: Union[str, Path],
-    n_yeo: int = 17,
-    yeo_targets: Union[str, list[str]] | None = None,
+    networks: Union[str, list[str]] | None = None,
     network_atlas: str = "yeo_17",
     n_components: int = 30,
     threshold: int = 2000,
@@ -1577,10 +1566,7 @@ def mask_extraction_rest(
         Path to NIfTI file to mask input_file
     ref_file : str or Path
         Path to NIfTI file to use as a BOLD reference in participant space
-    n_yeo : int, default=17
-        Yeo network parcellation to use. Options: 7 or 17.
-        Ignored when ``network_atlas`` explicitly specifies the atlas.
-    yeo_targets : str or List of str
+    networks : str or List of str
         Network targets to extract masks for (e.g., ["DefaultA", "ContA"])
     network_atlas : str, default="yeo_17"
         Network atlas for ICA component identification. Options:
@@ -1627,12 +1613,12 @@ def mask_extraction_rest(
     FileNotFoundError
         If input_file does not exist
     ValueError
-        If network_atlas, n_yeo, or yeo_targets parameter is invalid
+        If network_atlas or networks parameter is invalid
 
     """
 
-    if yeo_targets is None:
-        yeo_targets = ["DefaultA", "ContA"]
+    if networks is None:
+        networks = ["DefaultA", "ContA"]
 
     from nilearn.image import get_data
 
@@ -1671,21 +1657,16 @@ def mask_extraction_rest(
     if not ref_file.exists():
         raise FileNotFoundError(f"BOLD reference file not found: {ref_file}")
 
-    # Derive n_networks from network_atlas (overrides n_yeo for backward compat)
-    if network_atlas in ATLAS_SOURCES:
-        n_networks = ATLAS_SOURCES[network_atlas]["n_networks"]
-    else:
-        # Fallback: treat n_yeo as authoritative (backward compat)
-        if n_yeo not in (7, 17):
-            raise ValueError(f"n_yeo must be 7 or 17, got {n_yeo}")
-        n_networks = n_yeo
-        network_atlas = f"yeo_{n_yeo}"
+    # network_atlas is authoritative; the network count is derived from it.
+    if network_atlas not in ATLAS_SOURCES:
+        raise ValueError(f"Unknown network_atlas '{network_atlas}'. Available: {sorted(ATLAS_SOURCES)}")
+    n_networks = ATLAS_SOURCES[network_atlas]["n_networks"]
 
     # Convert to list and validate targets against network labels
-    if isinstance(yeo_targets, str):
-        yeo_targets = [yeo_targets]
+    if isinstance(networks, str):
+        networks = [networks]
     labels = get_yeo_labels(n_networks=n_networks)
-    for target in yeo_targets:
+    for target in networks:
         if target not in labels:
             raise ValueError(
                 f"Label '{target}' not in labels for {network_atlas} "
@@ -1737,7 +1718,7 @@ def mask_extraction_rest(
     # Now that ICA components and Yeo atlas are in same space, identify which
     # ICA components best represent each target network
     check_stop()
-    emit_progress("Step 3/3: Extracting network masks", f"Targets: {', '.join(yeo_targets)}")
+    emit_progress("Step 3/3: Extracting network masks", f"Targets: {', '.join(networks)}")
     masks_dir = root_dir / "03_masks"
 
     # Step 3a: Compute spatial correlation between ICA components and Yeo networks
@@ -1753,11 +1734,11 @@ def mask_extraction_rest(
         output_file=sc_file,
         overwrite=overwrite,
     )
-    chosen_components = {target: int(sc_df[target].idxmax()) for target in yeo_targets}
+    chosen_components = {target: int(sc_df[target].idxmax()) for target in networks}
 
     # Save initial mask selections (auto-selected based on correlation)
     initial_selections: dict[str, MaskSelection] = {}
-    for target in yeo_targets:
+    for target in networks:
         component_idx = chosen_components[target]
         correlation = float(sc_df[target].iloc[component_idx])
         initial_selections[target] = MaskSelection(
@@ -1773,7 +1754,7 @@ def mask_extraction_rest(
     # For each target network (e.g., DMN), find the ICA component that best matches it
     emit_progress("Step 3/3", "Selecting best ICA components for each network...")
     network_files = []
-    for target in yeo_targets:
+    for target in networks:
         network_file = masks_dir / Path(f"{bids_prefix}_{target}.nii.gz")
         if not network_file.exists() or overwrite:
             # Find component index with maximum correlation for this network
@@ -1822,7 +1803,7 @@ def mask_extraction_rest(
         network_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}.nii.gz"
 
         if not network_file.exists():
-            # Network not in yeo_targets, need to extract it first
+            # Network not in networks, need to extract it first
             # Check if it's a valid Yeo network
             if sham_hemisphere_network not in labels:
                 logger.warning(
@@ -1855,14 +1836,14 @@ def mask_extraction_rest(
         qc_output_dir = Path(qc_dir) if qc_dir is not None else root_dir.parent / "qc"
 
         # Use high-level API to generate comprehensive QC report
-        network_names = [str(target) for target in yeo_targets]
+        network_names = [str(target) for target in networks]
         report_path = qc.generate_mask_extraction_report(
             mask_extraction_dir=root_dir,
             participant_id=participant_id,
             session_id=session_id,
             network_names=network_names,
             output_dir=qc_output_dir,
-            n_yeo=n_networks,
+            n_networks=n_networks,
             overwrite=overwrite,
             open_browser=False,
             ref_file=ref_file,
@@ -1877,8 +1858,7 @@ def mask_extraction_mni(
     session_id: str,
     root_dir: Union[str, Path],
     ref_file: Union[str, Path],
-    n_yeo: int = 17,
-    yeo_targets: Union[str, list[str]] | None = None,
+    networks: Union[str, list[str]] | None = None,
     network_atlas: str = "yeo_17",
     threshold: int = 2000,
     overwrite: bool = False,
@@ -1911,9 +1891,7 @@ def mask_extraction_mni(
     ref_file : str or Path
         BOLD reference in participant space. Can be a boldref from preprocessing
         or the mean of a reference scan collection.
-    n_yeo : int, default=17
-        Yeo network parcellation. Ignored when ``network_atlas`` specifies it.
-    yeo_targets : str or list of str, optional
+    networks : str or list of str, optional
         Target networks to extract (e.g., ``["DefaultA", "ContA"]``).
         Defaults to ``["DefaultA", "ContA"]``.
     network_atlas : str, default="yeo_17"
@@ -1936,8 +1914,8 @@ def mask_extraction_mni(
     list of Path
         Thresholded mask files (``*_thr.nii.gz``)
     """
-    if yeo_targets is None:
-        yeo_targets = ["DefaultA", "ContA"]
+    if networks is None:
+        networks = ["DefaultA", "ContA"]
 
     # Helper to emit progress to both logger and callback
     def emit_progress(step: str, detail: str = ""):
@@ -1957,20 +1935,16 @@ def mask_extraction_mni(
     if not ref_file.exists():
         raise FileNotFoundError(f"Reference file not found: {ref_file}")
 
-    # Derive n_networks from network_atlas
-    if network_atlas in ATLAS_SOURCES:
-        n_networks = ATLAS_SOURCES[network_atlas]["n_networks"]
-    else:
-        if n_yeo not in (7, 17):
-            raise ValueError(f"n_yeo must be 7 or 17, got {n_yeo}")
-        n_networks = n_yeo
-        network_atlas = f"yeo_{n_yeo}"
+    # network_atlas is authoritative; the network count is derived from it.
+    if network_atlas not in ATLAS_SOURCES:
+        raise ValueError(f"Unknown network_atlas '{network_atlas}'. Available: {sorted(ATLAS_SOURCES)}")
+    n_networks = ATLAS_SOURCES[network_atlas]["n_networks"]
 
     # Validate targets
-    if isinstance(yeo_targets, str):
-        yeo_targets = [yeo_targets]
+    if isinstance(networks, str):
+        networks = [networks]
     labels = get_yeo_labels(n_networks=n_networks)
-    for target in yeo_targets:
+    for target in networks:
         if target not in labels:
             raise ValueError(
                 f"Label '{target}' not in labels for {network_atlas} "
@@ -1996,19 +1970,19 @@ def mask_extraction_mni(
     emit_progress("Step 1/2", "Registration complete")
 
     # Step 2/2: Extract network masks from atlas
-    emit_progress("Step 2/2: Extracting network masks", f"Targets: {', '.join(yeo_targets)}")
+    emit_progress("Step 2/2: Extracting network masks", f"Targets: {', '.join(networks)}")
     masks_dir = root_dir / "03_masks"
     masks_dir.mkdir(parents=True, exist_ok=True)
 
     network_thr_files: list[Path] = []
-    for target in yeo_targets:
+    for target in networks:
         thr_file = masks_dir / f"{bids_prefix}_{target}_thr.nii.gz"
         if not thr_file.exists() or overwrite:
             extract_yeo_mask_for_network(
                 yeo_subject_space=atlas2sub,
                 network_name=target,
                 output_file=thr_file,
-                n_yeo=n_networks,
+                n_networks=n_networks,
                 threshold=threshold,
                 overwrite=True,
             )
@@ -2018,7 +1992,7 @@ def mask_extraction_mni(
 
     # Save mask selections metadata
     selections: dict[str, MaskSelection] = {}
-    for target in yeo_targets:
+    for target in networks:
         selections[target] = MaskSelection(
             network_name=target,
             source_type="mni_atlas",
@@ -2047,13 +2021,13 @@ def mask_extraction_mni(
             save(Nifti1Image(sham_mask, atlas_img.affine, atlas_img.header), sham_network_file)
 
             # Also save the thresholded version if not already in targets
-            if sham_hemisphere_network not in yeo_targets:
+            if sham_hemisphere_network not in networks:
                 sham_thr_file = masks_dir / f"{bids_prefix}_{sham_hemisphere_network}_thr.nii.gz"
                 extract_yeo_mask_for_network(
                     yeo_subject_space=atlas2sub,
                     network_name=sham_hemisphere_network,
                     output_file=sham_thr_file,
-                    n_yeo=n_networks,
+                    n_networks=n_networks,
                     threshold=threshold,
                     overwrite=overwrite,
                 )
@@ -2070,14 +2044,14 @@ def mask_extraction_mni(
         emit_progress("Generating QC report...")
         qc_output_dir = Path(qc_dir) if qc_dir is not None else root_dir.parent / "qc"
 
-        network_names = [str(target) for target in yeo_targets]
+        network_names = [str(target) for target in networks]
         report_path = qc.generate_mask_extraction_report(
             mask_extraction_dir=root_dir,
             participant_id=participant_id,
             session_id=session_id,
             network_names=network_names,
             output_dir=qc_output_dir,
-            n_yeo=n_networks,
+            n_networks=n_networks,
             overwrite=overwrite,
             open_browser=False,
             ref_file=ref_file,
@@ -2334,106 +2308,21 @@ def get_atlas_labels(atlas_source: str) -> list[str]:
     return labels
 
 
-# --- Legacy Atlas Region Definitions ---
-# Curated combined entries kept for backward compatibility with atlas_name API.
-# New code should use atlas_source + regions via fetch_atlas_mask().
-
-_ATLAS_COMBINED_ENTRIES: dict[str, dict[str, Any]] = {
-    "harvard_oxford_stg": {
-        "description": "Superior Temporal Gyrus (anterior + posterior)",
-        "atlas_type": "harvard_oxford",
-        "atlas_fetch": "cort-maxprob-thr25-2mm",
-        "regions": [
-            "Superior Temporal Gyrus, anterior division",
-            "Superior Temporal Gyrus, posterior division",
-        ],
-    },
-    "harvard_oxford_ifg": {
-        "description": "Inferior Frontal Gyrus (pars triangularis + opercularis)",
-        "atlas_type": "harvard_oxford",
-        "atlas_fetch": "cort-maxprob-thr25-2mm",
-        "regions": [
-            "Inferior Frontal Gyrus, pars triangularis",
-            "Inferior Frontal Gyrus, pars opercularis",
-        ],
-    },
-    "harvard_oxford_mtg": {
-        "description": "Middle Temporal Gyrus (anterior + posterior + temporo-occipital)",
-        "atlas_type": "harvard_oxford",
-        "atlas_fetch": "cort-maxprob-thr25-2mm",
-        "regions": [
-            "Middle Temporal Gyrus, anterior division",
-            "Middle Temporal Gyrus, posterior division",
-            "Middle Temporal Gyrus, temporo-occipital part",
-        ],
-    },
-    "harvard_oxford_smg": {
-        "description": "Supramarginal Gyrus (anterior + posterior)",
-        "atlas_type": "harvard_oxford",
-        "atlas_fetch": "cort-maxprob-thr25-2mm",
-        "regions": [
-            "Supramarginal Gyrus, anterior division",
-            "Supramarginal Gyrus, posterior division",
-        ],
-    },
-    "harvard_oxford_cingulate": {
-        "description": "Cingulate Gyrus (anterior + posterior)",
-        "atlas_type": "harvard_oxford",
-        "atlas_fetch": "cort-maxprob-thr25-2mm",
-        "regions": [
-            "Cingulate Gyrus, anterior division",
-            "Cingulate Gyrus, posterior division",
-        ],
-    },
-}
-
-
-def get_atlas_region_registry() -> dict[str, dict[str, Any]]:
-    """Get the legacy atlas region registry (curated combined entries only).
-
-    Returns the static curated combined entries without fetching any atlas
-    data from nilearn. This avoids the startup lag that previously occurred
-    when Harvard-Oxford labels were fetched eagerly.
-
-    For individual regions, use :func:`get_atlas_labels` with an atlas_source
-    key instead.
-
-    Returns
-    -------
-    dict
-        Mapping of atlas_name to dict with "description", "atlas_fetch",
-        and "regions" keys.
-    """
-    return dict(_ATLAS_COMBINED_ENTRIES)
-
-
-# Keep ATLAS_REGION_REGISTRY as a reference to the combined entries for
-# backward compatibility.
-ATLAS_REGION_REGISTRY = _ATLAS_COMBINED_ENTRIES
-
-
 def fetch_atlas_mask(
     output_file: Union[str, Path],
-    atlas_name: str | None = None,
     atlas_source: str | None = None,
     regions: list[str] | None = None,
     overwrite: bool = False,
 ) -> Path:
     """Fetch an atlas from nilearn and extract specified regions as a binary mask.
 
-    Supports two modes:
-
-    1. **Legacy** (``atlas_name``): Looks up a curated combined entry from
-       :func:`get_atlas_region_registry` (e.g., ``"harvard_oxford_stg"``).
-    2. **New** (``atlas_source`` + ``regions``): Fetches any supported atlas
-       and extracts the named regions directly.
+    Fetches the atlas identified by ``atlas_source`` and extracts the named
+    ``regions`` directly.
 
     Parameters
     ----------
     output_file : str or Path
         Path to save the binary MNI-space mask NIfTI.
-    atlas_name : str, optional
-        Legacy key into the curated atlas registry.
     atlas_source : str, optional
         Key into ``ATLAS_SOURCES`` (e.g., ``"harvard_oxford"``, ``"aal"``,
         ``"schaefer_400_7net"``).
@@ -2450,8 +2339,8 @@ def fetch_atlas_mask(
     Raises
     ------
     ValueError
-        If neither ``atlas_name`` nor ``atlas_source`` is provided, or if
-        region labels are not found in the atlas.
+        If ``atlas_source`` + ``regions`` is not provided, or if region labels
+        are not found in the atlas.
     """
     output_file = Path(output_file)
 
@@ -2474,22 +2363,10 @@ def fetch_atlas_mask(
         save(Nifti1Image(binary_mask, gm_img.affine, gm_img.header), output_file)
         return output_file
     elif atlas_source is not None and regions is not None:
-        # New pathway: fetch atlas by source key
         atlas_img, atlas_data, labels, label_indices = _fetch_atlas_and_resolve_regions(atlas_source, regions)
         atlas_label = f"{atlas_source} ({len(regions)} regions)"
-    elif atlas_name is not None:
-        # Legacy pathway: look up curated combined entry
-        registry = get_atlas_region_registry()
-        if atlas_name not in registry:
-            available = ", ".join(sorted(registry.keys()))
-            raise ValueError(f"Unknown atlas_name '{atlas_name}'. Available: {available}")
-        entry = registry[atlas_name]
-        target_regions = entry["regions"]
-        atlas_type = entry.get("atlas_type", "harvard_oxford")
-        atlas_img, atlas_data, labels, label_indices = _fetch_atlas_and_resolve_regions(atlas_type, target_regions)
-        atlas_label = atlas_name
     else:
-        raise ValueError("Either atlas_name or (atlas_source + regions) must be provided")
+        raise ValueError("atlas_source + regions must be provided")
 
     # Create binary mask: 1 where atlas label is in target regions, 0 elsewhere
     binary_mask = np.isin(atlas_data, label_indices).astype(np.uint8)
@@ -3121,7 +2998,6 @@ def mask_extraction_task(
     threshold: int = 2000,
     threshold_method: str = "top_n",
     atlas_mask: Union[str, Path] | None = None,
-    atlas_name: str | None = None,
     atlas_source: str | None = None,
     atlas_regions: list[str] | None = None,
     ref_file: Union[str, Path] | None = None,
@@ -3196,21 +3072,17 @@ def mask_extraction_task(
     atlas_mask : str, Path, or None
         Path to a binary atlas NIfTI in subject space. Used with
         ``threshold_method="cluster"`` to constrain the search region.
-        Mutually exclusive with ``atlas_name``.
-    atlas_name : str or None
-        Legacy: name of a curated combined atlas entry (e.g.,
-        ``"harvard_oxford_stg"``). See :func:`get_atlas_region_registry`.
-        Requires ``ref_file`` for registration to subject space.
-        Mutually exclusive with ``atlas_mask`` and ``atlas_source``.
+        Mutually exclusive with ``atlas_source``.
     atlas_source : str or None
         Key into ``ATLAS_SOURCES`` (e.g., ``"harvard_oxford"``, ``"aal"``,
         ``"schaefer_400_7net"``). Used with ``atlas_regions`` to specify
-        which regions to extract. Mutually exclusive with ``atlas_name``.
+        which regions to extract. Mutually exclusive with ``atlas_mask``.
+        Requires ``ref_file`` for registration to subject space.
     atlas_regions : list[str] or None
         Region labels from the atlas to include in the mask. Required
         when ``atlas_source`` is provided.
     ref_file : str, Path, or None
-        BOLD reference image for atlas registration when ``atlas_name`` is
+        BOLD reference image for atlas registration when ``atlas_source`` is
         provided. Typically the temporal mean from preprocessing.
     cluster_start_threshold : float
         Starting stat threshold for iterative cluster search (default: 2.0).
@@ -3299,7 +3171,11 @@ def mask_extraction_task(
     ...     tr=1.2,
     ...     threshold=200,
     ...     threshold_method="cluster",
-    ...     atlas_name="harvard_oxford_stg",
+    ...     atlas_source="harvard_oxford",
+    ...     atlas_regions=[
+    ...         "Superior Temporal Gyrus, anterior division",
+    ...         "Superior Temporal Gyrus, posterior division",
+    ...     ],
     ...     ref_file='/data/sub-01/preprocessing/sub-01_task-selfother_mean.nii.gz',
     ... )
 
@@ -3368,22 +3244,17 @@ def mask_extraction_task(
     if threshold_method not in ("top_n", "cluster"):
         raise ValueError(f"threshold_method must be 'top_n' or 'cluster', got '{threshold_method}'")
     if threshold_method == "cluster":
-        if atlas_mask is None and atlas_name is None and atlas_source is None:
+        if atlas_mask is None and atlas_source is None:
             raise ValueError(
-                "When threshold_method='cluster', one of atlas_mask, atlas_name, "
-                "or atlas_source must be provided to define the anatomical ROI."
+                "When threshold_method='cluster', one of atlas_mask or atlas_source "
+                "must be provided to define the anatomical ROI."
             )
-        n_sources = sum(x is not None for x in [atlas_mask, atlas_name, atlas_source])
-        if n_sources > 1:
-            raise ValueError("Provide only one of atlas_mask, atlas_name, or atlas_source, not multiple.")
-        if atlas_name is not None and ref_file is None:
+        if atlas_mask is not None and atlas_source is not None:
+            raise ValueError("Provide only one of atlas_mask or atlas_source, not both.")
+        if atlas_source is not None and ref_file is None:
             raise ValueError(
-                "ref_file is required when atlas_name is provided, to register the atlas from MNI to subject space."
+                "ref_file is required when atlas_source is provided, to register the atlas from MNI to subject space."
             )
-        registry = get_atlas_region_registry()
-        if atlas_name is not None and atlas_name not in registry:
-            available = ", ".join(sorted(registry.keys()))
-            raise ValueError(f"Unknown atlas_name '{atlas_name}'. Available: {available}")
 
     n_steps = 3  # 01_glm, 02_mnireg, 03_masks
     bids_prefix = f"{participant_id}_{session_id}"
@@ -3500,7 +3371,7 @@ def mask_extraction_task(
 
     atlas_subject_space_data = None  # Set below if cluster/cluster_extent mode
 
-    _has_atlas = any(x is not None for x in (atlas_mask, atlas_name, atlas_source))
+    _has_atlas = any(x is not None for x in (atlas_mask, atlas_source))
     if threshold_method == "cluster" or (threshold_method == "cluster_extent" and _has_atlas):
         emit_progress(f"Step 2/{n_steps}: Preparing atlas mask")
 
@@ -3517,25 +3388,15 @@ def mask_extraction_task(
             assert ref_file is not None  # validated above
             ref_file = Path(ref_file)
 
-            # Determine fetch params from atlas_source or legacy atlas_name
-            if atlas_source is not None:
-                fetch_label = atlas_source
-                atlas_mni_path = mnireg_dir / f"{atlas_source}_mni.nii.gz"
-                atlas_mni_path = fetch_atlas_mask(
-                    output_file=atlas_mni_path,
-                    atlas_source=atlas_source,
-                    regions=atlas_regions or [],
-                    overwrite=overwrite,
-                )
-            else:
-                assert atlas_name is not None  # validated above
-                fetch_label = atlas_name
-                atlas_mni_path = mnireg_dir / f"{atlas_name}_mni.nii.gz"
-                atlas_mni_path = fetch_atlas_mask(
-                    output_file=atlas_mni_path,
-                    atlas_name=atlas_name,
-                    overwrite=overwrite,
-                )
+            assert atlas_source is not None  # validated above
+            fetch_label = atlas_source
+            atlas_mni_path = mnireg_dir / f"{atlas_source}_mni.nii.gz"
+            atlas_mni_path = fetch_atlas_mask(
+                output_file=atlas_mni_path,
+                atlas_source=atlas_source,
+                regions=atlas_regions or [],
+                overwrite=overwrite,
+            )
 
             emit_progress(f"Step 2/{n_steps}", f"Fetched {fetch_label} atlas in MNI space")
 
@@ -3767,7 +3628,7 @@ def mask_extraction_task(
                     f"{mask_name}: {n_kept} voxels ({extent_info['n_clusters_surviving']} clusters, capped)",
                 )
 
-            _atlas_label = atlas_name or atlas_source or atlas_mask
+            _atlas_label = atlas_source or atlas_mask
             selections[mask_name] = TaskMaskSelection(
                 mask_name=mask_name,
                 contrast_definition=contrast_expr,
@@ -3853,7 +3714,7 @@ def mask_extraction_task(
                 n_voxels_above_zero=n_positive,
                 n_voxels_thresholded=n_kept,
                 threshold_method="cluster",
-                atlas_used=str(atlas_name or atlas_mask),
+                atlas_used=str(atlas_source or atlas_mask),
                 final_cluster_threshold=cluster_info.get("final_threshold"),
                 n_clusters_found=cluster_info.get("n_clusters_at_final"),
                 cluster_outcome=outcome,
@@ -4408,7 +4269,7 @@ def generate_reference_qc_overlays(
     mask_extraction_dir: Path,
     network_coreg_files: Sequence[Path],
     run_str: str,
-    n_yeo: int = 17,
+    n_networks: int = 17,
     overwrite: bool = False,
     reference_subdir: str = "01_reference",
 ) -> None:
@@ -4430,7 +4291,7 @@ def generate_reference_qc_overlays(
         List of coregistered network mask files
     run_str : str
         Run number string (e.g., "01" or "02")
-    n_yeo : int, default=17
+    n_networks : int, default=17
         Yeo parcellation (7 or 17 networks)
     overwrite : bool, default=False
         If True, overwrite existing files
@@ -4452,9 +4313,6 @@ def generate_reference_qc_overlays(
     xfm_dir = reference_dir / "xfm"
     ref_stem = ref_file.stem.replace(".nii", "")
     xfm_files = sorted(xfm_dir.glob(f"{bids_prefix}_{ref_stem}_to_task-reference_run-{run_str}_mean_*"))
-    if not xfm_files:
-        # Fall back to legacy naming pattern (boldref instead of ref_stem)
-        xfm_files = sorted(xfm_dir.glob(f"{bids_prefix}_boldref_to_task-reference_run-{run_str}_mean_*"))
     if not xfm_files:
         logger.info(f"Skipping reference QC overlays; transforms not found in {xfm_dir}")
         return
@@ -4526,7 +4384,7 @@ def generate_reference_qc_overlays(
             session_id=session_id,
             network_names=network_names,
             output_dir=qc_dir,
-            n_yeo=n_yeo,
+            n_networks=n_networks,
             overwrite=False,  # Skip existing images, just update HTML
             open_browser=False,
             ref_file=ref_file,

@@ -67,7 +67,7 @@ class MaskSelectionDialog:
         masks_dir: Path,
         components_file: Path,
         yeo_subject_space: Path,
-        n_yeo: int = 17,
+        network_atlas: str = "yeo_17",
         threshold: int = 2000,
         on_complete: Callable[[dict[str, MaskSelection]], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
@@ -77,7 +77,7 @@ class MaskSelectionDialog:
         input_file: Path | None = None,
         brain_mask_file: Path | None = None,
         ref_file: Path | None = None,
-        yeo_targets: list[str] | None = None,
+        networks: list[str] | None = None,
         n_components: int = 30,
         smooth_fwhm: float | None = None,
         highpass: float | None = None,
@@ -100,7 +100,7 @@ class MaskSelectionDialog:
             masks_dir: Directory containing masks (03_masks/)
             components_file: Path to ICA components file
             yeo_subject_space: Path to Yeo atlas in subject space
-            n_yeo: Yeo parcellation (7 or 17)
+            network_atlas: Network atlas key (e.g. "yeo_17", "schaefer_400_7net")
             threshold: Voxel threshold for masks
             on_complete: Callback with final selections when user applies changes
             on_cancel: Callback when dialog is cancelled
@@ -109,7 +109,7 @@ class MaskSelectionDialog:
             input_file: Path to preprocessed fMRI data (for script generation)
             brain_mask_file: Path to brain mask (for script generation)
             ref_file: Path to BOLD reference (for script generation)
-            yeo_targets: Target network names (for script generation)
+            networks: Target network names (for script generation)
             n_components: Number of ICA components (for script generation)
             smooth_fwhm: Gaussian smoothing FWHM in mm (for script generation)
             highpass: High-pass filter frequency in Hz (for script generation)
@@ -126,7 +126,10 @@ class MaskSelectionDialog:
         self.masks_dir = masks_dir
         self.components_file = components_file
         self.yeo_subject_space = yeo_subject_space
-        self.n_yeo = n_yeo
+        from pineuro.atlas_registry import ATLAS_SOURCES
+
+        self.network_atlas = network_atlas
+        self.n_networks = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)
         self.threshold = threshold
         self.on_complete = on_complete
         self.on_cancel = on_cancel
@@ -137,7 +140,7 @@ class MaskSelectionDialog:
         self.input_file = input_file
         self.brain_mask_file = brain_mask_file
         self.ref_file = ref_file
-        self.yeo_targets = yeo_targets or list(self.masks_info.keys())
+        self.networks = networks or list(self.masks_info.keys())
         self.n_components = n_components
         self.smooth_fwhm = smooth_fwhm
         self.highpass = highpass
@@ -596,7 +599,7 @@ class MaskSelectionDialog:
                         selection=selection,
                         components_file=self.components_file,
                         yeo_subject_space=self.yeo_subject_space,
-                        n_yeo=self.n_yeo,
+                        n_networks=self.n_networks,
                         threshold=self.threshold,
                     )
             # Save selections so the report reads correct component/correlation info
@@ -610,8 +613,8 @@ class MaskSelectionDialog:
                 mask_extraction_dir=self.mask_extraction_dir,
                 participant_id=self.participant_id,
                 session_id=self.session_id,
-                network_names=self.yeo_targets,
-                n_yeo=self.n_yeo,
+                network_names=self.networks,
+                n_networks=self.n_networks,
                 overwrite=True,
             )
             self.html_report_path = report_path
@@ -652,7 +655,7 @@ class MaskSelectionDialog:
                 network_names=[network_name],
                 n_alternatives=self.n_components,  # Generate for all components
                 output_dir=qc_dir,
-                n_yeo=self.n_yeo,
+                n_networks=self.n_networks,
                 ref_file=self.ref_file,
             )
 
@@ -674,7 +677,7 @@ class MaskSelectionDialog:
                 session_id=self.session_id,
                 network_name=network_name,
                 output_dir=qc_dir,
-                n_yeo=self.n_yeo,
+                n_networks=self.n_networks,
                 ref_file=self.ref_file,
             )
 
@@ -1063,7 +1066,7 @@ class MaskSelectionDialog:
                 mask_file=temp_mask,
                 yeo_subject_space=self.yeo_subject_space,
                 network_name=network_name,
-                n_yeo=self.n_yeo,
+                n_networks=self.n_networks,
             )
 
             # Generate overlay
@@ -1074,7 +1077,7 @@ class MaskSelectionDialog:
                 output_dir=temp_dir,
                 network_name=f"{network_name}_combined",
                 atlas_path=self.yeo_subject_space,
-                n_yeo=self.n_yeo,
+                n_networks=self.n_networks,
                 overwrite=True,
             )
 
@@ -1246,7 +1249,7 @@ class MaskSelectionDialog:
                     mask_file=temp_mask,
                     yeo_subject_space=self.yeo_subject_space,
                     network_name=network_name,
-                    n_yeo=self.n_yeo,
+                    n_networks=self.n_networks,
                 )
 
                 if self.on_log:
@@ -1380,7 +1383,7 @@ class MaskSelectionDialog:
                 # Use Yeo atlas - extract the network region
                 from pineuro.utils import get_yeo_labels
 
-                labels = get_yeo_labels(n_networks=self.n_yeo)
+                labels = get_yeo_labels(n_networks=self.n_networks)
                 network_index = labels.index(self.hemisphere_network) + 1
                 atlas_img = load(self.yeo_subject_space)
                 atlas_data = atlas_img.get_fdata()  # type: ignore[attr-defined]
@@ -1401,7 +1404,7 @@ class MaskSelectionDialog:
                 session_id=self.session_id,
                 hemisphere_network=self.hemisphere_network,
                 output_dir=qc_dir,
-                n_yeo=self.n_yeo,
+                n_networks=self.n_networks,
                 overwrite=True,
             )
 
@@ -1456,8 +1459,6 @@ class MaskSelectionDialog:
 
             # Re-read correlation matrix if it exists (updated by script)
             corr_file = self.masks_dir / "network_IC_spatial_correlation.csv"
-            if not corr_file.exists():
-                corr_file = self.masks_dir / "Yeo_IC_spatial_correlation.csv"
             corr_df = None
             if corr_file.exists():
                 corr_df = pd.read_csv(corr_file, index_col=0)
@@ -1565,9 +1566,8 @@ class MaskSelectionDialog:
                 "input_file": self.input_file,
                 "mask_file": self.brain_mask_file,
                 "ref_file": self.ref_file,
-                "n_yeo": self.n_yeo,
-                "yeo_targets": self.yeo_targets,
-                "network_atlas": f"yeo_{self.n_yeo}",
+                "networks": self.networks,
+                "network_atlas": self.network_atlas,
                 "n_components": self.n_components,
                 "threshold": self.threshold,
                 "smooth_fwhm": self.smooth_fwhm,
@@ -1657,7 +1657,7 @@ class MaskSelectionDialog:
                     selection=selection,
                     components_file=self.components_file,
                     yeo_subject_space=self.yeo_subject_space,
-                    n_yeo=self.n_yeo,
+                    n_networks=self.n_networks,
                     threshold=self.threshold,
                 )
             except Exception as ex:
@@ -1684,7 +1684,7 @@ class MaskSelectionDialog:
                     else []
                 )
                 yeo2sub = yeo2sub_files[0] if yeo2sub_files else None
-                labels = get_yeo_labels(self.n_yeo)
+                labels = get_yeo_labels(self.n_networks)
 
                 for name in modified_networks:
                     thr_file = self.masks_dir / f"{self._bids_prefix}_{name}_thr.nii.gz"
@@ -1741,7 +1741,7 @@ class MaskSelectionDialog:
                         session_id=self.session_id,
                         hemisphere_network=self.hemisphere_network,
                         output_dir=qc_dir,
-                        n_yeo=self.n_yeo,
+                        n_networks=self.n_networks,
                         overwrite=True,
                     )
                     # Update stored overlays for display

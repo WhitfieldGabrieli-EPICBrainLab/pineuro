@@ -2,8 +2,6 @@
 
 import time
 
-import pytest
-
 from pineuro.gui.models import StudyConfig, StudyMetadata
 
 # =============================================================================
@@ -101,11 +99,6 @@ class TestStudyConfig:
         config = StudyConfig.from_dict(d)
         assert config.metadata.name == ""
         assert config.session_config == {"simulator": {"enabled": True}}
-
-    def test_from_dict_rejects_legacy_top_level_keys(self):
-        for legacy_key in ("mask", "feedback", "task", "localizer_task", "scan"):
-            with pytest.raises(ValueError, match="outdated schema"):
-                StudyConfig.from_dict({"_metadata": {"name": "X"}, legacy_key: {}})
 
     def test_from_dict_file_path_kwarg(self, tmp_path):
         config = self._make_config()

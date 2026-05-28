@@ -15,11 +15,11 @@ pytestmark = pytest.mark.validation
 
 
 def _write_feedbacklog(path, values):
-    """Write a minimal feedbacklog.tsv with a {mask}_delivered column."""
+    """Write a minimal feedbacklog.tsv with a bare mask-name column."""
     frame = pd.DataFrame(
         {
             "volume": list(range(1, len(values) + 1)),
-            "roi_delivered": values,
+            "roi": values,
         }
     )
     frame.to_csv(path, sep="\t", index=False)
@@ -63,13 +63,3 @@ def test_replay_loops_when_exhausted(tmp_path):
     assert provider.get_activation(4, 0.0)["roi"] == values[0]
     assert provider.get_activation(5, 0.0)["roi"] == values[1]
     assert provider.get_activation(9, 0.0)["roi"] == values[2]
-
-
-def test_replay_supports_plain_mask_columns(tmp_path):
-    """A feedbacklog with bare mask-name columns (no _delivered) also replays."""
-    frame = pd.DataFrame({"volume": [1, 2], "roi": [0.4, 0.9]})
-    log = tmp_path / "feedbacklog.tsv"
-    frame.to_csv(log, sep="\t", index=False)
-    provider = ReplayActivationProvider(log, ["roi"])
-    assert provider.get_activation(1, 0.0)["roi"] == 0.4  # verbatim TSV round-trip
-    assert provider.get_activation(2, 0.0)["roi"] == 0.9

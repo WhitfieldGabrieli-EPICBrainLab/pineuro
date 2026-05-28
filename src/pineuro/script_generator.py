@@ -26,6 +26,7 @@ from pprint import pformat
 from string import Template
 from typing import Any, Union
 
+from pineuro.atlas_registry import ATLAS_SOURCES
 from pineuro.mask_extraction import MaskSelection
 
 VALID_MODES = ("rest", "task", "mni")
@@ -71,7 +72,7 @@ def generate_mask_extraction_script(
         norm = {**norm, "qc_enabled": False}
         selection_block = _generate_selection_code(
             selections,
-            n_yeo=params.get("n_yeo", 17),
+            n_networks=ATLAS_SOURCES.get(params.get("network_atlas", "yeo_17"), {}).get("n_networks", 17),
             threshold=params.get("threshold", 2000),
         )
         return _REST_TEMPLATE.substitute(
@@ -102,7 +103,7 @@ def _normalize_for_repr(value: Any) -> Any:
 
 def _generate_selection_code(
     selections: dict[str, MaskSelection] | None,
-    n_yeo: int,
+    n_networks: int,
     threshold: int,
 ) -> str:
     """Build the (commented-out) STEP 2 block documenting manual mask selections."""
@@ -182,7 +183,7 @@ def _generate_selection_code(
         #         selection=selection,
         #         components_file=components_file,
         #         yeo_subject_space=yeo_subject_space,
-        #         n_yeo={n_yeo},
+        #         n_networks={n_networks},
         #         threshold={threshold},
         #     )
         #
@@ -213,6 +214,7 @@ import sys
 from pathlib import Path
 
 from pineuro import qc
+from pineuro.atlas_registry import ATLAS_SOURCES
 from pineuro.mask_extraction import run_mask_extraction_from_config
 from pineuro.qc import generate_alternative_overlays, generate_yeo_network_overlay
 
@@ -238,8 +240,8 @@ def clean_stale_outputs(root_dir):
 
 def main():
     root_dir = Path(PARAMS["root_dir"])
-    network_names = PARAMS["yeo_targets"]
-    n_yeo = PARAMS["n_yeo"]
+    network_names = PARAMS["networks"]
+    n_networks = ATLAS_SOURCES.get(PARAMS["network_atlas"], {}).get("n_networks", 17)
     qc_only = "--qc-only" in sys.argv
 
     if not qc_only:
@@ -268,7 +270,7 @@ ${selection_block}
         network_names=network_names,
         n_alternatives=PARAMS["n_components"],
         output_dir=qc_dir,
-        n_yeo=n_yeo,
+        n_networks=n_networks,
         overwrite=True,
     )
     for network_name in network_names:
@@ -278,7 +280,7 @@ ${selection_block}
             session_id=PARAMS["session_id"],
             network_name=network_name,
             output_dir=qc_dir,
-            n_yeo=n_yeo,
+            n_networks=n_networks,
             overwrite=True,
         )
     print()
@@ -291,7 +293,7 @@ ${selection_block}
         participant_id=PARAMS["participant_id"],
         session_id=PARAMS["session_id"],
         network_names=network_names,
-        n_yeo=n_yeo,
+        n_networks=n_networks,
         overwrite=True,
         open_browser=False,
     )

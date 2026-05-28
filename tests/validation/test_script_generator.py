@@ -39,8 +39,7 @@ def test_rest_script_is_syntactically_valid():
             "input_file": "/data/sub-01/preproc.nii.gz",
             "mask_file": "/data/sub-01/mask.nii.gz",
             "ref_file": "/data/sub-01/ref.nii.gz",
-            "n_yeo": 17,
-            "yeo_targets": ["DefaultA", "ContA"],
+            "networks": ["DefaultA", "ContA"],
             "network_atlas": "yeo_17",
             "n_components": 30,
             "threshold": 2000,
@@ -66,8 +65,7 @@ def test_rest_script_contains_every_parameter_literal():
             "input_file": "/data/sub-42/unique_preproc.nii.gz",
             "mask_file": "/data/sub-42/unique_mask.nii.gz",
             "ref_file": "/data/sub-42/unique_ref.nii.gz",
-            "n_yeo": 7,
-            "yeo_targets": ["Vis", "SomMot"],
+            "networks": ["Vis", "SomMot"],
             "network_atlas": "schaefer_100_7net",
             "n_components": 25,
             "threshold": 1500,
@@ -92,7 +90,6 @@ def test_rest_script_contains_every_parameter_literal():
     assert "'n_components': 25" in script
     assert "'threshold': 1500" in script
     assert "'smooth_fwhm': 4.0" in script
-    assert "'n_yeo': 7" in script
 
 
 # =============================================================================
@@ -188,8 +185,7 @@ def test_mni_script_is_syntactically_valid_and_faithful():
             "session_id": "ses-01",
             "root_dir": "/data/sub-07/mask_extraction",
             "ref_file": "/data/sub-07/unique_mni_ref.nii.gz",
-            "n_yeo": 17,
-            "yeo_targets": ["DefaultA", "ContA"],
+            "networks": ["DefaultA", "ContA"],
             "network_atlas": "yeo_17",
             "threshold": 2000,
             "overwrite": True,

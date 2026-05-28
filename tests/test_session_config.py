@@ -58,7 +58,6 @@ class TestLocalizerConfig:
         assert config.type == "rest"
         assert config.id == "rest"  # defaults to type
         assert config.networks == ["DefaultA", "ContA"]
-        assert config.extraction.n_yeo == 17
         assert config.extraction.network_atlas == "yeo_17"
         assert config.motion_correction == "none"
 
@@ -132,7 +131,7 @@ class TestLocalizerConfig:
 class TestLocalizerExtractionConfig:
     def test_defaults(self):
         ex = LocalizerExtractionConfig()
-        assert ex.n_yeo == 17
+        assert ex.network_atlas == "yeo_17"
         assert ex.threshold == 2000
         assert ex.threshold_method == "top_n"
 
@@ -174,14 +173,6 @@ class TestFeedbackRunConfig:
     def test_invalid_roi_combine_method_rejected(self):
         with pytest.raises(ValueError, match="roi_combine_method"):
             FeedbackRunConfig(roi_combine_method="bogus")
-
-    def test_legacy_use_efficiency_weights_migrates(self):
-        # Old modern-schema YAMLs may still carry the boolean; _build_feedback_run
-        # translates it to the roi_combine_method choice.
-        true_run = SessionConfig._build_feedback_run({"use_efficiency_weights": True})
-        false_run = SessionConfig._build_feedback_run({"use_efficiency_weights": False})
-        assert true_run.roi_combine_method == "inverse_sd"
-        assert false_run.roi_combine_method == "mean"
 
     def test_invalid_motion_correction_rejected(self):
         with pytest.raises(ValueError, match="motion_correction"):
@@ -273,11 +264,6 @@ class TestSessionConfig:
             "bottom_network": "DefaultA",
         }
         assert cfg2.combined_mask_names == ["DefaultA", "ContA"]
-
-    def test_rejects_legacy_top_level_keys(self):
-        for legacy_key in ("mask", "feedback", "task", "localizer_task", "scan"):
-            with pytest.raises(ValueError, match="outdated schema"):
-                SessionConfig._from_dict({"paths": {"base_dir": "/tmp", "participant_id": "sub-01"}, legacy_key: {}})
 
     def test_rejects_unknown_mask_source(self, tmp_path):
         data = {

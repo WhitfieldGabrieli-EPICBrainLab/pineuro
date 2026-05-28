@@ -15,8 +15,7 @@ def _rest_params(tmp_path, **over):
         "input_file": str(tmp_path / "preproc.nii.gz"),
         "mask_file": str(tmp_path / "mask.nii.gz"),
         "ref_file": str(tmp_path / "boldref.nii.gz"),
-        "n_yeo": 17,
-        "yeo_targets": ["DefaultA", "ContA"],
+        "networks": ["DefaultA", "ContA"],
         "network_atlas": "yeo_17",
         "n_components": 30,
         "threshold": 2000,
@@ -55,8 +54,7 @@ def _mni_params(tmp_path, **over):
         "session_id": "ses-01",
         "root_dir": str(tmp_path / "masks"),
         "ref_file": str(tmp_path / "boldref.nii.gz"),
-        "n_yeo": 17,
-        "yeo_targets": ["DefaultA"],
+        "networks": ["DefaultA"],
         "network_atlas": "yeo_17",
         "threshold": 2000,
         "overwrite": True,
@@ -85,12 +83,11 @@ class TestRestScript:
     def test_contains_parameters(self, tmp_path):
         script = generate_mask_extraction_script(
             "rest",
-            _rest_params(tmp_path, participant_id="sub-42", n_components=25, threshold=1500, n_yeo=7),
+            _rest_params(tmp_path, participant_id="sub-42", n_components=25, threshold=1500),
         )
         assert "sub-42" in script
         assert "'n_components': 25" in script
         assert "'threshold': 1500" in script
-        assert "'n_yeo': 7" in script
 
     def test_carries_network_atlas(self, tmp_path):
         """The Schaefer/non-Yeo atlas is now reproducible (was dropped before)."""

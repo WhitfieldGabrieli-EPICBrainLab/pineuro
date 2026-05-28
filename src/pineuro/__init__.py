@@ -8,7 +8,6 @@ Main Functions
 run_feedback_task : Run a complete real-time feedback task
 preprocessing : DICOM conversion, motion correction, brain extraction
 collect_volumes : Watch for and collect incoming scanner volumes (DICOM or NIfTI)
-collect_dicoms : Alias for collect_volumes (backward compatibility)
 mask_extraction_rest : Extract network masks using ICA and Yeo atlas
 mask_extraction_mni : Extract network masks directly from MNI atlas (no localizer needed)
 mask_extraction_task : Extract network masks using GLM contrasts from task localizer
@@ -92,7 +91,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # --- preprocessing.py (heavy: nibabel, scipy) ---
     "preprocessing": (".preprocessing", "preprocessing"),
     "collect_volumes": (".preprocessing", "collect_volumes"),
-    "collect_dicoms": (".preprocessing", "collect_dicoms"),
     # --- mask_extraction.py (heavy: nibabel, scipy, pandas) ---
     "mask_extraction_rest": (".mask_extraction", "mask_extraction_rest"),
     "mask_extraction_mni": (".mask_extraction", "mask_extraction_mni"),
@@ -199,7 +197,6 @@ __all__ = [
     "parse_step_run_number",
     "preprocessing",
     "collect_volumes",
-    "collect_dicoms",
     "mask_extraction_rest",
     "mask_extraction_mni",
     "mask_extraction_task",

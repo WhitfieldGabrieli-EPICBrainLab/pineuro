@@ -108,7 +108,7 @@ mask_files = mask_extraction_rest(
     input_file=preproc_file,
     mask_file=mask_file,
     ref_file=ref_file,
-    yeo_targets=['DefaultA', 'ContA'],
+    networks=['DefaultA', 'ContA'],
 )
 ```
 

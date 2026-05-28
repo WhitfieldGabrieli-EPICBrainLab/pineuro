@@ -23,7 +23,8 @@ class TestSelectShamTaskMaskNames:
         assert task == ["ContA", "SalA"]
 
     def test_single_sham_mask_swaps_target_only(self):
-        # Legacy single-alt fallback: target swapped, real non-target kept.
+        # Degraded case (only one sham mask resolved, e.g. a missing hemisphere
+        # mask): the target role is swapped to sham, the real non-target is kept.
         task = _select_sham_task_mask_names(
             sham_mask_names=["SalA"],
             real_mask_names=["SomMotA", "DefaultA"],

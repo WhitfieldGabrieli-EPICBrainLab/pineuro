@@ -48,7 +48,7 @@ class TestBuildRunSequence:
         config.feedback_runs = [
             FeedbackRunConfig(task="ball", mask_source="rest", max_runs=2, use_transfer_runs=True),
         ]
-        seq = _build_run_sequence(config, n_feedback_runs=2)
+        seq = _build_run_sequence(config)
         run_types = [rt for rt, _ in seq]
         assert run_types == ["transfer", "feedback", "feedback", "transfer"]
 
@@ -57,14 +57,14 @@ class TestBuildRunSequence:
         config.feedback_runs = [
             FeedbackRunConfig(task="ball", mask_source="rest", max_runs=3, use_transfer_runs=False),
         ]
-        seq = _build_run_sequence(config, n_feedback_runs=3)
+        seq = _build_run_sequence(config)
         run_types = [rt for rt, _ in seq]
         assert run_types == ["feedback", "feedback", "feedback"]
 
     def test_empty_feedback_runs(self, tmp_path):
         config = _make_config(tmp_path)
         config.feedback_runs = []
-        seq = _build_run_sequence(config, n_feedback_runs=2)
+        seq = _build_run_sequence(config)
         assert seq == []
 
     def test_single_feedback_run(self, tmp_path):
@@ -72,7 +72,7 @@ class TestBuildRunSequence:
         config.feedback_runs = [
             FeedbackRunConfig(task="ball", mask_source="rest", max_runs=1, use_transfer_runs=False),
         ]
-        seq = _build_run_sequence(config, n_feedback_runs=1)
+        seq = _build_run_sequence(config)
         run_types = [rt for rt, _ in seq]
         assert run_types == ["feedback"]
 
@@ -83,7 +83,7 @@ class TestBuildRunSequence:
             FeedbackRunConfig(task="es", mask_source="rest", max_runs=2, use_transfer_runs=False),
             FeedbackRunConfig(task="ball", mask_source="rest", max_runs=2, use_transfer_runs=True),
         ]
-        seq = _build_run_sequence(config, n_feedback_runs=0)
+        seq = _build_run_sequence(config)
         run_types = [rt for rt, _ in seq]
         frc_indices = [idx for _, idx in seq]
 
@@ -103,18 +103,9 @@ class TestBuildRunSequence:
             FeedbackRunConfig(task="a", mask_source="rest", max_runs=1, use_transfer_runs=False),
             FeedbackRunConfig(task="b", mask_source="rest", max_runs=3, use_transfer_runs=False),
         ]
-        seq = _build_run_sequence(config, n_feedback_runs=0)
+        seq = _build_run_sequence(config)
         run_types = [rt for rt, _ in seq]
         assert run_types == ["feedback", "feedback", "feedback", "feedback"]
-
-    def test_n_feedback_runs_arg_ignored(self, tmp_path):
-        """n_feedback_runs arg is ignored when feedback_runs is populated."""
-        config = _make_config(tmp_path)
-        config.feedback_runs = [
-            FeedbackRunConfig(task="ball", mask_source="rest", max_runs=3, use_transfer_runs=False),
-        ]
-        seq = _build_run_sequence(config, n_feedback_runs=99)
-        assert len(seq) == 3
 
 
 # =============================================================================
@@ -204,5 +195,5 @@ class TestRunNextTaskComplete:
         state.save()
 
         mask_files = [tmp_path / "mask.nii.gz"]
-        result = run_next_task(config, mask_files, n_feedback_runs=1)
+        result = run_next_task(config, mask_files)
         assert result is None

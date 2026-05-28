@@ -91,15 +91,14 @@ class FeedbackTabBuilder:
     def _create_fields(self):
         """Create all form field controls for this feedback run."""
         c = self.config
-        # Nested sub-blocks introduced by the schema restructure; default to empty dicts so
-        # `.get(...)` calls work when those blocks are missing on legacy/partial configs.
-        qc_cfg = c.get("qc", {}) or {}
-        glm_cfg = c.get("glm", {}) or {}
-        connectivity_cfg = c.get("connectivity", {}) or {}
-        intermittent_cfg = c.get("intermittent", {}) or {}
+        # Nested sub-blocks (default to empty when a run doesn't configure them).
+        qc_cfg = c.get("qc", {})
+        glm_cfg = c.get("glm", {})
+        connectivity_cfg = c.get("connectivity", {})
+        intermittent_cfg = c.get("intermittent", {})
 
         # Task type (read-only — set in Study tab)
-        self._task_type = c.get("task", c.get("task_type", "ball"))
+        self._task_type = c.get("task", "ball")
         try:
             task_meta = get_task_metadata(self._task_type)
             type_label = task_meta.display_name

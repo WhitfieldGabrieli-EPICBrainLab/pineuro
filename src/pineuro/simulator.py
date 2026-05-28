@@ -9,7 +9,6 @@ at TR-paced intervals to mimic scanner acquisition for testing pipelines.
 Components
 ----------
 - VolumeSimulator: Deadline-based copier that preserves timing and ordering
-- DicomSimulator: Alias for VolumeSimulator (backward compatibility)
 
 Workflow
 --------
@@ -670,10 +669,6 @@ class VolumeSimulator:
 
         if self.cleanup_on_complete:
             self.cleanup()
-
-
-# Backward compatibility alias
-DicomSimulator = VolumeSimulator
 
 
 def main():

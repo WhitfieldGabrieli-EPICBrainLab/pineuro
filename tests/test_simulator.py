@@ -9,7 +9,7 @@ import nibabel as nib
 import numpy as np
 import pytest
 
-from pineuro.simulator import DicomSimulator, VolumeSimulator
+from pineuro.simulator import VolumeSimulator
 
 # =============================================================================
 # Construction and validation
@@ -67,9 +67,6 @@ class TestVolumeSimulatorConstruction:
 
         sim = VolumeSimulator(source, tmp_path / "target", tr=2.0, speed=4.0)
         assert sim.delay == pytest.approx(0.5)
-
-    def test_dicom_simulator_alias(self):
-        assert DicomSimulator is VolumeSimulator
 
 
 # =============================================================================

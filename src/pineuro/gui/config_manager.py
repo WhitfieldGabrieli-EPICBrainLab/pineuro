@@ -26,7 +26,7 @@ Example YAML structure:
           tr: 1.2
           networks: [DefaultA, ContA]
           extraction:
-            n_yeo: 17
+            network_atlas: yeo_17
             ...
     feedback_runs:
         - task: ball

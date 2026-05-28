@@ -9,7 +9,7 @@ Validation Functions
 validate_positive_number : Validate positive float values
 validate_positive_int : Validate positive integer values
 validate_path : Validate file/directory paths
-validate_yeo_targets : Validate Yeo network target selection
+validate_yeo_networks : Validate Yeo network selection
 
 Constants
 ---------
@@ -164,21 +164,21 @@ def validate_path(value: Any, name: str, must_exist: bool = False) -> Path:
     return path
 
 
-def validate_yeo_networks(n_yeo: int, selected_networks: list) -> tuple[int, list]:
+def validate_yeo_networks(n_networks: int, selected_networks: list) -> tuple[int, list]:
     """Validate Yeo network configuration.
 
     Args:
-        n_yeo: Number of Yeo networks (7 or 17)
+        n_networks: Number of Yeo networks (7 or 17)
         selected_networks: List of selected network names
 
     Returns:
-        Tuple of (validated n_yeo, validated network list)
+        Tuple of (validated n_networks, validated network list)
 
     Raises:
         ValidationError: If validation fails
     """
-    if n_yeo not in [7, 17]:
-        raise ValidationError(f"n_yeo must be 7 or 17, got: {n_yeo}")
+    if n_networks not in [7, 17]:
+        raise ValidationError(f"n_networks must be 7 or 17, got: {n_networks}")
 
     if not selected_networks:
         raise ValidationError("At least one network must be selected")
@@ -186,7 +186,7 @@ def validate_yeo_networks(n_yeo: int, selected_networks: list) -> tuple[int, lis
     if len(selected_networks) < 2:
         raise ValidationError(f"At least 2 networks must be selected for feedback, got: {len(selected_networks)}")
 
-    return n_yeo, selected_networks
+    return n_networks, selected_networks
 
 
 def validate_participant_id(participant_id: str) -> tuple[bool, str | None]:
@@ -239,10 +239,12 @@ def validate_session_config(config_dict: dict) -> tuple[bool, str | None]:
 
         # Validate extraction sub-block for ICA (rest) localizers
         if loc0.get("type", "rest") == "rest":
+            from pineuro.atlas_registry import ATLAS_SOURCES
+
             extraction = loc0.get("extraction", {})
-            n_yeo = extraction.get("n_yeo", 0)
+            n_networks = ATLAS_SOURCES.get(extraction.get("network_atlas", "yeo_17"), {}).get("n_networks", 0)
             networks = loc0.get("networks", [])
-            validate_yeo_networks(n_yeo, networks)
+            validate_yeo_networks(n_networks, networks)
             validate_positive_number(extraction.get("smooth_fwhm", 0), "extraction.smooth_fwhm")
             validate_positive_number(extraction.get("highpass", 0), "extraction.highpass")
 

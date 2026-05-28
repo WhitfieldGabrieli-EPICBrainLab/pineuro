@@ -47,7 +47,7 @@ mask_files = mask_extraction_rest(
     input_file=preproc_file,
     mask_file=mask_file,
     ref_file=ref_file,
-    yeo_targets=['DefaultA', 'ContA'],  # Target networks
+    networks=['DefaultA', 'ContA'],  # Target networks
 )
 
 for name, path in mask_files.items():

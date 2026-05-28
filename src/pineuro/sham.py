@@ -121,20 +121,7 @@ class ReplayActivationProvider(ShamActivationProvider):
         """Load and validate source feedbacklog."""
         df = pd.read_csv(self.feedbacklog_path, sep="\t")
 
-        # Check for required columns
-        # Handle both old format (mask names directly) and new format (mask_delivered)
-        missing_masks = []
-        self._column_mapping = {}
-
-        for name in self.mask_names:
-            # Try new format first (mask_delivered), then old format (mask name only)
-            if f"{name}_delivered" in df.columns:
-                self._column_mapping[name] = f"{name}_delivered"
-            elif name in df.columns:
-                self._column_mapping[name] = name
-            else:
-                missing_masks.append(name)
-
+        missing_masks = [name for name in self.mask_names if name not in df.columns]
         if missing_masks:
             raise ValueError(
                 f"Mask columns not found in feedbacklog: {missing_masks}. Available columns: {df.columns.tolist()}"
@@ -168,7 +155,7 @@ class ReplayActivationProvider(ShamActivationProvider):
             self._loop_warned = True
 
         row = self._data.iloc[source_idx]
-        return {name: float(row[self._column_mapping[name]]) for name in self.mask_names}
+        return {name: float(row[name]) for name in self.mask_names}
 
 
 def _nan_to_str(val) -> str | None:
@@ -407,7 +394,7 @@ def resolve_sham_masks(
     which will be used instead of the real target networks for sham participants.
 
     Supports two modes:
-    1. 'two_networks': Returns masks for two distinct Yeo networks (legacy)
+    1. 'two_networks': Returns masks for two distinct Yeo networks
     2. 'hemisphere_split': Returns left/right hemisphere masks from a single network
 
     Parameters
@@ -464,7 +451,7 @@ def resolve_sham_masks(
             f"target={target_hemisphere}, non-target={non_target_hemisphere}"
         )
     else:
-        # two_networks mode (legacy)
+        # two_networks mode
         targets = alternative_mask_targets
 
     bids_prefix = f"{participant_id}_{session_id}"

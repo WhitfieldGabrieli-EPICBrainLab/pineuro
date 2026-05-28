@@ -311,7 +311,7 @@ class ShamConfig:
 
     For 'alternative_masks', two modes are available:
     1. 'hemisphere_split': Split a single network into left/right hemispheres (default)
-    2. 'two_networks': Use two distinct Yeo networks (legacy behavior)
+    2. 'two_networks': Use two distinct Yeo networks
 
     Critical blinding requirements:
     - All masks (target + alternative) are extracted for ALL participants
@@ -462,7 +462,7 @@ class PathConfig:
 
 
 # =============================================================================
-# New top-level configuration blocks (replacing the legacy ScanConfig split)
+# Top-level configuration blocks
 # =============================================================================
 
 
@@ -522,12 +522,9 @@ class ReferenceConfig:
 class LocalizerExtractionConfig:
     """Mask-extraction parameters for a single localizer.
 
-    Grouped under ``localizers[*].extraction`` in the new schema. Replaces
-    the legacy ``mask:`` block (which mixed extraction params, target
-    network names, contrasts, and manual-import fields).
+    Grouped under ``localizers[*].extraction``.
     """
 
-    n_yeo: int = 17
     network_atlas: str = "yeo_17"
     n_components: int = 30
     threshold: int = 2000
@@ -536,7 +533,6 @@ class LocalizerExtractionConfig:
     highpass: float = 0.01
     lowpass: float | None = None
     atlas_mask: str | None = None
-    atlas_name: str | None = None
     atlas_source: str | None = None
     atlas_regions: list[str] | None = None
     cluster_start_threshold: float = 2.0
@@ -601,14 +597,6 @@ class IntermittentConfig:
     """
 
     interval: int | None = None
-
-
-# Legacy dataclasses ScanConfig / MaskConfig / FeedbackConfig / TaskConfig removed in
-# the schema restructure. Their fields now live on:
-#   - LocalizerConfig.extraction (mask-extraction params, contrasts, manual_*)
-#   - LocalizerConfig.networks / .motion_correction / .task_params
-#   - FeedbackRunConfig.qc / .glm / .connectivity / .intermittent
-#   - SimulatorConfig / ScannerConfig / ReferenceConfig
 
 
 @dataclass
@@ -724,9 +712,7 @@ class LocalizerConfig:
         Number of runs for this localizer.
     source_dicoms : list[Path]
         DICOM source folders (for simulator).
-    n_yeo : int
-        Number of Yeo networks (7 or 17). Rest only.
-    yeo_targets : list[str]
+    networks : list[str]
         Target network names to extract. Rest only.
     network_atlas : str
         Network atlas for ICA component identification. Rest only.
@@ -754,8 +740,6 @@ class LocalizerConfig:
         ``"top_n"``, ``"cluster"``, or ``"cluster_extent"``.
     atlas_mask : str or None
         Binary atlas NIfTI path for cluster thresholding.
-    atlas_name : str or None
-        Curated atlas entry name for cluster thresholding.
     atlas_source : str or None
         Atlas source key for cluster thresholding.
     atlas_regions : list[str] or None
@@ -981,22 +965,9 @@ class SessionConfig:
             data = json.load(f)
         return cls._from_dict(data)
 
-    # Legacy top-level YAML keys that no longer exist in the new schema.
-    # Their presence triggers an immediate ValueError in _from_dict so partial
-    # migrations fail loudly at load time rather than silently at runtime.
-    _LEGACY_TOP_LEVEL_KEYS = frozenset({"mask", "feedback", "task", "localizer_task", "scan"})
-
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> SessionConfig:
         """Create config from dictionary."""
-        found_legacy = cls._LEGACY_TOP_LEVEL_KEYS & set(data.keys())
-        if found_legacy:
-            raise ValueError(
-                f"Study config uses outdated schema (found legacy top-level keys: "
-                f"{sorted(found_legacy)}). This version of pineuro removed the legacy "
-                f"single-block schema; regenerate the YAML via the GUI study editor."
-            )
-
         paths_data = data.get("paths", {})
         paths = PathConfig(**paths_data)
 
@@ -1065,12 +1036,6 @@ class SessionConfig:
             block = frc_data.pop(key, None)
             if block:
                 frc_data[key] = klass(**block)
-        # Back-compat: the old boolean use_efficiency_weights became the
-        # roi_combine_method choice -- True meant weighting was on (now the
-        # corrected 1/sigma), False meant a plain unweighted mean.
-        legacy = frc_data.pop("use_efficiency_weights", None)
-        if legacy is not None and "roi_combine_method" not in frc_data:
-            frc_data["roi_combine_method"] = "inverse_sd" if legacy else "mean"
         return FeedbackRunConfig(**frc_data)
 
     def to_yaml(self, path: Path) -> None:
@@ -1112,10 +1077,8 @@ class SessionConfig:
     def combined_mask_names(self) -> list[str]:
         """De-duplicated union of every localizer's mask names.
 
-        Replaces the legacy stored ``mask.mask_names`` field. Returns the
-        ordered union (first occurrence wins) so callers that previously
-        passed ``config.mask.mask_names`` to :func:`run_feedback_task`
-        get a stable, deterministic list.
+        Returns the ordered union (first occurrence wins) so callers get a
+        stable, deterministic list.
         """
         seen: set[str] = set()
         out: list[str] = []
@@ -1149,9 +1112,11 @@ class SessionConfig:
             if frc.max_runs <= 0:
                 errors.append(f"feedback_runs[{i}].max_runs must be positive, got {frc.max_runs}")
 
+        from .atlas_registry import ATLAS_SOURCES
+
         for i, loc in enumerate(self.localizers):
-            if loc.is_rest and loc.extraction.n_yeo not in (7, 17):
-                errors.append(f"localizers[{i}].extraction.n_yeo must be 7 or 17, got {loc.extraction.n_yeo}")
+            if loc.is_rest and loc.extraction.network_atlas not in ATLAS_SOURCES:
+                errors.append(f"localizers[{i}].extraction.network_atlas is invalid: {loc.extraction.network_atlas!r}")
 
         return errors
 
@@ -1607,7 +1572,7 @@ def run_dicom_collection(
     config : SessionConfig
         Session configuration
     use_simulator : bool
-        If True, use DicomSimulator to feed DICOMs (for testing)
+        If True, use VolumeSimulator to feed DICOMs (for testing)
         If False, watch for real scanner DICOMs (real-time mode)
     task_name : str
         Name used for logging and output directory prefix
@@ -1848,7 +1813,6 @@ def run_mask_extraction(
             threshold=extraction.threshold,
             threshold_method=extraction.threshold_method,
             atlas_mask=extraction.atlas_mask,
-            atlas_name=extraction.atlas_name,
             atlas_source=extraction.atlas_source,
             atlas_regions=extraction.atlas_regions,
             ref_file=ref_file,
@@ -1877,8 +1841,7 @@ def run_mask_extraction(
             input_file=preproc_file,
             mask_file=mask_file,
             ref_file=ref_file,
-            n_yeo=extraction.n_yeo,
-            yeo_targets=loc.networks,
+            networks=loc.networks,
             network_atlas=extraction.network_atlas,
             smooth_fwhm=extraction.smooth_fwhm,
             highpass=extraction.highpass,
@@ -1974,8 +1937,7 @@ def run_localizer_extraction(
             input_file=preproc_file,
             mask_file=mask_file,
             ref_file=ref_file,
-            n_yeo=ex.n_yeo,
-            yeo_targets=localizer.networks,
+            networks=localizer.networks,
             network_atlas=ex.network_atlas,
             smooth_fwhm=ex.smooth_fwhm,
             highpass=ex.highpass,
@@ -1999,7 +1961,6 @@ def run_localizer_extraction(
             threshold=ex.threshold,
             threshold_method=ex.threshold_method,
             atlas_mask=ex.atlas_mask,
-            atlas_name=ex.atlas_name,
             atlas_source=ex.atlas_source,
             atlas_regions=ex.atlas_regions,
             ref_file=ref_file,
@@ -2224,7 +2185,7 @@ def setup_session(
     overwrite : bool
         If True, rerun all steps even if outputs exist
     use_simulator : bool
-        If True, use DicomSimulator for DICOM collection (testing mode)
+        If True, use VolumeSimulator for DICOM collection (testing mode)
         If False, watch for real scanner DICOMs (real-time mode)
     skip_collection : bool
         If True, skip DICOM collection and use source DICOMs directly
@@ -2423,37 +2384,10 @@ def setup_session(
             )
             coreg_mask_files.extend(coreg)
     else:
-        # Legacy single-localizer path (no localizers list configured)
-        localizer_sources = config.resolve_localizer_sources()
-        if skip_collection:
-            logger.info("Skipping localizer collection (using source DICOMs directly)")
-            rest_dicoms = localizer_sources
-        else:
-            rest_dicoms = run_dicom_collection(
-                config,
-                use_simulator=use_simulator,
-                task_name="rest",
-                source_dirs=localizer_sources,
-                n_volumes_list=(
-                    [config.localizers[0].n_volumes] * config.localizers[0].n_runs if config.localizers else [250]
-                ),
-                start_run=1,
-                max_runs=config.localizers[0].n_runs if config.localizers else 1,
-            )
-
-        preproc_file, mask_file, ref_file = run_preprocessing(
-            config,
-            rest_dicoms=rest_dicoms,
-            overwrite=overwrite,
-        )
-        network_files = run_mask_extraction(config, preproc_file, mask_file, ref_file, overwrite)
-
-        coreg_mask_files = run_coregistration(
-            config,
-            network_files,
-            ref_file,
-            reference_dicom_dir=initial_reference[0],
-            overwrite=overwrite,
+        raise ValueError(
+            "config.localizers must be non-empty for the standard setup pipeline. "
+            "Mask reuse and manual import are handled earlier; there is no implicit "
+            "single-localizer fallback."
         )
 
     logger.info("")
@@ -2509,13 +2443,8 @@ def run_single_task(
     from .tasks.factory import create_task
     from .tasks.task_registry import get_task_metadata
 
-    # run_config is now required (the flat config.task/config.feedback fallback was removed
-    # when the legacy MaskConfig/FeedbackConfig/TaskConfig/ScanConfig dataclasses were deleted).
     if run_config is None:
-        raise ValueError(
-            "run_config is required; the legacy flat config.task/config.feedback "
-            "fallback was removed. Build configs with `feedback_runs=[...]` instead."
-        )
+        raise ValueError("run_config is required; build configs with `feedback_runs=[...]`.")
 
     eff_task_type = run_config.task
     eff_task_params = run_config.task_params
@@ -2801,11 +2730,13 @@ def coregister_before_first_transfer(
 
     # Generate reference QC overlays (only at this pre-transfer step)
     try:
+        from .atlas_registry import ATLAS_SOURCES
         from .mask_extraction import generate_reference_qc_overlays
 
         assert config.paths.mask_extraction_dir is not None
         _run_match = re.search(r"run-(\d+)", coreg_mask_files[0].stem) if coreg_mask_files else None
         run_str = _run_match.group(1) if _run_match else "01"
+        _ref_atlas = config.localizers[0].extraction.network_atlas if config.localizers else "yeo_17"
         generate_reference_qc_overlays(
             participant_id=config.paths.participant_id,
             session_id=config.paths.session_id,
@@ -2814,7 +2745,7 @@ def coregister_before_first_transfer(
             mask_extraction_dir=config.paths.mask_extraction_dir,
             network_coreg_files=coreg_mask_files,
             run_str=run_str,
-            n_yeo=config.localizers[0].extraction.n_yeo if config.localizers else 17,
+            n_networks=ATLAS_SOURCES.get(_ref_atlas, {}).get("n_networks", 17),
             overwrite=True,
             reference_subdir="04_reference",  # Match the output_subdir used in coregister_reference
         )
@@ -2829,20 +2760,16 @@ def coregister_before_first_transfer(
 # =============================================================================
 
 
-def _build_run_sequence(config: SessionConfig, n_feedback_runs: int) -> list[tuple[str, int]]:
-    """Build the run sequence from ``feedback_runs`` or legacy flat config.
+def _build_run_sequence(config: SessionConfig) -> list[tuple[str, int]]:
+    """Build the run sequence from ``config.feedback_runs``.
 
     Each entry is ``(run_type, frc_index)`` where *frc_index* is the index
-    into ``config.feedback_runs`` that owns this step.  For legacy configs
-    with a single implicit feedback task, *frc_index* is always ``0``.
+    into ``config.feedback_runs`` that owns this step.
 
     Parameters
     ----------
     config : SessionConfig
-        Session configuration (``feedback_runs`` is used when populated)
-    n_feedback_runs : int
-        Fallback number of feedback runs (used only when ``feedback_runs``
-        is empty or has a single entry without ``max_runs`` override).
+        Session configuration; the sequence is derived from ``feedback_runs``.
 
     Returns
     -------
@@ -2865,7 +2792,6 @@ def _build_run_sequence(config: SessionConfig, n_feedback_runs: int) -> list[tup
 def run_full_session(
     config: SessionConfig,
     mask_files: list[Path],
-    n_feedback_runs: int = 2,
     reset_session: bool = False,
     use_simulator: bool = True,
 ) -> list[dict[str, Any]]:
@@ -2873,6 +2799,7 @@ def run_full_session(
 
     Workflow depends on task config: with transfer runs it's
     Transfer -> Feedback x N -> Transfer; without it's just Feedback x N.
+    The run count comes from each ``feedback_runs[*].max_runs``.
 
     Parameters
     ----------
@@ -2880,8 +2807,6 @@ def run_full_session(
         Session configuration
     mask_files : list[Path]
         Paths to coregistered mask files
-    n_feedback_runs : int
-        Number of feedback runs between transfer runs
     reset_session : bool
         If True, reset task state before starting
     use_simulator : bool
@@ -2894,7 +2819,7 @@ def run_full_session(
     """
     from .tasks.state import TaskState
 
-    run_sequence = _build_run_sequence(config, n_feedback_runs)
+    run_sequence = _build_run_sequence(config)
     # Derive total feedback run count from sequence
     total_feedback = sum(1 for rt, _ in run_sequence if rt == "feedback")
 
@@ -2903,7 +2828,7 @@ def run_full_session(
     logger.info("STARTING MULTI-RUN SESSION")
     logger.info("=" * 60)
     if not config.feedback_runs:
-        raise ValueError("config.feedback_runs must be non-empty; the legacy flat config.task block was removed.")
+        raise ValueError("config.feedback_runs must be non-empty.")
     primary_task = config.feedback_runs[0].task
     task_types = [frc.task for frc in config.feedback_runs]
     logger.info(f"Tasks: {', '.join(task_types)}")
@@ -2967,7 +2892,6 @@ def run_full_session(
 def run_next_task(
     config: SessionConfig,
     mask_files: list[Path],
-    n_feedback_runs: int = 2,
     use_simulator: bool = True,
 ) -> dict[str, Any] | None:
     """Run the next task in the session sequence.
@@ -2981,8 +2905,6 @@ def run_next_task(
         Session configuration
     mask_files : list[Path]
         Paths to coregistered mask files
-    n_feedback_runs : int
-        Number of feedback runs between transfer runs
     use_simulator : bool
         If True, use DICOM simulator for testing
 
@@ -3002,7 +2924,7 @@ def run_next_task(
 
     mask_files = [Path(f) for f in mask_files]
 
-    run_sequence = _build_run_sequence(config, n_feedback_runs)
+    run_sequence = _build_run_sequence(config)
     total_feedback = sum(1 for rt, _ in run_sequence if rt == "feedback")
 
     if task_state.max_feedback_runs != total_feedback:

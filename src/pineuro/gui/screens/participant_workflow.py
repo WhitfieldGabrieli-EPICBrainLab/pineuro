@@ -658,25 +658,21 @@ class ParticipantWorkflowScreen:
         masks_dir = mask_extraction_dir / "03_masks"
         ica_dir = mask_extraction_dir / "01_ica"
 
+        from pineuro.atlas_registry import ATLAS_SOURCES
+
         # Get network names — for multi-localizer, use the specific localizer's targets
         if loc_idx is not None and localizers and len(localizers) > 1:
             loc = localizers[loc_idx]
-            network_names = list(loc.get("networks", loc.get("networks", loc.get("yeo_targets", []))))
-            n_yeo = loc.get(
-                "n_yeo",
-                (config["localizers"][0].get("extraction", {}).get("n_yeo", 17) if config.get("localizers") else 17),
-            )
-            threshold = loc.get(
-                "threshold",
-                (
-                    config["localizers"][0].get("extraction", {}).get("threshold", 2000)
-                    if config.get("localizers")
-                    else 2000
-                ),
-            )
+            extraction = loc.get("extraction", {})
+            network_names = list(loc.get("networks", []))
+            network_atlas = extraction.get("network_atlas", "yeo_17")
+            n_networks = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)
+            threshold = extraction.get("threshold", 2000)
         else:
+            ex0 = config["localizers"][0]["extraction"]
             network_names = list(config["localizers"][0]["networks"])  # Copy to avoid modifying original
-            n_yeo = config["localizers"][0]["extraction"]["n_yeo"]
+            network_atlas = ex0.get("network_atlas", "yeo_17")
+            n_networks = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)
             threshold = (
                 config["localizers"][0].get("extraction", {}).get("threshold", 2000)
                 if config.get("localizers")
@@ -697,7 +693,7 @@ class ParticipantWorkflowScreen:
                 if sham_hemisphere_network and sham_hemisphere_network not in network_names:
                     network_names.append(sham_hemisphere_network)
             else:
-                # Two networks mode (legacy)
+                # Two networks mode
                 alternative_targets = sham_config.get("alternative_mask_targets", [])
                 for target in alternative_targets:
                     if target and target not in network_names:
@@ -708,8 +704,6 @@ class ParticipantWorkflowScreen:
 
         # Load correlation matrix
         corr_file = masks_dir / "network_IC_spatial_correlation.csv"
-        if not corr_file.exists():
-            corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
         if not corr_file.exists():
             _snack = ft.SnackBar(
                 ft.Text("Correlation matrix not found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE
@@ -766,7 +760,7 @@ class ParticipantWorkflowScreen:
             network_names=network_names,
             n_alternatives=1,  # Only generate overlay for top component per network
             output_dir=qc_dir,
-            n_yeo=n_yeo,
+            n_networks=n_networks,
             ref_file=ref_file if ref_file.exists() else None,
         )
 
@@ -784,7 +778,7 @@ class ParticipantWorkflowScreen:
                 session_id=self.session_id,
                 hemisphere_network=sham_hemisphere_network,
                 output_dir=qc_dir,
-                n_yeo=n_yeo,
+                n_networks=n_networks,
                 ref_file=ref_file if ref_file.exists() else None,
             )
 
@@ -898,7 +892,7 @@ class ParticipantWorkflowScreen:
             masks_dir=masks_dir,
             components_file=components_file,
             yeo_subject_space=yeo_subject_space,
-            n_yeo=n_yeo,
+            network_atlas=network_atlas,
             threshold=threshold,
             on_complete=on_complete,
             on_log=self._add_log,
@@ -907,7 +901,7 @@ class ParticipantWorkflowScreen:
             input_file=input_file if input_file.exists() else None,
             brain_mask_file=brain_mask_file if brain_mask_file.exists() else None,
             ref_file=ref_file if ref_file.exists() else None,
-            yeo_targets=network_names,
+            networks=network_names,
             n_components=n_components,
             smooth_fwhm=smooth_fwhm,
             highpass=highpass,
@@ -1285,16 +1279,16 @@ class ParticipantWorkflowScreen:
             _close_dialog(dialog)
 
             extraction = _loc(config).get("extraction", {})
-            atlas_name = extraction.get("atlas_name")
+            atlas_source = extraction.get("atlas_source")
             threshold_method = extraction.get("threshold_method", "top_n")
-            if threshold_method != "cluster" or not atlas_name:
+            if threshold_method != "cluster" or not atlas_source:
                 self._add_log("[INFO] Masks rejected — re-run mask extraction with different parameters")
                 return
 
             # Find atlas in subject space
-            atlas_subject_file = masks_dir / f"{self._bids_prefix}_atlas_{atlas_name}.nii.gz"
+            atlas_subject_file = masks_dir / f"{self._bids_prefix}_atlas_{atlas_source}.nii.gz"
             if not atlas_subject_file.exists():
-                atlas_subject_file = mask_extraction_dir / "02_mnireg" / f"{atlas_name}_to_{self._bids_prefix}.nii.gz"
+                atlas_subject_file = mask_extraction_dir / "02_mnireg" / f"{atlas_source}_to_{self._bids_prefix}.nii.gz"
 
             if not atlas_subject_file.exists() or not ref_file.exists():
                 self._add_log("[INFO] Masks rejected — atlas in subject space not available")
@@ -1309,7 +1303,7 @@ class ParticipantWorkflowScreen:
                 output_dir=qc_dir,
                 participant_id=self.participant_id,
                 session_id=self.session_id,
-                atlas_name=atlas_name,
+                atlas_name=atlas_source,
             )
 
             if not atlas_overlay_png or not atlas_overlay_png.exists():
@@ -1378,7 +1372,7 @@ class ParticipantWorkflowScreen:
                                         ft.Row(
                                             [
                                                 ft.Text(
-                                                    f"Atlas: {atlas_name}",
+                                                    f"Atlas: {atlas_source}",
                                                     size=14,
                                                     weight=ft.FontWeight.W_500,
                                                 ),
@@ -2195,7 +2189,7 @@ class ParticipantWorkflowScreen:
         # Build dynamic steps list
         steps = []
 
-        # Build feedback/transfer steps from feedback_runs or legacy config
+        # Build feedback/transfer steps from feedback_runs
         fb_steps = _build_feedback_step_ids(config)
 
         has_feedback = len(fb_steps) > 0
@@ -2260,7 +2254,7 @@ class ParticipantWorkflowScreen:
                 # Single manual localizer: import masks only, no collection/preprocessing
                 steps.append("mask_extraction")
             else:
-                # Single localizer (legacy or 1-element list)
+                # Single localizer (1-element list)
                 for i in range(1, n_localizer_runs + 1):
                     steps.append(f"rest_run_{i}")
                 steps.extend(["preprocessing", "mask_extraction"])
@@ -2336,7 +2330,7 @@ class ParticipantWorkflowScreen:
                 if masks_dir.exists() and len(list(masks_dir.glob(f"{self._bids_prefix}_*.nii.gz"))) > 0:
                     self.step_statuses["mask_extraction"] = StepStatus.COMPLETE
             else:
-                # Single localizer (legacy)
+                # Single localizer (1-element list)
                 expected_vols = config["localizers"][0].get("n_volumes") if config.get("localizers") else None
                 if expected_vols is None:
                     rest_n_volumes = (
@@ -2576,7 +2570,7 @@ class ParticipantWorkflowScreen:
         """Build a mapping from mask name to the localizer index that produces it.
 
         For task localizers, mask names come from the ``contrasts`` dict keys.
-        For rest localizers, mask names come from the ``yeo_targets`` list.
+        For rest localizers, mask names come from the ``networks`` list.
 
         Returns:
             Dict mapping mask name to localizer index.
@@ -2587,7 +2581,7 @@ class ParticipantWorkflowScreen:
         for loc_idx, loc in enumerate(localizers):
             loc_type = loc.get("type", "rest")
             if loc_type == "rest":
-                for target in loc.get("networks", loc.get("yeo_targets", [])):
+                for target in loc.get("networks", []):
                     mask_to_loc[target] = loc_idx
             else:
                 # Task localizer — contrasts dict keys are the mask names
@@ -2644,10 +2638,10 @@ class ParticipantWorkflowScreen:
         return masks
 
     def _fb(self, key: str, default=None):
-        """Read a feedback parameter from the active FRC (new nested schema).
+        """Read a feedback parameter from the active FRC (nested schema).
 
-        Maps legacy flat keys to their new sub-block locations
-        (qc / glm / connectivity / intermittent).
+        Settings that live in a sub-block (qc / glm / connectivity / intermittent)
+        are resolved through the map below; everything else is read at the top level.
         """
         _NESTED_KEY_MAP = {
             "fd_threshold": ("qc", "fd_threshold"),
@@ -2667,13 +2661,11 @@ class ParticipantWorkflowScreen:
         frc = getattr(self, "_active_frc", None)
         if not frc:
             return default
-        if key in frc:
-            return frc[key]
         sub_key = _NESTED_KEY_MAP.get(key)
         if sub_key is not None:
             block, inner = sub_key
             return frc.get(block, {}).get(inner, default)
-        return default
+        return frc.get(key, default)
 
     def _resolve_frc_mask_names(self, frc: dict) -> list[str]:
         """Return an ordered list of mask names for a feedback run config.
@@ -4876,7 +4868,7 @@ class ParticipantWorkflowScreen:
                 if hemisphere_network and hemisphere_network not in network_names:
                     network_names.append(hemisphere_network)
             else:
-                # Two networks mode (legacy)
+                # Two networks mode
                 alternative_targets = sham_config.get("alternative_mask_targets", [])
                 for target in alternative_targets:
                     if target and target not in network_names:
@@ -4991,12 +4983,13 @@ class ParticipantWorkflowScreen:
             }
         else:
             all_networks = self._get_all_network_targets(config)
+            _ica_atlas = config["localizers"][0]["extraction"].get("network_atlas", "yeo_17")
             return {
                 "label": "Extract Network Masks (ICA)",
-                "description": f"ICA-based extraction of {len(all_networks)} network masks using {config['localizers'][0]['extraction']['n_yeo']}-network Yeo atlas.",
+                "description": f"ICA-based extraction of {len(all_networks)} network masks using the {_ica_atlas} atlas.",
                 "parameters": {
                     "Networks": ", ".join(all_networks),
-                    "Yeo Atlas": f"{config['localizers'][0]['extraction']['n_yeo']} networks",
+                    "Atlas": _ica_atlas,
                     "Smoothing": f"{config['localizers'][0]['extraction']['smooth_fwhm']} mm FWHM",
                     "Highpass": f"{config['localizers'][0]['extraction']['highpass']} Hz",
                     "Output": base_dir / "mask_extraction",
@@ -5387,12 +5380,13 @@ class ParticipantWorkflowScreen:
                     params[display_key] = value
             else:
                 # Rest-specific params
-                if loc.get("n_components"):
-                    params["ICA Components"] = loc["n_components"]
-                if loc.get("networks", loc.get("yeo_targets")):
-                    params["Target Networks"] = ", ".join(loc.get("networks", loc.get("yeo_targets", [])))
-                if loc.get("network_atlas"):
-                    params["Atlas"] = loc["network_atlas"]
+                extraction = loc.get("extraction", {})
+                if extraction.get("n_components"):
+                    params["ICA Components"] = extraction["n_components"]
+                if loc.get("networks"):
+                    params["Target Networks"] = ", ".join(loc.get("networks", []))
+                if extraction.get("network_atlas"):
+                    params["Atlas"] = extraction["network_atlas"]
 
             if run_info["existing_attempts"]:
                 params["Previous Attempts"] = ", ".join(f"attempt-{a:02d}" for a in run_info["existing_attempts"])
@@ -5447,14 +5441,15 @@ class ParticipantWorkflowScreen:
             if loc_type == "rest":
                 loc_display = "Resting State"
                 method = "ICA"
+                extraction = loc.get("extraction", {})
                 params = {
                     "Method": "ICA (Independent Component Analysis)",
-                    "Atlas": loc.get("network_atlas", "yeo_17"),
-                    "Components": loc.get("n_components", 20),
-                    "Target Networks": ", ".join(loc.get("networks", loc.get("yeo_targets", []))),
-                    "Smoothing": f"{loc.get('smooth_fwhm', 5.0)} mm FWHM",
-                    "Highpass": f"{loc.get('highpass', 0.01)} Hz",
-                    "Threshold": f"{loc.get('threshold', 2000)} ({loc.get('threshold_method', 'top_n')})",
+                    "Atlas": extraction.get("network_atlas", "yeo_17"),
+                    "Components": extraction.get("n_components", 20),
+                    "Target Networks": ", ".join(loc.get("networks", [])),
+                    "Smoothing": f"{extraction.get('smooth_fwhm', 5.0)} mm FWHM",
+                    "Highpass": f"{extraction.get('highpass', 0.01)} Hz",
+                    "Threshold": f"{extraction.get('threshold', 2000)} ({extraction.get('threshold_method', 'top_n')})",
                 }
             elif loc_type == "manual":
                 from pineuro.gui.components.manual_masks import read_manual_masks
@@ -6935,7 +6930,7 @@ class ParticipantWorkflowScreen:
             label = "Manual" if loc_type == "manual" else ("Rest" if loc_type == "rest" else loc_type.upper())
             return f"Review & Approve {label} Masks (Loc {loc_idx + 1})"
 
-        # Handle dynamic rest_run_* steps (single-localizer / legacy)
+        # Handle dynamic rest_run_* steps (single-localizer)
         if step_id.startswith("rest_run_"):
             run_num = step_id.split("_")[-1]
             # Dynamic label based on localizer type

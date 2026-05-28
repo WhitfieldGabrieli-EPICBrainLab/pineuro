@@ -35,7 +35,6 @@ def _make_study_config(**overrides) -> StudyConfig:
                 "n_runs": 2,
                 "networks": ["ContA", "DefaultA"],
                 "extraction": {
-                    "n_yeo": 7,
                     "network_atlas": "yeo_7",
                     "n_components": 15,
                     "threshold": 2000,

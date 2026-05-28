@@ -155,7 +155,6 @@ class PipelineRunner:
         """Compute the ``[positive, negative]`` mask pair from a run's network_assignment.
 
         Returns None if the task is not a 2-network task or the assignment is incomplete.
-        Replaces the legacy ``feedback_runs[*].differential_pair`` field.
         """
         if not frc:
             return None
@@ -453,7 +452,7 @@ class PipelineRunner:
 
     def _run_reference_initial(self) -> None:
         """Collect initial reference scan for positioning verification."""
-        from pineuro.preprocessing import collect_dicoms
+        from pineuro.preprocessing import collect_volumes
         from pineuro.session import get_localizer_run_info
 
         config = self.config
@@ -466,7 +465,6 @@ class PipelineRunner:
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
 
-        # Get number of volumes (use new field, fall back to legacy)
         n_volumes = config.get("reference", {}).get("initial_n_volumes", 2)
 
         # Get run info with retry detection
@@ -515,7 +513,7 @@ class PipelineRunner:
             simulator_source_dir = None
             simulator_speed = 1.0
 
-        collect_dicoms(
+        collect_volumes(
             watch_dir=watch_dir,
             output_dir=output_dir,
             n_volumes=n_volumes,
@@ -539,7 +537,7 @@ class PipelineRunner:
         Args:
             run_num: Run number (1-based)
         """
-        from pineuro.preprocessing import collect_dicoms
+        from pineuro.preprocessing import collect_volumes
         from pineuro.session import get_localizer_run_info
 
         config = self.config
@@ -555,7 +553,7 @@ class PipelineRunner:
 
         # If the localizer task declares its own worst-case duration, override
         # the user-configured n_volumes with the computed ceiling. The existing
-        # task_done_event mechanism still lets collect_dicoms stop early when
+        # task_done_event mechanism still lets collect_volumes stop early when
         # the task finishes, so this only caps collection — it never forces it
         # to run longer than the task actually does.
         if is_task_localizer:
@@ -629,7 +627,7 @@ class PipelineRunner:
 
             watch_dir = base_dir / "tmp" / f"incoming_{task_name}_run{run_num}"
             watch_dir.mkdir(parents=True, exist_ok=True)
-            # Clear stale files from previous runs so collect_dicoms doesn't
+            # Clear stale files from previous runs so collect_volumes doesn't
             # catalog them as "already processed" (the simulator will re-copy
             # files with the same names, which would then be skipped).
             for f in watch_dir.iterdir():
@@ -661,11 +659,11 @@ class PipelineRunner:
         # Determine which localizer task to use
         actual_task_id = task_name if is_task_localizer else "rest"
 
-        # Shared event so collect_dicoms knows when acquisition actually starts
+        # Shared event so collect_volumes knows when acquisition actually starts
         trigger_event = threading.Event()
 
         # Event set when the localizer task's paradigm finishes.
-        # For variable-duration tasks (e.g., RIT), this signals collect_dicoms
+        # For variable-duration tasks (e.g., RIT), this signals collect_volumes
         # to drain remaining volumes and stop, rather than waiting for n_volumes.
         task_done_event = threading.Event()
 
@@ -680,7 +678,7 @@ class PipelineRunner:
             task_done_event=task_done_event,
         )
 
-        # collect_dicoms just watches the directory - no simulator
+        # collect_volumes just watches the directory - no simulator
         # (simulator is controlled by the task for synchronization)
 
         # Create QC monitor for real-time motion/quality metrics during collection
@@ -693,7 +691,7 @@ class PipelineRunner:
             on_qc_data=self.on_qc_data,
         )
 
-        collect_dicoms(
+        collect_volumes(
             watch_dir=watch_dir,
             output_dir=output_dir,
             n_volumes=n_volumes,
@@ -812,7 +810,7 @@ class PipelineRunner:
             trigger_keys=trigger_keys,
         )
 
-        # Set trigger event for timing synchronization with collect_dicoms
+        # Set trigger event for timing synchronization with collect_volumes
         if trigger_event is not None:
             task.trigger_event = trigger_event
 
@@ -1153,7 +1151,6 @@ class PipelineRunner:
             highpass = extraction.get("highpass", 0.01)
             threshold_method = extraction.get("threshold_method", "top_n")
             atlas_mask_cfg = extraction.get("atlas_mask")
-            atlas_name_cfg = extraction.get("atlas_name")
             atlas_source_cfg = extraction.get("atlas_source")
             atlas_regions_cfg = extraction.get("atlas_regions")
             cluster_start_threshold = extraction.get("cluster_start_threshold", 2.0)
@@ -1176,7 +1173,6 @@ class PipelineRunner:
                 "threshold": threshold,
                 "threshold_method": threshold_method,
                 "atlas_mask": atlas_mask_cfg,
-                "atlas_name": atlas_name_cfg,
                 "atlas_source": atlas_source_cfg,
                 "atlas_regions": atlas_regions_cfg,
                 "ref_file": str(ref_file),
@@ -1195,9 +1191,8 @@ class PipelineRunner:
             self._write_reproduce_script("task", params)
         else:
             # ICA-based extraction (existing behavior)
-            n_yeo = extraction["n_yeo"]
-            network_atlas = extraction.get("network_atlas", f"yeo_{n_yeo}")
-            yeo_targets = list(loc0.get("networks", []))  # Copy to avoid modifying original
+            network_atlas = extraction.get("network_atlas", "yeo_17")
+            networks = list(loc0.get("networks", []))  # Copy to avoid modifying original
             n_components = extraction.get("n_components", 30)
             threshold = extraction.get("threshold", 2000)
             smooth_fwhm = extraction["smooth_fwhm"]
@@ -1211,8 +1206,8 @@ class PipelineRunner:
                 mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
                 if mask_mode == "hemisphere_split":
                     hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                    if hemisphere_network and hemisphere_network not in yeo_targets:
-                        yeo_targets.append(hemisphere_network)
+                    if hemisphere_network and hemisphere_network not in networks:
+                        networks.append(hemisphere_network)
                         if self._is_blind_mode():
                             self._emit_progress_file_only(f"Including sham hemisphere network: {hemisphere_network}")
                             self._emit_progress("Including additional network for mask extraction")
@@ -1222,8 +1217,8 @@ class PipelineRunner:
                 else:
                     alternative_targets = sham_config.get("alternative_mask_targets", [])
                     for target in alternative_targets:
-                        if target and target not in yeo_targets:
-                            yeo_targets.append(target)
+                        if target and target not in networks:
+                            networks.append(target)
                             if self._is_blind_mode():
                                 self._emit_progress_file_only(f"Including sham alternative network: {target}")
                                 self._emit_progress("Including additional network for mask extraction")
@@ -1237,8 +1232,7 @@ class PipelineRunner:
                 "input_file": preproc_file,
                 "mask_file": mask_file,
                 "ref_file": ref_file,
-                "n_yeo": n_yeo,
-                "yeo_targets": yeo_targets,
+                "networks": networks,
                 "network_atlas": network_atlas,
                 "n_components": n_components,
                 "threshold": threshold,
@@ -1468,13 +1462,13 @@ class PipelineRunner:
         elif loc_type == "rest":
             from pineuro.mask_extraction import run_mask_extraction_from_config
 
-            n_yeo = loc.get("n_yeo", 17)
-            network_atlas = loc.get("network_atlas", f"yeo_{n_yeo}")
-            yeo_targets = list(loc.get("yeo_targets", ["DefaultA", "ContA"]))
-            threshold = loc.get("threshold", 2000)
-            smooth_fwhm = loc.get("smooth_fwhm", 5.0)
-            highpass = loc.get("highpass", 0.01)
-            lowpass = loc.get("lowpass")
+            extraction = loc.get("extraction", {})
+            network_atlas = extraction.get("network_atlas", "yeo_17")
+            networks = list(loc.get("networks", []))
+            threshold = extraction.get("threshold", 2000)
+            smooth_fwhm = extraction["smooth_fwhm"]
+            highpass = extraction["highpass"]
+            lowpass = extraction.get("lowpass")
 
             # Include sham networks for rest localizers
             sham_config = config.get("sham", {})
@@ -1483,13 +1477,13 @@ class PipelineRunner:
                 mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
                 if mask_mode == "hemisphere_split":
                     hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                    if hemisphere_network and hemisphere_network not in yeo_targets:
-                        yeo_targets.append(hemisphere_network)
+                    if hemisphere_network and hemisphere_network not in networks:
+                        networks.append(hemisphere_network)
                     sham_hemisphere_network = hemisphere_network
                 else:
                     for target in sham_config.get("alternative_mask_targets", []):
-                        if target and target not in yeo_targets:
-                            yeo_targets.append(target)
+                        if target and target not in networks:
+                            networks.append(target)
 
             params = {
                 "participant_id": self.participant_id,
@@ -1498,10 +1492,9 @@ class PipelineRunner:
                 "input_file": preproc_file,
                 "mask_file": mask_file,
                 "ref_file": ref_file,
-                "n_yeo": n_yeo,
-                "yeo_targets": yeo_targets,
+                "networks": networks,
                 "network_atlas": network_atlas,
-                "n_components": loc.get("n_components", 30),
+                "n_components": extraction.get("n_components", 30),
                 "threshold": threshold,
                 "smooth_fwhm": smooth_fwhm,
                 "highpass": highpass,
@@ -1517,6 +1510,7 @@ class PipelineRunner:
         else:
             from pineuro.mask_extraction import run_mask_extraction_from_config
 
+            extraction = loc.get("extraction", {})
             contrasts = loc.get("contrasts", {})
             if not contrasts:
                 from pineuro.tasks.task_registry import get_task_metadata
@@ -1550,22 +1544,21 @@ class PipelineRunner:
                 "events": events_file,
                 "contrasts": contrasts,
                 "tr": loc.get("tr", 1.2),
-                "threshold": loc.get("threshold", 2000),
-                "threshold_method": loc.get("threshold_method", "top_n"),
-                "atlas_mask": loc.get("atlas_mask"),
-                "atlas_name": loc.get("atlas_name"),
-                "atlas_source": loc.get("atlas_source"),
-                "atlas_regions": loc.get("atlas_regions"),
+                "threshold": extraction.get("threshold", 2000),
+                "threshold_method": extraction.get("threshold_method", "top_n"),
+                "atlas_mask": extraction.get("atlas_mask"),
+                "atlas_source": extraction.get("atlas_source"),
+                "atlas_regions": extraction.get("atlas_regions"),
                 "ref_file": str(ref_file),
-                "cluster_start_threshold": loc.get("cluster_start_threshold", 2.0),
-                "cluster_step": loc.get("cluster_step", 0.1),
-                "cluster_return_all": loc.get("cluster_return_all", False),
-                "min_cluster_size": loc.get("min_cluster_size", 50),
-                "max_total_voxels": loc.get("max_total_voxels"),
+                "cluster_start_threshold": extraction.get("cluster_start_threshold", 2.0),
+                "cluster_step": extraction.get("cluster_step", 0.1),
+                "cluster_return_all": extraction.get("cluster_return_all", False),
+                "min_cluster_size": extraction.get("min_cluster_size", 50),
+                "max_total_voxels": extraction.get("max_total_voxels"),
                 "include_reverse": loc.get("include_reverse_contrasts", False),
                 "overwrite": self.overwrite,
-                "smoothing_fwhm": loc.get("smooth_fwhm", 5.0),
-                "high_pass": loc.get("highpass", 0.01),
+                "smoothing_fwhm": extraction.get("smooth_fwhm", 5.0),
+                "high_pass": extraction.get("highpass", 0.01),
                 "drift_model": loc.get("drift_model", "cosine"),
                 "hrf_model": loc.get("hrf_model", "spm"),
                 "qc_enabled": True,
@@ -1686,9 +1679,8 @@ class PipelineRunner:
         # Read atlas/network config (same settings used for ICA pipeline)
         loc0 = _loc(config)
         extraction = loc0.get("extraction", {})
-        n_yeo = extraction.get("n_yeo", 17)
-        network_atlas = extraction.get("network_atlas", f"yeo_{n_yeo}")
-        yeo_targets = list(loc0.get("networks", ["DefaultA", "ContA"]))
+        network_atlas = extraction.get("network_atlas", "yeo_17")
+        networks = list(loc0.get("networks", ["DefaultA", "ContA"]))
         threshold = extraction.get("threshold", 2000)
 
         # Handle sham networks (same logic as _run_mask_extraction)
@@ -1698,8 +1690,8 @@ class PipelineRunner:
             mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
             if mask_mode == "hemisphere_split":
                 hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                if hemisphere_network and hemisphere_network not in yeo_targets:
-                    yeo_targets.append(hemisphere_network)
+                if hemisphere_network and hemisphere_network not in networks:
+                    networks.append(hemisphere_network)
                     if self._is_blind_mode():
                         self._emit_progress_file_only(f"Including sham hemisphere network: {hemisphere_network}")
                         self._emit_progress("Including additional network for mask extraction")
@@ -1709,8 +1701,8 @@ class PipelineRunner:
             else:
                 alternative_targets = sham_config.get("alternative_mask_targets", [])
                 for target in alternative_targets:
-                    if target and target not in yeo_targets:
-                        yeo_targets.append(target)
+                    if target and target not in networks:
+                        networks.append(target)
                         if self._is_blind_mode():
                             self._emit_progress_file_only(f"Including sham alternative network: {target}")
                             self._emit_progress("Including additional network for mask extraction")
@@ -1728,8 +1720,7 @@ class PipelineRunner:
             "session_id": self.session_id,
             "root_dir": mask_extraction_dir,
             "ref_file": ref_file,
-            "n_yeo": n_yeo,
-            "yeo_targets": yeo_targets,
+            "networks": networks,
             "network_atlas": network_atlas,
             "threshold": threshold,
             "overwrite": self.overwrite,
@@ -1777,7 +1768,7 @@ class PipelineRunner:
         Args:
             run_id: Run number (1 for initial, 2 for realtime)
         """
-        from pineuro.mask_extraction import coregister_reference, generate_reference_qc_overlays
+        from pineuro.mask_extraction import ATLAS_SOURCES, coregister_reference, generate_reference_qc_overlays
 
         config = self.config
 
@@ -1883,7 +1874,7 @@ class PipelineRunner:
             for loc_idx, loc in enumerate(localizers):
                 loc_type = loc.get("type", "rest")
                 if loc_type == "rest":
-                    for target in loc.get("yeo_targets", []):
+                    for target in loc.get("networks", []):
                         mask_name_to_loc[target] = loc_idx
                 elif loc_type == "manual":
                     for mask_name in loc.get("manual_mask_names", []):
@@ -2042,9 +2033,12 @@ class PipelineRunner:
                 mask_extraction_dir=qc_mask_extraction_dir,
                 network_coreg_files=coreg_masks,
                 run_str=str(actual_reference_run).zfill(2),
-                n_yeo=(
-                    config["localizers"][0].get("extraction", {}).get("n_yeo", 17) if config.get("localizers") else 17
-                ),
+                n_networks=ATLAS_SOURCES.get(
+                    config["localizers"][0].get("extraction", {}).get("network_atlas", "yeo_17")
+                    if config.get("localizers")
+                    else "yeo_17",
+                    {},
+                ).get("n_networks", 17),
                 overwrite=self.overwrite,
                 reference_subdir=reference_subdir,
             )
@@ -2055,7 +2049,7 @@ class PipelineRunner:
 
     def _run_reference_realtime(self) -> None:
         """Collect real-time reference scan before feedback tasks."""
-        from pineuro.preprocessing import collect_dicoms
+        from pineuro.preprocessing import collect_volumes
         from pineuro.session import get_localizer_run_info
 
         config = self.config
@@ -2074,7 +2068,6 @@ class PipelineRunner:
         is_mask_reuse = session_metadata.get("mask_source") == "reuse"
         run_id = 1 if is_mask_reuse else 2
 
-        # Get number of volumes (use new field, fall back to legacy)
         n_volumes = config.get("reference", {}).get("realtime_n_volumes", 2)
 
         # Get run info with retry detection
@@ -2123,7 +2116,7 @@ class PipelineRunner:
             simulator_source_dir = None
             simulator_speed = 1.0
 
-        collect_dicoms(
+        collect_volumes(
             watch_dir=watch_dir,
             output_dir=output_dir,
             n_volumes=n_volumes,
@@ -2166,10 +2159,8 @@ class PipelineRunner:
 
         # Resolve per-run config from feedback_runs if available
         frc = self._resolve_feedback_run_config(step_id)
-        # Map old-shape flat keys to the new nested sub-block they live in
-        # (qc / glm / connectivity / intermittent). For backwards compatibility
-        # within this helper, the legacy flat key is also checked at the top level
-        # of the per-run dict.
+        # Convenience map from a short setting name to the nested sub-block it lives
+        # in (qc / glm / connectivity / intermittent), so call sites can use flat names.
         _NESTED_KEY_MAP = {
             "fd_threshold": ("qc", "fd_threshold"),
             "dvars_threshold": ("qc", "dvars_threshold"),
@@ -2187,18 +2178,16 @@ class PipelineRunner:
         }
 
         def _fb(key: str, default: Any = None) -> Any:
-            """Read a feedback-run setting from the per-run config (new nested schema)."""
+            """Read a feedback-run setting from the per-run config (nested schema)."""
             if frc is None:
                 return default
-            # Direct top-level read (task, max_runs, tr, n_volumes, n_baseline, feedback_mode, etc.)
-            if key in frc:
-                return frc[key]
-            # Look up in nested sub-block
+            # Settings that live in a nested sub-block.
             sub_key = _NESTED_KEY_MAP.get(key)
             if sub_key is not None:
                 block, inner = sub_key
                 return frc.get(block, {}).get(inner, default)
-            return default
+            # Top-level settings (task, max_runs, tr, n_volumes, n_baseline, feedback_mode, etc.)
+            return frc.get(key, default)
 
         # Get output directory for slot-based run info
         config = self.config
@@ -2264,8 +2253,6 @@ class PipelineRunner:
 
         if metadata.network_roles:
             # network_assignment is the single source of truth for role-to-mask mapping.
-            # The legacy differential_pair / task_params[role.key] fallbacks were removed
-            # along with the old singular config blocks.
             assigned_names = []
             if frc:
                 net_assign = frc.get("network_assignment", {})

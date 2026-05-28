@@ -160,7 +160,7 @@ class TestValidateSessionConfig:
                     "n_runs": 2,
                     "networks": ["Default", "Cont"],
                     "extraction": {
-                        "n_yeo": 7,
+                        "network_atlas": "yeo_7",
                         "smooth_fwhm": 5.0,
                         "highpass": 0.01,
                     },
@@ -212,15 +212,15 @@ class TestValidateSessionConfig:
         ok, err = validate_session_config(config)
         assert ok is False
 
-    def test_invalid_n_yeo_fails(self):
+    def test_invalid_network_atlas_fails(self):
         config = self._valid_config()
-        config["localizers"][0]["extraction"]["n_yeo"] = 5  # only 7 or 17
+        config["localizers"][0]["extraction"]["network_atlas"] = "yeo_99"  # not a known atlas
         ok, err = validate_session_config(config)
         assert ok is False
 
-    def test_valid_n_yeo_17(self):
+    def test_valid_network_atlas_17(self):
         config = self._valid_config()
-        config["localizers"][0]["extraction"]["n_yeo"] = 17
+        config["localizers"][0]["extraction"]["network_atlas"] = "yeo_17"
         ok, err = validate_session_config(config)
         assert ok is True
 

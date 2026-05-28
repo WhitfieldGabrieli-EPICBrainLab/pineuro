@@ -1773,10 +1773,3 @@ def collect_volumes(
     logger.info(f"Collection complete: {collected_count} volumes in {elapsed:.1f}s")
 
     return output_dir
-
-
-# =============================================================================
-# BACKWARD COMPATIBILITY
-# =============================================================================
-# Old name for collect_volumes - kept for existing code that uses it
-collect_dicoms = collect_volumes

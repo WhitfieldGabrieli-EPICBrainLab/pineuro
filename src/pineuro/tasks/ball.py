@@ -69,24 +69,7 @@ class SignalMode(str, Enum):
     CONNECTIVITY = "connectivity"
 
 
-# ==============================================================================
-# HRF and Task Regressor Computation
-# ==============================================================================
-
-# Re-export for backward compatibility with existing imports from this module.
-# compute_hrf and compute_boxcar_task_regressor are imported lazily via __getattr__
-# to avoid pulling in pineuro.utils (and its heavy deps) at import time.
-__all__ = ["BallTask", "SignalMode", "compute_hrf", "compute_boxcar_task_regressor"]  # noqa: F822
-
-
-def __getattr__(name):
-    if name in ("compute_hrf", "compute_boxcar_task_regressor"):
-        from pineuro.utils import compute_boxcar_task_regressor, compute_hrf
-
-        globals()["compute_hrf"] = compute_hrf
-        globals()["compute_boxcar_task_regressor"] = compute_boxcar_task_regressor
-        return globals()[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+__all__ = ["BallTask", "SignalMode"]
 
 
 # Instruction text constants

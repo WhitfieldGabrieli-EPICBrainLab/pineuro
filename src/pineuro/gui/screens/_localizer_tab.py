@@ -178,11 +178,11 @@ class LocalizerTabBuilder:
             on_change=self._on_reverse_contrasts_changed,
         )
 
-        # Network atlas (extraction sub-block, with legacy flat-key fallback)
+        # Network atlas (extraction sub-block)
         from pineuro.mask_extraction import ATLAS_SOURCES
 
         extraction_cfg = c.get("extraction", {}) or {}
-        network_atlas = extraction_cfg.get("network_atlas", c.get("network_atlas", "yeo_17"))
+        network_atlas = extraction_cfg.get("network_atlas", "yeo_17")
         self.network_atlas_dropdown = ft.Dropdown(
             width=600,
             label="Network atlas",
@@ -197,9 +197,8 @@ class LocalizerTabBuilder:
 
         # Network selection dropdowns (up to MAX_NETWORKS)
         MAX_NETWORKS = 5
-        # Read from "networks" (new schema); fall back to legacy "yeo_targets" for back-compat.
-        yeo_targets = c.get("networks", c.get("yeo_targets", ["DefaultA", "ContA"]))
-        self._n_target_networks = len(yeo_targets) if yeo_targets else 2
+        networks = c.get("networks", ["DefaultA", "ContA"])
+        self._n_target_networks = len(networks) if networks else 2
 
         current_n = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)
         net_options = self._get_yeo_network_options(current_n)
@@ -214,7 +213,7 @@ class LocalizerTabBuilder:
 
         self._network_dropdowns: list[ft.Dropdown] = []
         for i in range(MAX_NETWORKS):
-            val = yeo_targets[i] if i < len(yeo_targets) else None
+            val = networks[i] if i < len(networks) else None
             dd = ft.Dropdown(
                 width=290,
                 label=f"Network {i + 1}",
@@ -224,11 +223,11 @@ class LocalizerTabBuilder:
             )
             self._network_dropdowns.append(dd)
 
-        # ICA settings (rest only) — read from extraction sub-block with flat-key fallback
+        # ICA settings (rest only) — read from extraction sub-block
         self.n_components_field = ft.TextField(
             width=600,
             label="ICA components",
-            value=str(extraction_cfg.get("n_components", c.get("n_components", 20))),
+            value=str(extraction_cfg.get("n_components", 20)),
             hint_text="Number of ICA components for decomposition",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_components", self.n_components_field, validate_positive_int),
@@ -237,7 +236,7 @@ class LocalizerTabBuilder:
         self.smooth_fwhm_field = ft.TextField(
             width=600,
             label="Spatial smoothing (mm FWHM)",
-            value=str(extraction_cfg.get("smooth_fwhm", c.get("smooth_fwhm", 5.0))),
+            value=str(extraction_cfg.get("smooth_fwhm", 5.0)),
             hint_text="Gaussian kernel size in mm",
             keyboard_type=ft.KeyboardType.NUMBER,
         )
@@ -245,15 +244,14 @@ class LocalizerTabBuilder:
         self.highpass_field = ft.TextField(
             width=600,
             label="Highpass filter (Hz)",
-            value=str(extraction_cfg.get("highpass", c.get("highpass", 0.01))),
+            value=str(extraction_cfg.get("highpass", 0.01)),
             hint_text="Cutoff frequency for highpass filter",
             keyboard_type=ft.KeyboardType.NUMBER,
         )
 
-        # Mask extraction (extraction sub-block, with flat fallback)
-        # Convenience accessor — falls back to flat key for back-compat.
+        # Mask extraction (extraction sub-block)
         def _ex(key: str, default: Any = None) -> Any:
-            v = extraction_cfg.get(key, c.get(key, default))
+            v = extraction_cfg.get(key, default)
             return v if v is not None else default
 
         self.threshold_field = ft.TextField(
@@ -503,8 +501,6 @@ class LocalizerTabBuilder:
 
     def collect_config(self) -> dict[str, Any]:
         """Gather current field values into a config dict (new nested schema)."""
-        from pineuro.mask_extraction import ATLAS_SOURCES
-
         loc_type = self._loc_type or "rest"
 
         if loc_type == "manual":
@@ -545,7 +541,6 @@ class LocalizerTabBuilder:
         if is_rest:
             network_atlas = self.network_atlas_dropdown.value or "yeo_17"
             extraction["network_atlas"] = network_atlas
-            extraction["n_yeo"] = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)
             smooth_val = self.smooth_fwhm_field.value
             extraction["smooth_fwhm"] = float(smooth_val) if smooth_val and smooth_val != "None" else 5.0
             highpass_val = self.highpass_field.value
@@ -554,7 +549,7 @@ class LocalizerTabBuilder:
             n_comp_val = self.n_components_field.value
             extraction["n_components"] = int(n_comp_val) if n_comp_val and n_comp_val != "None" else 30
 
-            # Network targets (renamed from yeo_targets)
+            # Network targets
             targets = []
             for i, dd in enumerate(self._network_dropdowns):
                 if i >= self._n_target_networks:

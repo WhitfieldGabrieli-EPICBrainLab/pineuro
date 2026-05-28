@@ -80,7 +80,7 @@ from .csv_poller import FeedbackLogPoller, FeedbackMonitor
 from .feedback_summary import FeedbackSummaryData, FeedbackSummaryDialog, compute_feedback_summary
 from .mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
 from .pipeline_runner import PipelineRunner
-from .qc_plots import FDData, FDPlot
+from .qc_plots import FDPlot
 from .qc_viewer import QCReportManager, open_qc_report
 from .session_selection_dialog import SessionSelectionDialog
 from .task_mirror import TaskMirror
@@ -92,7 +92,6 @@ __all__ = [
     "ActivationPlot",
     "ActivationData",
     "FDPlot",
-    "FDData",
     "TaskMirror",
     "FeedbackLogPoller",
     "FeedbackMonitor",

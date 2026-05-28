@@ -80,10 +80,6 @@ class QCData:
         return len(self.volumes)
 
 
-# Backward-compatible alias (exported in __init__.py)
-FDData = QCData
-
-
 # =============================================================================
 # Base plot class
 # =============================================================================

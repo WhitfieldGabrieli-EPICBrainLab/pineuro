@@ -126,7 +126,7 @@ Generate QC report for feedback task:
 # Standard library imports
 import logging
 import webbrowser
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1394,7 +1394,7 @@ def generate_mask_extraction_report(
     session_id: str,
     network_names: Sequence[str],
     output_dir: Path | None = None,
-    n_yeo: int | None = None,
+    n_networks: int | None = None,
     overwrite: bool = False,
     open_browser: bool = False,
     ref_file: Path | str | None = None,
@@ -1415,7 +1415,7 @@ def generate_mask_extraction_report(
         Names of extracted networks (e.g., ['Default', 'ContA', 'ContB'])
     output_dir : Path, optional
         QC output directory. Defaults to mask_extraction_dir.parent / 'qc'
-    n_yeo : int, optional
+    n_networks : int, optional
         Yeo parcellation (7 or 17 networks). If not provided, infers from
         network names by checking if any match 17-network labels.
     overwrite : bool, default=False
@@ -1489,10 +1489,7 @@ def generate_mask_extraction_report(
             mni_ref_files = sorted(glob(str(mni_ref_dir / "*.nii.gz")))
             ref_file = Path(mni_ref_files[0]) if mni_ref_files else None
 
-    # Find correlation matrix (new name or legacy Yeo name)
     corr_file = masks_dir / "network_IC_spatial_correlation.csv"
-    if not corr_file.exists():
-        corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
 
     # Find network masks
     network_masks = {}
@@ -1585,8 +1582,8 @@ def generate_mask_extraction_report(
     # Determine number of networks and get Yeo labels (needed for both subject and MNI overlays)
     from pineuro.utils import get_yeo_labels
 
-    if n_yeo is not None:
-        n_networks = n_yeo
+    if n_networks is not None:
+        n_networks = n_networks
     else:
         # Infer from network names - check if any names match 17-network labels
         labels_17 = get_yeo_labels(17)
@@ -2170,7 +2167,7 @@ def generate_alternative_overlays(
     network_names: Sequence[str],
     n_alternatives: int = 3,
     output_dir: Path | None = None,
-    n_yeo: int | None = None,
+    n_networks: int | None = None,
     overwrite: bool = False,
     ref_file: Path | str | None = None,
 ) -> dict[str, dict[int, Path]]:
@@ -2192,7 +2189,7 @@ def generate_alternative_overlays(
         Number of alternative components to generate overlays for
     output_dir : Path, optional
         QC output directory. Defaults to mask_extraction_dir.parent / 'qc'
-    n_yeo : int, optional
+    n_networks : int, optional
         Yeo parcellation (7 or 17 networks). If not provided, infers from
         network names by checking if any match 17-network labels.
     overwrite : bool, default=False
@@ -2248,10 +2245,7 @@ def generate_alternative_overlays(
         logger.warning("No BOLD reference found")
         return {}
 
-    # Load correlation matrix (new name or legacy Yeo name)
     corr_file = masks_dir / "network_IC_spatial_correlation.csv"
-    if not corr_file.exists():
-        corr_file = masks_dir / "Yeo_IC_spatial_correlation.csv"
     if not corr_file.exists():
         logger.warning("No correlation matrix found")
         return {}
@@ -2264,8 +2258,8 @@ def generate_alternative_overlays(
     yeo2sub = Path(yeo2sub_files[0]) if yeo2sub_files else None
 
     # Determine Yeo network count
-    if n_yeo is not None:
-        n_networks = n_yeo
+    if n_networks is not None:
+        n_networks = n_networks
     else:
         # Infer from network names - check if any names match 17-network labels
         labels_17 = get_yeo_labels(17)
@@ -2352,7 +2346,7 @@ def generate_yeo_network_overlay(
     session_id: str,
     network_name: str,
     output_dir: Path | None = None,
-    n_yeo: int = 17,
+    n_networks: int = 17,
     overwrite: bool = False,
     ref_file: Path | str | None = None,
 ) -> Path | None:
@@ -2369,7 +2363,7 @@ def generate_yeo_network_overlay(
         Name of the network (e.g., 'DefaultA')
     output_dir : Path, optional
         QC output directory
-    n_yeo : int, default=17
+    n_networks : int, default=17
         Yeo parcellation (7 or 17)
     overwrite : bool, default=False
         Regenerate overlay even if it exists
@@ -2427,9 +2421,9 @@ def generate_yeo_network_overlay(
     logger.info(f"Generating Yeo atlas overlay for {network_name}")
 
     # Get network label index
-    labels = get_yeo_labels(n_networks=n_yeo)
+    labels = get_yeo_labels(n_networks=n_networks)
     if network_name not in labels:
-        logger.warning(f"Network {network_name} not in Yeo-{n_yeo} labels")
+        logger.warning(f"Network {network_name} not in Yeo-{n_networks} labels")
         return None
     network_index = labels.index(network_name) + 1
 
@@ -2556,7 +2550,7 @@ def generate_mask_overlay(
     output_dir: Path,
     network_name: str,
     atlas_path: Path | None = None,
-    n_yeo: int = 17,
+    n_networks: int = 17,
     overwrite: bool = False,
 ) -> Path | None:
     """
@@ -2578,7 +2572,7 @@ def generate_mask_overlay(
     atlas_path : Path, optional
         Path to Yeo atlas in subject space for slice selection.
         If not provided, slices are selected from the mask itself.
-    n_yeo : int, default=17
+    n_networks : int, default=17
         Yeo parcellation (7 or 17) for labels
     overwrite : bool, default=False
         Regenerate overlay even if it exists
@@ -2622,7 +2616,7 @@ def generate_mask_overlay(
         n_voxels = int((mask_data > 0).sum())
 
         # Select slices based on mask or atlas
-        labels = get_yeo_labels(n_networks=n_yeo)
+        labels = get_yeo_labels(n_networks=n_networks)
 
         # Extract base network name (remove _combined suffix if present)
         base_network = network_name.replace("_combined", "").replace("_thr", "")
@@ -2664,7 +2658,7 @@ def generate_hemisphere_overlays(
     session_id: str,
     hemisphere_network: str,
     output_dir: Path | None = None,
-    n_yeo: int = 17,
+    n_networks: int = 17,
     overwrite: bool = False,
     ref_file: Path | str | None = None,
 ) -> dict[str, Path]:
@@ -2684,7 +2678,7 @@ def generate_hemisphere_overlays(
         Name of the network that was split (e.g., 'SomMotA')
     output_dir : Path, optional
         QC output directory. Defaults to mask_extraction_dir.parent / 'qc'
-    n_yeo : int, default=17
+    n_networks : int, default=17
         Yeo parcellation (7 or 17 networks)
     overwrite : bool, default=False
         Regenerate overlays even if they exist
@@ -2743,7 +2737,7 @@ def generate_hemisphere_overlays(
         yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Schaefer_to_*.nii.gz")))
     yeo2sub = Path(yeo2sub_files[0]) if yeo2sub_files else None
 
-    labels = get_yeo_labels(n_yeo)
+    labels = get_yeo_labels(n_networks)
 
     result: dict[str, Path] = {}
 
@@ -3917,122 +3911,3 @@ def _generate_html_template(title: str, participant_id: str, stage: str, section
 </body>
 </html>"""
     return html
-
-
-def write_html_report(
-    out_path: Path,
-    participant_id: str,
-    overlays_by_space: Iterable[tuple[str, Iterable[tuple[str, Path]]]],
-    heatmap_png: Path | None,
-    summaries: Iterable[MaskSummary],
-) -> None:
-    """Create an HTML QC report for mask extraction (legacy API).
-
-    This is the original mask extraction report generator, kept for
-    backwards compatibility. For new code, prefer using
-    generate_mask_extraction_report() which auto-discovers outputs.
-
-    The report includes:
-    1. ICA × Yeo network correlation heatmap (if provided)
-    2. Mask overlays organized by coordinate space
-    3. Summary table with mask metrics
-
-    Parameters
-    ----------
-    out_path : Path
-        Output path for the HTML report file.
-    participant_id : str
-        Participant identifier displayed in report header.
-    overlays_by_space : iterable of (space_name, overlays)
-        Mask overlay images organized by coordinate space.
-        Each item is a tuple of (space_name, overlay_list) where
-        overlay_list contains (mask_name, png_path) tuples.
-        Example: [("BOLD reference", [("DefaultA", Path("..."))])]
-    heatmap_png : Path or None
-        Path to the ICA × Yeo correlation heatmap PNG.
-        If None, the correlation section is omitted.
-    summaries : iterable of MaskSummary
-        Mask metrics for the summary table. One MaskSummary per
-        extracted network mask.
-
-    See Also
-    --------
-    generate_mask_extraction_report : Preferred high-level API
-    MaskSummary : Dataclass for mask metrics
-
-    Examples
-    --------
-    >>> summaries = [
-    ...     MaskSummary('DefaultA', 2000, 8.0, (45, 60, 35), 3, 0.42),
-    ...     MaskSummary('ContA', 1800, 7.2, (50, 40, 45), 7, 0.38),
-    ... ]
-    >>> overlays = [
-    ...     ("BOLD reference", [
-    ...         ("DefaultA", Path("overlays/DefaultA.png")),
-    ...         ("ContA", Path("overlays/ContA.png")),
-    ...     ])
-    ... ]
-    >>> write_html_report(
-    ...     out_path=Path("qc_report.html"),
-    ...     participant_id="sub-01",
-    ...     overlays_by_space=overlays,
-    ...     heatmap_png=Path("heatmap.png"),
-    ...     summaries=summaries
-    ... )
-    """
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _rel(p: Path) -> str:
-        try:
-            return p.relative_to(out_path.parent).as_posix()
-        except ValueError:
-            return p.as_posix()
-
-    # Build sections using new template
-    sections: list[dict[str, Any]] = []
-
-    # ICA × Yeo correlation heatmap
-    if heatmap_png and heatmap_png.exists():
-        sections.append({"type": "heading", "content": "ICA × Yeo Correlation"})
-        sections.append({"type": "single_image", "path": _rel(heatmap_png), "alt": "Correlation heatmap"})
-
-    # Mask overlays by space
-    for space_name, overlays in overlays_by_space:
-        sections.append({"type": "heading", "content": f"Mask Overlays ({space_name})"})
-        grid_items = []
-        for name, img_path in overlays:
-            grid_items.append({"title": name, "path": _rel(img_path), "alt": f"Mask overlay: {name} ({space_name})"})
-        sections.append({"type": "grid", "content": grid_items})
-
-    # Mask summary table
-    sections.append({"type": "heading", "content": "Mask Summary"})
-    table_rows = []
-    for s in summaries:
-        table_rows.append(
-            [
-                s.name,
-                str(s.voxels),
-                f"{s.volume_ml:.2f}",
-                str(s.centroid_ijk),
-                str(s.chosen_component),
-                f"{s.correlation:.3f}",
-            ]
-        )
-    sections.append(
-        {
-            "type": "table",
-            "headers": ["Name", "Voxels", "Volume (mL)", "Centroid (i,j,k)", "Chosen component", "Correlation (r)"],
-            "rows": table_rows,
-        }
-    )
-
-    # Generate HTML using template
-    html = _generate_html_template(
-        title=f"pineuro QC - {participant_id}",
-        participant_id=participant_id,
-        stage="Mask Extraction",
-        sections=sections,
-    )
-
-    out_path.write_text(html)
