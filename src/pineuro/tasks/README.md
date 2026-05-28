@@ -44,36 +44,64 @@ finally:
 
 ## Creating Custom Tasks
 
-Subclass `BaseTask` and implement three methods:
+Tasks are registered through a decorator + metadata system. Define a `TaskMetadata`
+describing the configurable parameters, then decorate a `BaseTask` subclass with
+`@pineuro_task` (its `task_id` must match the metadata). Implement `setup()` and
+`update()`; `cleanup()` is optional.
 
 ```python
-from pineuro.tasks import BaseTask
 from psychopy import visual
 
+from pineuro.tasks.base import BaseTask
+from pineuro.tasks.task_registry import TaskMetadata, TaskParameter, pineuro_task
+
+MY_TASK_METADATA = TaskMetadata(
+    task_id="my_task",
+    display_name="My Task",
+    description="Brief description of the task",
+    parameters=[
+        TaskParameter(key="speed", label="Speed", type="float",
+                      default=1.0, min_value=0.1, max_value=10.0),
+    ],
+    n_networks=1,           # number of brain-network masks the task needs
+    roles={"feedback"},     # "feedback", "localizer", or both
+)
+
+@pineuro_task(MY_TASK_METADATA)
 class MyTask(BaseTask):
+    task_id = "my_task"
+
     def setup(self):
-        """Initialize PsychoPy window and stimuli."""
-        self.win = visual.Window([800, 600])
+        """Create the PsychoPy window and stimuli."""
+        self.create_window(monitor_position="right")
         self.stim = visual.Circle(self.win, radius=0.1)
 
     def update(self, data: dict):
-        """Update display based on latest activation.
+        """Update the display from the latest activation.
 
         Called every frame (~60 Hz) with:
         - data['activation']: current activation value
+        - data['activations']: all mask activations, keyed by mask name
         - data['volume']: volume number
         - data['time']: elapsed time
         - data['is_baseline']: baseline status
         """
-        # Scale stimulus based on activation
-        self.stim.radius = 0.1 + data['activation'] * 0.05
+        self.stim.radius = 0.1 + data["activation"] * 0.05
         self.stim.draw()
         self.win.flip()
 
     def cleanup(self):
-        """Close window and release resources."""
+        """Close the window and release resources (optional)."""
         self.win.close()
 ```
+
+The `@pineuro_task` decorator registers both the metadata and the class. To make a
+**built-in** task discoverable, add its module to the import list in
+`_load_builtin_tasks()` in `__init__.py`; **external plugins** are loaded at runtime via
+`discover_tasks([Path(...)])`. For **localizer** tasks (stimulus presentation without
+real-time feedback), subclass `BaseLocalizerTask` and implement `setup()` +
+`run_paradigm()` instead. See the project `CONTRIBUTING.md` ("Adding a task") for the
+full checklist.
 
 ## Architecture
 
