@@ -60,15 +60,20 @@ class QCReportManager:
     Detects available QC reports and provides methods to open them.
     """
 
-    def __init__(self, base_dir: Path, participant_id: str):
+    def __init__(self, base_dir: Path, participant_id: str, session_id: str):
         """Initialize the QC report manager.
 
         Args:
             base_dir: Base directory for participant data
             participant_id: Participant ID
+            session_id: Session identifier (e.g. "ses-01")
         """
         self.base_dir = Path(base_dir)
         self.participant_id = participant_id
+        self.session_id = session_id
+        # BIDS prefix matching QC report / overlay output naming
+        # ({participant}_{session}_...), as written by pineuro.qc.
+        self._bids_prefix = f"{participant_id}_{session_id}"
         self.network_order: list[str] | None = None
 
     def _sort_overlays(self, plots: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
@@ -97,7 +102,7 @@ class QCReportManager:
         """
         # Preprocessing QC is in preprocessing/qc/
         qc_dir = self.base_dir / "preprocessing" / "qc"
-        report_path = qc_dir / f"{self.participant_id}_task-rest_preprocessing_qc.html"
+        report_path = qc_dir / f"{self._bids_prefix}_task-rest_preprocessing_qc.html"
 
         if report_path.exists():
             return report_path
@@ -119,7 +124,7 @@ class QCReportManager:
         # Primary location: participant-level qc/ directory
         # (This is where qc.generate_mask_extraction_report() outputs by default)
         qc_dir = self.base_dir / "qc"
-        report_path = qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
+        report_path = qc_dir / f"{self._bids_prefix}_mask_extraction_qc.html"
 
         if report_path.exists():
             return report_path
@@ -134,7 +139,7 @@ class QCReportManager:
         # Fallback: check step-level directory (mask_extraction/qc/)
         step_qc_dir = self.base_dir / "mask_extraction" / "qc"
         if step_qc_dir.exists():
-            step_report = step_qc_dir / f"{self.participant_id}_mask_extraction_qc.html"
+            step_report = step_qc_dir / f"{self._bids_prefix}_mask_extraction_qc.html"
             if step_report.exists():
                 return step_report
 
@@ -161,7 +166,7 @@ class QCReportManager:
             qc_dir = self.base_dir / "feedback" / "01_reference" / "qc"
 
         # Try standard naming
-        report_path = qc_dir / f"{self.participant_id}_reference_run-{run_id:02d}_qc.html"
+        report_path = qc_dir / f"{self._bids_prefix}_reference_run-{run_id:02d}_qc.html"
         if report_path.exists():
             return report_path
 
@@ -189,7 +194,7 @@ class QCReportManager:
         # Try attempt-specific path first if attempt provided
         if attempt is not None:
             report_path = (
-                qc_dir / f"{self.participant_id}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_feedback_qc.html"
+                qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_feedback_qc.html"
             )
             if report_path.exists():
                 return report_path
@@ -210,7 +215,7 @@ class QCReportManager:
             Path to report if exists, None otherwise
         """
         qc_dir = self.base_dir / "qc"
-        report_path = qc_dir / f"{self.participant_id}_qc.html"
+        report_path = qc_dir / f"{self._bids_prefix}_qc.html"
 
         if report_path.exists():
             return report_path
@@ -370,7 +375,7 @@ class QCReportManager:
             for overlay in sorted(overlay_dir.glob("*_overlay.png")):
                 # Extract network name from filename
                 # e.g., "sub-01_DefaultA_overlay.png" -> "DefaultA"
-                network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
+                network = overlay.stem.replace(f"{self._bids_prefix}_", "").replace("_overlay", "")
                 subject_overlays.append((f"{network} Mask (Subject Space)", overlay))
         plots.extend(self._sort_overlays(subject_overlays))
 
@@ -379,7 +384,7 @@ class QCReportManager:
         mni_dir = qc_dir / "overlays" / "mni"
         if mni_dir.exists():
             for overlay in sorted(mni_dir.glob("*_overlay.png")):
-                network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
+                network = overlay.stem.replace(f"{self._bids_prefix}_", "").replace("_overlay", "")
                 mni_overlays.append((f"{network} Mask (MNI Space)", overlay))
         plots.extend(self._sort_overlays(mni_overlays))
 
@@ -392,7 +397,7 @@ class QCReportManager:
                 if "run-01" not in overlay.stem:
                     continue
                 # Extract network name (e.g., "DefaultA" from "sub-01_DefaultA_thr_to_task-reference_run-01_mean_overlay")
-                network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
+                network = overlay.stem.replace(f"{self._bids_prefix}_", "").replace("_overlay", "")
                 # Clean up the network name to remove the thr_to_task-reference_run-XX_mean suffix
                 if "_thr_to_task-reference" in network:
                     network = network.split("_thr_to_task-reference")[0]
@@ -432,7 +437,7 @@ class QCReportManager:
                 if run_pattern not in overlay.stem:
                     continue
                 # Extract network name (e.g., "DefaultA" from "sub-01_DefaultA_thr_to_task-reference_run-02_mean_overlay")
-                network = overlay.stem.replace(f"{self.participant_id}_", "").replace("_overlay", "")
+                network = overlay.stem.replace(f"{self._bids_prefix}_", "").replace("_overlay", "")
                 # Clean up the network name to remove the thr_to_task-reference_run-XX_mean suffix
                 if "_thr_to_task-reference" in network:
                     network = network.split("_thr_to_task-reference")[0]

@@ -44,9 +44,9 @@ The pipeline follows these steps (with numbered output directories for traceabil
 Output Files
 ------------
 After preprocessing, the root directory contains:
-- {participant}_task-{task}_preproc.nii.gz : Masked, preprocessed 4D timeseries
-- {participant}_task-{task}_preproc_mask.nii.gz : Eroded brain mask
-- {participant}_task-{task}_boldref.nii.gz : Masked BOLD reference (mean of run-01)
+- {participant}_{session}_task-{task}_preproc.nii.gz : Masked, preprocessed 4D timeseries
+- {participant}_{session}_task-{task}_preproc_mask.nii.gz : Eroded brain mask
+- {participant}_{session}_task-{task}_boldref.nii.gz : Masked BOLD reference (mean of run-01)
 
 Dependencies
 ------------
@@ -153,6 +153,15 @@ if TYPE_CHECKING:
 # This allows users to configure logging at the pineuro level
 logger = logging.getLogger(__name__)
 
+
+class PreprocessingStopped(Exception):
+    """Raised when a caller-supplied ``stop_event`` is set mid-pipeline.
+
+    Signals a cooperative cancellation (e.g. the GUI "Stop" button) rather than
+    an error, so callers can treat it as a clean stop instead of a failure.
+    """
+
+
 # =============================================================================
 # SECTION 1: CORE PREPROCESSING FUNCTIONS
 # =============================================================================
@@ -169,6 +178,7 @@ def motion_correction(
     output_file: Union[str, Path],
     overwrite: bool = False,
     random_seed: int = 0,
+    stop_event: threading.Event | None = None,
 ) -> None:
     """
     Perform motion correction on fMRI data using ANTsPy rigid registration.
@@ -192,6 +202,11 @@ def motion_correction(
         Seed for ANTs registration's metric sampling. A fixed seed makes
         motion correction reproducible: re-running on identical input yields
         identical motion parameters.
+    stop_event : threading.Event, optional
+        Cooperative cancellation signal, checked before each volume's
+        registration. When set, :class:`PreprocessingStopped` is raised (stop
+        latency is one volume, ~1s, since a single registration is not
+        interruptible). If omitted, all volumes are corrected.
 
     Returns
     -------
@@ -252,6 +267,12 @@ def motion_correction(
         for i in range(n_vols):
             if i == ref_idx:
                 continue
+
+            # Each volume is a separate ~1s ANTs registration, so checking here
+            # lets a GUI Stop abort a long single run promptly (an individual
+            # registration is not interruptible, so latency is one volume).
+            if stop_event is not None and stop_event.is_set():
+                raise PreprocessingStopped("Motion correction stopped by user")
 
             mov_ants = ants.from_numpy(data[..., i], spacing=spacing)
 
@@ -690,6 +711,7 @@ def preprocessing(
     progress_callback: Callable[[str, str], None] | None = None,
     attempt_per_input: list[int] | None = None,
     run_per_input: list[int] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> tuple[Path, Path, Path]:
     """
     Run the complete preprocessing pipeline for fMRI data.
@@ -742,6 +764,12 @@ def preprocessing(
         ``{1: [2, 3]}``-style multi-attempt-per-run selections without losing
         the run identity (otherwise both entries enumerate as run-01/run-02).
         If omitted, parsed from folder names, falling back to enumeration order.
+    stop_event : threading.Event, optional
+        Cooperative cancellation signal. When set, the pipeline aborts at the
+        next checkpoint (step boundaries and per-run sub-steps) by raising
+        :class:`PreprocessingStopped`. ANTs operations are not interrupted
+        mid-call, so latency is bounded by a single sub-step (~5-15s). If
+        omitted, the pipeline always runs to completion.
 
     Returns
     -------
@@ -844,6 +872,11 @@ def preprocessing(
         if progress_callback:
             progress_callback(step, detail)
 
+    def check_stop():
+        """Abort cooperatively if the caller requested a stop."""
+        if stop_event is not None and stop_event.is_set():
+            raise PreprocessingStopped("Preprocessing stopped by user")
+
     emit_progress(f"Running preprocessing for {participant_id} / {session_id}")
     bids_prefix = f"{participant_id}_{session_id}"
 
@@ -928,6 +961,7 @@ def preprocessing(
     # - Handles all major scanner vendors (Siemens, GE, Philips)
     # - Outputs JSON sidecars with BIDS-compatible metadata
 
+    check_stop()
     emit_progress("Step 1/4: DICOM to NIfTI conversion")
     nifti_dir = root_dir / "01_nifti"
     nifti_files: list[Path] = []
@@ -1011,17 +1045,19 @@ def preprocessing(
     #
     # The .par file contains the motion parameters for QC visualization.
 
+    check_stop()
     emit_progress("Step 2/4: Motion correction (ANTsPy)")
     mcf_dir = root_dir / "02_motion_correction"
     mcf_files: list[Path] = []
 
     for idx, nifti in enumerate(nifti_files):
+        check_stop()
         emit_progress(
             "Step 2/4",
             f"Running motion correction on {idx + 1}/{len(nifti_files)} (run-{runs[idx]:02d}_attempt-{attempts[idx]:02d})...",
         )
         mcf_file = mcf_dir / Path(f"{_label(idx)}_mcf.nii.gz")
-        motion_correction(input_file=nifti, output_file=mcf_file, overwrite=overwrite)
+        motion_correction(input_file=nifti, output_file=mcf_file, overwrite=overwrite, stop_event=stop_event)
         mcf_files.append(mcf_file)
 
     emit_progress("Step 2/4", f"Complete ({len(mcf_files)} runs corrected)")
@@ -1041,6 +1077,7 @@ def preprocessing(
     #    - We only run extraction on the first run because all runs will be aligned
     #      to the same space (via coregistration in Step 4)
 
+    check_stop()
     emit_progress("Step 3/4: Brain extraction (ANTsPy)")
     bet_dir = root_dir / "03_brain_extraction"
 
@@ -1051,6 +1088,7 @@ def preprocessing(
     emit_progress("Step 3/4", "Computing temporal mean images...")
     mean_files: list[Path] = []
     for idx, nifti in enumerate(mcf_files):
+        check_stop()
         mean_file = bet_dir / Path(f"{_label(idx)}_mean.nii.gz")
         compute_mean(input_file=nifti, output_file=mean_file, overwrite=overwrite)
         mean_files.append(mean_file)
@@ -1059,6 +1097,7 @@ def preprocessing(
     # We use run-01 as the reference space for the entire dataset.
     # All subsequent runs will be aligned to this space, so we only need
     # one brain mask (created from run-01's mean).
+    check_stop()
     emit_progress("Step 3/4", "Running brain extraction...")
     sub_ref = mean_files[0]  # Run-01 mean serves as the subject reference
     _, mean_mask = brain_extraction(input_file=sub_ref, output_dir=bet_dir, overwrite=overwrite)
@@ -1081,6 +1120,7 @@ def preprocessing(
     # - This preserves brain shape while correcting for position changes
     # - We use ANTs for robust, accurate registration
 
+    check_stop()
     emit_progress("Step 4/4: Coregistration and finalization")
     coreg_dir = root_dir / "04_coregistered"
     coreg_file = coreg_dir / Path(f"{bids_prefix}_task-{task}.nii.gz")
@@ -1104,6 +1144,7 @@ def preprocessing(
         concat_files = []
 
         for idx, mean_file in enumerate(mean_files):
+            check_stop()
             if idx == 0:
                 # First input IS the reference - no transformation needed
                 # Just add its motion-corrected data to the concatenation list
@@ -1141,6 +1182,7 @@ def preprocessing(
         # --- Concatenate All Runs ---
         # Combine all coregistered runs into a single 4D timeseries.
         # The order is chronological (run-01, run-02, ...).
+        check_stop()
         emit_progress("Step 4/4", f"Concatenating {len(concat_files)} runs...")
         concat(input_files=list(concat_files), output_file=coreg_file, overwrite=overwrite)
 

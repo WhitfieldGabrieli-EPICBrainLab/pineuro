@@ -261,6 +261,7 @@ class ParticipantWorkflowScreen:
         self.qc_manager = QCReportManager(
             base_dir=participant_base_dir,
             participant_id=participant_id,
+            session_id=session_id,
         )
 
         # Selected rest runs for preprocessing (None = use all available)
@@ -2309,9 +2310,9 @@ class ParticipantWorkflowScreen:
 
                         # Check preprocessing
                         step_id = f"localizer_{loc_idx}_preprocessing"
-                        preproc_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz"
-                        mask_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc_mask.nii.gz"
-                        ref_f = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_boldref.nii.gz"
+                        preproc_f = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task_name}_preproc.nii.gz"
+                        mask_f = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task_name}_preproc_mask.nii.gz"
+                        ref_f = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task_name}_boldref.nii.gz"
                         if preproc_f.exists() and mask_f.exists() and ref_f.exists():
                             self.step_statuses[step_id] = StepStatus.COMPLETE
 
@@ -2352,9 +2353,9 @@ class ParticipantWorkflowScreen:
                     )
                     self.step_statuses[step_id] = status
 
-                preproc_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc.nii.gz"
-                mask_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_preproc_mask.nii.gz"
-                ref_file = preprocessing_dir / f"{participant_id}_task-{loc_task_name}_boldref.nii.gz"
+                preproc_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task_name}_preproc.nii.gz"
+                mask_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task_name}_preproc_mask.nii.gz"
+                ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task_name}_boldref.nii.gz"
                 if preproc_file.exists() and mask_file.exists() and ref_file.exists():
                     self.step_statuses["preprocessing"] = StepStatus.COMPLETE
 
@@ -2806,8 +2807,28 @@ class ParticipantWorkflowScreen:
             needs_approval = step_id in gated_steps or is_feedback_transfer
             requires_approval = needs_approval and not self._is_step_approval_unlocked(step_id)
 
+        # Completed preprocessing / mask-extraction steps stay clickable so the user
+        # can re-run them (e.g. after editing inputs outside pineuro). Give them an
+        # explicit "Re-run" label + refresh icon so it's clear the action is available;
+        # the preview panel then prompts for skip/overwrite before anything re-runs.
+        is_import = label == "Import Masks"
+        is_rerunnable = not is_import and (
+            step_id in ("preprocessing", "mask_extraction")
+            or (
+                step_id.startswith("localizer_")
+                and (step_id.endswith("_preprocessing") or step_id.endswith("_extraction"))
+            )
+        )
+        if status == StepStatus.COMPLETE and is_rerunnable:
+            display_label = "Re-run Preprocessing" if "preprocessing" in step_id else "Re-run Mask Extraction"
+            display_icon = ft.Icons.REFRESH
+        else:
+            display_label = label
+            display_icon = None
+
         button = ft.ElevatedButton(
-            label,
+            display_label,
+            icon=display_icon,
             on_click=on_click,
             disabled=self._is_running or status == StepStatus.RUNNING or requires_preprocessing or requires_approval,
         )
@@ -4748,8 +4769,11 @@ class ParticipantWorkflowScreen:
                 warning_text = "Previous run data exists and will be archived before starting fresh."
                 warning_icon = ft.icons.Icons.ARCHIVE
             else:
-                warning_text = "Output files already exist. You'll be asked whether to skip or overwrite."
-                warning_icon = ft.icons.Icons.INFO
+                warning_text = (
+                    "Output files from a previous run exist. After you click Start you'll "
+                    "choose Skip Existing (keep them) or Overwrite All (re-run from scratch)."
+                )
+                warning_icon = ft.icons.Icons.REPLAY
 
             overwrite_warning = ft.Container(
                 content=ft.Row(
@@ -5189,10 +5213,8 @@ class ParticipantWorkflowScreen:
                 "Output": base_dir / "feedback" / "02_feedback_output",
                 "Simulator Speed": f"{config.get('simulator', {}).get('feedback_speed', 1.0)}x",
             },
-            "output_path": base_dir
-            / "feedback"
-            / "02_feedback_output"
-            / f"{participant_id}_task-transfer_run-{transfer_num:02d}_feedbacklog.tsv",
+            "output_path": base_dir / "feedback" / "02_feedback_output",
+            "output_pattern": f"{self._bids_prefix}_task-transfer_run-{transfer_num:02d}_attempt-*_feedbacklog.tsv",
         }
 
     def _get_step_info(self, step_id: str, config: dict, base_dir: Path, participant_id: str) -> dict:
@@ -5404,10 +5426,10 @@ class ParticipantWorkflowScreen:
                     "Runs": loc.get("n_runs", 2),
                     "Input": base_dir / "collection" / f"task-{loc_task_name}_*",
                     "Output": base_dir / "preprocessing",
-                    "Expected Outputs": f"{participant_id}_task-{loc_task_name}_preproc.nii.gz, _mask.nii.gz, _boldref.nii.gz",
+                    "Expected Outputs": f"{self._bids_prefix}_task-{loc_task_name}_preproc.nii.gz, _mask.nii.gz, _boldref.nii.gz",
                 },
                 "output_path": base_dir / "preprocessing",
-                "output_pattern": f"{participant_id}_task-{loc_task_name}_preproc.nii.gz",
+                "output_pattern": f"{self._bids_prefix}_task-{loc_task_name}_preproc.nii.gz",
             }
 
         elif step_id.startswith("localizer_") and step_id.endswith("_extraction"):
@@ -5561,10 +5583,8 @@ class ParticipantWorkflowScreen:
                 "label": f"Feedback Run {run_num}",
                 "description": f"{ordinal} neurofeedback run with real-time activation feedback.",
                 "parameters": params,
-                "output_path": base_dir
-                / "feedback"
-                / "02_feedback_output"
-                / f"{participant_id}_task-feedback_run-{run_num:02d}_feedbacklog.tsv",
+                "output_path": base_dir / "feedback" / "02_feedback_output",
+                "output_pattern": f"{self._bids_prefix}_task-feedback_run-{run_num:02d}_attempt-*_feedbacklog.tsv",
             }
         else:
             info = step_info_map.get(

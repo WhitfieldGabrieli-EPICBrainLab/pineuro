@@ -50,21 +50,28 @@ def _ramp_motion(n_vols: int, column: int, lo: float, hi: float) -> np.ndarray:
     return motion
 
 
-def _binned_monotonic(values: np.ndarray, n_bins: int = 4) -> bool:
-    """True if the per-bin means of ``values`` are monotonic.
+def _ramp_tracking(recovered: np.ndarray, injected_ramp: np.ndarray) -> float:
+    """|Pearson r| between a recovered ``.par`` column and the injected motion ramp.
 
-    Averaging within consecutive bins suppresses the per-volume jitter of ANTs'
-    iterative optimizer, so this stays an exact, deterministic boolean (fixed
-    phantom + seeded ANTs) while only requiring the recovered ``.par`` column to
-    track the monotonic injected ramp *on average* -- it does not depend on the
-    optimizer's per-volume precision. A sign-inconsistency bug, or a rot/trans
-    block swap (which leaves the checked column as near-zero noise), still
-    breaks the binned monotonicity.
+    The injected ramp is strictly monotonic, so a recovery that reports the
+    motion in this column with a *consistent sign* yields a strong linear
+    association (|r| near 1) regardless of ANTs' per-volume recovery accuracy.
+    Correlating across all volumes is robust to the optimizer's per-volume
+    jitter; a strict per-bin monotonicity check is not -- it flipped
+    intermittently when two adjacent bin means landed within ANTs'
+    rotation-recovery noise of each other. That nondeterminism persists with a
+    fixed seed under both multi- and single-threaded ITK, so it cannot be fixed
+    by seeding alone; aggregating into a correlation absorbs it. A rot/trans
+    block swap leaves the column as near-zero noise (|r| ~ 0) and a
+    sign-scrambling bug gives low |r| -- both fail the floor. ``abs`` is used
+    because the sign of recovered motion relative to the injected displacement
+    follows ANTs' transform-direction convention, which this test does not assert.
     """
-    arr = np.asarray(values, dtype=np.float64)
-    bin_means = np.array([b.mean() for b in np.array_split(arr, n_bins)])
-    d = np.diff(bin_means)
-    return bool(np.all(d >= 0.0) or np.all(d <= 0.0))
+    rec = np.asarray(recovered, dtype=np.float64)
+    inj = np.asarray(injected_ramp, dtype=np.float64)
+    if rec.std() == 0.0:
+        return 0.0
+    return float(abs(np.corrcoef(rec, inj)[0, 1]))
 
 
 def test_motion_correction_par_translation_layout(tmp_path, record):
@@ -78,10 +85,10 @@ def test_motion_correction_par_translation_layout(tmp_path, record):
     - Within the translation sub-block (columns 3-5), the dominant axis (largest
       mean absolute value) is axis 0 — trans_x. A regression that swaps the
       translation columns fails here.
-    - The binned means of ``.par[:, 3]`` are monotonic, because the injected
-      ramp is monotonic and is reported relative to the (middle) reference
-      volume. A sign-inconsistency bug, or a rot/trans block swap (which leaves
-      col 3 as near-zero noise), breaks the binned monotonicity.
+    - ``.par[:, 3]`` correlates with the injected ramp (|r| >= 0.5). The ramp is
+      monotonic, so a correct, consistent-sign recovery tracks it linearly; a
+      sign-inconsistency bug, or a rot/trans block swap (which leaves col 3 as
+      near-zero noise), drops |r| toward zero.
 
     Neither assertion depends on ANTs' recovery *accuracy* — only that pineuro
     places the recovered translation in the right column with a consistent sign.
@@ -115,20 +122,23 @@ def test_motion_correction_par_translation_layout(tmp_path, record):
         == 0.0
     )
 
-    monotonic = _binned_monotonic(par[:, 3])
+    ramp_corr = _ramp_tracking(par[:, 3], motion[:, 0])
     assert (
         record(
             "preprocessing",
-            "motion_par_translation_monotonic",
-            float(monotonic),
-            threshold=1.0,
-            op="==",
+            "motion_par_translation_ramp_corr",
+            ramp_corr,
+            threshold=0.5,
+            op=">=",
             description=(
-                "The head motion ramps steadily in one direction. The reported "
-                "left-right values should ramp the same way; 1 means they do."
+                "The head motion ramps steadily in one direction; the reported "
+                "left-right values should track that ramp. This is |correlation| "
+                "between them (0-1). >=0.5 is a clearly significant association "
+                "(n=20 volumes), which a correct, consistent-sign column gives and "
+                "a column swap (~0) cannot. ANTs' recovery precision is not asserted."
             ),
         )
-        == 1.0
+        >= 0.5
     )
 
 
@@ -144,10 +154,12 @@ def test_motion_correction_par_rotation_layout(tmp_path, record):
       *within* the rotation sub-block because a rotation about the volume centre
       also induces a reported translation, so the dominant column of the *full*
       6-vector can be a translation — not a layout error.
-    - The binned means of ``.par[:, 2]`` are monotonic, mirroring the monotonic
-      injected ramp. Binning is required here: ANTs' per-volume rotation
-      recovery is noisier than translation, so raw per-volume monotonicity is
-      too strict -- but the bin means still track the ramp's direction exactly.
+    - ``.par[:, 2]`` correlates with the injected ramp (|r| >= 0.5). ANTs'
+      per-volume rotation recovery is noisy and intermittently nondeterministic
+      (even seeded/single-threaded), so a strict per-bin monotonicity check
+      flaked; a correlation over all volumes absorbs that jitter while a swap
+      (|r| ~ 0) or sign-scrambling bug still fails. Observed |r| ~ 0.66-0.83, so
+      0.5 clears it with margin yet stays far above the failure modes.
 
     As above, ANTs' rotation-recovery accuracy is not asserted — only that
     pineuro reports the rotation in the correct column with a consistent sign.
@@ -181,20 +193,23 @@ def test_motion_correction_par_rotation_layout(tmp_path, record):
         == 2.0
     )
 
-    monotonic = _binned_monotonic(par[:, 2])
+    ramp_corr = _ramp_tracking(par[:, 2], motion[:, 5])
     assert (
         record(
             "preprocessing",
-            "motion_par_rotation_monotonic",
-            float(monotonic),
-            threshold=1.0,
-            op="==",
+            "motion_par_rotation_ramp_corr",
+            ramp_corr,
+            threshold=0.5,
+            op=">=",
             description=(
-                "The rotation ramps steadily in one direction. The reported "
-                "rotation values should ramp the same way; 1 means they do."
+                "The rotation ramps steadily in one direction; the reported "
+                "rotation values should track that ramp. This is |correlation| "
+                "between them (0-1), robust to ANTs' per-volume rotation jitter. "
+                ">=0.5 is a clearly significant association (n=20 volumes), which a "
+                "correct, consistent-sign column gives and a swap (~0) cannot."
             ),
         )
-        == 1.0
+        >= 0.5
     )
 
 

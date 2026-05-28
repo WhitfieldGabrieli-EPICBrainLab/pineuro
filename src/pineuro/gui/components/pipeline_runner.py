@@ -97,6 +97,9 @@ class PipelineRunner:
         self.config = config
         self.participant_id = participant_id
         self.session_id = session_id
+        # BIDS prefix matching preprocessing/mask-extraction output naming
+        # ({participant}_{session}_task-...); used when resolving pipeline I/O paths.
+        self._bids_prefix = f"{participant_id}_{session_id}"
         self.on_progress = on_progress
         self.on_complete = on_complete
         self.on_error = on_error
@@ -399,6 +402,14 @@ class PipelineRunner:
                     self.on_complete(True, f"Step {step_id} completed successfully")
 
         except Exception as e:
+            # A stop requested mid-flight (e.g. preprocessing raising
+            # PreprocessingStopped at a checkpoint) is a clean cancellation,
+            # not a failure — report it as stopped and skip the error panel.
+            if self._stop_event.is_set():
+                logger.info(f"Step {step_id} stopped by user")
+                if self.on_complete:
+                    self.on_complete(False, f"Step {step_id} stopped by user")
+                return
             logger.error(f"Step {step_id} failed: {e}", exc_info=True)
             if self.on_error:
                 self.on_error(e)
@@ -963,6 +974,7 @@ class PipelineRunner:
             progress_callback=progress_callback,
             attempt_per_input=attempt_per_input,
             run_per_input=run_per_input,
+            stop_event=self._stop_event,
         )
 
     def _manual_reference_file(self, base_dir: Path, root_dir: Path, loc: dict) -> Path:
@@ -1064,9 +1076,9 @@ class PipelineRunner:
         extraction = loc0.get("extraction", {})
 
         # Input files from preprocessing
-        preproc_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc.nii.gz"
-        mask_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc_mask.nii.gz"
-        ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+        preproc_file = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_preproc.nii.gz"
+        mask_file = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_preproc_mask.nii.gz"
+        ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_boldref.nii.gz"
 
         # Set up progress callback for mask extraction to show in GUI log console
         def progress_callback(step: str, detail: str = ""):
@@ -1230,6 +1242,7 @@ class PipelineRunner:
                 qc_enabled=True,
                 progress_callback=progress_callback,
                 sham_hemisphere_network=sham_hemisphere_network,
+                stop_event=self._stop_event,
             )
 
         # Create WM/CSF tissue masks for nuisance regression (if enabled)
@@ -1380,6 +1393,7 @@ class PipelineRunner:
             progress_callback=progress_callback,
             attempt_per_input=attempt_per_input,
             run_per_input=run_per_input,
+            stop_event=self._stop_event,
         )
 
     def _run_localizer_extraction(self, loc_idx: int) -> None:
@@ -1400,9 +1414,9 @@ class PipelineRunner:
         mask_extraction_dir = base_dir / "mask_extraction"
         loc_dir = mask_extraction_dir / f"loc_{loc_idx}_{task_name}"
 
-        preproc_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc.nii.gz"
-        mask_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_preproc_mask.nii.gz"
-        ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+        preproc_file = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_preproc.nii.gz"
+        mask_file = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_preproc_mask.nii.gz"
+        ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_boldref.nii.gz"
 
         def progress_callback(step: str, detail: str = ""):
             if detail:
@@ -1464,6 +1478,7 @@ class PipelineRunner:
                 qc_enabled=True,
                 progress_callback=progress_callback,
                 sham_hemisphere_network=sham_hemisphere_network,
+                stop_event=self._stop_event,
             )
         else:
             from pineuro.mask_extraction import mask_extraction_task
@@ -1552,7 +1567,7 @@ class PipelineRunner:
 
         # Option 1: boldref from preprocessing
         preprocessing_dir = base_dir / "preprocessing"
-        boldref = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+        boldref = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_boldref.nii.gz"
         if boldref.exists():
             self._emit_progress(f"Using boldref from preprocessing: {boldref.name}")
             return boldref
@@ -1569,7 +1584,7 @@ class PipelineRunner:
 
                 mni_ref_dir.mkdir(parents=True, exist_ok=True)
 
-                mean_file = mni_ref_dir / f"{self.participant_id}_task-reference_mean.nii.gz"
+                mean_file = mni_ref_dir / f"{self._bids_prefix}_task-reference_mean.nii.gz"
                 if mean_file.exists():
                     self._emit_progress(f"Using existing reference mean: {mean_file.name}")
                     return mean_file
@@ -1578,7 +1593,7 @@ class PipelineRunner:
                 nifti_file = dicom_to_nifti(
                     dicom_dir=ref_dir,
                     output_dir=mni_ref_dir,
-                    output_name=f"{self.participant_id}_task-reference",
+                    output_name=f"{self._bids_prefix}_task-reference",
                 )
                 nifti_path = Path(nifti_file)
                 if nifti_path.exists():
@@ -1596,7 +1611,7 @@ class PipelineRunner:
 
                 mni_ref_dir.mkdir(parents=True, exist_ok=True)
 
-                mean_file = mni_ref_dir / f"{self.participant_id}_task-reference-realtime_mean.nii.gz"
+                mean_file = mni_ref_dir / f"{self._bids_prefix}_task-reference-realtime_mean.nii.gz"
                 if mean_file.exists():
                     self._emit_progress(f"Using existing realtime reference mean: {mean_file.name}")
                     return mean_file
@@ -1605,7 +1620,7 @@ class PipelineRunner:
                 nifti_file = dicom_to_nifti(
                     dicom_dir=ref_dir,
                     output_dir=mni_ref_dir,
-                    output_name=f"{self.participant_id}_task-reference-realtime",
+                    output_name=f"{self._bids_prefix}_task-reference-realtime",
                 )
                 nifti_path = Path(nifti_file)
                 if nifti_path.exists():
@@ -1777,7 +1792,7 @@ class PipelineRunner:
 
             localizer_task = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
             task_name = localizer_task if localizer_task != "rest" else "rest"
-            ref_file = source_preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+            ref_file = source_preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_boldref.nii.gz"
             masks_dir = source_mask_extraction_dir / "03_masks"
 
             self._emit_progress(f"Using masks from source session: {mask_source_session}")
@@ -1791,7 +1806,7 @@ class PipelineRunner:
                 ref_file = self._manual_reference_file(base_dir, mask_extraction_dir, loc0)
             else:
                 task_name = localizer_task if localizer_task != "rest" else "rest"
-                ref_file = preprocessing_dir / f"{self.participant_id}_task-{task_name}_boldref.nii.gz"
+                ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_boldref.nii.gz"
             masks_dir = mask_extraction_dir / "03_masks"
 
         # Find the most recent complete reference collection for this run
@@ -1895,7 +1910,7 @@ class PipelineRunner:
                     loc_dir = mask_extraction_dir / f"loc_{loc_idx}_manual"
                     loc_ref_file = self._manual_reference_file(base_dir, loc_dir, loc)
                 else:
-                    loc_ref_file = preprocessing_dir / f"{self.participant_id}_task-{loc_task_name}_boldref.nii.gz"
+                    loc_ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task_name}_boldref.nii.gz"
 
                 # Add tissue masks to the first group only
                 group_files = [str(f) for f in mask_files]

@@ -148,9 +148,11 @@ References
 # =============================================================================
 
 # --- Standard Library ---
+import contextlib
 import json  # JSON I/O for selection metadata
 import logging
 import re  # Regex for filename parsing
+import threading  # Cooperative cancellation signal for long-running steps
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -188,6 +190,161 @@ from pineuro.utils import (
 
 # --- Module Logger ---
 logger = logging.getLogger(__name__)
+
+
+class MaskExtractionStopped(Exception):
+    """Raised when a caller-supplied ``stop_event`` is set mid-pipeline.
+
+    Signals a cooperative cancellation (e.g. the GUI "Stop" button) rather than
+    an error, so callers can treat it as a clean stop instead of a failure. The
+    ICA fit, which is not interruptible in-process, runs in a child process that
+    is terminated when the stop is requested — see :func:`run_ica`.
+    """
+
+
+def _terminate_process_tree(pid: int, timeout: float = 5.0) -> None:
+    """Terminate a process and all of its descendants.
+
+    CanICA runs with ``n_jobs=-1``, so the worker process spawns joblib/loky
+    grandchildren; terminating only the worker would orphan them. psutil walks
+    the tree, sends terminate, then kills anything still alive after ``timeout``.
+    """
+    import psutil
+
+    try:
+        parent = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+    procs = parent.children(recursive=True)
+    procs.append(parent)
+    for p in procs:
+        with contextlib.suppress(psutil.NoSuchProcess):
+            p.terminate()
+    _, alive = psutil.wait_procs(procs, timeout=timeout)
+    for p in alive:
+        with contextlib.suppress(psutil.NoSuchProcess):
+            p.kill()
+
+
+def _run_canica(
+    input_file: str,
+    mask_file: str,
+    n_components: int,
+    smooth_fwhm: float | None,
+    highpass: float | None,
+    lowpass: float | None,
+    t_r: float,
+    random_state: int,
+    memory_dir: str,
+    components_file: str,
+    metadata_file: str,
+) -> None:
+    """Build CanICA, fit it, and write components + metadata to disk.
+
+    Factored out so it can run either inline (no ``stop_event``) or inside a
+    killable child process (see :func:`run_ica`). All arguments are plain,
+    picklable values so the child can be spawned cross-platform.
+    """
+    from nilearn.decomposition import CanICA
+
+    canica: Any = CanICA(
+        mask=mask_file,
+        n_components=n_components,
+        smoothing_fwhm=smooth_fwhm,
+        high_pass=highpass,
+        low_pass=lowpass,
+        threshold=None,  # type: ignore[arg-type]
+        t_r=t_r,
+        n_jobs=-1,  # Use all CPUs
+        random_state=random_state,
+        memory=memory_dir,
+        memory_level=2,
+        verbose=1,
+    )
+    canica.fit(input_file)
+    components_img: SpatialImage = canica.components_img_
+    save(components_img, components_file)
+    logger.info(f"Saved components to: {components_file}")
+    np.savez(
+        metadata_file,
+        n_components=n_components,
+        components_shape=components_img.shape,
+        input_file=str(input_file),
+    )
+    logger.info(f"Saved metadata to: {metadata_file}")
+
+
+def _canica_worker(args: tuple, result_queue: Any) -> None:
+    """Child-process entry point: run :func:`_run_canica`, report ok/error.
+
+    The components are written to disk by ``_run_canica``; only a tiny status
+    tuple travels back over the queue, so there is no large-payload join hazard.
+    """
+    try:
+        _run_canica(*args)
+        result_queue.put(("ok", None))
+    except Exception as e:  # noqa: BLE001 - forward any failure to the parent
+        result_queue.put(("error", f"{type(e).__name__}: {e}"))
+
+
+def _remove_partial_outputs(*paths: Path) -> None:
+    """Delete any partially-written outputs left by an interrupted run."""
+    for p in paths:
+        with contextlib.suppress(OSError):
+            Path(p).unlink(missing_ok=True)
+
+
+def _run_canica_cancellable(
+    args: tuple,
+    stop_event: threading.Event,
+    components_file: Path,
+    metadata_file: Path,
+) -> None:
+    """Run :func:`_run_canica` in a child process, killing it on ``stop_event``.
+
+    nilearn's ``fit`` is a single opaque call with no cancellation hook, so the
+    only way to interrupt it is to run it in a separate process and terminate
+    that process (and its joblib workers) when the GUI requests a stop. ``spawn``
+    is used so the child is a clean interpreter on every platform (a ``fork``
+    after nibabel/ANTs threads are live is unsafe).
+    """
+    import multiprocessing as mp
+    import queue as queue_mod
+
+    ctx = mp.get_context("spawn")
+    result_queue: Any = ctx.Queue()
+    proc = ctx.Process(target=_canica_worker, args=(args, result_queue), daemon=False)
+    proc.start()
+
+    result: tuple | None = None
+    try:
+        while True:
+            try:
+                result = result_queue.get(timeout=0.5)
+                break
+            except queue_mod.Empty:
+                pass
+            if stop_event.is_set():
+                logger.info("Stop requested — terminating ICA subprocess")
+                _terminate_process_tree(proc.pid)  # type: ignore[arg-type]
+                proc.join(timeout=10)
+                _remove_partial_outputs(components_file, metadata_file)
+                raise MaskExtractionStopped("Mask extraction (ICA) stopped by user")
+            if not proc.is_alive():
+                # Worker exited; collect its (possibly already-queued) result.
+                try:
+                    result = result_queue.get(timeout=2)
+                except queue_mod.Empty:
+                    result = ("error", "ICA worker exited without reporting a result")
+                break
+    finally:
+        if proc.is_alive():
+            _terminate_process_tree(proc.pid)  # type: ignore[arg-type]
+        proc.join(timeout=10)
+
+    status, detail = result if result is not None else ("error", "ICA worker produced no result")
+    if status != "ok":
+        raise RuntimeError(f"CanICA computation failed: {detail}")
 
 
 def _json_default(obj):
@@ -963,6 +1120,7 @@ def run_ica(
     highpass: float | None = None,
     lowpass: float | None = None,
     overwrite: bool = False,
+    stop_event: threading.Event | None = None,
 ) -> tuple[Path, Path]:
     """
     Run Canonical ICA (CanICA) on fMRI data using nilearn.
@@ -988,6 +1146,12 @@ def run_ica(
     overwrite : bool, default=False
         If True, always run command and overwrite existing outputs.
         If False, skip command if all output files already exist.
+    stop_event : threading.Event, optional
+        Cooperative cancellation signal. When provided, the ICA fit runs in a
+        child process so it can be interrupted mid-computation: if the event is
+        set, the child (and its joblib workers) is terminated, partial outputs
+        are removed, and :class:`MaskExtractionStopped` is raised. When omitted,
+        the fit runs inline (no subprocess) and always runs to completion.
 
     Returns
     -------
@@ -1004,8 +1168,6 @@ def run_ica(
         If CanICA command fails
 
     """
-
-    from nilearn.decomposition import CanICA
 
     logger.info("CanICA...")
 
@@ -1037,7 +1199,7 @@ def run_ica(
 
     img = cast(Nifti1Image, load(input_file))
     # Extract TR from 4th dimension of zooms (temporal spacing)
-    tr = img.header.get_zooms()[3]
+    tr = float(img.header.get_zooms()[3])
 
     # Convert nan to None (nilearn needs None to skip smoothing/filtering)
     import math
@@ -1049,49 +1211,40 @@ def run_ica(
     if lowpass is not None and math.isnan(lowpass):
         lowpass = None
 
-    # Initialize CanICA
-    logger.info("Initializing CanICA...")
-    canica: Any = CanICA(
-        mask=mask_file,
-        n_components=n_components,
-        smoothing_fwhm=smooth_fwhm,  # type: ignore[arg-type]
-        high_pass=highpass,
-        low_pass=lowpass,
-        threshold=None,  # type: ignore[arg-type]
-        t_r=tr,
-        n_jobs=-1,  # Use all CPUs
-        random_state=0,  # For reproducibility
-        memory=str(output_dir / "cache"),
-        memory_level=2,
-        verbose=1,
+    # All-picklable args so the fit can run inline or in a spawned child process.
+    canica_args = (
+        str(input_file),
+        str(mask_file),
+        n_components,
+        smooth_fwhm,
+        highpass,
+        lowpass,
+        tr,
+        0,  # random_state — fixed for reproducibility
+        str(output_dir / "cache"),
+        str(components_file),
+        str(metadata_file),
     )
 
-    # Fit CanICA
     logger.info("Computing ICA components... (this may take several minutes)")
     with Timer("CanICA decomposition", "mask_extraction"):
         try:
-            canica.fit(input_file)
-            logger.info("CanICA computation completed successfully")
+            if stop_event is None:
+                # No cancellation requested (CLI / tests): run inline, no subprocess overhead.
+                _run_canica(*canica_args)
+            else:
+                # GUI: run in a killable child process so Stop interrupts the fit itself.
+                _run_canica_cancellable(canica_args, stop_event, components_file, metadata_file)
+        except MaskExtractionStopped:
+            raise
         except Exception as e:
             error_msg = f"CanICA computation failed: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
+    logger.info("CanICA computation completed successfully")
 
-    # Get components as image
-    components_img: SpatialImage = canica.components_img_  # type: ignore
-
-    # Save components
-    save(components_img, components_file)
-    logger.info(f"Saved components to: {components_file}")
-
-    # Save metadata
-    np.savez(
-        metadata_file, n_components=n_components, components_shape=components_img.shape, input_file=str(input_file)
-    )
-    logger.info(f"Saved metadata to: {metadata_file}")
-
-    # Log component information
-    components_data = components_img.get_fdata()
+    # Log component dimensions (reload from disk; the fit may have run in a child process).
+    components_data = np.asarray(cast(Nifti1Image, load(components_file)).dataobj)
     logger.info(f"Component dimensions: {components_data.shape}")
     logger.info(f"Number of components extracted: {components_data.shape[3]}")
 
@@ -1401,6 +1554,7 @@ def mask_extraction_rest(
     qc_dir: Union[str, Path] | None = None,
     progress_callback: Callable[[str, str], None] | None = None,
     sham_hemisphere_network: str | None = None,
+    stop_event: threading.Event | None = None,
 ) -> list[Path]:
     """
     Run the mask extraction pipeline for resting-state fMRI data.
@@ -1456,6 +1610,12 @@ def mask_extraction_rest(
         If provided, generates hemisphere-split masks for this network (e.g., "SomMotA").
         Creates {participant}_{network}_left_thr.nii.gz and {participant}_{network}_right_thr.nii.gz
         files for use in hemisphere-split sham feedback.
+    stop_event : threading.Event, optional
+        Cooperative cancellation signal. The ICA fit is interruptible
+        mid-computation (it runs in a killable subprocess; see :func:`run_ica`),
+        and the registration / extraction steps are checked at their boundaries.
+        When set, :class:`MaskExtractionStopped` is raised. If omitted, the
+        pipeline always runs to completion.
 
     Returns
     -------
@@ -1484,6 +1644,16 @@ def mask_extraction_rest(
             logger.info(step)
         if progress_callback:
             progress_callback(step, detail)
+
+    def check_stop():
+        """Abort cooperatively at a step boundary if the caller requested a stop.
+
+        The ICA fit interrupts mid-computation via its own subprocess (see
+        ``run_ica``); these boundary checks cover the cheaper ANTs registration
+        and mask-extraction steps that run between the ICA and the result.
+        """
+        if stop_event is not None and stop_event.is_set():
+            raise MaskExtractionStopped("Mask extraction stopped by user")
 
     # Log the command
     emit_progress(f"Mask extraction for {participant_id} / {session_id}")
@@ -1523,6 +1693,7 @@ def mask_extraction_rest(
             )
 
     # Step 1: ICA
+    check_stop()
     emit_progress("Step 1/3: Running ICA decomposition", f"{n_components} components")
     ica_dir = root_dir / "01_ica"
     components_file, _ = run_ica(
@@ -1535,6 +1706,7 @@ def mask_extraction_rest(
         highpass=highpass,
         lowpass=lowpass,
         overwrite=overwrite,
+        stop_event=stop_event,
     )
     components_img = cast(Nifti1Image, load(components_file))
     components_data = get_data(components_img)
@@ -1543,6 +1715,7 @@ def mask_extraction_rest(
     # Step 2: MNI registration - bring Yeo atlas into participant space
     # Overview: We need the Yeo atlas in the same space as our ICA components
     # to perform spatial correlation. This requires: participant → MNI → Yeo → participant
+    check_stop()
     emit_progress("Step 2/3: MNI registration", "Computing transforms...")
     mnireg_dir = root_dir / "02_mnireg"
 
@@ -1563,6 +1736,7 @@ def mask_extraction_rest(
     # Step 3: Extract network masks using ICA-atlas correlation
     # Now that ICA components and Yeo atlas are in same space, identify which
     # ICA components best represent each target network
+    check_stop()
     emit_progress("Step 3/3: Extracting network masks", f"Targets: {', '.join(yeo_targets)}")
     masks_dir = root_dir / "03_masks"
 
