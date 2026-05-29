@@ -548,7 +548,7 @@ class StudyEditorScreen:
     def _on_add_feedback(self, e):
         """Add a new feedback task tab."""
         self._collect_all_configs()
-        template = {"task_type": "ball", "tr": 1.2, "n_volumes": 150, "n_baseline": 25, "max_runs": 1}
+        template = {"task": "ball", "tr": 1.2, "n_volumes": 150, "n_baseline": 25, "max_runs": 1}
         self._feedback_configs.append(template)
         self._rebuild_tabs()
 
@@ -562,13 +562,13 @@ class StudyEditorScreen:
         """Handle feedback task type change from Study tab overview."""
         self._collect_all_configs()
         new_type = self._fb_type_dropdowns[index].value
-        old_type = self._feedback_configs[index].get("task_type", "ball")
+        old_type = self._feedback_configs[index].get("task", "ball")
 
         if new_type == old_type:
             return
 
         cfg = self._feedback_configs[index]
-        cfg["task_type"] = new_type
+        cfg["task"] = new_type
         # Clear old task-specific params since they're for the old task type
         cfg.pop("task_params", None)
         self._rebuild_tabs()
@@ -670,7 +670,7 @@ class StudyEditorScreen:
     def _get_feedback_tab_label(self, index: int) -> str:
         """Get tab label for a feedback task, including short type name."""
         cfg = self._feedback_configs[index]
-        task_type = cfg.get("task_type", "ball")
+        task_type = cfg.get("task", "ball")
         try:
             meta = get_task_metadata(task_type)
             short = meta.display_name
@@ -813,7 +813,7 @@ class StudyEditorScreen:
                 width=560,
                 label=f"Feedback {i + 1}",
                 options=[ft.dropdown.Option(key=o.key, text=o.text) for o in self._feedback_type_options],
-                value=cfg.get("task_type", "ball"),
+                value=cfg.get("task", "ball"),
                 on_select=lambda e, idx=i: self._on_feedback_type_changed(idx, e),
             )
             self._fb_type_dropdowns.append(dd)
@@ -1039,7 +1039,7 @@ class StudyEditorScreen:
 
         # --- Feedback sources ---
         for fb_idx, cfg in enumerate(self._feedback_configs):
-            task_type = cfg.get("task_type", "ball")
+            task_type = cfg.get("task", "ball")
             try:
                 meta = get_task_metadata(task_type)
                 label = f"Feedback {fb_idx + 1} ({meta.display_name})"
