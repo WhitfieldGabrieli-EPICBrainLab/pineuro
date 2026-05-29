@@ -8,6 +8,8 @@ import pytest
 
 from pineuro.gui.utils import (
     ValidationError,
+    build_feedback_steps,
+    feedback_step_for,
     pick_directory,
     pick_file,
     pick_save_file,
@@ -422,3 +424,70 @@ class TestPickersNonMacOS:
         _install_stub_tkinter(monkeypatch)
         monkeypatch.setattr("pineuro.gui.dispatch.get_dispatcher", lambda: _FakeDispatcher("C:/x/out.tsv"))
         assert pick_save_file(title="Save", default_extension=".tsv") == "C:/x/out.tsv"
+
+
+# =============================================================================
+# build_feedback_steps / feedback_step_for
+# =============================================================================
+
+
+class TestBuildFeedbackSteps:
+    """Per-task BIDS entities and per-task run numbering for feedback/transfer steps."""
+
+    # ball x2 with pre/post transfers, then gauge x1 (no transfers).
+    CONFIG = {
+        "feedback_runs": [
+            {"task": "ball", "max_runs": 2, "use_transfer_runs": True},
+            {"task": "gauge", "max_runs": 1},
+        ]
+    }
+
+    def test_ordering_and_step_ids(self):
+        steps = build_feedback_steps(self.CONFIG)
+        assert [s.step_id for s in steps] == [
+            "transfer_1",
+            "feedback_1",
+            "feedback_2",
+            "transfer_2",
+            "feedback_3",
+        ]
+
+    def test_task_entities_use_real_name_with_transfer_suffix(self):
+        steps = build_feedback_steps(self.CONFIG)
+        assert [s.task_entity for s in steps] == [
+            "balltransfer",
+            "ball",
+            "ball",
+            "balltransfer",
+            "gauge",
+        ]
+
+    def test_run_numbers_restart_per_task_entity(self):
+        steps = build_feedback_steps(self.CONFIG)
+        # ball feedback: 1, 2 ; balltransfer: 1, 2 ; gauge feedback: 1
+        by_step = {s.step_id: s.run_number for s in steps}
+        assert by_step == {
+            "transfer_1": 1,
+            "feedback_1": 1,
+            "feedback_2": 2,
+            "transfer_2": 2,
+            "feedback_3": 1,
+        }
+
+    def test_kind_tracks_feedback_vs_transfer(self):
+        steps = {s.step_id: s.kind for s in build_feedback_steps(self.CONFIG)}
+        assert steps["feedback_1"] == "feedback"
+        assert steps["transfer_1"] == "transfer"
+
+    def test_feedback_step_for_lookup(self):
+        step = feedback_step_for(self.CONFIG, "feedback_3")
+        assert step is not None
+        assert step.task_id == "gauge"
+        assert step.task_entity == "gauge"
+        assert step.run_number == 1
+
+    def test_feedback_step_for_unknown_returns_none(self):
+        assert feedback_step_for(self.CONFIG, "feedback_99") is None
+
+    def test_empty_config(self):
+        assert build_feedback_steps({}) == []

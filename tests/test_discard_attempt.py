@@ -153,14 +153,14 @@ class TestDiscardIntegration:
         fb = tmp_path / "feedback" / "02_feedback_output"
         _touch(fb / "sub-01_ses-01_task-feedback_run-01_attempt-01_feedbacklog.tsv", "header\nrow")
 
-        before = get_slot_run_info(fb, "sub-01", "ses-01", "feedback", step_id="feedback_1")
+        before = get_slot_run_info(fb, "sub-01", "ses-01", "feedback", run=1)
         assert before["attempt"] == 2
 
         discard_attempt(
             tmp_path, subject="sub-01", session="ses-01", task="feedback", attempt=1, run=1, kind="feedback"
         )
 
-        after = get_slot_run_info(fb, "sub-01", "ses-01", "feedback", step_id="feedback_1")
+        after = get_slot_run_info(fb, "sub-01", "ses-01", "feedback", run=1)
         assert after["attempt"] == 1
 
 

@@ -25,7 +25,7 @@ The Participant Workflow GUI also shows overlay thumbnails for quick visual veri
 
 ## Feedback Tasks QC
 
-**File:** `feedback/02_feedback_output/qc/sub-001_task-feedback_acq-01_run-01_feedback_qc.html`
+**File:** `feedback/02_feedback_output/qc/sub-001_ses-01_task-ball_run-01_attempt-01_feedback_qc.html`
 
 Contains:
 - **Activation timeseries** — Per-volume activation for each network mask, with baseline period shaded

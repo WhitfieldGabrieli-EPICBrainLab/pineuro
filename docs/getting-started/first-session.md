@@ -169,13 +169,13 @@ data/sub-rockland01/
 │   │   ├── masks/                       # Network masks aligned to feedback task
 │   │   └── xfm/                         # Registration transforms
 │   └── 02_feedback_output/
-│       ├── sub-rockland01_task-feedback_acq-01_run-01_feedbacklog.tsv   # Per-volume activations
-│       ├── sub-rockland01_task-feedback_acq-01_run-01_design.tsv        # GLM design matrix
-│       ├── sub-rockland01_task-feedback_acq-01_run-01_psychopylog.tsv   # Task display state
-│       ├── sub-rockland01_task-feedback_acq-01_run-01_events.tsv        # Block events
-│       ├── task_state.json                                            # Task state
+│       ├── sub-rockland01_ses-01_task-ball_run-01_attempt-01_feedbacklog.tsv   # Per-volume activations
+│       ├── sub-rockland01_ses-01_task-ball_run-01_attempt-01_design.tsv        # GLM design matrix
+│       ├── sub-rockland01_ses-01_task-ball_run-01_attempt-01_psychopylog.tsv   # Task display state
+│       ├── sub-rockland01_ses-01_task-ball_run-01_attempt-01_events.tsv        # Block events
+│       ├── task_state.json                                                   # Task state
 │       └── qc/
-│           └── sub-rockland01_task-feedback_acq-01_run-01_feedback_qc.html
+│           └── sub-rockland01_ses-01_task-ball_run-01_attempt-01_feedback_qc.html
 │
 ├── qc/                                  # Master QC directory
 │   ├── sub-rockland01_mask_extraction_qc.html  # Mask QC with overlay images

@@ -51,7 +51,7 @@ Valid TR: 1.2
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import flet as ft
 
@@ -274,6 +274,101 @@ def validate_session_config(config_dict: dict) -> tuple[bool, str | None]:
     except Exception as e:
         logger.error(f"Unexpected validation error: {e}")
         return False, f"Validation error: {e}"
+
+
+class FeedbackStep(NamedTuple):
+    """One feedback/transfer step in the participant pipeline.
+
+    Attributes
+    ----------
+    step_id : str
+        Globally unique slot key (``"feedback_1"``, ``"transfer_2"``, ...). Used as a
+        dict key for step status tracking, so it stays a flat global counter.
+    task_id : str
+        Registered task id (e.g. ``"ball"``), as it appears in the task registry.
+    kind : str
+        ``"feedback"`` or ``"transfer"`` — whether real-time feedback is delivered.
+    task_entity : str
+        BIDS ``task-`` entity for this step's output files: ``task_id`` for feedback
+        runs, ``f"{task_id}transfer"`` for transfer runs.
+    run_number : int
+        Run number for this step's filenames. Restarts at 1 per ``task_entity``, so
+        each task's feedback and transfer outputs number independently.
+    label : str
+        Human-readable label (e.g. ``"Feedback Run 1 (Ball)"``).
+    """
+
+    step_id: str
+    task_id: str
+    kind: str
+    task_entity: str
+    run_number: int
+    label: str
+
+
+def _task_entity(task_id: str, kind: str) -> str:
+    """BIDS ``task-`` entity for a feedback step: real task name, ``transfer`` suffix."""
+    return task_id if kind == "feedback" else f"{task_id}transfer"
+
+
+def build_feedback_steps(config: dict[str, Any]) -> list[FeedbackStep]:
+    """Expand ``config["feedback_runs"]`` into ordered pipeline steps.
+
+    Single source of truth for both step ordering (pre-transfer, feedback x N,
+    post-transfer per feedback-run config) and per-task run numbering. ``step_id``
+    stays a flat global counter (used as a status dict key); ``run_number`` restarts
+    at 1 for each ``task_entity`` so that, e.g. ``feedback_runs = [ball x2 (with
+    transfers), gauge x1]`` produces ``task-balltransfer_run-01``, ``task-ball_run-01``,
+    ``task-ball_run-02``, ``task-balltransfer_run-02``, ``task-gauge_run-01``.
+
+    Returns
+    -------
+    list[FeedbackStep]
+        One entry per feedback/transfer step, in execution order.
+    """
+    from ..tasks.task_registry import get_task_metadata
+
+    feedback_runs = config.get("feedback_runs", [])
+    steps: list[FeedbackStep] = []
+    fb_counter = 0
+    tf_counter = 0
+    run_counters: dict[str, int] = {}
+
+    def _append(step_id: str, task_id: str, kind: str, label_suffix: str) -> None:
+        entity = _task_entity(task_id, kind)
+        run_counters[entity] = run_counters.get(entity, 0) + 1
+        slot = step_id.rsplit("_", 1)[1]
+        label = f"{'Transfer' if kind == 'transfer' else 'Feedback'} Run {slot} ({label_suffix})"
+        steps.append(FeedbackStep(step_id, task_id, kind, entity, run_counters[entity], label))
+
+    for frc in feedback_runs:
+        task_id = frc.get("task", "ball")
+        try:
+            label_suffix = get_task_metadata(task_id).display_name
+        except (ValueError, ImportError):
+            label_suffix = task_id.replace("_", " ").title()
+        use_transfers = frc.get("use_transfer_runs", False)
+        max_runs = frc.get("max_runs", 1)
+
+        if use_transfers:
+            tf_counter += 1
+            _append(f"transfer_{tf_counter}", task_id, "transfer", label_suffix)
+        for _ in range(max_runs):
+            fb_counter += 1
+            _append(f"feedback_{fb_counter}", task_id, "feedback", label_suffix)
+        if use_transfers:
+            tf_counter += 1
+            _append(f"transfer_{tf_counter}", task_id, "transfer", label_suffix)
+
+    return steps
+
+
+def feedback_step_for(config: dict[str, Any], step_id: str) -> FeedbackStep | None:
+    """Return the :class:`FeedbackStep` for ``step_id``, or ``None`` if not found."""
+    for step in build_feedback_steps(config):
+        if step.step_id == step_id:
+            return step
+    return None
 
 
 class ThreadSafeCallback:

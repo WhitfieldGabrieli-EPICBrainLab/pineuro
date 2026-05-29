@@ -2147,6 +2147,8 @@ class PipelineRunner:
         from pineuro.tasks.state import TaskState
         from pineuro.tasks.task_registry import get_task_metadata
 
+        from ..utils import feedback_step_for
+
         # Parse step ID to determine task type
         if step_id.startswith("transfer_"):
             task_type = "transfer"
@@ -2197,20 +2199,29 @@ class PipelineRunner:
         output_dir = feedback_dir / "02_feedback_output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use slot-based run numbering with attempt entity for retry tracking
+        # Resolve the BIDS task entity (real task name; transfer runs get a "transfer"
+        # suffix) and the per-task run number from the shared step plan.
+        step = feedback_step_for(config, step_id)
+        if step is None:
+            raise ValueError(f"Could not resolve feedback step for step_id: {step_id}")
+        task_entity = step.task_entity
+        task_run_number = step.run_number
+        # Real registered task id (e.g. "ball") — drives TaskState/factory/QC, not filenames.
+        feedback_task_type = step.task_id
+
+        # Next attempt number for this (task entity, run) slot, for retry tracking.
         run_info = get_slot_run_info(
             output_dir=output_dir,
             subject=self.participant_id,
             session=self.session_id,
-            task=task_type,
-            step_id=step_id,
+            task=task_entity,
+            run=task_run_number,
         )
-        task_run_number = run_info["run"]
         task_attempt = run_info["attempt"]
         self._set_current_attempt(
             kind="feedback",
             subject=self.participant_id,
-            task=task_type,
+            task=task_entity,
             attempt=task_attempt,
             run=task_run_number,
         )
@@ -2219,11 +2230,6 @@ class PipelineRunner:
 
         # Get mask files - use reference-coregistered masks if realtime reference is enabled,
         # otherwise use boldref space masks from mask extraction
-        feedback_task_type = (
-            frc.get("task", "ball")
-            if frc
-            else (config.get("feedback_runs", [{}])[0].get("task", "ball") if config.get("feedback_runs") else "ball")
-        )
 
         # Determine mask names based on the localizer entry's type.
         loc0 = _loc(config)
@@ -2334,7 +2340,9 @@ class PipelineRunner:
 
         if simulator_enabled:
             # Simulator mode: create temp watch dir and use source DICOMs
-            watch_dir = base_dir / "tmp" / f"incoming_{task_type}_run-{task_run_number:02d}_attempt-{task_attempt:02d}"
+            watch_dir = (
+                base_dir / "tmp" / f"incoming_{task_entity}_run-{task_run_number:02d}_attempt-{task_attempt:02d}"
+            )
             watch_dir.mkdir(parents=True, exist_ok=True)
 
             # Get per-run simulator source path based on step_id
@@ -2488,7 +2496,7 @@ class PipelineRunner:
                                     source_dir=study_base_dir,
                                     matched_participant=matched_participant,
                                     matched_session=matched_session or self.session_id,
-                                    task=task_type,
+                                    task=task_entity,
                                     run=task_run_number,
                                 )
                                 if self._is_blind_mode():
@@ -2573,7 +2581,7 @@ class PipelineRunner:
                 mask_paths=[str(f) for f in all_mask_files],
                 subject=self.participant_id,
                 session=self.session_id,
-                task=task_type,
+                task=task_entity,
                 run=task_run_number,
                 output_dir=output_dir,
                 collection_dir=collection_dir,

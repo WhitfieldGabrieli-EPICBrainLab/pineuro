@@ -95,10 +95,10 @@ After the session completes, check the outputs:
 ```
 /data/sub-01/feedback/
 ├── 02_feedback_output/
-│   ├── sub-01_task-nback_run-01_feedbacklog.tsv  # Activations
-│   └── sub-01_task-nback_run-01_design.tsv       # GLM design
+│   ├── sub-01_ses-01_task-ball_run-01_attempt-01_feedbacklog.tsv  # Activations
+│   └── sub-01_ses-01_task-ball_run-01_attempt-01_design.tsv       # GLM design
 └── qc/
-    └── sub-01_task-nback_run-01_feedback_qc.html # QC report
+    └── sub-01_ses-01_task-ball_run-01_attempt-01_feedback_qc.html # QC report
 ```
 
 The `feedbacklog.tsv` contains columns:

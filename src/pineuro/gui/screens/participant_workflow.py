@@ -51,7 +51,7 @@ from ..config_snapshot import (
     save_config_snapshot,
 )
 from ..models import StudyConfig
-from ..utils import truncate_text
+from ..utils import build_feedback_steps, feedback_step_for, truncate_text
 
 logger = logging.getLogger(__name__)
 
@@ -85,36 +85,15 @@ class StepStatus(Enum):
 def _build_feedback_step_ids(config: dict[str, Any]) -> list[tuple[str, str]]:
     """Build ``(step_id, label)`` pairs for feedback/transfer pipeline steps.
 
+    Thin wrapper over :func:`pineuro.gui.utils.build_feedback_steps` (the single
+    source of truth for step ordering, BIDS task entities, and per-task run numbers).
+
     Returns
     -------
     list[tuple[str, str]]
         E.g. ``[("transfer_1", "Transfer Run 1 (Ball)"), ("feedback_1", "Feedback Run 1 (Ball)"), ...]``
     """
-    feedback_runs = config.get("feedback_runs", [])
-    steps: list[tuple[str, str]] = []
-    fb_counter = 0
-    tf_counter = 0
-    for frc in feedback_runs:
-        task_type = frc.get("task", "?")
-        try:
-            from pineuro.tasks import get_task_metadata
-
-            label_suffix = get_task_metadata(task_type).display_name
-        except (ValueError, ImportError):
-            label_suffix = task_type.replace("_", " ").title()
-        use_transfers = frc.get("use_transfer_runs", False)
-        max_runs = frc.get("max_runs", 1)
-
-        if use_transfers:
-            tf_counter += 1
-            steps.append((f"transfer_{tf_counter}", f"Transfer Run {tf_counter} ({label_suffix})"))
-        for _ in range(max_runs):
-            fb_counter += 1
-            steps.append((f"feedback_{fb_counter}", f"Feedback Run {fb_counter} ({label_suffix})"))
-        if use_transfers:
-            tf_counter += 1
-            steps.append((f"transfer_{tf_counter}", f"Transfer Run {tf_counter} ({label_suffix})"))
-    return steps
+    return [(s.step_id, s.label) for s in build_feedback_steps(config)]
 
 
 class ParticipantWorkflowScreen:
@@ -2113,19 +2092,17 @@ class ParticipantWorkflowScreen:
             StepStatus based on best attempt status (COMPLETE if any complete,
             INTERRUPTED if any partial, PENDING if none found)
         """
-        from pineuro.feedback import parse_step_run_number
-
-        try:
-            run_num = parse_step_run_number(step_id)
-        except ValueError:
+        step = feedback_step_for(self.study_config.session_config, step_id)
+        if step is None:
             return StepStatus.PENDING
-        task_type = "transfer" if "transfer" in step_id else "feedback"
+        task_entity = step.task_entity
+        run_num = step.run_number
 
         if not output_dir.exists():
             return StepStatus.PENDING
 
         # Search for any attempt-* files for this slot's run number
-        pattern = f"{participant_id}_{session_id}_task-{task_type}_run-{run_num:02d}_attempt-*_feedbacklog.tsv"
+        pattern = f"{participant_id}_{session_id}_task-{task_entity}_run-{run_num:02d}_attempt-*_feedbacklog.tsv"
         log_files = list(output_dir.glob(pattern))
 
         if not log_files:
@@ -4098,9 +4075,13 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
 
-        # Determine task type and run number from step_id
-        task = "transfer" if "transfer" in step_id else "feedback"
-        run = 1 if "_1" in step_id else 2
+        # Determine the BIDS task entity and per-task run number from step_id
+        step = feedback_step_for(config, step_id)
+        if step is None:
+            logger.warning("Could not resolve feedback step for %s; skipping summary", step_id)
+            return
+        task = step.task_entity
+        run = step.run_number
 
         # Get config values — prefer per-FRC values
         frc_idx = self._get_feedback_step_frc_index(step_id)
@@ -5139,6 +5120,9 @@ class ParticipantWorkflowScreen:
         frc_idx = self._get_feedback_step_frc_index(step_id)
         feedback_runs = config.get("feedback_runs", [])
         frc = feedback_runs[frc_idx] if frc_idx is not None and frc_idx < len(feedback_runs) else None
+        step = feedback_step_for(config, step_id)
+        task_entity = step.task_entity if step else f"transfer_{transfer_num}"
+        run_number = step.run_number if step else transfer_num
 
         def _val(key, default=None):
             if frc is None:
@@ -5166,7 +5150,7 @@ class ParticipantWorkflowScreen:
             "label": f"Transfer Run {transfer_num}",
             "description": description,
             "parameters": {
-                "Task": f"transfer (run-{transfer_num:02d})",
+                "Task": f"{task_entity} (run-{run_number:02d})",
                 "Volumes": _val("n_volumes", 150),
                 "Baseline": _val("n_baseline", 25),
                 "Feedback": "OFF",
@@ -5179,7 +5163,7 @@ class ParticipantWorkflowScreen:
                 "Simulator Speed": f"{config.get('simulator', {}).get('feedback_speed', 1.0)}x",
             },
             "output_path": base_dir / "feedback" / "02_feedback_output",
-            "output_pattern": f"{self._bids_prefix}_task-transfer_run-{transfer_num:02d}_attempt-*_feedbacklog.tsv",
+            "output_pattern": f"{self._bids_prefix}_task-{task_entity}_run-{run_number:02d}_attempt-*_feedbacklog.tsv",
         }
 
     def _get_step_info(self, step_id: str, config: dict, base_dir: Path, participant_id: str) -> dict:
@@ -5546,12 +5530,15 @@ class ParticipantWorkflowScreen:
             params["Output"] = base_dir / "feedback" / "02_feedback_output"
             params["Simulator Speed"] = f"{config.get('simulator', {}).get('feedback_speed', 1.0)}x"
 
+            _fb_step = feedback_step_for(config, step_id)
+            _fb_entity = _fb_step.task_entity if _fb_step else _feedback_task_type
+            _fb_run = _fb_step.run_number if _fb_step else run_num
             info = {
                 "label": f"Feedback Run {run_num}",
                 "description": f"{ordinal} neurofeedback run with real-time activation feedback.",
                 "parameters": params,
                 "output_path": base_dir / "feedback" / "02_feedback_output",
-                "output_pattern": f"{self._bids_prefix}_task-feedback_run-{run_num:02d}_attempt-*_feedbacklog.tsv",
+                "output_pattern": f"{self._bids_prefix}_task-{_fb_entity}_run-{_fb_run:02d}_attempt-*_feedbacklog.tsv",
             }
         else:
             info = step_info_map.get(
@@ -5568,20 +5555,22 @@ class ParticipantWorkflowScreen:
         feedback_step_ids = [sid for sid, _ in _build_feedback_step_ids(config)]
 
         if step_id in feedback_step_ids:
-            task_type = "transfer" if "transfer" in step_id else "feedback"
+            step = feedback_step_for(config, step_id)
+            task_entity = step.task_entity if step else step_id
+            run_number = step.run_number if step else 1
             output_dir = base_dir / "feedback" / "02_feedback_output"
 
-            # Get slot-based run info with attempt number
+            # Get the next attempt number for this (task entity, run) slot
             run_info = get_slot_run_info(
                 output_dir=output_dir,
                 subject=participant_id,
                 session=self.session_id,
-                task=task_type,
-                step_id=step_id,
+                task=task_entity,
+                run=run_number,
             )
 
             # Update parameters to show run number and attempt
-            info["parameters"]["Task"] = f"{task_type} (run-{run_info['run']:02d})"
+            info["parameters"]["Task"] = f"{task_entity} (run-{run_info['run']:02d})"
             info["parameters"]["Attempt"] = f"attempt-{run_info['attempt']:02d}"
 
             # If there are previous attempts, show them
@@ -7259,25 +7248,28 @@ class ParticipantWorkflowScreen:
 
         n_volumes = self._fb("n_volumes", 150)
 
-        # Determine task type and get slot-based run info
-        task_type = "transfer" if "transfer" in step_id else "feedback"
+        # Resolve the BIDS task entity and per-task run number, then the attempt slot
+        step = feedback_step_for(config, step_id)
+        if step is None:
+            raise ValueError(f"Could not resolve feedback step for step_id: {step_id}")
+        task_entity = step.task_entity
         output_dir = base_dir / "feedback" / "02_feedback_output"
 
-        # Get the slot-based run info (run number and attempt number)
+        # Get the next attempt number for this (task entity, run) slot
         from pineuro.feedback import get_slot_run_info
 
         run_info = get_slot_run_info(
             output_dir=output_dir,
             subject=self.participant_id,
             session=self.session_id,
-            task=task_type,
-            step_id=step_id,
+            task=task_entity,
+            run=step.run_number,
         )
 
         # Construct log file path with attempt entity (format as 2-digit number)
         log_path = (
             output_dir
-            / f"{self._bids_prefix}_task-{task_type}_run-{run_info['run']:02d}_attempt-{run_info['attempt']:02d}_feedbacklog.tsv"
+            / f"{self._bids_prefix}_task-{task_entity}_run-{run_info['run']:02d}_attempt-{run_info['attempt']:02d}_feedbacklog.tsv"
         )
         # Store psychopylog path for hit count reading (same pattern but psychopylog.tsv)
         self._psychopylog_path = output_dir / log_path.name.replace("feedbacklog.tsv", "psychopylog.tsv")

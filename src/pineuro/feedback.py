@@ -2216,47 +2216,19 @@ def get_next_run_number(
     return max(existing_runs) + 1
 
 
-def parse_step_run_number(step_id: str) -> int:
-    """Extract run number from a workflow step_id.
-
-    Parameters
-    ----------
-    step_id : str
-        Workflow step identifier (e.g., 'feedback_3', 'transfer_1')
-
-    Returns
-    -------
-    int
-        The run number extracted from the step_id.
-
-    Raises
-    ------
-    ValueError
-        If step_id is not in the expected format ``{type}_{number}``.
-    """
-    parts = step_id.rsplit("_", 1)
-    if len(parts) == 2 and parts[0] in ("feedback", "transfer"):
-        try:
-            return int(parts[1])
-        except ValueError:
-            pass
-    raise ValueError(
-        f"Invalid step_id: {step_id!r}. Expected format 'feedback_N' or 'transfer_N' (e.g., 'feedback_3')."
-    )
-
-
 def get_slot_run_info(
     output_dir: Path,
     subject: str,
     session: str,
     task: str,
-    step_id: str,
+    run: int,
 ) -> dict:
-    """Get run info based on workflow slot with attempt entity for retries.
+    """Get the next attempt number for a given (task, run) slot.
 
-    Uses a slot-based run numbering system where:
-    - The run number is derived from the step_id suffix (e.g., feedback_3 -> run-03)
-    - attempt-01/attempt-02/attempt-03 corresponds to attempt number (first, second, third...)
+    The run number is supplied by the caller (it depends on the per-task numbering
+    derived from the session config). This function scans for existing
+    ``attempt-NN`` files at that run number and returns the next attempt to use,
+    so retries reuse the run number with an incremented attempt.
 
     Parameters
     ----------
@@ -2264,31 +2236,33 @@ def get_slot_run_info(
         Base output directory for feedback tasks
     subject : str
         Subject identifier (e.g., 'sub-01')
+    session : str
+        Session identifier (e.g., 'ses-01')
     task : str
-        Task name (e.g., 'feedback', 'transfer')
-    step_id : str
-        Workflow step identifier (e.g., 'transfer_1', 'feedback_3')
+        BIDS task entity (e.g., 'ball', 'balltransfer')
+    run : int
+        Run number for this slot (1-indexed)
 
     Returns
     -------
     dict
         Dictionary containing:
-        - 'run': int - The run number for this slot
+        - 'run': int - The run number for this slot (echoes the ``run`` argument)
         - 'attempt': int - The attempt number for this try (1, 2, 3, ...)
         - 'run_attempt_string': str - Combined string like 'run-03_attempt-01'
         - 'existing_attempts': list - List of existing attempt numbers for this slot
 
     Examples
     --------
-    >>> info = get_slot_run_info(output_dir, 'sub-01', 'transfer', 'transfer_1')
+    >>> info = get_slot_run_info(output_dir, 'sub-01', 'ses-01', 'ball', 1)
     >>> info
     {'run': 1, 'attempt': 1, 'run_attempt_string': 'run-01_attempt-01', 'existing_attempts': []}
     >>> # After one interrupted run:
-    >>> info = get_slot_run_info(output_dir, 'sub-01', 'transfer', 'transfer_1')
+    >>> info = get_slot_run_info(output_dir, 'sub-01', 'ses-01', 'ball', 1)
     >>> info
     {'run': 1, 'attempt': 2, 'run_attempt_string': 'run-01_attempt-02', 'existing_attempts': [1]}
     """
-    run_num = parse_step_run_number(step_id)
+    run_num = run
 
     if not output_dir.exists():
         return {
@@ -3869,12 +3843,9 @@ def run_feedback_task(
         includes activation timeseries, baseline distributions, and design matrix
         visualizations. Default is True.
     step_id : str, optional
-        Workflow step identifier (e.g., 'transfer_1', 'feedback_2'). If provided,
-        uses slot-based run numbering with the attempt entity for retry tracking.
-        The step_id determines the run number (transfer_1/feedback_1 -> run-01,
-        transfer_2/feedback_2 -> run-02) and an attempt index (1, 2, 3, ...)
-        is appended for each attempt at the same slot. When step_id is provided,
-        the `run` parameter is ignored and determined from the step_id mapping.
+        Workflow step identifier (e.g., 'transfer_1', 'feedback_2'), used only for
+        logging/context. The caller-supplied ``run`` is authoritative; the attempt
+        index (1, 2, 3, ...) is derived by scanning existing files at that run.
     sham_provider : ShamActivationProvider, optional
         Sham activation source for control conditions. When provided, the estimator
         returns sham activations (from provider) to the task while still computing
@@ -4004,15 +3975,12 @@ def run_feedback_task(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine run number and attempt number based on step_id.
-    # step_id is required: it selects the workflow slot ("feedback_1", "transfer_2", ...)
-    # which `get_slot_run_info` uses to derive run-NN and the next attempt-NN.
-    if step_id is None:
-        raise ValueError("step_id is required: it selects the workflow slot for slot-based attempt tracking.")
-    run_info = get_slot_run_info(output_dir, subject, session, task, step_id)
-    run = run_info["run"]  # Override run parameter with slot-determined value
+    # The caller-supplied `run` is authoritative (it reflects per-task run numbering
+    # derived from the session config). Derive only the next attempt-NN by scanning
+    # existing files at this (task, run) slot.
+    run_info = get_slot_run_info(output_dir, subject, session, task, run)
     attempt = run_info["attempt"]
-    logger.info(f"Using slot-based naming for {step_id}: run-{run:02d}, attempt-{attempt:02d}")
+    logger.info(f"Using slot-based naming for {step_id or task}: run-{run:02d}, attempt-{attempt:02d}")
 
     # Check for and archive any interrupted run before starting fresh.
     # With attempt-based naming, a new attempt means a fresh attempt; we only

@@ -182,7 +182,7 @@ class QCReportManager:
         """Get path to feedback/transfer run QC report.
 
         Args:
-            task: Task type ("feedback" or "transfer")
+            task: BIDS task entity (e.g. "ball", "balltransfer")
             run: Run number
             attempt: Attempt number (optional)
 
@@ -262,18 +262,29 @@ class QCReportManager:
             },
         ]
 
-        # Add feedback run QC reports
-        for task in ["transfer", "feedback"]:
-            for run in range(1, 10):  # Check up to 9 runs
-                path = self.get_feedback_qc(task, run)
-                if path:
-                    reports.append(
-                        {
-                            "name": f"{task.capitalize()} Run {run}",
-                            "type": f"{task}_run_{run}",
-                            "path": path,
-                        }
-                    )
+        # Add feedback/transfer run QC reports. Discover the real task entities from
+        # disk — filenames use the actual task name (e.g. task-ball, task-balltransfer),
+        # not a fixed "feedback"/"transfer" label, and there may be several per session.
+        import re
+
+        qc_dir = self.base_dir / "feedback" / "02_feedback_output" / "qc"
+        if qc_dir.exists():
+            seen: set[tuple[str, int]] = set()
+            for report in sorted(qc_dir.glob("*_feedback_qc.html")):
+                match = re.search(r"task-(.+?)_run-(\d+)", report.name)
+                if not match:
+                    continue
+                entity, run = match.group(1), int(match.group(2))
+                if (entity, run) in seen:
+                    continue
+                seen.add((entity, run))
+                reports.append(
+                    {
+                        "name": f"{entity} Run {run}",
+                        "type": f"{entity}_run_{run}",
+                        "path": self.get_feedback_qc(entity, run),
+                    }
+                )
 
         # Filter to only existing reports
         return [r for r in reports if r["path"] is not None]
@@ -295,14 +306,19 @@ class QCReportManager:
             "combined": lambda: self.get_combined_qc(),
         }
 
-        # Handle feedback/transfer runs
-        if report_type.startswith(("transfer_run_", "feedback_run_")):
-            parts = report_type.split("_")
-            task = parts[0]
-            run = int(parts[2])
-            path = self.get_feedback_qc(task, run)
-        elif report_type in path_getters:
+        # Handle feedback/transfer runs: "{task_entity}_run_{run}". The entity is the
+        # real task name and may itself contain underscores (e.g. "self_other"), so
+        # split on the final "_run_" rather than the first underscore.
+        if report_type in path_getters:
             path = path_getters[report_type]()
+        elif "_run_" in report_type:
+            entity, run_str = report_type.rsplit("_run_", 1)
+            try:
+                run = int(run_str)
+            except ValueError:
+                logger.warning(f"Unknown report type: {report_type}")
+                return False
+            path = self.get_feedback_qc(entity, run)
         else:
             logger.warning(f"Unknown report type: {report_type}")
             return False

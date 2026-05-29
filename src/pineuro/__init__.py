@@ -87,7 +87,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ConnectivityEstimator": (".feedback", "ConnectivityEstimator"),
     "get_next_run_number": (".feedback", "get_next_run_number"),
     "get_slot_run_info": (".feedback", "get_slot_run_info"),
-    "parse_step_run_number": (".feedback", "parse_step_run_number"),
     # --- preprocessing.py (heavy: nibabel, scipy) ---
     "preprocessing": (".preprocessing", "preprocessing"),
     "collect_volumes": (".preprocessing", "collect_volumes"),
@@ -194,7 +193,6 @@ __all__ = [
     "ConnectivityEstimator",
     "get_next_run_number",
     "get_slot_run_info",
-    "parse_step_run_number",
     "preprocessing",
     "collect_volumes",
     "mask_extraction_rest",

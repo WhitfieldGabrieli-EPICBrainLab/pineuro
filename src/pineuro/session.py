@@ -2515,7 +2515,7 @@ def run_single_task(
         mask_paths=list(mask_files),
         subject=config.paths.participant_id,
         session=config.paths.session_id,
-        task="feedback" if feedback_mode else "transfer",
+        task=eff_task_type if feedback_mode else f"{eff_task_type}transfer",
         run=task_run_number,
         output_dir=config.paths.feedback_output_dir,
         collection_dir=config.paths.collection_dir,
