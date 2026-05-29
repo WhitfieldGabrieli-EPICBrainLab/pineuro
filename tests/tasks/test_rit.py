@@ -252,8 +252,8 @@ class TestRITVolumeComputation:
     def test_compute_max_run_seconds_defaults(self):
         from pineuro.tasks.rit import HEAD_TAIL_BUFFER_S, _rit_max_run_seconds
 
-        # 4 trials * (5 + 25 + 60 + 60 + 15) + 10 buffer = 670s with defaults
-        expected = 4 * (5.0 + 25.0 + 2 * 30.0 + 4 * 15.0 + 15.0) + HEAD_TAIL_BUFFER_S
+        # 4 trials * (5 + 25 + 60 + 20 + 15) + 10 buffer = 510s with defaults
+        expected = 4 * (5.0 + 25.0 + 2 * 30.0 + 4 * 5.0 + 15.0) + HEAD_TAIL_BUFFER_S
         assert _rit_max_run_seconds({}) == pytest.approx(expected)
 
     def test_compute_max_run_seconds_scales_with_trials(self):
@@ -269,10 +269,10 @@ class TestRITVolumeComputation:
     def test_compute_max_run_seconds_respects_rating_timeout(self):
         from pineuro.tasks.rit import _rit_max_run_seconds
 
-        base = _rit_max_run_seconds({})  # rating_timeout=15
+        base = _rit_max_run_seconds({})  # rating_timeout=5
         bumped = _rit_max_run_seconds({"rating_timeout": 30.0})
-        # 4 ratings per trial * 4 trials = 16 rating phases; each grows by 15s
-        assert bumped - base == pytest.approx(16 * 15.0)
+        # 4 ratings per trial * 4 trials = 16 rating phases; each grows by 25s
+        assert bumped - base == pytest.approx(16 * 25.0)
 
     def test_rit_metadata_exposes_callable(self):
         from pineuro.tasks.task_registry import get_task_metadata

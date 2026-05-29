@@ -14,17 +14,17 @@ Protocol (per Shreiner et al., 2025)
 - 2 runs per session, 4 trials each
 - Pass → run assignment is shuffled deterministically per participant,
   and memories within the chosen pass are shuffled before presentation.
-- Each trial (~145-165s):
+- Each trial (~120-125s):
     1. Memory prompt + keyword (5s)
     2. Reflection: "Think about this memory in detail" (25s)
     3. Rumination prompt (30s)
-    4. Sadness rating 1-5 (up to 15s)
-    5. Focus-on-feelings rating 1-5 (up to 15s)
+    4. Sadness rating 1-5 (up to 5s)
+    5. Focus-on-feelings rating 1-5 (up to 5s)
     6. Rest/fixation (10-15s jittered)
     7. Distraction prompt (30s)
-    8. Sadness rating 1-5 (up to 15s)
-    9. Focus-on-feelings rating 1-5 (up to 15s)
-- Total run duration: ~10-11 minutes
+    8. Sadness rating 1-5 (up to 5s)
+    9. Focus-on-feelings rating 1-5 (up to 5s)
+- Total run duration: ~8 minutes
 
 Keywords File
 -------------
@@ -107,7 +107,7 @@ def _rit_max_run_seconds(params: dict[str, Any]) -> float:
     memory = float(params.get("memory_display_duration", 5.0))
     reflection = float(params.get("reflection_duration", 25.0))
     block = float(params.get("rumination_duration", 30.0))  # rumination + distraction
-    rating_to = float(params.get("rating_timeout", 15.0))
+    rating_to = float(params.get("rating_timeout", 5.0))
     rest_max = float(params.get("rest_max", 15.0))
 
     per_trial = memory + reflection + 2 * block + 4 * rating_to + rest_max
@@ -165,7 +165,7 @@ RIT_METADATA = TaskMetadata(
             key="rating_timeout",
             label="Rating Timeout (s)",
             type="float",
-            default=15.0,
+            default=5.0,
             min_value=5.0,
             max_value=30.0,
             hint="Maximum time for each rating response",
@@ -199,14 +199,14 @@ RIT_METADATA = TaskMetadata(
             key="right_key",
             label="Right Key",
             type="str",
-            default="3",
+            default="2",
             hint="Key for moving rating right",
         ),
         TaskParameter(
             key="confirm_key",
             label="Confirm Key",
             type="str",
-            default="2",
+            default="0",
             hint="Key for confirming rating selection",
         ),
         TaskParameter(
@@ -257,7 +257,7 @@ class RITTask(BaseLocalizerTask):
     rumination_duration : float
         Duration for rumination and distraction prompts (default: 30.0s).
     rating_timeout : float
-        Maximum time for each rating (default: 15.0s).
+        Maximum time for each rating (default: 5.0s).
     rest_min : float
         Minimum rest jitter duration (default: 10.0s).
     rest_max : float
@@ -284,12 +284,12 @@ class RITTask(BaseLocalizerTask):
         memory_display_duration: float = 5.0,
         reflection_duration: float = 25.0,
         rumination_duration: float = 30.0,
-        rating_timeout: float = 15.0,
+        rating_timeout: float = 5.0,
         rest_min: float = 10.0,
         rest_max: float = 15.0,
         left_key: str = "1",
-        right_key: str = "3",
-        confirm_key: str = "2",
+        right_key: str = "2",
+        confirm_key: str = "0",
         n_trials_per_run: int = 4,
         keywords_file: Union[str, Path] | None = None,
         simulator=None,
