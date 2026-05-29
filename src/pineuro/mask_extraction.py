@@ -3812,7 +3812,7 @@ def run_mask_extraction_from_config(
 
 
 # =============================================================================
-# SECTION 3B: MANUAL ROI IMPORT
+# SECTION 3D: MANUAL ROI IMPORT
 # =============================================================================
 # For researchers with pre-existing NIfTI masks (FreeSurfer, fMRIPrep,
 # hand-drawn ROIs, standard atlases). Bypasses the ICA/GLM extraction pipeline
