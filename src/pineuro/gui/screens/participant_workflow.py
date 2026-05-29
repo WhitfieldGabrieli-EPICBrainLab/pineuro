@@ -7407,11 +7407,12 @@ class ParticipantWorkflowScreen:
 
     def _on_stop_clicked(self):
         """Handle stop button click during execution - shows confirmation dialog."""
-        # Check if this is a feedback/transfer step (which has post-run questions)
-        step_id = self._current_step_id or ""
-        is_feedback_step = step_id.startswith("transfer_") or step_id.startswith("feedback_")
+        # Only offer to show post-run questions if the live task would actually
+        # display some for this run (most tasks/runs have none) — see
+        # PipelineRunner.current_task_has_post_run_questions().
+        has_questions = self.pipeline_runner is not None and self.pipeline_runner.current_task_has_post_run_questions()
 
-        # Checkbox for showing questions (only relevant for feedback steps)
+        # Checkbox for showing questions (only added when the task has them)
         show_questions_checkbox = ft.Checkbox(
             label="Show post-run questions to participant",
             value=False,  # Default to not showing questions on stop
@@ -7419,7 +7420,7 @@ class ParticipantWorkflowScreen:
 
         def confirm_stop(e):
             self.page.pop_dialog()
-            show_questions = bool(show_questions_checkbox.value) if is_feedback_step else False
+            show_questions = bool(show_questions_checkbox.value) if has_questions else False
 
             # Stop feedback monitoring
             self._stop_feedback_monitoring()
@@ -7444,7 +7445,7 @@ class ParticipantWorkflowScreen:
             ),
         ]
 
-        if is_feedback_step:
+        if has_questions:
             content_items.extend(
                 [
                     ft.Divider(),

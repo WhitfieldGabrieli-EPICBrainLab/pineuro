@@ -62,6 +62,7 @@ from .task_base import TaskBase
 
 if TYPE_CHECKING:
     from .state import TaskState
+    from .task_registry import PostRunQuestion
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -425,6 +426,39 @@ class BaseTask(TaskBase):
             # Small sleep to avoid busy-waiting
             core.wait(0.01)
 
+    def _eligible_post_run_questions(self) -> list["PostRunQuestion"]:
+        """Post-run questions whose condition passes for the current run context.
+
+        Mirrors the per-question gating documented on
+        :class:`~pineuro.tasks.task_registry.PostRunQuestion`:
+        - "always": always shown
+        - "feedback_only": only when ``feedback_mode`` (feedback run, not transfer)
+        - "last_feedback_only": only when ``feedback_mode`` and this is the final
+          feedback run (``_task_state.is_last_feedback_run``)
+
+        Reads only init-time / run-stable state (no PsychoPy window), so it is safe
+        to call off the task thread — e.g. from the GUI to decide whether a manual
+        stop should offer to show questions.
+        """
+        metadata = self.get_task_metadata()
+        if not metadata or not metadata.post_run_questions:
+            return []
+
+        is_last = self._task_state is not None and getattr(self._task_state, "is_last_feedback_run", False)
+
+        eligible = []
+        for question in metadata.post_run_questions:
+            if question.condition == "feedback_only" and not self.feedback_mode:
+                continue
+            if question.condition == "last_feedback_only" and not (self.feedback_mode and is_last):
+                continue
+            eligible.append(question)
+        return eligible
+
+    def has_pending_post_run_questions(self) -> bool:
+        """Whether any post-run question would be shown for the current run."""
+        return bool(self._eligible_post_run_questions())
+
     def _show_post_run_questions(
         self,
         left_button: str = "1",
@@ -433,14 +467,8 @@ class BaseTask(TaskBase):
     ) -> list[dict[str, Any]]:
         """Display post-run questions defined in task metadata.
 
-        Called automatically by cleanup(). Tasks with no questions defined
-        in metadata will skip this (no-op).
-
-        Reads questions from TaskMetadata.post_run_questions and displays
-        each one based on its condition:
-        - "always": Show for all runs
-        - "feedback_only": Only show when feedback_mode is True
-        - "last_feedback_only": Only show on final feedback run
+        Called automatically by cleanup(). Tasks with no eligible questions for
+        the current run (see :meth:`_eligible_post_run_questions`) skip this (no-op).
 
         Parameters
         ----------
@@ -456,9 +484,9 @@ class BaseTask(TaskBase):
         list of dict
             List of {"question": str, "response": int} for each answered question
         """
-        metadata = self.get_task_metadata()
-        if not metadata or not metadata.post_run_questions:
-            return []  # No-op for tasks without questions
+        questions = self._eligible_post_run_questions()
+        if not questions:
+            return []  # No-op for tasks without (eligible) questions
 
         # Check if window exists
         if not hasattr(self, "win") or self.win is None:
@@ -467,19 +495,7 @@ class BaseTask(TaskBase):
 
         responses = []
 
-        for question in metadata.post_run_questions:
-            # Check condition
-            if question.condition == "feedback_only":
-                if not self.feedback_mode:
-                    continue
-
-            elif question.condition == "last_feedback_only":
-                is_last = False
-                if self._task_state is not None:
-                    is_last = getattr(self._task_state, "is_last_feedback_run", False)
-                if not (self.feedback_mode and is_last):
-                    continue
-
+        for question in questions:
             # Display slider and collect response
             response = self._run_slider(
                 question_text=question.text,

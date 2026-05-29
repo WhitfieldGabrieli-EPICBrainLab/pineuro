@@ -346,6 +346,25 @@ class PipelineRunner:
 
         return attempt
 
+    def current_task_has_post_run_questions(self) -> bool:
+        """Whether the in-flight feedback task would show post-run questions if stopped now.
+
+        Queries the live task so the answer matches exactly what the stop path
+        would display (its ``feedback_mode`` / ``_task_state`` are unchanged by a
+        stop, since stopped runs aren't recorded as completed). Returns False when
+        no feedback task is running (e.g. localizer steps), so the Stop dialog
+        omits the questions checkbox.
+        """
+        with self._task_lock:
+            task = self._current_feedback_task
+        if task is None:
+            return False
+        try:
+            return bool(task.has_pending_post_run_questions())
+        except Exception:  # never block the stop dialog on a metadata/state hiccup
+            logger.exception("Failed to check for pending post-run questions")
+            return False
+
     def _run_step_impl(self, step_id: str) -> None:
         """Implementation of step execution (runs in background thread).
 

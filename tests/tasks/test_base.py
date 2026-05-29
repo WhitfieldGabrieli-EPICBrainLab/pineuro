@@ -216,3 +216,88 @@ class TestOnTrigger:
     def test_forwards_to_coordinator(self, base_task):
         base_task._on_trigger()
         base_task.coordinator.send_trigger.assert_called_once()
+
+
+# =============================================================================
+# Post-run question eligibility
+# =============================================================================
+
+
+class TestEligiblePostRunQuestions:
+    """`_eligible_post_run_questions` / `has_pending_post_run_questions` mirror the
+    per-question `condition` gating that decides which questions are displayed —
+    and which drive whether a manual stop offers to show them.
+    """
+
+    def _task(self, mock_coordinator, *, questions, feedback_mode=True, is_last=False):
+        from types import SimpleNamespace
+
+        from pineuro.tasks.base import BaseTask
+
+        class _StubTask(BaseTask):
+            def setup(self):  # pragma: no cover
+                pass
+
+            def update(self, data):  # pragma: no cover
+                pass
+
+        task = _StubTask(coordinator=mock_coordinator(), feedback_mode=feedback_mode)
+        # `questions=None` simulates an unregistered task (no metadata).
+        metadata = None if questions is None else SimpleNamespace(post_run_questions=questions)
+        task.get_task_metadata = lambda: metadata
+        task._task_state = SimpleNamespace(is_last_feedback_run=is_last)
+        return task
+
+    def _q(self, condition):
+        from pineuro.tasks.task_registry import PostRunQuestion
+
+        return PostRunQuestion(text=f"q-{condition}", condition=condition)
+
+    def test_no_metadata(self, mock_coordinator):
+        task = self._task(mock_coordinator, questions=None)
+        assert task._eligible_post_run_questions() == []
+        assert task.has_pending_post_run_questions() is False
+
+    def test_empty_question_list(self, mock_coordinator):
+        task = self._task(mock_coordinator, questions=[])
+        assert task._eligible_post_run_questions() == []
+        assert task.has_pending_post_run_questions() is False
+
+    @pytest.mark.parametrize("feedback_mode", [True, False])
+    @pytest.mark.parametrize("is_last", [True, False])
+    def test_always_shown_regardless_of_context(self, mock_coordinator, feedback_mode, is_last):
+        q = self._q("always")
+        task = self._task(mock_coordinator, questions=[q], feedback_mode=feedback_mode, is_last=is_last)
+        assert task._eligible_post_run_questions() == [q]
+        assert task.has_pending_post_run_questions() is True
+
+    def test_feedback_only_shown_on_feedback_run(self, mock_coordinator):
+        q = self._q("feedback_only")
+        task = self._task(mock_coordinator, questions=[q], feedback_mode=True)
+        assert task._eligible_post_run_questions() == [q]
+
+    def test_feedback_only_hidden_on_transfer_run(self, mock_coordinator):
+        q = self._q("feedback_only")
+        task = self._task(mock_coordinator, questions=[q], feedback_mode=False)
+        assert task._eligible_post_run_questions() == []
+        assert task.has_pending_post_run_questions() is False
+
+    @pytest.mark.parametrize(
+        ("feedback_mode", "is_last", "expected"),
+        [(True, True, True), (True, False, False), (False, True, False), (False, False, False)],
+    )
+    def test_last_feedback_only_needs_feedback_and_last(self, mock_coordinator, feedback_mode, is_last, expected):
+        q = self._q("last_feedback_only")
+        task = self._task(mock_coordinator, questions=[q], feedback_mode=feedback_mode, is_last=is_last)
+        assert task.has_pending_post_run_questions() is expected
+
+    def test_mixed_list_filters_to_eligible_subset(self, mock_coordinator):
+        always, fb_only, last_only = self._q("always"), self._q("feedback_only"), self._q("last_feedback_only")
+        # Feedback run that is NOT the last: always + feedback_only, but not last_feedback_only.
+        task = self._task(
+            mock_coordinator,
+            questions=[always, fb_only, last_only],
+            feedback_mode=True,
+            is_last=False,
+        )
+        assert task._eligible_post_run_questions() == [always, fb_only]
