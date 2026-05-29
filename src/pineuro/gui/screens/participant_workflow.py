@@ -360,23 +360,6 @@ class ParticipantWorkflowScreen:
             self._initial_qc_approved = approved
             self.step_statuses["mask_approval"] = StepStatus.COMPLETE if approved else StepStatus.PENDING
 
-    def _has_custom_mask_selections(self) -> bool:
-        """Check if user has customized mask selections.
-
-        Returns:
-            True if any mask was manually modified from the auto-selected ICA component
-        """
-        from pineuro.mask_extraction import load_mask_selections
-
-        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
-        masks_dir = base_dir / "mask_extraction" / "03_masks"
-
-        selections = load_mask_selections(masks_dir)
-        if not selections:
-            return False
-
-        return any(sel.selection_reason in ("manual", "yeo_fallback") for sel in selections.values())
-
     def _check_reference_available(self) -> tuple[bool, str]:
         """Check if a reference image is available for MNI registration.
 
@@ -3010,7 +2993,6 @@ class ParticipantWorkflowScreen:
                                         icon=ft.Icons.TUNE,
                                         on_click=lambda e: self._show_mask_review_dialog(),
                                     ),
-                                    ft.Text("(MNI Atlas)", size=12, color=ft.Colors.GREY_600),
                                     ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
                                 ],
                                 spacing=5,
@@ -3210,7 +3192,6 @@ class ParticipantWorkflowScreen:
                                         icon=ft.Icons.TUNE,
                                         on_click=lambda e: self._show_mask_review_dialog(),
                                     ),
-                                    ft.Text("(Manual import)", size=12, color=ft.Colors.GREY_600),
                                     ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
                                 ],
                                 spacing=5,
@@ -3255,19 +3236,6 @@ class ParticipantWorkflowScreen:
             if all_extraction_complete:
                 if self._initial_qc_approved:
                     # Approved - show "Review Masks" button with checkmark
-                    masks_customized = self._has_custom_mask_selections()
-                    _cfg = self.study_config.session_config
-                    localizer_type = _cfg.get("mask", {}).get("localizer_type", "rest")
-                    _loc0 = _cfg.get("localizers", [{}])[0] if _cfg.get("localizers") else {}
-                    if _loc0.get("type") == "manual":
-                        method_label = "Manual"
-                    elif localizer_type == "task":
-                        method_label = "GLM"
-                    else:
-                        method_label = "ICA"
-                    status_text = "Customized" if masks_customized else method_label
-                    status_color = ft.Colors.BLUE if masks_customized else ft.Colors.GREY_600
-
                     controls.append(
                         ft.Container(
                             content=ft.Row(
@@ -3277,7 +3245,6 @@ class ParticipantWorkflowScreen:
                                         icon=ft.Icons.TUNE,
                                         on_click=lambda e: self._show_mask_review_dialog(),
                                     ),
-                                    ft.Text(f"({status_text})", size=12, color=status_color),
                                     ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
                                 ],
                                 spacing=5,
