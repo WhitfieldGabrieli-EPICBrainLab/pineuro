@@ -1279,7 +1279,7 @@ def get_localizer_run_info(collection_dir: Path, task: str, run: int) -> dict[st
     collection_dir : Path
         Collection directory to scan
     task : str
-        Task name (e.g., 'rest', 'reference', 'self_other')
+        Task name (e.g., 'rest', 'reference', 'selfother')
     run : int
         Run number
 

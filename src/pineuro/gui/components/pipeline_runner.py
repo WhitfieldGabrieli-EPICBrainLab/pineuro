@@ -739,7 +739,7 @@ class PipelineRunner:
 
         Args:
             run_num: Run number (1-based)
-            task_id: Task identifier (e.g., "rest", "self_other")
+            task_id: Task identifier (e.g., "rest", "selfother")
             watch_dir: Directory to watch for first DICOM arrival (auto-trigger)
             attempt: Attempt number (for retry handling)
             simulator: VolumeSimulator instance (optional, for offline testing)
@@ -855,7 +855,7 @@ class PipelineRunner:
         Parameters
         ----------
         task_name : str
-            Task name (e.g., 'rest', 'self_other')
+            Task name (e.g., 'rest', 'selfother')
         runs_to_process : list[int]
             List of run numbers to process
         rest_volumes : list[int]

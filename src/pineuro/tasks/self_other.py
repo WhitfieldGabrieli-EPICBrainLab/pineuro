@@ -59,7 +59,7 @@ DEFAULT_BLOCK_ORDER = "voice,voice,rest,voice,voice,rest,voice,rest,voice,voice,
 
 
 SELF_OTHER_METADATA = TaskMetadata(
-    task_id="self_other",
+    task_id="selfother",
     display_name="Self/Other Voice Localizer",
     description="Block design: self-voice vs other-voice sentences for STG ROI definition",
     roles={"localizer"},
@@ -158,7 +158,7 @@ class SelfOtherTask(BaseLocalizerTask):
         first volume to arrive.
     """
 
-    task_id = "self_other"
+    task_id = "selfother"
 
     def __init__(
         self,

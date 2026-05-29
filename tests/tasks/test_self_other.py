@@ -9,12 +9,12 @@ class TestSelfOtherMetadata:
     def test_registered(self):
         from pineuro.tasks.task_registry import list_available_tasks
 
-        assert "self_other" in list_available_tasks()
+        assert "selfother" in list_available_tasks()
 
     def test_localizer_role(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("self_other")
+        meta = get_task_metadata("selfother")
         assert "localizer" in meta.roles
 
 

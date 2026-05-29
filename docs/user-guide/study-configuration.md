@@ -26,7 +26,7 @@ Configure acquisition parameters for each scan type:
 - **TR** — Repetition time in seconds
 - **Volumes** — Number of volumes per localizer run
 - **Runs** — Number of localizer runs (typically 1-2)
-- **Task Type** — `rest` (resting-state), `fixation` (fixation cross), or a task-based localizer (e.g., `self_other`)
+- **Task Type** — `rest` (resting-state), `fixation` (fixation cross), or a task-based localizer (e.g., `selfother`)
 
 **Feedback**
 - **TR** — Repetition time for feedback runs
@@ -69,7 +69,7 @@ See [Feedback Tasks](feedback-tasks.md) for full details.
 
 ### Task
 
-- **Task Type** — Any registered task (`gauge`, `ball`, `thermometer`, `rit_triggered_ball`, etc. — see [Tasks](tasks.md))
+- **Task Type** — Any registered task (`gauge`, `ball`, `thermometer`, `rittriggeredball`, etc. — see [Tasks](tasks.md))
 - **Max Feedback Runs** — Number of feedback runs per session
 - **Transfer Runs** — Enable/disable practice runs without real feedback
 - **Task-Specific Parameters** — Dynamically populated based on selected task type

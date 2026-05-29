@@ -294,7 +294,7 @@ class TestResolveMaskNamesForRun:
         from pineuro.tasks.task_registry import get_task_metadata
 
         cfg = self._config(tmp_path, ["RIT"])
-        meta = get_task_metadata("rit_triggered_ball")
+        meta = get_task_metadata("rittriggeredball")
         names = _resolve_mask_names_for_run(cfg, meta, {"trigger_network": "RIT"})
         assert names == ["RIT"]
 
@@ -303,7 +303,7 @@ class TestResolveMaskNamesForRun:
         from pineuro.tasks.task_registry import get_task_metadata
 
         cfg = self._config(tmp_path, ["RIT", "ContA"])
-        meta = get_task_metadata("rit_triggered_ball")
+        meta = get_task_metadata("rittriggeredball")
         names = _resolve_mask_names_for_run(cfg, meta, {"trigger_network": "RIT", "movement_network": "ContA"})
         assert names == ["RIT", "ContA"]
 
@@ -312,7 +312,7 @@ class TestResolveMaskNamesForRun:
         from pineuro.tasks.task_registry import get_task_metadata
 
         cfg = self._config(tmp_path, ["RIT", "ContA", "DefaultA"])
-        meta = get_task_metadata("rit_triggered_ball")
+        meta = get_task_metadata("rittriggeredball")
         names = _resolve_mask_names_for_run(
             cfg, meta, {"trigger_network": "RIT", "top_network": "ContA", "bottom_network": "DefaultA"}
         )
@@ -325,7 +325,7 @@ class TestResolveMaskNamesForRun:
         from pineuro.tasks.task_registry import get_task_metadata
 
         cfg = self._config(tmp_path, ["RIT", "ContA", "DefaultA"])
-        meta = get_task_metadata("rit_triggered_ball")
+        meta = get_task_metadata("rittriggeredball")
         names = _resolve_mask_names_for_run(cfg, meta, {"trigger_network": "RIT"})
         assert names == ["RIT"]
 

@@ -51,7 +51,7 @@ def scan_collection_attempts(
     collection_dir : Path
         Collection directory to scan
     task : str
-        Task prefix (e.g., 'task-rest', 'task-self_other')
+        Task prefix (e.g., 'task-rest', 'task-selfother')
     run : int
         Run number
     expected_volumes : int

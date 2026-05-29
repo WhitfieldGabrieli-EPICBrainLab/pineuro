@@ -6,13 +6,13 @@ class TestRITTriggeredBallMetadata:
         from pineuro.tasks.task_registry import list_available_tasks
 
         tasks = list_available_tasks()
-        assert "rit_triggered_ball" in tasks
+        assert "rittriggeredball" in tasks
 
     def test_metadata_fields(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rit_triggered_ball")
-        assert meta.task_id == "rit_triggered_ball"
+        meta = get_task_metadata("rittriggeredball")
+        assert meta.task_id == "rittriggeredball"
         # Only the trigger/movement network is mandatory; movement override and
         # the dual-mode networks are optional roles.
         assert meta.n_networks == 1
@@ -20,7 +20,7 @@ class TestRITTriggeredBallMetadata:
     def test_has_network_roles(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rit_triggered_ball")
+        meta = get_task_metadata("rittriggeredball")
         roles = {r.key: r for r in meta.network_roles}
         assert "trigger_network" in roles
         assert "movement_network" in roles
@@ -39,7 +39,7 @@ class TestRITTriggeredBallMetadata:
     def test_task_parameters_defined(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rit_triggered_ball")
+        meta = get_task_metadata("rittriggeredball")
         param_keys = {p.key for p in meta.parameters}
         assert "movement_mode" in param_keys
         assert "movement_direction" in param_keys
@@ -53,7 +53,7 @@ class TestRITTriggeredBallMetadata:
     def test_movement_param_defaults(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rit_triggered_ball")
+        meta = get_task_metadata("rittriggeredball")
         params = {p.key: p for p in meta.parameters}
         assert params["movement_mode"].default == "single"
         assert params["movement_mode"].choices == ["single", "dual"]

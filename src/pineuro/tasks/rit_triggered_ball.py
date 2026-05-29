@@ -181,7 +181,7 @@ class RITTriggeredBallTask(BaseTask):
         Monitor position for task window.
     """
 
-    task_id = "rit_triggered_ball"
+    task_id = "rittriggeredball"
 
     def __init__(
         self,
@@ -1107,7 +1107,7 @@ class RITTriggeredBallTask(BaseTask):
 # ============================================================================
 
 RIT_TRIGGERED_BALL_METADATA = TaskMetadata(
-    task_id="rit_triggered_ball",
+    task_id="rittriggeredball",
     display_name="RIT Triggered Ball",
     description=(
         "Monitors rumination network activation and triggers ball feedback "
@@ -1276,4 +1276,4 @@ RIT_TRIGGERED_BALL_METADATA = TaskMetadata(
 )
 
 register_task(RIT_TRIGGERED_BALL_METADATA)
-register_task_class("rit_triggered_ball", RITTriggeredBallTask)
+register_task_class("rittriggeredball", RITTriggeredBallTask)

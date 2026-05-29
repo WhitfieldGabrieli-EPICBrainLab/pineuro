@@ -135,7 +135,7 @@ class RITExperienceSamplingTask(BaseTask):
         Monitor position for task window.
     """
 
-    task_id = "rit_experience_sampling"
+    task_id = "ritexperiencesampling"
 
     def __init__(
         self,
@@ -940,7 +940,7 @@ class RITExperienceSamplingTask(BaseTask):
 # ============================================================================
 
 RIT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
-    task_id="rit_experience_sampling",
+    task_id="ritexperiencesampling",
     display_name="RIT Experience Sampling",
     description=(
         "Triggered experience sampling: monitors rumination network activation "
@@ -1055,4 +1055,4 @@ RIT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
 )
 
 register_task(RIT_EXPERIENCE_SAMPLING_METADATA)
-register_task_class("rit_experience_sampling", RITExperienceSamplingTask)
+register_task_class("ritexperiencesampling", RITExperienceSamplingTask)

@@ -11,13 +11,13 @@ class TestRITExperienceSamplingRegistration:
         from pineuro.tasks.task_registry import list_available_tasks
 
         tasks = list_available_tasks(role="feedback")
-        assert "rit_experience_sampling" in tasks
+        assert "ritexperiencesampling" in tasks
 
     def test_task_metadata(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rit_experience_sampling")
-        assert meta.task_id == "rit_experience_sampling"
+        meta = get_task_metadata("ritexperiencesampling")
+        assert meta.task_id == "ritexperiencesampling"
         assert meta.display_name == "RIT Experience Sampling"
         assert meta.n_networks == 1
         assert meta.design_type == "nuisance_only"
@@ -26,7 +26,7 @@ class TestRITExperienceSamplingRegistration:
     def test_task_parameters_defined(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
-        meta = get_task_metadata("rit_experience_sampling")
+        meta = get_task_metadata("ritexperiencesampling")
         param_keys = {p.key for p in meta.parameters}
         assert "activation_contrast" in param_keys
         assert "consecutive_volumes" in param_keys
@@ -40,12 +40,12 @@ class TestRITExperienceSamplingRegistration:
         from pineuro.tasks.factory import get_registered_task_ids
 
         ids = get_registered_task_ids()
-        assert "rit_experience_sampling" in ids
+        assert "ritexperiencesampling" in ids
 
     def test_import_from_tasks_package(self):
         from pineuro.tasks import RITExperienceSamplingTask
 
-        assert RITExperienceSamplingTask.task_id == "rit_experience_sampling"
+        assert RITExperienceSamplingTask.task_id == "ritexperiencesampling"
 
 
 # =============================================================================

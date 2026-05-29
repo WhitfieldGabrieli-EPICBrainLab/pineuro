@@ -306,9 +306,8 @@ class QCReportManager:
             "combined": lambda: self.get_combined_qc(),
         }
 
-        # Handle feedback/transfer runs: "{task_entity}_run_{run}". The entity is the
-        # real task name and may itself contain underscores (e.g. "self_other"), so
-        # split on the final "_run_" rather than the first underscore.
+        # Handle feedback/transfer runs: "{task_entity}_run_{run}". Split on the
+        # final "_run_" so the trailing run index is peeled off the task entity.
         if report_type in path_getters:
             path = path_getters[report_type]()
         elif "_run_" in report_type:

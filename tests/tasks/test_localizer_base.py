@@ -111,7 +111,7 @@ class TestTaskStateRecording:
     def test_stateless_localizer_still_writes_run_ledger(self, localizer, tmp_path):
         # A localizer that declares no task_state_fields and records no snapshot
         # still gets a task_state.json with an empty task_state dict but a
-        # populated completed_runs ledger (the rest/self_other case).
+        # populated completed_runs ledger (the rest/selfother case).
         from pineuro.tasks.state import TaskState
 
         state_dir = tmp_path / "task_state_stub_localizer"

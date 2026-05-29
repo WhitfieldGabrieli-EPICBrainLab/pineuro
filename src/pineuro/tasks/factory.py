@@ -155,7 +155,7 @@ def create_localizer_task(
     Parameters
     ----------
     task_id : str
-        Registered localizer task identifier (e.g., 'self_other')
+        Registered localizer task identifier (e.g., 'selfother')
     output_dir : str or Path
         Directory for events TSV output
     participant_id : str
