@@ -6,7 +6,7 @@ Tasks are the visual displays shown to participants during neurofeedback. pineur
 
 ### Gauge Task
 
-A brain-o-meter (analog gauge dial) where needle position reflects differential activation between two networks. Designed for the Rockland NFB paradigm with alternating wander/focus blocks.
+A brain-o-meter (analog gauge dial) where needle position reflects differential activation between two networks. Designed for a mind-wandering neurofeedback paradigm with alternating wander/focus blocks.
 
 **Display:** A semicircular gauge with "Focused" and "Wandering" labels. The needle moves based on the difference between focus and wander network activations.
 

@@ -2,12 +2,12 @@
 
 This tutorial walks you through a complete neurofeedback task using pineuro's GUI. You'll preprocess resting-state data, extract participant-specific network masks, and run a simulated real-time neurofeedback task — all without a scanner.
 
-We use the NKI Rockland Sample neurofeedback dataset as example data, but the same workflow applies to any DICOM dataset.
+We use a public resting-state neurofeedback dataset as example data, but the same workflow applies to any DICOM dataset.
 
 ## Prerequisites
 
 - **pineuro installed** — see [Installation](installation.md)
-- **Sample DICOM data** — This tutorial uses DICOMs from the Enhanced NKI Rockland Sample, available through the [INDI data portal](https://fcon_1000.projects.nitrc.org/indi/enhanced/). Each subject should have three scan directories:
+- **Sample DICOM data** — This tutorial uses DICOMs from a public resting-state neurofeedback dataset. Each subject should have three scan directories:
   - `rest_1400/` — Resting-state scan (TR=1.4s, ~404 volumes)
   - `mask/` — Reference scan (TR=2.0s, typically 2-4 volumes)
   - `dmn_tracking_test/` — Neurofeedback run (TR=2.0s, ~412 volumes)
@@ -18,8 +18,8 @@ The source mapping tells pineuro's simulator where to find DICOMs for each parti
 
 ```
 subject	rest1	reference_realtime	feedback_run-01
-sub-rockland01	/path/to/A00059346/rest_1400	/path/to/A00059346/mask	/path/to/A00059346/dmn_tracking_test
-sub-rockland02	/path/to/A00059428/rest_1400	/path/to/A00059428/mask	/path/to/A00059428/dmn_tracking_test
+sub-01	/path/to/A00059346/rest_1400	/path/to/A00059346/mask	/path/to/A00059346/dmn_tracking_test
+sub-02	/path/to/A00059428/rest_1400	/path/to/A00059428/mask	/path/to/A00059428/dmn_tracking_test
 ```
 
 Each row maps a participant ID to the DICOM directories for that subject. Column names must match exactly:
@@ -43,16 +43,16 @@ Click **"+ New Study"** to open the Study Editor. Configure each tab:
 
 ### General Tab
 
-- **Name**: `Rockland NFB`
+- **Name**: `NFB Demo`
 - **Description**: A brief description of your study
 
 ### Scan Tab
 
-Configure the scan parameters to match the Rockland dataset:
+Configure the scan parameters to match the dataset:
 
 - **Localizer**: TR = `1.4`, Volumes = `404`, Runs = `1`, Task Type = `rest`
 - **Feedback**: TR = `2.0`, Volumes = `412`
-- **Reference Scans**: Enable "Real-time Reference" (disable "Initial Reference" — Rockland only has one reference scan)
+- **Reference Scans**: Enable "Real-time Reference" (disable "Initial Reference" — this dataset only has one reference scan)
 - **Simulator**: Check "Enable Simulator", set source mapping to your `subject_mapping.tsv`, Collection Speed = `10.0` (10x real-time)
 - **Feedback Simulator Speed**: `1.0` (real-time) for a realistic test, or `10.0` to run quickly
 
@@ -85,7 +85,7 @@ Click **Save**.
 
 ## Step 3: Run a Participant
 
-From the Study Manager, click your study card and enter the participant ID: `sub-rockland01`. Click **Start** to open the Participant Workflow.
+From the Study Manager, click your study card and enter the participant ID: `sub-01`. Click **Start** to open the Participant Workflow.
 
 The pipeline runs in sequential phases. Click each step to execute it:
 
@@ -134,10 +134,10 @@ At TR=2.0 and 412 volumes, a real-time run takes about 14 minutes. Set the feedb
 
 ## Step 4: Inspect Outputs
 
-After the session completes, the output directory for `sub-rockland01` contains:
+After the session completes, the output directory for `sub-01` contains:
 
 ```
-data/sub-rockland01/
+data/sub-01/
 ├── collection/                          # Raw collected DICOMs
 │   ├── task-rest_acq-01_run-01/         # Resting-state DICOMs
 │   ├── task-reference_acq-01_run-02/     # Reference scan DICOMs
@@ -147,20 +147,20 @@ data/sub-rockland01/
 │   ├── 01_nifti/                        # Converted NIfTI files
 │   ├── 02_motion_correction/            # Motion-corrected data
 │   ├── 03_brain_extraction/             # Brain mask + mean image
-│   ├── sub-rockland01_task-rest_preproc.nii.gz       # Final preprocessed 4D
-│   ├── sub-rockland01_task-rest_preproc_mask.nii.gz  # Brain mask
-│   ├── sub-rockland01_task-rest_boldref.nii.gz       # BOLD reference
+│   ├── sub-01_task-rest_preproc.nii.gz       # Final preprocessed 4D
+│   ├── sub-01_task-rest_preproc_mask.nii.gz  # Brain mask
+│   ├── sub-01_task-rest_boldref.nii.gz       # BOLD reference
 │   └── qc/
-│       └── sub-rockland01_task-rest_preprocessing_qc.html
+│       └── sub-01_task-rest_preprocessing_qc.html
 │
 ├── mask_extraction/
 │   ├── 01_ica/                          # ICA components
 │   ├── 02_mnireg/                       # MNI registration transforms + Yeo atlas in subject space
 │   ├── 03_masks/                        # Network masks
-│   │   ├── sub-rockland01_Cont.nii.gz         # Control network (full)
-│   │   ├── sub-rockland01_Cont_thr.nii.gz     # Control network (thresholded)
-│   │   ├── sub-rockland01_Default.nii.gz      # DMN (full)
-│   │   ├── sub-rockland01_Default_thr.nii.gz  # DMN (thresholded)
+│   │   ├── sub-01_Cont.nii.gz         # Control network (full)
+│   │   ├── sub-01_Cont_thr.nii.gz     # Control network (thresholded)
+│   │   ├── sub-01_Default.nii.gz      # DMN (full)
+│   │   ├── sub-01_Default_thr.nii.gz  # DMN (thresholded)
 │   │   └── mask_selections.json               # ICA component → network mapping
 │   └── 05_tissue/                       # WM and CSF masks for nuisance regression
 │
@@ -169,16 +169,16 @@ data/sub-rockland01/
 │   │   ├── masks/                       # Network masks aligned to feedback task
 │   │   └── xfm/                         # Registration transforms
 │   └── 02_feedback_output/
-│       ├── sub-rockland01_ses-01_task-ball_run-01_attempt-01_feedbacklog.tsv   # Per-volume activations
-│       ├── sub-rockland01_ses-01_task-ball_run-01_attempt-01_design.tsv        # GLM design matrix
-│       ├── sub-rockland01_ses-01_task-ball_run-01_attempt-01_psychopylog.tsv   # Task display state
-│       ├── sub-rockland01_ses-01_task-ball_run-01_attempt-01_events.tsv        # Block events
+│       ├── sub-01_ses-01_task-ball_run-01_attempt-01_feedbacklog.tsv   # Per-volume activations
+│       ├── sub-01_ses-01_task-ball_run-01_attempt-01_design.tsv        # GLM design matrix
+│       ├── sub-01_ses-01_task-ball_run-01_attempt-01_psychopylog.tsv   # Task display state
+│       ├── sub-01_ses-01_task-ball_run-01_attempt-01_events.tsv        # Block events
 │       ├── task_state.json                                                   # Task state
 │       └── qc/
-│           └── sub-rockland01_ses-01_task-ball_run-01_attempt-01_feedback_qc.html
+│           └── sub-01_ses-01_task-ball_run-01_attempt-01_feedback_qc.html
 │
 ├── qc/                                  # Master QC directory
-│   ├── sub-rockland01_mask_extraction_qc.html  # Mask QC with overlay images
+│   ├── sub-01_mask_extraction_qc.html  # Mask QC with overlay images
 │   └── overlays/                        # Mask overlay PNGs (subject, reference, alternatives)
 │
 └── logs/                                # Session logs
@@ -204,7 +204,7 @@ data/sub-rockland01/
 
 ## Step 5: Next Steps
 
-- **Run more participants** — Enter a different participant ID (e.g., `sub-rockland02`) and run the same pipeline. The source mapping automatically selects the correct DICOMs.
+- **Run more participants** — Enter a different participant ID (e.g., `sub-02`) and run the same pipeline. The source mapping automatically selects the correct DICOMs.
 - **Adjust parameters** — Edit the study to change ICA components, threshold values, or task settings. Re-run with `overwrite=False` to skip completed steps.
 - **Multi-session studies** — Enable multi-session mode in the study editor to reuse masks across sessions with reference scan coregistration.
 - **Sham conditions** — Enable sham mode to deliver alternative mask feedback or replay data for control participants.
