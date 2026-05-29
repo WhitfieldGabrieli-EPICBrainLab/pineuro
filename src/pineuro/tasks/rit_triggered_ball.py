@@ -18,11 +18,21 @@ Task Flow (per run)
    d. Return to monitoring
 5. Save BIDS events TSV (includes per-TR activation rows)
 
-Network Setup (3 networks)
---------------------------
-- mask_names[0]: Trigger network (e.g. RIT) — monitored for threshold/trend
-- mask_names[1]: Top ball network (e.g. ContA) — ball moves up when more active
-- mask_names[2]: Bottom ball network (e.g. DefaultA) — ball moves down when more active
+Network Setup
+-------------
+mask_names[0] is always the trigger network (e.g. the rumination network)
+monitored for threshold/trend. Ball movement depends on ``movement_mode``:
+
+- ``single`` (default): one network's signed activation drives the ball.
+  It defaults to the trigger network (so the main use case needs only one
+  mask) but can be overridden by assigning the ``movement_network`` role.
+  ``movement_direction`` chooses the sign mapping: ``positive_down``
+  (default) sends the ball down when activation is positive (more
+  rumination) and up when negative (less rumination); ``positive_up`` flips
+  it.
+- ``dual``: two networks drive the ball by their activation difference —
+  mask_names[1] (top, ball up when more active) minus mask_names[2]
+  (bottom, ball down when more active). Requires 3 masks.
 
 Trigger Conditions (all must be met simultaneously)
 ---------------------------------------------------
@@ -126,7 +136,18 @@ class RITTriggeredBallTask(BaseTask):
     coordinator : NeurofeedbackCoordinator
         Coordinator providing activation data.
     mask_names : list of str, optional
-        Names of masks. Must have 3 entries: [trigger, top_ball, bottom_ball].
+        Ordered mask names by role. ``mask_names[0]`` is the trigger network
+        (always required). In ``single`` movement mode an optional
+        ``mask_names[1]`` overrides the movement network (otherwise the
+        trigger network drives the ball). In ``dual`` mode entries 1 and 2 are
+        the top/bottom ball networks (3 masks required).
+    movement_mode : str
+        ``"single"`` (default) drives the ball from one network's signed
+        activation; ``"dual"`` drives it from the difference of two networks.
+    movement_direction : str
+        Single mode only. ``"positive_down"`` (default) moves the ball down
+        when activation is positive (more rumination) and up when negative;
+        ``"positive_up"`` flips it. Ignored in dual mode.
     activation_contrast : str
         ``"positive"`` triggers when activation > 0 (above baseline),
         ``"negative"`` triggers when activation < 0 (below baseline).
@@ -166,6 +187,8 @@ class RITTriggeredBallTask(BaseTask):
         self,
         coordinator,
         mask_names: list[str] | None = None,
+        movement_mode: str = "single",
+        movement_direction: str = "positive_down",
         activation_contrast: str = "positive",
         consecutive_volumes: int = 3,
         activation_trend: str = "increasing",
@@ -185,13 +208,19 @@ class RITTriggeredBallTask(BaseTask):
         **kwargs,
     ):
         if mask_names is None:
-            mask_names = coordinator.mask_names[:3]
-        if len(mask_names) < 3:
-            raise ValueError(
-                f"RITTriggeredBallTask requires 3 mask names [trigger, top_ball, bottom_ball], got {len(mask_names)}"
-            )
+            mask_names = coordinator.mask_names[:1]
+        if len(mask_names) < 1:
+            raise ValueError("RITTriggeredBallTask requires at least 1 mask name (trigger network)")
         if trend_method not in ("strict", "slope"):
             raise ValueError(f"trend_method must be 'strict' or 'slope', got {trend_method!r}")
+        if movement_mode not in ("single", "dual"):
+            raise ValueError(f"movement_mode must be 'single' or 'dual', got {movement_mode!r}")
+        if movement_direction not in ("positive_down", "positive_up"):
+            raise ValueError(f"movement_direction must be 'positive_down' or 'positive_up', got {movement_direction!r}")
+        if movement_mode == "dual" and len(mask_names) < 3:
+            raise ValueError(
+                f"dual movement mode requires 3 mask names [trigger, top_ball, bottom_ball], got {len(mask_names)}"
+            )
 
         super().__init__(
             coordinator=coordinator,
@@ -221,8 +250,22 @@ class RITTriggeredBallTask(BaseTask):
         self.circle_shrink_factor = circle_shrink_factor
         self.reset_ball_each_episode = reset_ball_each_episode
 
-        # Ball network names (for dual-network movement)
-        self._ball_mask_names = [mask_names[1], mask_names[2]]
+        # Ball movement configuration
+        self.movement_mode = movement_mode
+        self.movement_direction = movement_direction
+        # positive_down: positive activation -> ball down (negative -> up).
+        self._direction_sign: float = -1.0 if movement_direction == "positive_down" else 1.0
+
+        # Movement network(s). Single mode uses one signed network (defaults to
+        # the trigger network unless a movement override was assigned via the
+        # optional movement_network role). Dual mode uses two networks driven by
+        # their activation difference.
+        if movement_mode == "single":
+            self._movement_mask: str | None = mask_names[1] if len(mask_names) >= 2 else mask_names[0]
+            self._ball_mask_names = [self._movement_mask]
+        else:
+            self._movement_mask = None
+            self._ball_mask_names = [mask_names[1], mask_names[2]]
 
         # Trigger state
         self._trigger_state = TriggerState()
@@ -285,9 +328,13 @@ class RITTriggeredBallTask(BaseTask):
         self._psychopy_log_writer: Any = None
         self._frame_counter: int = 0
 
+        if movement_mode == "single":
+            movement_desc = f"single({self._movement_mask}, {movement_direction})"
+        else:
+            movement_desc = f"dual[{self._ball_mask_names[0]}, {self._ball_mask_names[1]}]"
         logger.info(
             f"RITTriggeredBallTask initialized: trigger={self.mask_name}, "
-            f"ball=[{self._ball_mask_names[0]}, {self._ball_mask_names[1]}], "
+            f"movement={movement_desc}, "
             f"contrast={activation_contrast}, consecutive={consecutive_volumes}, "
             f"trend={activation_trend}, method={trend_method}, "
             f"cooldown={min_prompt_interval}s, "
@@ -306,8 +353,10 @@ class RITTriggeredBallTask(BaseTask):
         super()._update_data(activations, volume, elapsed, is_baseline, is_outlier)
 
         trigger_val = activations.get(self.mask_name, float("nan"))
-        ball_val_1 = activations.get(self._ball_mask_names[0], float("nan"))
-        ball_val_2 = activations.get(self._ball_mask_names[1], float("nan"))
+        ball_val_1 = activations.get(self._ball_mask_names[0], float("nan")) if self._ball_mask_names else float("nan")
+        ball_val_2 = (
+            activations.get(self._ball_mask_names[1], float("nan")) if len(self._ball_mask_names) > 1 else float("nan")
+        )
 
         self._all_activations.append(
             {
@@ -423,10 +472,37 @@ class RITTriggeredBallTask(BaseTask):
     # =========================================================================
 
     def _calculate_ball_movement(self, activations: dict) -> None:
-        """Update movement parameters from dual-network activations.
+        """Update movement parameters from the configured movement signal.
 
-        Called once per new volume during ball episodes.
+        Called once per new volume during ball episodes. In ``single`` mode
+        the ball is driven by one network's signed activation (mirrors the
+        connectivity-mode mapping in ``BallTask``); in ``dual`` mode by the
+        difference between two networks.
         """
+        if self.movement_mode == "single":
+            self._calculate_single_movement(activations)
+        else:
+            self._calculate_dual_movement(activations)
+
+    def _calculate_single_movement(self, activations: dict) -> None:
+        """Single-network movement: magnitude from |z|, direction from sign."""
+        val = activations.get(self._movement_mask, 0.0)
+
+        # Reject outliers
+        if abs(val) > self.pda_outlier_threshold:
+            self._current_is_outlier = True
+            return
+
+        self._current_is_outlier = False
+        self._current_activity = abs(val) / 10.0
+
+        # Direction from signed activation. positive_down (_direction_sign=-1)
+        # sends a positive activation (more rumination) downward; negative up.
+        directed = self._direction_sign * val
+        self._current_direction = 1.0 if directed >= 0 else -1.0
+
+    def _calculate_dual_movement(self, activations: dict) -> None:
+        """Dual-network movement: magnitude from the activation difference."""
         acts = [activations.get(name, 0.0) for name in self._ball_mask_names]
 
         # Reject outliers
@@ -444,7 +520,7 @@ class RITTriggeredBallTask(BaseTask):
         self._current_activity = np.abs(acts[0] - acts[1]) / 10.0
 
         # Direction from dominant network
-        max_idx = np.argmax(acts)
+        max_idx = int(np.argmax(acts))
         self._current_direction = self._network_directions[max_idx]
 
     def _apply_movement(self) -> None:
@@ -479,7 +555,11 @@ class RITTriggeredBallTask(BaseTask):
                 self._episode_hits[i] += 1
                 self._total_hits[i] += 1
 
-                label = self._ball_mask_names[i]
+                label = (
+                    self._ball_mask_names[i]
+                    if i < len(self._ball_mask_names)
+                    else ("up" if self._network_directions[i] > 0 else "down")
+                )
                 logger.info(f"Hit! {label} target (episode: {self._episode_hits[i]}, total: {self._total_hits[i]})")
 
                 # Flash circle white
@@ -894,11 +974,14 @@ class RITTriggeredBallTask(BaseTask):
             ball_y = 0.5 - self._ball_pos[1]
             shapes.append({"type": "circle", "x": 0.5, "y": ball_y, "radius": 0.03, "fill": "white"})
 
-            # Hit counter
-            hit_text = (
-                f"{self._ball_mask_names[0]}: {self._episode_hits[0]}  "
-                f"{self._ball_mask_names[1]}: {self._episode_hits[1]}"
-            )
+            # Hit counter. Dual mode labels by network; single mode by direction.
+            if len(self._ball_mask_names) > 1:
+                hit_text = (
+                    f"{self._ball_mask_names[0]}: {self._episode_hits[0]}  "
+                    f"{self._ball_mask_names[1]}: {self._episode_hits[1]}"
+                )
+            else:
+                hit_text = f"Up: {self._episode_hits[0]}  Down: {self._episode_hits[1]}"
             shapes.append(
                 {
                     "type": "text",
@@ -1028,29 +1111,69 @@ RIT_TRIGGERED_BALL_METADATA = TaskMetadata(
     display_name="RIT Triggered Ball",
     description=(
         "Monitors rumination network activation and triggers ball feedback "
-        "episodes when threshold + trend conditions are met. Ball movement "
-        "is driven by two separate networks."
+        "episodes when threshold + trend conditions are met. By default the "
+        "ball is driven by the rumination network's signed activation "
+        "(single mode); it can also be driven by the difference between two "
+        "networks (dual mode)."
     ),
-    n_networks=3,
+    n_networks=1,
     network_roles=[
         NetworkRole(
             "trigger_network",
-            "Trigger Network",
-            "Brain network monitored for trigger conditions (e.g. rumination network)",
+            "Trigger / Movement Network",
+            "Network monitored for trigger conditions (e.g. rumination network). "
+            "In single movement mode it also drives the ball unless a movement override is assigned.",
+        ),
+        NetworkRole(
+            "movement_network",
+            "Movement Network (single-mode override)",
+            "Optional: drives the ball in single movement mode instead of the trigger network. "
+            "Leave unassigned to use the trigger network.",
+            optional=True,
+            default_from="trigger_network",
+            visible_when=("movement_mode", "single"),
         ),
         NetworkRole(
             "top_network",
-            "Top Ball Network (upward)",
-            "Ball moves up when this network is more active",
+            "Top Ball Network (dual mode, upward)",
+            "Dual movement mode: ball moves up when this network is more active.",
+            optional=True,
+            visible_when=("movement_mode", "dual"),
         ),
         NetworkRole(
             "bottom_network",
-            "Bottom Ball Network (downward)",
-            "Ball moves down when this network is more active",
+            "Bottom Ball Network (dual mode, downward)",
+            "Dual movement mode: ball moves down when this network is more active.",
+            optional=True,
+            visible_when=("movement_mode", "dual"),
         ),
     ],
     design_type="nuisance_only",
     parameters=[
+        TaskParameter(
+            key="movement_mode",
+            label="Ball Movement Mode",
+            type="str",
+            default="single",
+            choices=["single", "dual"],
+            hint=(
+                "single = one network's signed activation drives the ball "
+                "(defaults to the trigger network unless a Movement Network is assigned). "
+                "dual = activation difference between the Top and Bottom networks."
+            ),
+        ),
+        TaskParameter(
+            key="movement_direction",
+            label="Movement Direction (single mode)",
+            type="str",
+            default="positive_down",
+            choices=["positive_down", "positive_up"],
+            hint=(
+                "Single mode only. positive_down (default) = positive activation "
+                "(more rumination) moves the ball down, negative (less rumination) "
+                "moves it up. positive_up flips this. Ignored in dual mode."
+            ),
+        ),
         TaskParameter(
             key="activation_contrast",
             label="Activation Contrast",

@@ -2663,9 +2663,16 @@ def _resolve_mask_names_for_run(
             name = network_assignment.get(role.key)
             if name:
                 mask_names.append(name)
+            elif getattr(role, "optional", False):
+                # Optional roles are not positionally backfilled — an
+                # unassigned optional role is simply absent (the task supplies
+                # its own fallback, e.g. reusing the trigger network).
+                continue
             elif i < len(fallback):
                 mask_names.append(fallback[i])
-        if len(mask_names) == metadata.n_networks:
+        # Accept as long as every required role resolved (>= n_networks);
+        # optional roles may push the count above n_networks.
+        if len(mask_names) >= metadata.n_networks:
             return mask_names
     # Fall back to first N mask names from the combined union
     return fallback[: metadata.n_networks]

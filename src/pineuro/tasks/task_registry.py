@@ -77,21 +77,41 @@ class TaskConfigError(ValueError):
 
 @dataclass
 class NetworkRole:
-    """Description of a network slot required by a task.
+    """Description of a network slot used by a task.
 
-    Allows tasks to declare what each of their required network masks
-    represents, so the GUI can show appropriately labeled dropdowns
-    instead of hardcoding "top_network" / "bottom_network".
+    Allows tasks to declare what each of their network masks represents, so
+    the GUI can show appropriately labeled dropdowns instead of hardcoding
+    "top_network" / "bottom_network".
+
+    A role may be *required* (counts toward ``TaskMetadata.n_networks`` and
+    must be assigned a mask) or *optional* (an alternative/extra mask that the
+    task falls back from when unassigned). Optional roles let a single task
+    support a variable number of masks across configurations — e.g. the RIT
+    triggered ball needs only the trigger mask in single-network movement
+    mode but accepts extra masks for its override / dual-network modes.
 
     Attributes:
         key: Identifier used in network_assignment config (e.g., "top_network")
         label: Display label in GUI (e.g., "Top Network (upward)")
         description: Tooltip/help text explaining this network's role
+        optional: When True, the role is not counted toward
+            ``TaskMetadata.n_networks``; the session resolver skips it when
+            unassigned (no positional fallback) and the GUI renders it with a
+            blank "(unassigned)" option.
+        default_from: Key of another role this one falls back to when
+            unassigned. Used for the GUI blank-option label (e.g.
+            "(use Trigger Network)") and to document the fallback intent.
+        visible_when: ``(param_key, value)`` — the GUI shows this role's
+            dropdown only when the task parameter ``param_key`` currently
+            equals ``value``. None means always visible.
     """
 
     key: str
     label: str
     description: str = ""
+    optional: bool = False
+    default_from: str | None = None
+    visible_when: tuple[str, str] | None = None
 
 
 @dataclass

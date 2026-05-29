@@ -285,33 +285,43 @@ class FeedbackTabBuilder:
         single_mask = network_assignment.get(single_role_key)
         if not single_mask and self._available_mask_names:
             single_mask = self._available_mask_names[0]
+        single_mask_label = (
+            self._task_network_roles[0].label
+            if self._task_n_networks == 1 and self._task_network_roles
+            else "Target mask"
+        )
         self.single_mask_dropdown = ft.Dropdown(
             width=600,
-            label="Target mask",
+            label=single_mask_label,
             options=mask_options,
             value=single_mask,
             visible=(self._task_n_networks == 1),
         )
 
-        # Extra network role dropdowns (for tasks with 3+ networks, e.g. trigger network).
-        # Roles beyond the last 2 (which are handled by the differential pair) get
-        # their own dropdown.
+        # Optional network-role dropdowns. Each role declared optional in the
+        # task metadata (e.g. the RIT triggered ball's movement / top / bottom
+        # networks) gets its own mask dropdown with a leading blank option so
+        # "unassigned" is expressible. ``visible_when`` gates a dropdown to a
+        # task-parameter value (e.g. show movement_network only in single mode);
+        # required roles are handled by the single-mask dropdown or the
+        # differential pair.
         self._extra_role_dropdowns: list[tuple[str, ft.Dropdown]] = []
-        n_extra = max(0, self._task_n_networks - 2)
-        for role_idx in range(n_extra):
-            if role_idx < len(self._task_network_roles):
-                role = self._task_network_roles[role_idx]
-                saved = network_assignment.get(role.key)
-                if not saved and self._available_mask_names:
-                    saved = self._available_mask_names[0]
-                dd = ft.Dropdown(
-                    width=600,
-                    label=role.label,
-                    options=mask_options,
-                    value=saved,
-                    tooltip=role.description,
-                )
-                self._extra_role_dropdowns.append((role.key, dd))
+        for role in self._task_network_roles:
+            if not getattr(role, "optional", False):
+                continue
+            if getattr(role, "default_from", None):
+                blank_label = f"(use {self._role_label(role.default_from)})"
+            else:
+                blank_label = "(unassigned)"
+            dd = ft.Dropdown(
+                width=600,
+                label=role.label,
+                options=[ft.dropdown.Option(key="", text=blank_label), *mask_options],
+                value=network_assignment.get(role.key) or "",
+                tooltip=role.description,
+                visible=self._role_visible(role),
+            )
+            self._extra_role_dropdowns.append((role.key, dd))
         self._extra_roles_column = ft.Column(
             [dd for _, dd in self._extra_role_dropdowns],
             visible=len(self._extra_role_dropdowns) > 0,
@@ -500,6 +510,8 @@ class FeedbackTabBuilder:
 
         # Create task parameter fields
         self._create_task_parameter_fields()
+        # Wire task-params that gate optional-role visibility (e.g. movement_mode).
+        self._wire_role_gates()
 
     # ------------------------------------------------------------------
     # Build
@@ -666,7 +678,10 @@ class FeedbackTabBuilder:
         neg = self.differential_negative_dropdown.value
         assignment: dict[str, str] = {}
         for role_key, dd in self._extra_role_dropdowns:
-            if dd.value:
+            # Only persist a non-blank, currently-visible optional role. This
+            # drops the blank "(unassigned)" sentinel and avoids saving stale
+            # dual-mode masks while in single mode (and vice versa).
+            if dd.value and dd.visible:
                 assignment[role_key] = dd.value
         diff_roles = self._task_network_roles[len(self._extra_role_dropdowns) :]
         if len(diff_roles) >= 2 and pos and neg:
@@ -740,20 +755,27 @@ class FeedbackTabBuilder:
         new_options = [ft.dropdown.Option(key=n, text=n) for n in mask_names]
         has_multi = len(mask_names) >= 2
 
-        extra_dds = [dd for _, dd in self._extra_role_dropdowns]
         for dropdown in [
             self.single_mask_dropdown,
             self.differential_positive_dropdown,
             self.differential_negative_dropdown,
             self.connectivity_pair_a_dropdown,
             self.connectivity_pair_b_dropdown,
-            *extra_dds,
         ]:
             old = dropdown.value
             dropdown.options = new_options
             valid = [o.key for o in new_options]
             if old not in valid:
                 dropdown.value = None
+
+        # Optional-role dropdowns keep their leading blank "(unassigned)" option.
+        for _, dropdown in self._extra_role_dropdowns:
+            old = dropdown.value
+            blank = dropdown.options[0] if dropdown.options else ft.dropdown.Option(key="", text="(unassigned)")
+            dropdown.options = [blank, *new_options]
+            valid = [o.key for o in dropdown.options]
+            if old not in valid:
+                dropdown.value = ""
 
         # Update differential row visibility (only for multi-network tasks)
         needs_multi = self._task_n_networks >= 2
@@ -1257,6 +1279,59 @@ class FeedbackTabBuilder:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _role_label(self, role_key: str | None) -> str:
+        """Display label for a network role by key (falls back to the key)."""
+        for r in self._task_network_roles:
+            if r.key == role_key:
+                return str(r.label)
+        return role_key or ""
+
+    def _current_param_value(self, param_key: str) -> Any:
+        """Current value of a task parameter — live field, else saved config, else metadata default."""
+        field = self.task_param_fields.get(param_key)
+        if field is not None and getattr(field, "value", None) is not None:
+            return field.value
+        task_config = self.config.get("task_params", {})
+        if param_key in task_config:
+            return task_config[param_key]
+        try:
+            meta = get_task_metadata(self._task_type or "ball")
+            for p in meta.parameters:
+                if p.key == param_key:
+                    return p.default
+        except ValueError:
+            pass
+        return None
+
+    def _role_visible(self, role: Any) -> bool:
+        """Whether an optional role's dropdown should show, per its visible_when gate."""
+        gate = getattr(role, "visible_when", None)
+        if not gate:
+            return True
+        param_key, expected = gate
+        return bool(self._current_param_value(param_key) == expected)
+
+    def _wire_role_gates(self) -> None:
+        """Attach change handlers to task-params that gate optional-role visibility."""
+        gated_param_keys = {r.visible_when[0] for r in self._task_network_roles if getattr(r, "visible_when", None)}
+        for param_key in gated_param_keys:
+            field = self.task_param_fields.get(param_key)
+            if isinstance(field, ft.Dropdown):
+                field.on_select = self._on_role_gate_param_changed
+
+    def _on_role_gate_param_changed(self, e) -> None:
+        """A gating task-param changed — re-evaluate optional-role visibility."""
+        self._apply_role_gate_visibility()
+        with contextlib.suppress(Exception):
+            self.page.update()
+
+    def _apply_role_gate_visibility(self) -> None:
+        """Show/hide each optional-role dropdown per its current visible_when gate."""
+        for role_key, dd in self._extra_role_dropdowns:
+            role = next((r for r in self._task_network_roles if r.key == role_key), None)
+            if role is not None:
+                dd.visible = self._role_visible(role)
 
     def _validate_field(self, name: str, field: ft.TextField, validator):
         """Validate a form field."""

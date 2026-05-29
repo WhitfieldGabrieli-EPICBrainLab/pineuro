@@ -13,22 +13,36 @@ class TestRITTriggeredBallMetadata:
 
         meta = get_task_metadata("rit_triggered_ball")
         assert meta.task_id == "rit_triggered_ball"
-        assert meta.n_networks == 3
+        # Only the trigger/movement network is mandatory; movement override and
+        # the dual-mode networks are optional roles.
+        assert meta.n_networks == 1
 
     def test_has_network_roles(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
         meta = get_task_metadata("rit_triggered_ball")
-        role_keys = [r.key for r in meta.network_roles]
-        assert "trigger_network" in role_keys
-        assert "top_network" in role_keys
-        assert "bottom_network" in role_keys
+        roles = {r.key: r for r in meta.network_roles}
+        assert "trigger_network" in roles
+        assert "movement_network" in roles
+        assert "top_network" in roles
+        assert "bottom_network" in roles
+
+        # The trigger network is required; the rest are optional.
+        assert roles["trigger_network"].optional is False
+        assert roles["movement_network"].optional is True
+        assert roles["top_network"].optional is True
+        assert roles["bottom_network"].optional is True
+
+        # Single-mode movement defaults to the trigger network.
+        assert roles["movement_network"].default_from == "trigger_network"
 
     def test_task_parameters_defined(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
         meta = get_task_metadata("rit_triggered_ball")
         param_keys = {p.key for p in meta.parameters}
+        assert "movement_mode" in param_keys
+        assert "movement_direction" in param_keys
         assert "activation_contrast" in param_keys
         assert "consecutive_volumes" in param_keys
         assert "activation_trend" in param_keys
@@ -36,8 +50,20 @@ class TestRITTriggeredBallMetadata:
         assert "min_prompt_interval" in param_keys
         assert "timeout_duration" in param_keys
 
+    def test_movement_param_defaults(self):
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("rit_triggered_ball")
+        params = {p.key: p for p in meta.parameters}
+        assert params["movement_mode"].default == "single"
+        assert params["movement_mode"].choices == ["single", "dual"]
+        assert params["movement_direction"].default == "positive_down"
+        assert params["movement_direction"].choices == ["positive_down", "positive_up"]
+
 
 def _make_task(**kwargs):
+    import numpy as np
+
     from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask, TriggerState
 
     task = RITTriggeredBallTask.__new__(RITTriggeredBallTask)
@@ -48,6 +74,20 @@ def _make_task(**kwargs):
     task.min_prompt_interval = kwargs.get("min_prompt_interval", 10.0)
     task.timeout_duration = kwargs.get("timeout_duration", 60.0)
     task._trigger_state = TriggerState()
+
+    # Movement state so _calculate_ball_movement can be exercised directly
+    # (no PsychoPy / coordinator needed).
+    movement_direction = kwargs.get("movement_direction", "positive_down")
+    task.movement_mode = kwargs.get("movement_mode", "single")
+    task.movement_direction = movement_direction
+    task._direction_sign = -1.0 if movement_direction == "positive_down" else 1.0
+    task._movement_mask = kwargs.get("movement_mask", "RIT")
+    task._ball_mask_names = kwargs.get("ball_mask_names", [task._movement_mask])
+    task._network_directions = np.array([1, -1])
+    task.pda_outlier_threshold = kwargs.get("pda_outlier_threshold", 2.0)
+    task._current_activity = 0.0
+    task._current_direction = 0.0
+    task._current_is_outlier = False
     return task
 
 
@@ -232,6 +272,67 @@ class TestRITTriggeredBallSlopeMode:
         assert task._check_trigger(50.0, 0.3) is None
 
 
+class TestSingleMovement:
+    """Single-network movement: magnitude from |z|, direction from signed activation."""
+
+    def test_positive_down_positive_activation_moves_down(self):
+        task = _make_task(movement_mode="single", movement_direction="positive_down", movement_mask="RIT")
+        task._calculate_ball_movement({"RIT": 1.0})
+        assert task._current_is_outlier is False
+        assert task._current_direction == -1.0  # more rumination -> ball down
+        assert task._current_activity == 0.1  # |1.0| / 10.0
+
+    def test_positive_down_negative_activation_moves_up(self):
+        # Main use case: less rumination (negative activation) sends the ball up.
+        task = _make_task(movement_mode="single", movement_direction="positive_down", movement_mask="RIT")
+        task._calculate_ball_movement({"RIT": -1.0})
+        assert task._current_direction == 1.0
+        assert task._current_activity == 0.1
+
+    def test_positive_up_flips_direction(self):
+        task = _make_task(movement_mode="single", movement_direction="positive_up", movement_mask="RIT")
+        task._calculate_ball_movement({"RIT": 1.0})
+        assert task._current_direction == 1.0
+
+    def test_outlier_rejected(self):
+        task = _make_task(movement_mode="single", movement_mask="RIT", pda_outlier_threshold=2.0)
+        task._calculate_ball_movement({"RIT": 3.0})
+        assert task._current_is_outlier is True
+        assert task._current_activity == 0.0  # unchanged — movement skipped
+
+    def test_movement_override_reads_other_network(self):
+        # Movement mask differs from the trigger network.
+        task = _make_task(movement_mode="single", movement_direction="positive_down", movement_mask="ContA")
+        task._calculate_ball_movement({"RIT": 0.0, "ContA": -2.0})
+        assert task._current_direction == 1.0  # negative ContA -> up
+        assert task._current_activity == 0.2  # |-2.0| / 10.0
+
+
+class TestDualMovement:
+    """Dual-network movement (regression): magnitude from the activation difference."""
+
+    def test_top_more_active_moves_up(self):
+        task = _make_task(movement_mode="dual", ball_mask_names=["ContA", "DefaultA"])
+        task._calculate_ball_movement({"ContA": 0.8, "DefaultA": 0.3})
+        assert task._current_direction == 1  # network_directions[argmax] = +1
+        assert task._current_activity == 0.05  # |0.8 - 0.3| / 10.0
+
+    def test_bottom_more_active_moves_down(self):
+        task = _make_task(movement_mode="dual", ball_mask_names=["ContA", "DefaultA"])
+        task._calculate_ball_movement({"ContA": 0.3, "DefaultA": 0.8})
+        assert task._current_direction == -1
+
+
+class TestNetworkRoleDefaults:
+    def test_defaults(self):
+        from pineuro.tasks.task_registry import NetworkRole
+
+        role = NetworkRole("x", "X")
+        assert role.optional is False
+        assert role.default_from is None
+        assert role.visible_when is None
+
+
 class TestConstructorValidation:
     def test_invalid_trend_method_raises(self, mock_coordinator):
         import pytest
@@ -241,3 +342,47 @@ class TestConstructorValidation:
         coord = mock_coordinator(mask_names=["RIT", "ContA", "DefaultA"])
         with pytest.raises(ValueError, match="trend_method"):
             RITTriggeredBallTask(coord, trend_method="bogus")
+
+    def test_single_mask_constructs(self, mock_coordinator, tmp_path):
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
+
+        coord = mock_coordinator(mask_names=["RIT"], session="ses-01", output_dir=str(tmp_path))
+        task = RITTriggeredBallTask(coord, movement_mode="single")
+        assert task.mask_name == "RIT"
+        assert task._movement_mask == "RIT"  # defaults to the trigger network
+        assert task._ball_mask_names == ["RIT"]
+
+    def test_single_mask_movement_override(self, mock_coordinator, tmp_path):
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
+
+        coord = mock_coordinator(mask_names=["RIT", "ContA"], session="ses-01", output_dir=str(tmp_path))
+        task = RITTriggeredBallTask(coord, mask_names=["RIT", "ContA"], movement_mode="single")
+        assert task.mask_name == "RIT"
+        assert task._movement_mask == "ContA"  # override
+
+    def test_dual_mode_requires_three_masks(self, mock_coordinator):
+        import pytest
+
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
+
+        coord = mock_coordinator(mask_names=["RIT"])
+        with pytest.raises(ValueError, match="dual movement mode requires 3"):
+            RITTriggeredBallTask(coord, movement_mode="dual")
+
+    def test_invalid_movement_mode_raises(self, mock_coordinator):
+        import pytest
+
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
+
+        coord = mock_coordinator(mask_names=["RIT"])
+        with pytest.raises(ValueError, match="movement_mode"):
+            RITTriggeredBallTask(coord, movement_mode="bogus")
+
+    def test_invalid_movement_direction_raises(self, mock_coordinator):
+        import pytest
+
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
+
+        coord = mock_coordinator(mask_names=["RIT"])
+        with pytest.raises(ValueError, match="movement_direction"):
+            RITTriggeredBallTask(coord, movement_direction="bogus")

@@ -280,6 +280,67 @@ class TestSessionConfig:
 # =============================================================================
 
 
+class TestResolveMaskNamesForRun:
+    """_resolve_mask_names_for_run with optional roles and variable arity."""
+
+    def _config(self, tmp_path, networks):
+        return SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01"),
+            localizers=[LocalizerConfig(networks=networks)],
+        )
+
+    def test_single_trigger_only(self, tmp_path):
+        from pineuro.session import _resolve_mask_names_for_run
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        cfg = self._config(tmp_path, ["RIT"])
+        meta = get_task_metadata("rit_triggered_ball")
+        names = _resolve_mask_names_for_run(cfg, meta, {"trigger_network": "RIT"})
+        assert names == ["RIT"]
+
+    def test_single_with_movement_override(self, tmp_path):
+        from pineuro.session import _resolve_mask_names_for_run
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        cfg = self._config(tmp_path, ["RIT", "ContA"])
+        meta = get_task_metadata("rit_triggered_ball")
+        names = _resolve_mask_names_for_run(cfg, meta, {"trigger_network": "RIT", "movement_network": "ContA"})
+        assert names == ["RIT", "ContA"]
+
+    def test_dual(self, tmp_path):
+        from pineuro.session import _resolve_mask_names_for_run
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        cfg = self._config(tmp_path, ["RIT", "ContA", "DefaultA"])
+        meta = get_task_metadata("rit_triggered_ball")
+        names = _resolve_mask_names_for_run(
+            cfg, meta, {"trigger_network": "RIT", "top_network": "ContA", "bottom_network": "DefaultA"}
+        )
+        assert names == ["RIT", "ContA", "DefaultA"]
+
+    def test_optional_role_not_backfilled(self, tmp_path):
+        # Only the trigger is assigned; optional roles must NOT be positionally
+        # backfilled from the combined mask list.
+        from pineuro.session import _resolve_mask_names_for_run
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        cfg = self._config(tmp_path, ["RIT", "ContA", "DefaultA"])
+        meta = get_task_metadata("rit_triggered_ball")
+        names = _resolve_mask_names_for_run(cfg, meta, {"trigger_network": "RIT"})
+        assert names == ["RIT"]
+
+    def test_two_network_task_unchanged(self, tmp_path):
+        # Regression: a 2-network task (all required roles) still resolves to 2.
+        from pineuro.session import _resolve_mask_names_for_run
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("ball")
+        keys = [r.key for r in meta.network_roles]
+        cfg = self._config(tmp_path, ["ContA", "DefaultA"])
+        names = _resolve_mask_names_for_run(cfg, meta, {keys[0]: "ContA", keys[1]: "DefaultA"})
+        assert names == ["ContA", "DefaultA"]
+
+
 class TestShamConfig:
     def test_defaults(self):
         config = ShamConfig()

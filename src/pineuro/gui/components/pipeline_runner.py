@@ -2260,7 +2260,9 @@ class PipelineRunner:
                     name = net_assign.get(role.key)
                     if name:
                         assigned_names.append(name)
-            if len(assigned_names) >= 2:
+            # Use whatever roles were assigned (single-network tasks resolve to
+            # one mask; optional roles add more). Empty -> keep the default.
+            if assigned_names:
                 real_mask_names = assigned_names
 
         self._emit_progress(f"Task networks: {real_mask_names}")
