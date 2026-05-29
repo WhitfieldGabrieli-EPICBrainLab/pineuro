@@ -940,22 +940,13 @@ class FeedbackTabBuilder:
                     seed_field.update()
                     return
 
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-            except ImportError:
-                logger.error("tkinter is not available for file dialog")
-                return
+            from pineuro.gui.utils import pick_save_file
 
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            save_path = filedialog.asksaveasfilename(
+            save_path = pick_save_file(
                 title="Save randomization file",
-                defaultextension=".tsv",
+                default_extension=".tsv",
                 filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv")],
             )
-            root.destroy()
 
             if not save_path:
                 return

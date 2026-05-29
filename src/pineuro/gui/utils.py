@@ -355,26 +355,158 @@ def build_placeholder(text: str, height: float | None = None) -> ft.Container:
     )
 
 
+# ---------------------------------------------------------------------------
+# Native file/folder dialogs
+#
+# All pickers below branch on platform.  On Windows/Linux a ``tkinter``
+# dialog runs its own internal modal loop, so it works when dispatched to the
+# main thread via :class:`~pineuro.gui.dispatch.MainThreadDispatcher`.  On
+# macOS, however, the app runs ``ft.app()`` in a background thread and reserves
+# the main thread for a bare queue loop with *no* Tk/Cocoa event loop — calling
+# a tkinter native dialog in that state hangs the GUI (Python issue #38974), so
+# on macOS we shell out to a native AppleScript dialog via ``osascript`` (a
+# separate process with its own event loop, no main-thread requirement).
+# ---------------------------------------------------------------------------
+
+# AppleScript dialogs.  Dynamic strings are passed as ``argv`` (never
+# interpolated into the source) via the ``on run argv`` handler, so titles /
+# names / paths need no escaping.  An empty-string argument means "unset".
+_OSA_CHOOSE_FOLDER = """\
+on run argv
+    set p to item 1 of argv
+    set d to item 2 of argv
+    if d is "" then
+        set f to (choose folder with prompt p)
+    else
+        set f to (choose folder with prompt p default location (POSIX file d as alias))
+    end if
+    return POSIX path of f
+end run
+"""
+
+_OSA_CHOOSE_FILE = """\
+on run argv
+    set p to item 1 of argv
+    set d to item 2 of argv
+    if d is "" then
+        set f to (choose file with prompt p)
+    else
+        set f to (choose file with prompt p default location (POSIX file d as alias))
+    end if
+    return POSIX path of f
+end run
+"""
+
+_OSA_CHOOSE_FILE_NAME = """\
+on run argv
+    set p to item 1 of argv
+    set n to item 2 of argv
+    set d to item 3 of argv
+    if d is "" then
+        if n is "" then
+            set f to (choose file name with prompt p)
+        else
+            set f to (choose file name with prompt p default name n)
+        end if
+    else
+        if n is "" then
+            set f to (choose file name with prompt p default location (POSIX file d as alias))
+        else
+            set f to (choose file name with prompt p default name n default location (POSIX file d as alias))
+        end if
+    end if
+    return POSIX path of f
+end run
+"""
+
+
+def _osascript_path() -> str | None:
+    """Return the path to ``osascript``, or ``None`` if it is not available."""
+    import shutil
+
+    return shutil.which("osascript")
+
+
+def _run_osascript(script: str, *args: str) -> str | None:
+    """Run an AppleScript via ``osascript``, passing dynamic strings as ``argv``.
+
+    The *script* reads its inputs through ``on run argv`` (``item 1 of argv`` …)
+    so user-supplied values are never interpolated into the source — no escaping
+    or injection risk.
+
+    Returns the trimmed stdout (a POSIX path) on success, or ``None`` when the
+    user cancels (osascript exits non-zero with ``User canceled. (-128)``) or the
+    dialog cannot be shown.
+    """
+    import subprocess
+
+    osascript = _osascript_path()
+    if osascript is None:
+        logger.error("osascript not found — cannot open native macOS dialog")
+        return None
+
+    try:
+        proc = subprocess.run(
+            [osascript, "-e", script, *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:  # pragma: no cover - subprocess launch failure
+        logger.error(f"Error invoking osascript: {exc}")
+        return None
+
+    if proc.returncode != 0:
+        # Non-zero is the normal "cancelled" path (-128); log anything else.
+        logger.debug("osascript returned %s: %s", proc.returncode, proc.stderr.strip())
+        return None
+
+    return proc.stdout.strip() or None
+
+
+def _seed_dir(initial_path: str | None) -> str:
+    """Return an existing directory derived from *initial_path*, or ``""``.
+
+    A file path yields its parent; a directory path is used directly.  Returns
+    the empty string (the AppleScript "unset" sentinel) when nothing exists.
+    """
+    import os
+
+    if initial_path:
+        if os.path.isfile(initial_path):
+            return os.path.dirname(initial_path)
+        if os.path.isdir(initial_path):
+            return initial_path
+    return ""
+
+
 def pick_file(
     title: str = "Select file",
     *,
     filetypes: list[tuple[str, str]] | None = None,
     initial_path: str | None = None,
 ) -> str | None:
-    """Open a native file-open dialog on the main thread and return the chosen path.
+    """Open a native file-open dialog and return the chosen path.
 
-    Wraps the tkinter ``filedialog.askopenfilename`` + :class:`MainThreadDispatcher`
-    pattern so any GUI screen can prompt for a file without duplicating it.
+    On macOS uses a native AppleScript (``osascript``) dialog; on Windows/Linux
+    uses ``tkinter.filedialog.askopenfilename`` dispatched to the main thread via
+    :class:`~pineuro.gui.dispatch.MainThreadDispatcher`.
 
     Args:
         title: Dialog window title.
         filetypes: tkinter file-type filters as ``(label, pattern)`` tuples.
+            **Ignored on macOS** (AppleScript filters by UTI, not glob).
         initial_path: A file or directory used to seed the dialog's starting folder.
 
     Returns:
         The selected absolute path, or ``None`` if the dialog was cancelled or
         could not be opened.
     """
+    import sys
+
+    if sys.platform == "darwin":
+        return _run_osascript(_OSA_CHOOSE_FILE, title, _seed_dir(initial_path))
+
     if filetypes is None:
         filetypes = [("All Files", "*.*")]
 
@@ -406,6 +538,134 @@ def pick_file(
         path = get_dispatcher().submit(_show_dialog).result()
     except Exception as exc:
         logger.error(f"Error opening file picker: {exc}")
+        return None
+
+    return path or None
+
+
+def pick_directory(
+    title: str = "Select folder",
+    *,
+    initial_path: str | None = None,
+) -> str | None:
+    """Open a native folder-selection dialog and return the chosen path.
+
+    On macOS uses a native AppleScript (``osascript``) dialog; on Windows/Linux
+    uses ``tkinter.filedialog.askdirectory`` dispatched to the main thread via
+    :class:`~pineuro.gui.dispatch.MainThreadDispatcher`.
+
+    Args:
+        title: Dialog window title.
+        initial_path: An existing directory used to seed the starting folder.
+
+    Returns:
+        The selected directory path, or ``None`` if cancelled / unavailable.
+    """
+    import sys
+
+    if sys.platform == "darwin":
+        # ``POSIX path of`` a folder yields a trailing slash; strip it so the
+        # result matches tkinter's askdirectory (and the Windows/Linux) convention.
+        path = _run_osascript(_OSA_CHOOSE_FOLDER, title, _seed_dir(initial_path))
+        return (path.rstrip("/") or path) if path else path
+
+    try:
+        import os
+        import tkinter as tk
+        from tkinter import filedialog
+
+        from pineuro.gui.dispatch import get_dispatcher
+    except ImportError:
+        logger.error("tkinter is not available — cannot open folder picker")
+        return None
+
+    def _show_dialog() -> str:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        initial_dir = initial_path if initial_path and os.path.isdir(initial_path) else None
+        result = filedialog.askdirectory(title=title, initialdir=initial_dir)
+        root.destroy()
+        return result
+
+    try:
+        path = get_dispatcher().submit(_show_dialog).result()
+    except Exception as exc:
+        logger.error(f"Error opening folder picker: {exc}")
+        return None
+
+    return path or None
+
+
+def pick_save_file(
+    title: str = "Save file",
+    *,
+    default_name: str | None = None,
+    default_extension: str | None = None,
+    filetypes: list[tuple[str, str]] | None = None,
+    initial_path: str | None = None,
+) -> str | None:
+    """Open a native save-file dialog and return the chosen path.
+
+    On macOS uses a native AppleScript (``osascript``) dialog; on Windows/Linux
+    uses ``tkinter.filedialog.asksaveasfilename`` dispatched to the main thread
+    via :class:`~pineuro.gui.dispatch.MainThreadDispatcher`.
+
+    Args:
+        title: Dialog window title.
+        default_name: Suggested file name (``initialfile`` on tkinter,
+            ``default name`` on macOS).
+        default_extension: Extension appended when the user omits one
+            (``defaultextension`` on tkinter; ``choose file name`` does not
+            enforce one, so it is appended manually on macOS).
+        filetypes: tkinter file-type filters; **ignored on macOS**.
+        initial_path: A file or directory used to seed the starting folder.
+
+    Returns:
+        The selected path, or ``None`` if cancelled / unavailable.
+    """
+    import os
+    import sys
+
+    if sys.platform == "darwin":
+        path = _run_osascript(_OSA_CHOOSE_FILE_NAME, title, default_name or "", _seed_dir(initial_path))
+        if path and default_extension and not os.path.splitext(path)[1]:
+            ext = default_extension if default_extension.startswith(".") else f".{default_extension}"
+            path = path + ext
+        return path
+
+    if filetypes is None:
+        filetypes = [("All Files", "*.*")]
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        from pineuro.gui.dispatch import get_dispatcher
+    except ImportError:
+        logger.error("tkinter is not available — cannot open save dialog")
+        return None
+
+    def _show_dialog() -> str:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        kwargs: dict[str, Any] = {"title": title, "filetypes": filetypes}
+        if default_extension:
+            kwargs["defaultextension"] = default_extension
+        if default_name:
+            kwargs["initialfile"] = default_name
+        seed = _seed_dir(initial_path)
+        if seed:
+            kwargs["initialdir"] = seed
+        result = filedialog.asksaveasfilename(**kwargs)
+        root.destroy()
+        return result
+
+    try:
+        path = get_dispatcher().submit(_show_dialog).result()
+    except Exception as exc:
+        logger.error(f"Error opening save dialog: {exc}")
         return None
 
     return path or None

@@ -1210,38 +1210,18 @@ class StudyEditorScreen:
     def _create_browse_button(self, field: ft.TextField) -> ft.IconButton:
         """Create a browse button for directory selection."""
 
-        def pick_directory(e):
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-            except ImportError:
-                logger.error("tkinter is not available")
-                return
+        def on_click(e):
+            from pineuro.gui.utils import pick_directory
 
-            try:
-                from pineuro.gui.dispatch import get_dispatcher
-
-                def _show_dialog():
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    result = filedialog.askdirectory(
-                        title=f"Select {field.label}", initialdir=field.value if field.value else None
-                    )
-                    root.destroy()
-                    return result
-
-                path = get_dispatcher().submit(_show_dialog).result()
-                if path:
-                    field.value = path
-                    field.update()
-            except Exception as ex:
-                logger.error(f"Error opening directory picker: {ex}")
+            path = pick_directory(title=f"Select {field.label}", initial_path=field.value or None)
+            if path:
+                field.value = path
+                field.update()
 
         return ft.IconButton(
             icon=ft.Icons.FOLDER_OPEN,
             tooltip="Browse for folder",
-            on_click=pick_directory,
+            on_click=on_click,
         )
 
     def _create_file_browse_button(
@@ -1257,57 +1237,30 @@ class StudyEditorScreen:
         field : ft.TextField
             Field whose value is set to the picked path.
         filetypes : list of (label, pattern), optional
-            tkinter file-type filters.
+            tkinter file-type filters (ignored on macOS).
         on_pick : callable, optional
             Called with the picked path after ``field.value`` is set, e.g. to
             auto-populate a sibling field.
         """
-        if filetypes is None:
-            filetypes = [("All Files", "*.*")]
 
-        def pick_file(e):
-            try:
-                import os
-                import tkinter as tk
-                from tkinter import filedialog
-            except ImportError:
-                logger.error("tkinter is not available")
-                return
+        def on_click(e):
+            from pineuro.gui.utils import pick_file
 
-            try:
-                from pineuro.gui.dispatch import get_dispatcher
-
-                def _show_dialog():
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.attributes("-topmost", True)
-                    initial_dir = None
-                    if field.value:
-                        if os.path.isfile(field.value):
-                            initial_dir = os.path.dirname(field.value)
-                        elif os.path.isdir(field.value):
-                            initial_dir = field.value
-                    result = filedialog.askopenfilename(
-                        title=f"Select {field.label}",
-                        initialdir=initial_dir,
-                        filetypes=filetypes,
-                    )
-                    root.destroy()
-                    return result
-
-                path = get_dispatcher().submit(_show_dialog).result()
-                if path:
-                    field.value = path
-                    field.update()
-                    if on_pick is not None:
-                        on_pick(path)
-            except Exception as ex:
-                logger.error(f"Error opening file picker: {ex}")
+            path = pick_file(
+                title=f"Select {field.label}",
+                filetypes=filetypes,
+                initial_path=field.value or None,
+            )
+            if path:
+                field.value = path
+                field.update()
+                if on_pick is not None:
+                    on_pick(path)
 
         return ft.IconButton(
             icon=ft.Icons.FILE_OPEN,
             tooltip="Browse for file",
-            on_click=pick_file,
+            on_click=on_click,
         )
 
     # ------------------------------------------------------------------

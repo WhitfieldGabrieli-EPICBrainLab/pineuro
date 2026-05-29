@@ -1,9 +1,16 @@
-"""Tests for pineuro.gui.utils validation functions."""
+"""Tests for pineuro.gui.utils validation functions and native pickers."""
+
+import subprocess
+import sys
+import types
 
 import pytest
 
 from pineuro.gui.utils import (
     ValidationError,
+    pick_directory,
+    pick_file,
+    pick_save_file,
     validate_participant_id,
     validate_positive_int,
     validate_positive_number,
@@ -266,3 +273,152 @@ class TestValidateSessionConfig:
         ok, err = validate_session_config(config)
         assert isinstance(err, str)
         assert len(err) > 0
+
+
+# =============================================================================
+# Native file/folder pickers: pick_file / pick_directory / pick_save_file
+# =============================================================================
+
+
+def _completed(returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(args=["osascript"], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def _force_macos(monkeypatch, *, osascript="/usr/bin/osascript"):
+    """Pretend we are on macOS with (or without) osascript available."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr("shutil.which", lambda name: osascript)
+
+
+def _install_stub_tkinter(monkeypatch):
+    """Make ``import tkinter`` succeed without a real Tk install (headless CI)."""
+    tk_mod = types.ModuleType("tkinter")
+
+    class _Root:
+        def withdraw(self):
+            pass
+
+        def attributes(self, *a, **k):
+            pass
+
+        def destroy(self):
+            pass
+
+    tk_mod.Tk = _Root
+    fd_mod = types.ModuleType("tkinter.filedialog")
+    fd_mod.askopenfilename = lambda **k: ""
+    fd_mod.askdirectory = lambda **k: ""
+    fd_mod.asksaveasfilename = lambda **k: ""
+    tk_mod.filedialog = fd_mod
+    monkeypatch.setitem(sys.modules, "tkinter", tk_mod)
+    monkeypatch.setitem(sys.modules, "tkinter.filedialog", fd_mod)
+
+
+class _FakeFuture:
+    def __init__(self, value):
+        self._value = value
+
+    def result(self):
+        return self._value
+
+
+class _FakeDispatcher:
+    """Returns a canned value without ever running the dialog callback."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def submit(self, fn, *args, **kwargs):
+        return _FakeFuture(self._value)
+
+
+class TestPickFileMacOS:
+    def test_returns_selected_path(self, monkeypatch):
+        _force_macos(monkeypatch)
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _completed(stdout="/Users/x/file.nii\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = pick_file(title="Pick a file")
+        assert result == "/Users/x/file.nii"
+        # osascript was invoked with the title passed as an argv argument
+        assert captured["cmd"][0] == "/usr/bin/osascript"
+        assert "Pick a file" in captured["cmd"]
+
+    def test_cancel_returns_none(self, monkeypatch):
+        _force_macos(monkeypatch)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _completed(returncode=1, stderr="User canceled. (-128)"))
+        assert pick_file(title="Pick") is None
+
+    def test_missing_osascript_returns_none(self, monkeypatch):
+        _force_macos(monkeypatch, osascript=None)
+
+        def boom(*a, **k):
+            raise AssertionError("subprocess.run must not run without osascript")
+
+        monkeypatch.setattr(subprocess, "run", boom)
+        assert pick_file(title="Pick") is None
+
+
+class TestPickDirectoryMacOS:
+    def test_returns_selected_dir(self, monkeypatch):
+        _force_macos(monkeypatch)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _completed(stdout="/Users/x/data/\n"))
+        assert pick_directory(title="Pick a folder") == "/Users/x/data"
+
+
+class TestPickSaveFileMacOS:
+    def test_returns_selected_path(self, monkeypatch):
+        _force_macos(monkeypatch)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _completed(stdout="/Users/x/out.tsv\n"))
+        assert pick_save_file(title="Save") == "/Users/x/out.tsv"
+
+    def test_appends_default_extension_when_missing(self, monkeypatch):
+        _force_macos(monkeypatch)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _completed(stdout="/Users/x/rand\n"))
+        assert pick_save_file(title="Save", default_extension=".tsv") == "/Users/x/rand.tsv"
+
+    def test_keeps_existing_extension(self, monkeypatch):
+        _force_macos(monkeypatch)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _completed(stdout="/Users/x/rand.csv\n"))
+        assert pick_save_file(title="Save", default_extension=".tsv") == "/Users/x/rand.csv"
+
+    def test_default_name_passed_as_argv(self, monkeypatch):
+        _force_macos(monkeypatch)
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _completed(stdout="/Users/x/out.tsv\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        pick_save_file(title="Save", default_name="study.yaml")
+        assert "study.yaml" in captured["cmd"]
+
+
+class TestPickersNonMacOS:
+    def test_pick_file_uses_dispatcher_not_osascript(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+        _install_stub_tkinter(monkeypatch)
+        monkeypatch.setattr("pineuro.gui.dispatch.get_dispatcher", lambda: _FakeDispatcher("C:/x/f.yaml"))
+
+        def boom(*a, **k):
+            raise AssertionError("subprocess.run (osascript) must not run off macOS")
+
+        monkeypatch.setattr(subprocess, "run", boom)
+        assert pick_file(title="Pick") == "C:/x/f.yaml"
+
+    def test_pick_directory_uses_dispatcher(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        _install_stub_tkinter(monkeypatch)
+        monkeypatch.setattr("pineuro.gui.dispatch.get_dispatcher", lambda: _FakeDispatcher("/home/x/data"))
+        assert pick_directory(title="Pick") == "/home/x/data"
+
+    def test_pick_save_file_uses_dispatcher(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "win32")
+        _install_stub_tkinter(monkeypatch)
+        monkeypatch.setattr("pineuro.gui.dispatch.get_dispatcher", lambda: _FakeDispatcher("C:/x/out.tsv"))
+        assert pick_save_file(title="Save", default_extension=".tsv") == "C:/x/out.tsv"

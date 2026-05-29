@@ -439,37 +439,17 @@ class PyrtnfApp:
     def _export_study(self, study_name: str):
         """Export a study configuration YAML to a user-chosen file.
 
-        Uses tkinter filedialog (same pattern as study_editor.py directory picker).
-
         Args:
             study_name: Name of the study to export
         """
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-        except ImportError:
-            _snack = ft.SnackBar(ft.Text("File browser requires tkinter"))
-            _snack.open = True
-            self.page.overlay.append(_snack)
-            self.page.update()
-            return
+        from pineuro.gui.utils import pick_save_file
 
-        from pineuro.gui.dispatch import get_dispatcher
-
-        def _show_dialog():
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            result = filedialog.asksaveasfilename(
-                title=f"Export '{study_name}'",
-                defaultextension=".yaml",
-                filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
-                initialfile=f"{study_name.replace(' ', '_')}.yaml",
-            )
-            root.destroy()
-            return result
-
-        dest = get_dispatcher().submit(_show_dialog).result()
+        dest = pick_save_file(
+            title=f"Export '{study_name}'",
+            default_name=f"{study_name.replace(' ', '_')}.yaml",
+            default_extension=".yaml",
+            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+        )
 
         if not dest:
             return
@@ -484,34 +464,13 @@ class PyrtnfApp:
         self.page.update()
 
     def _import_study(self):
-        """Import a study configuration YAML from a user-chosen file.
+        """Import a study configuration YAML from a user-chosen file."""
+        from pineuro.gui.utils import pick_file
 
-        Uses tkinter filedialog (same pattern as study_editor.py file picker).
-        """
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-        except ImportError:
-            _snack = ft.SnackBar(ft.Text("File browser requires tkinter"))
-            _snack.open = True
-            self.page.overlay.append(_snack)
-            self.page.update()
-            return
-
-        from pineuro.gui.dispatch import get_dispatcher
-
-        def _show_dialog():
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes("-topmost", True)
-            result = filedialog.askopenfilename(
-                title="Import Study",
-                filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
-            )
-            root.destroy()
-            return result
-
-        src = get_dispatcher().submit(_show_dialog).result()
+        src = pick_file(
+            title="Import Study",
+            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+        )
 
         if not src:
             return
