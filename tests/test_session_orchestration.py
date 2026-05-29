@@ -6,6 +6,7 @@ from pineuro.session import (
     PathConfig,
     SessionConfig,
     _build_run_sequence,
+    _is_last_feedback_for_frc,
     reset_task_state,
 )
 
@@ -106,6 +107,34 @@ class TestBuildRunSequence:
         seq = _build_run_sequence(config)
         run_types = [rt for rt, _ in seq]
         assert run_types == ["feedback", "feedback", "feedback", "feedback"]
+
+
+# =============================================================================
+# _is_last_feedback_for_frc
+# =============================================================================
+
+
+class TestIsLastFeedbackForFrc:
+    """The per-task "last feedback run" flag that gates ``last_feedback_only`` questions."""
+
+    def test_two_task_blocks_fire_at_each_block_end(self):
+        # ball x3 (frc 0) then thermometer x2 (frc 1): True only at the last
+        # feedback of each block, not just the session's final feedback run.
+        seq = [("feedback", 0)] * 3 + [("feedback", 1)] * 2
+        flags = [_is_last_feedback_for_frc(seq, i, frc_idx) for i, (_, frc_idx) in enumerate(seq)]
+        assert flags == [False, False, True, False, True]
+
+    def test_single_block_fires_only_on_final_feedback(self):
+        seq = [("feedback", 0)] * 3
+        flags = [_is_last_feedback_for_frc(seq, i, 0) for i in range(len(seq))]
+        assert flags == [False, False, True]
+
+    def test_trailing_transfer_does_not_delay_the_flag(self):
+        # transfer -> feedback x2 -> transfer (all frc 0): the last feedback is the
+        # last *feedback* step, even though a transfer follows it.
+        seq = [("transfer", 0), ("feedback", 0), ("feedback", 0), ("transfer", 0)]
+        assert _is_last_feedback_for_frc(seq, 1, 0) is False
+        assert _is_last_feedback_for_frc(seq, 2, 0) is True
 
 
 # =============================================================================

@@ -245,7 +245,7 @@ class TestEligiblePostRunQuestions:
         # `questions=None` simulates an unregistered task (no metadata).
         metadata = None if questions is None else SimpleNamespace(post_run_questions=questions)
         task.get_task_metadata = lambda: metadata
-        task._task_state = SimpleNamespace(is_last_feedback_run=is_last)
+        task._is_last_feedback_run = is_last
         return task
 
     def _q(self, condition):

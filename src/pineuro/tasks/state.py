@@ -94,8 +94,10 @@ class TaskState:
     completed_runs : list[RunInfo]
         Metadata for all completed runs
     max_feedback_runs : int | None
-        Total expected number of feedback runs (for detecting last run).
-        None for non-feedback tasks (localizers); omitted from their state file.
+        Expected number of feedback runs across the whole session (informational;
+        used only for progress logging — per-task last-feedback detection lives in
+        the runtime, see BaseTask._is_last_feedback_run). None for non-feedback
+        tasks (localizers); omitted from their state file.
 
     Examples
     --------
@@ -115,8 +117,8 @@ class TaskState:
     task_id: str = "ball"
     task_state: dict[str, Any] = field(default_factory=dict)
     completed_runs: list[RunInfo] = field(default_factory=list)
-    # Feedback-only: total expected feedback runs (for "last feedback run" logic).
-    # Stays None for localizers and is omitted from their on-disk state.
+    # Feedback-only: total expected feedback runs across the session, for progress
+    # logging only. Stays None for localizers and is omitted from their on-disk state.
     max_feedback_runs: int | None = None
 
     # Slot-based tracking: maps slot_run_number to the task_state snapshot
@@ -209,19 +211,6 @@ class TaskState:
     def feedback_run_count(self) -> int:
         """Number of feedback runs completed so far."""
         return sum(1 for r in self.completed_runs if r.run_type == "feedback")
-
-    @property
-    def is_last_feedback_run(self) -> bool:
-        """Whether we have just completed the last feedback run.
-
-        Returns True when feedback_run_count >= max_feedback_runs,
-        meaning all feedback runs are complete. This is used to determine
-        when to show "last_feedback_only" post-run questions. Always False
-        when max_feedback_runs is unset (e.g. localizer tasks).
-        """
-        if self.max_feedback_runs is None:
-            return False
-        return self.feedback_run_count >= self.max_feedback_runs
 
     def get_state_for_slot(self, slot_run_number: int, attempt: int = 1) -> dict[str, Any]:
         """Get the appropriate task state for a run slot.

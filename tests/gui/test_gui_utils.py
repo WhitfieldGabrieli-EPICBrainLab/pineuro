@@ -479,6 +479,19 @@ class TestBuildFeedbackSteps:
         assert steps["feedback_1"] == "feedback"
         assert steps["transfer_1"] == "transfer"
 
+    def test_is_last_feedback_marks_final_feedback_of_each_block(self):
+        # True on the last feedback step of each block (ball: feedback_2; gauge: feedback_3),
+        # False on earlier feedback steps and on every transfer step. Gates
+        # "last_feedback_only" post-run questions per task in the GUI path.
+        by_step = {s.step_id: s.is_last_feedback for s in build_feedback_steps(self.CONFIG)}
+        assert by_step == {
+            "transfer_1": False,
+            "feedback_1": False,
+            "feedback_2": True,
+            "transfer_2": False,
+            "feedback_3": True,
+        }
+
     def test_feedback_step_for_lookup(self):
         step = feedback_step_for(self.CONFIG, "feedback_3")
         assert step is not None

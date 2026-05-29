@@ -2695,6 +2695,9 @@ class PipelineRunner:
             # Register callback so coordinator updates task with new activations
             coordinator._activation_callback = task._update_data
 
+            # Gate "last_feedback_only" post-run questions on the last feedback run for this task.
+            task._is_last_feedback_run = feedback_mode and step.is_last_feedback
+
             # Track task for stop support
             with self._task_lock:
                 self._current_feedback_task = task

@@ -2413,6 +2413,7 @@ def run_single_task(
     run_type: str,
     use_simulator: bool = True,
     run_config: FeedbackRunConfig | None = None,
+    is_last_feedback_run: bool = False,
 ) -> dict[str, Any]:
     """Run a single task (transfer or feedback).
 
@@ -2435,6 +2436,10 @@ def run_single_task(
     run_config : FeedbackRunConfig, optional
         Per-feedback-run configuration. When provided, takes priority over
         the flat ``config.feedback`` and ``config.task`` fields.
+    is_last_feedback_run : bool, default False
+        Whether this is the last feedback run for this task. Gates
+        "last_feedback_only" post-run questions. The caller derives it from
+        the run sequence; ignored for transfer runs.
 
     Returns
     -------
@@ -2565,6 +2570,9 @@ def run_single_task(
 
     # Register callback
     coordinator._activation_callback = task._update_data
+
+    # Gate "last_feedback_only" post-run questions on the last feedback run for this task.
+    task._is_last_feedback_run = feedback_mode and is_last_feedback_run
 
     try:
         task.run()
@@ -2799,6 +2807,15 @@ def _build_run_sequence(config: SessionConfig) -> list[tuple[str, int]]:
     return sequence
 
 
+def _is_last_feedback_for_frc(run_sequence: list[tuple[str, int]], index: int, frc_idx: int) -> bool:
+    """Whether the feedback step at *index* is the last feedback step for its frc block.
+
+    True when no later entry in *run_sequence* is a feedback run owned by the same
+    ``frc_idx``. Used to gate "last_feedback_only" post-run questions per task.
+    """
+    return not any(rt == "feedback" and fi == frc_idx for rt, fi in run_sequence[index + 1 :])
+
+
 def run_full_session(
     config: SessionConfig,
     mask_files: list[Path],
@@ -2884,6 +2901,7 @@ def run_full_session(
             run_type=run_type,
             use_simulator=use_simulator,
             run_config=frc,
+            is_last_feedback_run=(run_type == "feedback" and _is_last_feedback_for_frc(run_sequence, i, frc_idx)),
         )
         all_results.append(results)
 
@@ -2975,6 +2993,9 @@ def run_next_task(
         run_type=run_type,
         use_simulator=use_simulator,
         run_config=frc,
+        is_last_feedback_run=(
+            run_type == "feedback" and _is_last_feedback_for_frc(run_sequence, completed_count, frc_idx)
+        ),
     )
 
     return results

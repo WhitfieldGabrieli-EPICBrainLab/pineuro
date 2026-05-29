@@ -147,6 +147,11 @@ class BaseTask(TaskBase):
         # Question support
         self.feedback_mode = feedback_mode
         self._task_state = task_state
+        # Set by the runtime (session.py / GUI pipeline_runner) before run():
+        # True when this is the last feedback run for THIS task. Gates
+        # "last_feedback_only" post-run questions. Default False covers
+        # standalone/test tasks, localizers, and transfer runs.
+        self._is_last_feedback_run: bool = False
         self._questions_file = None  # Optional file handle for logging responses
         self._questions_writer = None  # Optional CSV writer
 
@@ -434,7 +439,8 @@ class BaseTask(TaskBase):
         - "always": always shown
         - "feedback_only": only when ``feedback_mode`` (feedback run, not transfer)
         - "last_feedback_only": only when ``feedback_mode`` and this is the final
-          feedback run (``_task_state.is_last_feedback_run``)
+          feedback run for this task (``self._is_last_feedback_run``, set by the
+          runtime before the run)
 
         Reads only init-time / run-stable state (no PsychoPy window), so it is safe
         to call off the task thread — e.g. from the GUI to decide whether a manual
@@ -444,7 +450,7 @@ class BaseTask(TaskBase):
         if not metadata or not metadata.post_run_questions:
             return []
 
-        is_last = self._task_state is not None and getattr(self._task_state, "is_last_feedback_run", False)
+        is_last = getattr(self, "_is_last_feedback_run", False)
 
         eligible = []
         for question in metadata.post_run_questions:

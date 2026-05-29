@@ -296,6 +296,9 @@ class FeedbackStep(NamedTuple):
         each task's feedback and transfer outputs number independently.
     label : str
         Human-readable label (e.g. ``"Feedback Run 1 (Ball)"``).
+    is_last_feedback : bool
+        Whether this is the last feedback step of its feedback-run block. Gates
+        "last_feedback_only" post-run questions per task. Always False for transfer steps.
     """
 
     step_id: str
@@ -304,6 +307,7 @@ class FeedbackStep(NamedTuple):
     task_entity: str
     run_number: int
     label: str
+    is_last_feedback: bool = False
 
 
 def _task_entity(task_id: str, kind: str) -> str:
@@ -334,12 +338,12 @@ def build_feedback_steps(config: dict[str, Any]) -> list[FeedbackStep]:
     tf_counter = 0
     run_counters: dict[str, int] = {}
 
-    def _append(step_id: str, task_id: str, kind: str, label_suffix: str) -> None:
+    def _append(step_id: str, task_id: str, kind: str, label_suffix: str, is_last_feedback: bool = False) -> None:
         entity = _task_entity(task_id, kind)
         run_counters[entity] = run_counters.get(entity, 0) + 1
         slot = step_id.rsplit("_", 1)[1]
         label = f"{'Transfer' if kind == 'transfer' else 'Feedback'} Run {slot} ({label_suffix})"
-        steps.append(FeedbackStep(step_id, task_id, kind, entity, run_counters[entity], label))
+        steps.append(FeedbackStep(step_id, task_id, kind, entity, run_counters[entity], label, is_last_feedback))
 
     for frc in feedback_runs:
         task_id = frc.get("task", "ball")
@@ -353,9 +357,9 @@ def build_feedback_steps(config: dict[str, Any]) -> list[FeedbackStep]:
         if use_transfers:
             tf_counter += 1
             _append(f"transfer_{tf_counter}", task_id, "transfer", label_suffix)
-        for _ in range(max_runs):
+        for i in range(max_runs):
             fb_counter += 1
-            _append(f"feedback_{fb_counter}", task_id, "feedback", label_suffix)
+            _append(f"feedback_{fb_counter}", task_id, "feedback", label_suffix, is_last_feedback=(i == max_runs - 1))
         if use_transfers:
             tf_counter += 1
             _append(f"transfer_{tf_counter}", task_id, "transfer", label_suffix)

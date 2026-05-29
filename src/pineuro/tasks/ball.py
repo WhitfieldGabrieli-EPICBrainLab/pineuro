@@ -1009,8 +1009,8 @@ class BallTask(BaseTask):
             self._psychopy_log_file = None
             self._psychopy_log_writer = None
 
-        # Record run completion BEFORE showing questions so is_last_feedback_run
-        # is accurate for "last_feedback_only" questions. The guard in
+        # Record run completion BEFORE showing questions so the recorded run snapshot
+        # is consistent with what the questions reflect. The guard in
         # _record_run_completion() prevents double-recording when super().cleanup()
         # calls it again.
         self._record_run_completion()
