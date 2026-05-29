@@ -2640,6 +2640,11 @@ class NeurofeedbackCoordinator:
         self._retry_counts: dict[str, int] = {}  # Track validation retries per file
         self._MAX_RETRIES = 5
         self._next_expected_filename: str | None = None  # Filename we're waiting for
+        # MoCo-mismatch detection: in siemens_moco mode the scanner emits BOTH the
+        # original and a corrected "MoCoSeries"; we keep only MoCoSeries. If we keep
+        # skipping originals but never see a single MoCoSeries, the data is not MoCo.
+        self._skipped_originals_no_moco: int = 0  # originals skipped while 0 MoCo processed
+        self._MOCO_MISMATCH_THRESHOLD: int = 10  # skipped originals w/ 0 MoCo -> fail
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()  # Signal when coordinator is ready
@@ -3026,7 +3031,18 @@ class NeurofeedbackCoordinator:
                         if self._keep_moco and not moco:
                             heapq.heappop(self._pending_heap)
                             self._processed_files.add(key)
-                            logger.debug(f"Skipping original volume (using MoCo): {file_path.name}")
+                            if self.n_processed == 0:
+                                self._skipped_originals_no_moco += 1
+                            # Surface the skipping at INFO (first + every 10th) so a
+                            # MoCo data/config mismatch is observable before it trips.
+                            if self._skipped_originals_no_moco == 1 or self._skipped_originals_no_moco % 10 == 0:
+                                logger.info(
+                                    f"Skipping original (non-MoCo) volume in siemens_moco mode; "
+                                    f"waiting for MoCoSeries: {file_path.name} "
+                                    f"(skipped {self._skipped_originals_no_moco} so far)"
+                                )
+                            else:
+                                logger.debug(f"Skipping original volume (using MoCo): {file_path.name}")
                             continue
                         if not self._keep_moco and moco:
                             heapq.heappop(self._pending_heap)
@@ -3052,6 +3068,34 @@ class NeurofeedbackCoordinator:
                         )
 
             return None
+
+    def _check_moco_mismatch(self) -> None:
+        """Fail fast if siemens_moco is selected but no MoCoSeries ever arrives.
+
+        In siemens_moco mode the scanner emits both the original and a corrected
+        "MoCoSeries"; we keep only MoCoSeries. Skipping some originals is normal
+        (the original is often reconstructed first). But if we have skipped many
+        originals and processed zero MoCo volumes, the incoming data is not MoCo
+        and the run can never produce feedback, so we stop with a clear error.
+        """
+        if self._error is not None or self._stop_event.is_set():
+            return
+        if (
+            self._keep_moco
+            and self.n_processed == 0
+            and self._skipped_originals_no_moco >= self._MOCO_MISMATCH_THRESHOLD
+        ):
+            msg = (
+                "Motion correction is set to 'siemens_moco', but the incoming volumes are "
+                "original (non-MoCo) series (SeriesDescription != 'MoCoSeries'). "
+                f"Skipped {self._skipped_originals_no_moco} original volumes without seeing a "
+                "single MoCoSeries, so no feedback can be produced. Either set motion "
+                "correction to 'software' or 'none', or supply Siemens MoCoSeries data / "
+                "enable MoCo (Motion Correction) on the scanner."
+            )
+            logger.error(msg)
+            self._error = RuntimeError(msg)
+            self._stop_event.set()
 
     def _get_queue_depth(self) -> int:
         """Get current queue depth (files waiting to be processed)."""
@@ -3460,7 +3504,10 @@ class NeurofeedbackCoordinator:
                 if file_to_process:
                     self._process_volume(file_to_process)
                 else:
-                    # Watchdog missed something or queue empty; rescan and back off
+                    # No processable file: detect siemens_moco/non-MoCo mismatch
+                    # (all pending volumes were skipped as originals), then rescan
+                    # and back off.
+                    self._check_moco_mismatch()
                     self._scan_for_existing_files()
                     time.sleep(0.05)
 

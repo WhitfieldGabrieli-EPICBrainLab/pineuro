@@ -2699,9 +2699,26 @@ class PipelineRunner:
             with contextlib.suppress(Exception):
                 task_future.result(timeout=30)
 
+            # Surface any error recorded by the coordinator background thread (e.g. a
+            # MoCo data/config mismatch) so the step fails instead of reporting fake
+            # success. check_error() is a no-op on a clean or user-stopped run (a stop
+            # sets _stop_event but not _error), so this only raises on genuine errors.
+            coordinator.check_error()  # re-raises coordinator._error if set
+
             # Extract results generically via task contract
             results = task.get_run_results()
             volumes_processed = results.get("volumes_processed", coordinator.n_processed)
+
+            # Defense in depth: a run that processed nothing produced no feedback.
+            # Fail it (unless the user stopped it) so other silent-0-volume causes
+            # (wrong watch dir, scanner not sending, all volumes failing validation)
+            # don't masquerade as success.
+            if volumes_processed == 0 and not coordinator.was_stopped() and coordinator._error is None:
+                raise RuntimeError(
+                    f"{task_type.capitalize()} run {task_run_number} processed 0 volumes. "
+                    f"No feedback was produced. Check that the scanner is sending volumes to the "
+                    f"watch directory and that the motion correction mode matches the incoming data."
+                )
 
             result_msg = (
                 f"{task_type.capitalize()} run {task_run_number} complete! Processed {volumes_processed} volumes."
