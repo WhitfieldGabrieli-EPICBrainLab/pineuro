@@ -1,6 +1,7 @@
 """Tests for pineuro.utils — utility functions, timing, file validation, masking."""
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +21,7 @@ from pineuro.utils import (
     disable_timing,
     enable_timing,
     erode_mask,
+    get_dicom_files,
     get_json_sidecar_path,
     get_timing_data,
     get_volume_files,
@@ -111,28 +113,131 @@ class TestGetJsonSidecarPath:
 
 
 # =============================================================================
-# get_volume_files
+# get_volume_files / get_dicom_files — directory enumeration with validation
 # =============================================================================
+
+
+def _make_nifti(path: Path) -> Path:
+    """Write a tiny valid NIfTI volume at ``path``."""
+    nib.save(nib.Nifti1Image(np.ones((4, 4, 4), dtype=np.float32), np.eye(4)), path)
+    return path
+
+
+def _make_dicom(path: Path) -> Path:
+    """Write a minimal valid Part-10 DICOM at ``path`` (header only, no pixels)."""
+    from pydicom.dataset import FileDataset, FileMetaDataset
+    from pydicom.uid import ExplicitVRLittleEndian, generate_uid
+
+    file_meta = FileMetaDataset()
+    file_meta.MediaStorageSOPClassUID = generate_uid()
+    file_meta.MediaStorageSOPInstanceUID = generate_uid()
+    file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    ds = FileDataset(str(path), {}, file_meta=file_meta, preamble=b"\x00" * 128)
+    ds.PatientID = "PHANTOM"
+    ds.Modality = "MR"
+    ds.SOPClassUID = file_meta.MediaStorageSOPClassUID
+    ds.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
+    ds.save_as(str(path), enforce_file_format=True)
+    return path
 
 
 class TestGetVolumeFiles:
     def test_sorted_output(self, tmp_path):
+        # validate=False: this exercises ordering only, not file validity.
         (tmp_path / "vol_003.dcm").touch()
         (tmp_path / "vol_001.dcm").touch()
         (tmp_path / "vol_002.dcm").touch()
-        result = get_volume_files(tmp_path)
+        result = get_volume_files(tmp_path, validate=False)
         names = [p.name for p in result]
         assert names == ["vol_001.dcm", "vol_002.dcm", "vol_003.dcm"]
 
     def test_skips_directories(self, tmp_path):
         (tmp_path / "vol_001.dcm").touch()
         (tmp_path / "subdir").mkdir()
-        result = get_volume_files(tmp_path)
+        result = get_volume_files(tmp_path, validate=False)
         assert len(result) == 1
 
     def test_empty_directory(self, tmp_path):
         result = get_volume_files(tmp_path)
         assert result == []
+
+    def test_skips_ds_store(self, tmp_path, caplog):
+        _make_nifti(tmp_path / "vol_001.nii.gz")
+        _make_nifti(tmp_path / "vol_002.nii.gz")
+        (tmp_path / ".DS_Store").write_bytes(b"\x00junk")
+        with caplog.at_level(logging.WARNING):
+            result = get_volume_files(tmp_path)
+        assert [p.name for p in result] == ["vol_001.nii.gz", "vol_002.nii.gz"]
+        assert ".DS_Store" in caplog.text
+
+    def test_skips_text_file(self, tmp_path, caplog):
+        _make_nifti(tmp_path / "vol_001.nii.gz")
+        (tmp_path / "notes.txt").write_text("not a volume")
+        with caplog.at_level(logging.WARNING):
+            result = get_volume_files(tmp_path)
+        assert [p.name for p in result] == ["vol_001.nii.gz"]
+        assert "notes.txt" in caplog.text
+
+    def test_excludes_json_sidecar_silently(self, tmp_path, caplog):
+        _make_nifti(tmp_path / "vol_000.nii.gz")
+        (tmp_path / "vol_000.json").write_text('{"RepetitionTime": 2.0}')
+        with caplog.at_level(logging.WARNING):
+            result = get_volume_files(tmp_path)
+        assert [p.name for p in result] == ["vol_000.nii.gz"]
+        # Sidecars are expected companions, not junk — not warned about.
+        assert "vol_000.json" not in caplog.text
+
+    def test_skips_os_junk_basenames(self, tmp_path):
+        _make_nifti(tmp_path / "vol_001.nii.gz")
+        (tmp_path / "Thumbs.db").write_bytes(b"\x00")
+        (tmp_path / "._vol_001.nii.gz").write_bytes(b"\x00")  # AppleDouble
+        result = get_volume_files(tmp_path)
+        assert [p.name for p in result] == ["vol_001.nii.gz"]
+
+    def test_only_junk_returns_empty_with_warning(self, tmp_path, caplog):
+        (tmp_path / ".DS_Store").write_bytes(b"\x00")
+        (tmp_path / "notes.txt").write_text("nope")
+        with caplog.at_level(logging.WARNING):
+            result = get_volume_files(tmp_path)
+        assert result == []
+        assert "No valid DICOM/NIfTI volumes" in caplog.text
+
+    def test_validate_false_returns_all(self, tmp_path):
+        _make_nifti(tmp_path / "vol_001.nii.gz")
+        (tmp_path / ".DS_Store").write_bytes(b"\x00")
+        (tmp_path / "notes.txt").write_text("nope")
+        result = get_volume_files(tmp_path, validate=False)
+        assert {p.name for p in result} == {"vol_001.nii.gz", ".DS_Store", "notes.txt"}
+
+    def test_recognizes_extensionless_dicom(self, tmp_path):
+        _make_dicom(tmp_path / "MR000001")  # no extension, as some scanners export
+        (tmp_path / ".DS_Store").write_bytes(b"\x00")
+        result = get_volume_files(tmp_path)
+        assert [p.name for p in result] == ["MR000001"]
+
+
+class TestGetDicomFiles:
+    def test_filters_non_dicom(self, tmp_path, caplog):
+        _make_dicom(tmp_path / "img_001.dcm")
+        (tmp_path / ".DS_Store").write_bytes(b"\x00")
+        (tmp_path / "notes.txt").write_text("nope")
+        with caplog.at_level(logging.WARNING):
+            result = get_dicom_files(tmp_path)
+        assert [p.name for p in result] == ["img_001.dcm"]
+        assert ".DS_Store" in caplog.text
+
+    def test_rejects_nifti(self, tmp_path):
+        # get_dicom_files is DICOM-only — a NIfTI is not a DICOM.
+        _make_nifti(tmp_path / "vol_001.nii.gz")
+        _make_dicom(tmp_path / "img_001.dcm")
+        result = get_dicom_files(tmp_path)
+        assert [p.name for p in result] == ["img_001.dcm"]
+
+    def test_validate_false_returns_all(self, tmp_path):
+        (tmp_path / "a.dcm").touch()
+        (tmp_path / ".DS_Store").write_bytes(b"\x00")
+        result = get_dicom_files(tmp_path, validate=False)
+        assert {p.name for p in result} == {"a.dcm", ".DS_Store"}
 
 
 # =============================================================================

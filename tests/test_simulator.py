@@ -56,8 +56,31 @@ class TestVolumeSimulatorConstruction:
     def test_empty_source(self, tmp_path):
         source = tmp_path / "source"
         source.mkdir()
-        with pytest.raises(ValueError, match="No volume files"):
+        with pytest.raises(ValueError, match="Source directory is empty"):
             VolumeSimulator(source, tmp_path / "target", tr=1.0)
+
+    def test_source_with_only_junk_raises(self, tmp_path):
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / ".DS_Store").write_bytes(b"\x00junk")
+        (source / "notes.txt").write_text("nope")
+        with pytest.raises(ValueError, match="none are valid DICOM or NIfTI"):
+            VolumeSimulator(source, tmp_path / "target", tr=1.0)
+
+    def test_ignores_stray_non_volume_files(self, tmp_path):
+        source = tmp_path / "source"
+        source.mkdir()
+        for i in range(3):
+            data = np.ones((4, 4, 4), dtype=np.float32)
+            nib.save(nib.Nifti1Image(data, np.eye(4)), source / f"vol_{i:03d}.nii.gz")
+        # A stray macOS metadata file that sorts BEFORE the real volumes, so it
+        # would otherwise become volume_files[0] (used for type/TR detection).
+        (source / ".DS_Store").write_bytes(b"\x00junk")
+
+        sim = VolumeSimulator(source, tmp_path / "target", tr=1.5)
+        assert len(sim.volume_files) == 3
+        assert sim.source_type == "nifti"
+        assert all(f.name != ".DS_Store" for f in sim.volume_files)
 
     def test_speed_affects_delay(self, tmp_path):
         source = tmp_path / "source"

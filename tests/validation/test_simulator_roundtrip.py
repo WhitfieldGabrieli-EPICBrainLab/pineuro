@@ -67,7 +67,7 @@ def test_simulator_construct_requires_volume_files(tmp_path):
     """An empty source_dir raises ValueError (contract)."""
     source_dir = tmp_path / "source_empty"
     source_dir.mkdir()
-    with pytest.raises(ValueError, match="No volume files"):
+    with pytest.raises(ValueError, match="Source directory is empty"):
         VolumeSimulator(source_dir, tmp_path / "tgt", tr=1.0, speed=100.0)
 
 

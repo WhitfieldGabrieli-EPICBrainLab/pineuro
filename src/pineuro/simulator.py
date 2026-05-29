@@ -216,10 +216,19 @@ class VolumeSimulator:
         if not self.source_dir.is_dir():
             raise ValueError(f"Source is not a directory: {self.source_dir}")
 
-        # Auto-detect source type and get volume files
+        # Auto-detect source type and get volume files (filters out non-volume junk
+        # like .DS_Store, so volume_files[0] below is always a real volume)
         self.volume_files = get_volume_files(self.source_dir)
         if len(self.volume_files) == 0:
-            raise ValueError(f"No volume files (DICOM or NIfTI) found in: {self.source_dir}")
+            # Distinguish a truly empty directory from one holding only non-volume files.
+            raw_files = get_volume_files(self.source_dir, validate=False)
+            if raw_files:
+                names = ", ".join(sorted(f.name for f in raw_files)[:20])
+                raise ValueError(
+                    f"Source directory contains {len(raw_files)} file(s) but none are valid "
+                    f"DICOM or NIfTI volumes: {self.source_dir} ({names})"
+                )
+            raise ValueError(f"Source directory is empty: {self.source_dir}")
 
         # Determine source type based on first file
         if is_nifti_file(self.volume_files[0]):

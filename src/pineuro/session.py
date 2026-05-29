@@ -1597,6 +1597,7 @@ def run_dicom_collection(
         Paths to collected DICOM folders (one per run)
     """
     from .preprocessing import collect_volumes
+    from .utils import get_volume_files
 
     logger.info("")
     logger.info("=" * 60)
@@ -1639,11 +1640,13 @@ def run_dicom_collection(
 
         # Skip if simulator outputs already present
         if use_simulator and output_dir.exists():
-            # Get all files (supports extensionless DICOMs)
-            existing_volumes = [f for f in output_dir.iterdir() if f.is_file()]
+            # Count only valid volumes (supports extensionless DICOMs) so a stray
+            # file (e.g. .DS_Store) can't inflate the count and wrongly skip a run
+            # that is actually one volume short.
+            existing_volumes = get_volume_files(output_dir)
             if len(existing_volumes) >= n_volumes:
                 logger.info(
-                    f"Skipping simulator collection for run {run_num}: {len(existing_volumes)} files already exist in {output_dir}"
+                    f"Skipping simulator collection for run {run_num}: {len(existing_volumes)} volumes already exist in {output_dir}"
                 )
                 collected_folders.append(output_dir)
                 continue

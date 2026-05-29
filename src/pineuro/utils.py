@@ -696,18 +696,74 @@ def _check_command_installation(cmd: Union[str, Path] = "fsl") -> None:
 # DICOM file extensions to search for
 DICOM_EXTENSIONS = ["*.dcm", "*.DCM", "*.ima", "*.IMA"]
 
+# Basenames that are never volume files (OS metadata). Matched case-insensitively.
+_JUNK_BASENAMES = frozenset({"thumbs.db", "desktop.ini"})
 
-def get_dicom_files(directory: Path) -> list[Path]:
+
+def _is_obvious_junk(path: Path) -> bool:
+    """Return True for files that are never DICOM/NIfTI volumes, detected cheaply.
+
+    Catches OS metadata without a header read: dot-prefixed files (``.DS_Store``,
+    AppleDouble ``._*``, atomic-copy ``.*.tmp``) and known junk basenames
+    (``Thumbs.db``, ``desktop.ini``). Extensionless files are NOT junk — some
+    scanners export DICOMs without an extension.
+    """
+    return path.name.startswith(".") or path.name.lower() in _JUNK_BASENAMES
+
+
+def _filter_volume_files(directory: Path, validator: Callable[[Path], bool], *, kind: str) -> list[Path]:
+    """List files in ``directory`` accepted by ``validator``, sorted by path.
+
+    Skips obvious junk (see :func:`_is_obvious_junk`) and ``.json`` sidecars
+    before the header read, then validates the rest. Emits a single warning
+    naming the non-volume files that were ignored. ``kind`` labels the volume
+    type in log messages (e.g. ``"DICOM/NIfTI"``).
+    """
+    valid: list[Path] = []
+    skipped: list[Path] = []
+    for f in directory.iterdir():
+        if not f.is_file():
+            continue
+        if f.name.lower().endswith(".json"):
+            # NIfTI sidecar — an expected companion, not a volume; exclude silently.
+            continue
+        if _is_obvious_junk(f) or not validator(f):
+            skipped.append(f)
+        else:
+            valid.append(f)
+    valid.sort()
+
+    if skipped:
+        names = sorted(f.name for f in skipped)
+        shown = ", ".join(names[:20])
+        if len(names) > 20:
+            shown += f", and {len(names) - 20} more"
+        if valid:
+            logger.warning(f"Ignored {len(skipped)} non-volume file(s) in {directory}: {shown}")
+        else:
+            logger.warning(
+                f"No valid {kind} volumes in {directory}; ignored {len(skipped)} non-volume file(s): {shown}"
+            )
+    return valid
+
+
+def get_dicom_files(directory: Path, validate: bool = True) -> list[Path]:
     """
     Get all DICOM files in a directory, sorted by filename.
 
-    Returns all files in the directory, assuming they are valid DICOM files.
-    This supports DICOM files without extensions (common with some scanner exports).
+    By default, filters out non-DICOM files (OS metadata like ``.DS_Store``,
+    text files, JSON sidecars, scanner junk) by reading each file's header, so
+    stray files never enter the pipeline. Validation is header-only and supports
+    extensionless DICOMs (common with some scanner exports).
 
     Parameters
     ----------
     directory : Path
         Directory to search for DICOM files
+    validate : bool, default=True
+        If True, return only files that validate as DICOM and log a warning
+        naming any non-DICOM files that were ignored. If False, return every
+        file unfiltered (escape hatch for callers that must list raw contents).
 
     Returns
     -------
@@ -715,10 +771,11 @@ def get_dicom_files(directory: Path) -> list[Path]:
         Sorted list of DICOM file paths
 
     """
-    # Get all files in directory (supports extensionless DICOMs)
-    dicom_files = [f for f in directory.iterdir() if f.is_file()]
-    dicom_files.sort()
-    return dicom_files
+    if not validate:
+        dicom_files = [f for f in directory.iterdir() if f.is_file()]
+        dicom_files.sort()
+        return dicom_files
+    return _filter_volume_files(directory, is_valid_dicom, kind="DICOM")
 
 
 def is_valid_dicom(file_path: Path, validate_pixels: bool = False) -> bool:
@@ -823,17 +880,24 @@ def get_nifti_files(directory: Path) -> list[Path]:
     return valid_niftis
 
 
-def get_volume_files(directory: Path) -> list[Path]:
+def get_volume_files(directory: Path, validate: bool = True) -> list[Path]:
     """
-    Get all volume files in a directory, sorted by filename.
+    Get all volume files (DICOM or NIfTI) in a directory, sorted by filename.
 
-    Returns all files in the directory, assuming they are valid volume files.
-    This supports DICOM files without extensions (common with some scanner exports).
+    By default, filters out non-volume files (OS metadata like ``.DS_Store``,
+    text files, JSON sidecars, scanner junk) by reading each file's header, so
+    stray files never enter the pipeline. Validation is header-only and supports
+    extensionless DICOMs (common with some scanner exports).
 
     Parameters
     ----------
     directory : Path
         Directory to search for volume files
+    validate : bool, default=True
+        If True, return only files that validate as DICOM or NIfTI and log a
+        warning naming any non-volume files that were ignored. If False, return
+        every file unfiltered (escape hatch for callers that must list raw
+        contents, e.g. to distinguish an empty directory from one full of junk).
 
     Returns
     -------
@@ -841,10 +905,11 @@ def get_volume_files(directory: Path) -> list[Path]:
         Sorted list of volume file paths
 
     """
-    # Get all files in directory (supports extensionless DICOMs)
-    volume_files = [f for f in directory.iterdir() if f.is_file()]
-    volume_files.sort()
-    return volume_files
+    if not validate:
+        volume_files = [f for f in directory.iterdir() if f.is_file()]
+        volume_files.sort()
+        return volume_files
+    return _filter_volume_files(directory, is_valid_volume, kind="DICOM/NIfTI")
 
 
 def is_nifti_file(file_path: Path) -> bool:
