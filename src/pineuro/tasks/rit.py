@@ -16,9 +16,13 @@ introduced the task but did not prescribe how it is packaged into a session,
 so the number of runs and the number of trials per run are
 study-configuration choices.
 
-- Each run draws its trials from one of two memory passes; the pass → run
-  assignment is shuffled deterministically per participant, and memories
-  within the chosen pass are shuffled before presentation.
+- The keywords file groups memories into ``total_runs`` passes (its ``pass``
+  field is authoritative; the task never re-partitions memories). Each RIT run
+  draws its trials from one pass. The pass for a run is chosen by a
+  per-participant shuffle indexed by that run's ordinal across *all* of the
+  participant's sessions, so the passes are distributed complementarily across
+  runs (e.g. ses-01 vs ses-03) and which pass is "first" varies per participant.
+  Memories within the chosen pass are shuffled before presentation.
 - Each trial (~120-125s):
     1. Memory prompt + keyword (5s)
     2. Reflection: "Think about this memory in detail" (25s)
@@ -37,7 +41,9 @@ Pre-created JSON file per participant in ``keywords_dir``, discovered by
 participant ID via glob matching. Each memory entry must include:
 
 - ``keyword`` (str): shown on screen with the memory prompt as a recall anchor.
-- ``pass`` (int, 1 or 2): which of the two passes this memory belongs to.
+- ``pass`` (int): which pass this memory belongs to. The file must define
+  exactly ``total_runs`` distinct passes, each with at least
+  ``n_trials_per_run`` memories.
 - ``memory_prompt`` (str): the prompt text shown to the participant.
 
 Optional fields (recorded in the events TSV but not used to drive task logic):
@@ -224,6 +230,19 @@ RIT_METADATA = TaskMetadata(
             max_value=8,
             hint="Number of trials per run (default: 4)",
         ),
+        TaskParameter(
+            key="total_runs",
+            label="Total RIT Runs (across study)",
+            type="int",
+            default=2,
+            min_value=1,
+            max_value=8,
+            hint=(
+                "Total number of RIT runs for this participant across the whole "
+                "study (all sessions). Defines the number of memory passes: the "
+                "keywords file must contain exactly this many passes."
+            ),
+        ),
     ],
     compute_max_run_seconds=_rit_max_run_seconds,
 )
@@ -254,8 +273,9 @@ class RITTask(BaseLocalizerTask):
         See the module docstring for the required JSON schema. Alternatively,
         pass ``keywords_file`` directly for standalone use.
     run : int
-        Run number (1 or 2). The pass each run draws from is randomized
-        deterministically per participant.
+        Within-session run number (1-based). Used only for retry/slot
+        bookkeeping; the memory pass is selected from the cross-session run
+        ordinal (see ``total_runs``), not from this value.
     memory_display_duration : float
         Duration to show memory prompt + keyword (default: 5.0s).
     reflection_duration : float
@@ -272,6 +292,10 @@ class RITTask(BaseLocalizerTask):
         Keys for rating scale navigation.
     n_trials_per_run : int
         Number of trials per run (default: 4).
+    total_runs : int
+        Total number of RIT runs for this participant across the whole study
+        (all sessions). Sets the number of memory passes; the keywords file
+        must contain exactly this many passes (default: 2).
     keywords_file : str or Path, optional
         Direct path to a specific keywords file (overrides keywords_dir lookup).
     simulator : VolumeSimulator, optional
@@ -297,6 +321,7 @@ class RITTask(BaseLocalizerTask):
         right_key: str = "2",
         confirm_key: str = "0",
         n_trials_per_run: int = 4,
+        total_runs: int = 2,
         keywords_file: Union[str, Path] | None = None,
         simulator=None,
         **kwargs,
@@ -321,12 +346,16 @@ class RITTask(BaseLocalizerTask):
         self.right_key = right_key
         self.confirm_key = confirm_key
         self.n_trials_per_run = n_trials_per_run
+        self.total_runs = total_runs
 
         # Populated in setup()
         self._memories: list[dict[str, Any]] = []
         self._rumination_prompts: list[str] = []
         self._distraction_prompts: list[str] = []
         self._target_pass: int = 0
+        # Position of the chosen pass in the per-participant shuffle (0-based),
+        # set in _load_keywords(); also offsets the prompt-pool window.
+        self._pass_window: int = 0
 
     # =========================================================================
     # Keywords loading
@@ -383,19 +412,79 @@ class RITTask(BaseLocalizerTask):
             f"Tried patterns: {patterns}"
         )
 
+    def _prior_rit_passes(self) -> list[int]:
+        """Passes already used by this participant's prior recorded RIT runs.
+
+        Reads the recorded ``target_pass`` of every completed RIT run across all
+        of the participant's sessions -- each session keeps its own
+        ``preprocessing/task_state_rit`` ledger -- plus any earlier-slot runs
+        already recorded in the current session. Pass selection draws the next
+        *unused* pass from this set, so two single-run sessions (e.g. ses-01 and
+        ses-03) get distinct, complementary passes even though both have
+        ``run_number == 1`` -- and complementarity holds even if runs happen out
+        of order or a middle session's ledger is missing.
+
+        Output paths follow ``<base>/sub-XX/ses-YY/preprocessing``, so the
+        participant directory is ``output_dir``'s grandparent and sibling
+        sessions are its ``ses-*`` children. Raises ``ValueError`` if that layout
+        can't be resolved -- rather than silently degrading into a pass collision
+        -- since the caller skips this lookup entirely when ``total_runs == 1``.
+        """
+        from .state import TaskState
+
+        participant_dir = Path(self.output_dir).resolve().parent.parent
+        if not participant_dir.is_dir():
+            raise ValueError(
+                "RIT cross-session pass assignment needs the standard "
+                "<base>/sub-XX/ses-YY/preprocessing output layout, but could not "
+                f"resolve a participant directory from output_dir={self.output_dir!r}. "
+                "Set total_runs=1 for single-run/standalone use."
+            )
+
+        passes: list[int] = []
+        for session_dir in sorted(participant_dir.glob("ses-*")):
+            if session_dir.name == self.session_id:
+                # Current session: only earlier slots already recorded count.
+                if self._task_state is not None:
+                    passes.extend(
+                        r.task_state_snapshot["target_pass"]
+                        for r in self._task_state.completed_runs
+                        if r.run_type == "localizer"
+                        and (r.slot_run_number or 0) < self.run_number
+                        and "target_pass" in r.task_state_snapshot
+                    )
+                continue
+            state_file = session_dir / "preprocessing" / f"task_state_{self.task_id}" / "task_state.json"
+            if not state_file.exists():
+                continue
+            try:
+                state = TaskState.load(state_file.parent, task_id=self.task_id)
+            except Exception as exc:  # pragma: no cover - defensive I/O guard
+                logger.warning("RIT: could not read prior task state at %s: %s", state_file, exc)
+                continue
+            passes.extend(
+                r.task_state_snapshot["target_pass"]
+                for r in state.completed_runs
+                if r.run_type == "localizer" and "target_pass" in r.task_state_snapshot
+            )
+        return passes
+
     def _load_keywords(self) -> None:
         """Load keywords file and assign memories to this run.
 
-        Randomizes deterministically per participant (seed derived from
-        ``participant_id``):
+        Pass *membership* is taken from the keywords file -- each memory's
+        ``pass`` field is authoritative and the task never partitions memories
+        into passes. The run-level randomizations are seeded deterministically
+        per participant:
 
-        1. Pass → run mapping is shuffled, so for some participants run 1
-           draws from pass 1 and for others from pass 2.
-        2. The memories within the selected pass are shuffled before the
-           first ``n_trials_per_run`` are taken.
-
-        Also shuffles rumination and distraction prompts using the same
-        RNG (existing behavior, preserved).
+        1. The file's distinct passes are shuffled per participant; this run draws
+           the next pass the participant has not used across all of their RIT runs
+           (``_prior_rit_passes``), so the passes are complementary across runs and
+           pass 1 is not pinned to the first run.
+        2. Memories within the selected pass are shuffled before the first
+           ``n_trials_per_run`` are taken.
+        3. The rumination/distraction prompt pools are shuffled and split into
+           non-overlapping per-run windows keyed to the chosen pass's position.
         """
         keywords_path = self._resolve_keywords_file()
         logger.info(f"Loading keywords file: {keywords_path}")
@@ -408,16 +497,35 @@ class RITTask(BaseLocalizerTask):
             self._stage_task_state_snapshot()
             return
 
+        # Pass membership is file-defined; validate the file matches total_runs.
+        pass_labels = sorted({m["pass"] for m in all_memories})
+        n_passes = self.total_runs
+        if len(pass_labels) != n_passes:
+            raise ValueError(
+                f"Keywords file {keywords_path} defines {len(pass_labels)} pass(es) "
+                f"{pass_labels}, but total_runs={n_passes}. The file must contain "
+                f"exactly total_runs distinct passes."
+            )
+
         # Deterministic per-participant RNG. Use a stable hash (hashlib) rather
         # than the builtin hash(), which is salted per process (PYTHONHASHSEED)
         # and would give a different randomization on every run.
         seed = int(hashlib.sha256(str(self.participant_id).encode()).hexdigest(), 16) & 0xFFFFFFFF
         rng = random.Random(seed)
 
-        # 1. Randomize which pass this run draws from.
-        pass_order = [1, 2]
-        rng.shuffle(pass_order)
-        self._target_pass = pass_order[self.run_number - 1]
+        # 1. Randomly order the file-defined passes per participant, then draw the
+        #    next pass this participant has not used across all of their RIT runs.
+        #    Drawing the *unused* pass (rather than indexing by a run count) keeps
+        #    the passes complementary even if runs happen out of order or a middle
+        #    session's ledger is missing -- and pass 1 is not pinned to the first
+        #    run. A single-run study has one pass, so no cross-session lookup.
+        shuffled_passes = list(pass_labels)
+        rng.shuffle(shuffled_passes)
+        used = [] if self.total_runs == 1 else self._prior_rit_passes()
+        used_set = set(used)
+        remaining = [p for p in shuffled_passes if p not in used_set]
+        self._target_pass = remaining[0] if remaining else shuffled_passes[len(used) % n_passes]
+        self._pass_window = shuffled_passes.index(self._target_pass)
 
         # 2. Filter to this pass and shuffle within-pass order.
         run_memories = [m for m in all_memories if m["pass"] == self._target_pass]
@@ -430,14 +538,24 @@ class RITTask(BaseLocalizerTask):
         rng.shuffle(run_memories)
         self._memories = run_memories[: self.n_trials_per_run]
 
-        # 3. Shuffle rumination / distraction prompts (unchanged).
+        # 3. Shuffle the rumination / distraction prompt pools, then give this run
+        #    a non-overlapping window of n_trials_per_run prompts. The window offset
+        #    follows the chosen pass's position in the shuffle, so prompt
+        #    complementarity tracks pass complementarity from one source of truth.
+        if self.total_runs * self.n_trials_per_run > len(DISTRACTION_PROMPTS):
+            logger.warning(
+                "RIT: total_runs=%d x n_trials_per_run=%d exceeds the %d-prompt pool; "
+                "distraction/rumination prompts will repeat across runs.",
+                self.total_runs,
+                self.n_trials_per_run,
+                len(DISTRACTION_PROMPTS),
+            )
         rumination_order = list(range(len(RUMINATION_PROMPTS)))
         distraction_order = list(range(len(DISTRACTION_PROMPTS)))
         rng.shuffle(rumination_order)
         rng.shuffle(distraction_order)
 
-        # Run 1 gets first half, run 2 gets second half
-        start = (self.run_number - 1) * self.n_trials_per_run
+        start = self._pass_window * self.n_trials_per_run
         end = start + self.n_trials_per_run
         self._rumination_prompts = [
             RUMINATION_PROMPTS[rumination_order[i % len(RUMINATION_PROMPTS)]] for i in range(start, end)
@@ -446,7 +564,13 @@ class RITTask(BaseLocalizerTask):
             DISTRACTION_PROMPTS[distraction_order[i % len(DISTRACTION_PROMPTS)]] for i in range(start, end)
         ]
 
-        logger.info(f"Loaded {len(self._memories)} memories for run {self.run_number} (pass {self._target_pass})")
+        logger.info(
+            "Loaded %d memories for RIT run %d (pass %d, window %d)",
+            len(self._memories),
+            self.run_number,
+            self._target_pass,
+            self._pass_window,
+        )
         self._stage_task_state_snapshot()
 
     def _restore_prior_selection(self, all_memories: list[dict[str, Any]]) -> bool:
@@ -476,6 +600,7 @@ class RITTask(BaseLocalizerTask):
             return False
 
         self._target_pass = snap["target_pass"]
+        self._pass_window = snap.get("pass_window", self._pass_window)
         self._memories = restored
         self._rumination_prompts = list(snap.get("rumination_prompts", []))
         self._distraction_prompts = list(snap.get("distraction_prompts", []))
@@ -491,6 +616,7 @@ class RITTask(BaseLocalizerTask):
         """Record this run's selection so it persists and can be restored on retry."""
         self._task_state_snapshot = {
             "target_pass": self._target_pass,
+            "pass_window": self._pass_window,
             "keywords": [m["keyword"] for m in self._memories],
             "rumination_prompts": list(self._rumination_prompts),
             "distraction_prompts": list(self._distraction_prompts),

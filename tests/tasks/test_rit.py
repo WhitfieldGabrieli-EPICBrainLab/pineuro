@@ -33,6 +33,14 @@ class TestRITTaskMetadata:
         assert "keywords_dir" in param_keys
         assert "rumination_duration" in param_keys
         assert "n_trials_per_run" in param_keys
+        assert "total_runs" in param_keys
+
+    def test_default_n_runs_is_one(self):
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        # RIT defaults to a single localizer run per session; the study-wide
+        # pass count is the separate `total_runs` parameter.
+        assert get_task_metadata("rit").default_n_runs == 1
 
 
 # =============================================================================
@@ -147,81 +155,320 @@ class TestRITKeywordParsing:
 
 
 # =============================================================================
-# RIT keyword loading — randomization behavior
+# RIT keyword loading — cross-session pass assignment & randomization
 # =============================================================================
 
 
 class TestRITKeywordLoading:
-    """Tests for _load_keywords pass-assignment and within-pass shuffles."""
+    """Tests for _load_keywords: file-defined passes, draw-next-unused-pass
+    selection, and per-participant within-run randomization."""
 
     @staticmethod
-    def _write_keywords(tmp_path):
+    def _write_keywords(tmp_path, n_passes=2, per_pass=4):
         memories = [
             {"keyword": f"kw{i}_p{p}", "pass": p, "memory_prompt": f"Prompt {i} pass {p}"}
-            for p in (1, 2)
-            for i in range(1, 5)
+            for p in range(1, n_passes + 1)
+            for i in range(1, per_pass + 1)
         ]
         kw_file = tmp_path / "sub-01_rit_keywords.json"
         kw_file.write_text(json.dumps({"memories": memories}))
         return kw_file
 
     @staticmethod
-    def _make_task(kw_file, participant_id, run):
+    def _make_task(kw_file, participant_id, *, prior_passes=(), total_runs=2, run=1, task_state=None):
+        """Build a bare RITTask with a stubbed set of prior-run passes.
+
+        ``__new__`` bypasses __init__, so every attribute _load_keywords touches
+        is set explicitly. ``_prior_rit_passes`` is stubbed to ``prior_passes``
+        (the passes this participant's earlier RIT runs already used) so these
+        tests isolate the draw-next-unused logic from filesystem enumeration
+        (the real method is exercised in TestRITPriorPasses).
+        """
         from pineuro.tasks.rit import RITTask
 
         task = RITTask.__new__(RITTask)
         task.keywords_dir = None
         task._keywords_file_override = kw_file
         task.participant_id = participant_id
+        task.session_id = "ses-01"
         task.run_number = run
         task.n_trials_per_run = 4
-        task._task_state = None  # mirrors TaskBase.__init__ (bypassed by __new__)
+        task.total_runs = total_runs
+        task._task_state = task_state
+        task._pass_window = 0
+        task.output_dir = kw_file.parent
+        task._prior_rit_passes = lambda: list(prior_passes)
         return task
 
     def test_load_keywords_deterministic_per_participant(self, tmp_path):
         kw_file = self._write_keywords(tmp_path)
-        task1 = self._make_task(kw_file, "sub-001", 1)
-        task2 = self._make_task(kw_file, "sub-001", 1)
+        task1 = self._make_task(kw_file, "sub-001")
+        task2 = self._make_task(kw_file, "sub-001")
         task1._load_keywords()
         task2._load_keywords()
         assert [m["keyword"] for m in task1._memories] == [m["keyword"] for m in task2._memories]
 
     def test_load_keywords_all_memories_same_pass(self, tmp_path):
         kw_file = self._write_keywords(tmp_path)
-        task = self._make_task(kw_file, "sub-001", 1)
+        task = self._make_task(kw_file, "sub-001")
         task._load_keywords()
         passes = {m["pass"] for m in task._memories}
-        assert len(passes) == 1, f"run 1 mixed multiple passes: {passes}"
+        assert len(passes) == 1, f"run mixed multiple passes: {passes}"
         assert len(task._memories) == 4
 
-    def test_load_keywords_pass_assignment_varies_across_participants(self, tmp_path):
-        """Across many participant IDs, run 1 should sometimes draw from pass 2."""
+    def test_pass_assignment_varies_across_participants(self, tmp_path):
+        """Across participant IDs, the first RIT run draws from pass 1 or pass 2."""
         kw_file = self._write_keywords(tmp_path)
-        passes_for_run1 = set()
+        passes_seen = set()
         for i in range(64):
-            task = self._make_task(kw_file, f"sub-{i:03d}", 1)
+            task = self._make_task(kw_file, f"sub-{i:03d}")
             task._load_keywords()
-            passes_for_run1.add(task._memories[0]["pass"])
-            if len(passes_for_run1) == 2:
+            passes_seen.add(task._target_pass)
+            if len(passes_seen) == 2:
                 break
-        assert passes_for_run1 == {1, 2}, (
-            f"Expected both pass values for run 1 across participants; saw {passes_for_run1}"
-        )
+        assert passes_seen == {1, 2}, f"Expected both passes for the first run across participants; saw {passes_seen}"
 
-    def test_load_keywords_within_pass_shuffles(self, tmp_path):
+    def test_within_pass_order_shuffles(self, tmp_path):
         """Memories within the chosen pass aren't always presented in file order."""
         kw_file = self._write_keywords(tmp_path)
-        file_order_p1 = [f"kw{i}_p1" for i in range(1, 5)]
-        file_order_p2 = [f"kw{i}_p2" for i in range(1, 5)]
+        file_order = {
+            1: [f"kw{i}_p1" for i in range(1, 5)],
+            2: [f"kw{i}_p2" for i in range(1, 5)],
+        }
         seen_shuffle = False
         for i in range(64):
-            task = self._make_task(kw_file, f"sub-{i:03d}", 1)
+            task = self._make_task(kw_file, f"sub-{i:03d}")
             task._load_keywords()
             order = [m["keyword"] for m in task._memories]
-            if order != file_order_p1 and order != file_order_p2:
+            if order != file_order[task._target_pass]:
                 seen_shuffle = True
                 break
-        assert seen_shuffle, "Expected to observe at least one shuffled within-pass order across participants"
+        assert seen_shuffle, "Expected at least one shuffled within-pass order across participants"
+
+    def test_complementary_passes_across_runs(self, tmp_path):
+        """The first run and a later run (which sees the first's pass as used)
+        get different, non-overlapping passes, and pass 1 is not pinned first."""
+        kw_file = self._write_keywords(tmp_path)
+        pass1_first = 0
+        n = 40
+        for i in range(n):
+            pid = f"sub-{i:03d}"
+            run0 = self._make_task(kw_file, pid, prior_passes=())
+            run0._load_keywords()
+            run1 = self._make_task(kw_file, pid, prior_passes=(run0._target_pass,))
+            run1._load_keywords()
+            assert run0._target_pass != run1._target_pass
+            assert {m["keyword"] for m in run0._memories}.isdisjoint(m["keyword"] for m in run1._memories)
+            if run0._target_pass == 1:
+                pass1_first += 1
+        # Pass 1 lands in the first run for only some participants (not pinned).
+        assert 0 < pass1_first < n, f"pass 1 -> first run for {pass1_first}/{n} (should vary)"
+
+    def test_prompt_windows_dont_overlap_across_runs(self, tmp_path):
+        """Successive runs get non-overlapping distraction/rumination prompts."""
+        kw_file = self._write_keywords(tmp_path)
+        run0 = self._make_task(kw_file, "sub-001", prior_passes=())
+        run0._load_keywords()
+        run1 = self._make_task(kw_file, "sub-001", prior_passes=(run0._target_pass,))
+        run1._load_keywords()
+        assert len(run0._distraction_prompts) == 4
+        assert set(run0._distraction_prompts).isdisjoint(run1._distraction_prompts)
+        assert set(run0._rumination_prompts).isdisjoint(run1._rumination_prompts)
+
+    def test_total_runs_mismatch_raises(self, tmp_path):
+        """A keywords file whose distinct pass count != total_runs is rejected."""
+        kw_file = self._write_keywords(tmp_path, n_passes=2)
+        task = self._make_task(kw_file, "sub-001", total_runs=3)
+        with pytest.raises(ValueError, match="total_runs"):
+            task._load_keywords()
+
+    def test_retry_restores_recorded_selection(self, tmp_path):
+        """When the current slot already has a recorded run, its exact selection
+        is restored rather than recomputed from the fresh path."""
+        from pineuro.tasks.state import TaskState
+
+        kw_file = self._write_keywords(tmp_path)
+        state = TaskState.create_for_task(tmp_path / "state", task_id="rit")
+        state.record_run(
+            run_type="localizer",
+            volumes_processed=0,
+            attempt=1,
+            slot_run_number=1,
+            task_state_snapshot={
+                "target_pass": 2,
+                "pass_window": 1,
+                "keywords": ["kw3_p2", "kw1_p2"],
+                "rumination_prompts": ["r1"],
+                "distraction_prompts": ["d1"],
+            },
+            merge_into_task_state=False,
+        )
+        # Stubbed fresh path would draw from no priors; restore must win.
+        task = self._make_task(kw_file, "sub-001", prior_passes=(), run=1, task_state=state)
+        task._load_keywords()
+        assert task._target_pass == 2
+        assert [m["keyword"] for m in task._memories] == ["kw3_p2", "kw1_p2"]
+        assert task._pass_window == 1
+
+    def test_single_run_short_circuits_without_disk(self, tmp_path):
+        """total_runs=1 has one pass, so no cross-session lookup happens."""
+        kw_file = self._write_keywords(tmp_path, n_passes=1, per_pass=4)
+        task = self._make_task(kw_file, "sub-001", total_runs=1)
+
+        def _boom():
+            raise AssertionError("_prior_rit_passes must not be called for total_runs=1")
+
+        task._prior_rit_passes = _boom
+        task._load_keywords()
+        assert task._target_pass == 1
+        assert task._pass_window == 0
+        assert len(task._memories) == 4
+
+
+# =============================================================================
+# RIT cross-session pass discovery — _prior_rit_passes
+# =============================================================================
+
+
+class TestRITPriorPasses:
+    """Tests for the cross-session enumeration that drives pass assignment:
+    it reads the passes prior recorded RIT runs already used, and raises (rather
+    than silently colliding) when the standard session layout is missing."""
+
+    @staticmethod
+    def _make_task(participant_dir, session_id, *, run=1, task_state=None):
+        from pineuro.tasks.rit import RITTask
+
+        task = RITTask.__new__(RITTask)
+        task.participant_id = participant_dir.name
+        task.session_id = session_id
+        task.run_number = run
+        task.output_dir = participant_dir / session_id / "preprocessing"
+        task._task_state = task_state
+        return task
+
+    @staticmethod
+    def _record_localizer_run(state_dir, slot, target_pass=None):
+        from pineuro.tasks.state import TaskState
+
+        state = TaskState.load(state_dir, task_id="rit")
+        state.record_run(
+            run_type="localizer",
+            volumes_processed=0,
+            attempt=1,
+            slot_run_number=slot,
+            task_state_snapshot={"target_pass": slot if target_pass is None else target_pass, "keywords": []},
+            merge_into_task_state=False,
+        )
+        state.save()
+
+    def test_first_session_has_no_priors(self, tmp_path):
+        participant_dir = tmp_path / "sub-001"
+        (participant_dir / "ses-01" / "preprocessing").mkdir(parents=True)
+        task = self._make_task(participant_dir, "ses-01")
+        assert task._prior_rit_passes() == []
+
+    def test_reads_prior_session_passes(self, tmp_path):
+        participant_dir = tmp_path / "sub-001"
+        (participant_dir / "ses-01" / "preprocessing").mkdir(parents=True)
+        (participant_dir / "ses-03" / "preprocessing").mkdir(parents=True)
+        self._record_localizer_run(
+            participant_dir / "ses-01" / "preprocessing" / "task_state_rit", slot=1, target_pass=2
+        )
+        task = self._make_task(participant_dir, "ses-03")
+        assert task._prior_rit_passes() == [2]
+
+    def test_reads_earlier_runs_in_current_session(self, tmp_path):
+        from pineuro.tasks.state import TaskState
+
+        participant_dir = tmp_path / "sub-001"
+        state_dir = participant_dir / "ses-01" / "preprocessing" / "task_state_rit"
+        state_dir.mkdir(parents=True)
+        state = TaskState.load(state_dir, task_id="rit")
+        state.record_run(
+            run_type="localizer",
+            volumes_processed=0,
+            attempt=1,
+            slot_run_number=1,
+            task_state_snapshot={"target_pass": 1, "keywords": []},
+            merge_into_task_state=False,
+        )
+        # Current run is slot 2 in the same session; slot 1 already completed.
+        task = self._make_task(participant_dir, "ses-01", run=2, task_state=state)
+        assert task._prior_rit_passes() == [1]
+
+    def test_missing_or_garbled_ledger_is_skipped(self, tmp_path):
+        participant_dir = tmp_path / "sub-001"
+        for ses in ("ses-01", "ses-02", "ses-04"):
+            (participant_dir / ses / "preprocessing").mkdir(parents=True)
+        # ses-01: a valid recorded run.
+        self._record_localizer_run(
+            participant_dir / "ses-01" / "preprocessing" / "task_state_rit", slot=1, target_pass=1
+        )
+        # ses-02: an unparseable ledger.
+        garbled = participant_dir / "ses-02" / "preprocessing" / "task_state_rit"
+        garbled.mkdir(parents=True)
+        (garbled / "task_state.json").write_text("{not valid json")
+        # ses-04: no task_state_rit ledger at all.
+        task = self._make_task(participant_dir, "ses-03")
+        assert task._prior_rit_passes() == [1]
+
+    def test_raises_without_session_layout(self, tmp_path):
+        from pineuro.tasks.rit import RITTask
+
+        task = RITTask.__new__(RITTask)
+        task.participant_id = "sub-001"
+        task.session_id = "ses-01"
+        task.run_number = 2
+        task._task_state = None
+        # No sub-XX/ses-YY layout under this path → fail loud, do not silently
+        # fall back to a value that would re-introduce a pass collision.
+        task.output_dir = tmp_path / "nope" / "missing" / "preprocessing"
+        with pytest.raises(ValueError, match="layout"):
+            task._prior_rit_passes()
+
+    def test_fresh_run_draws_complementary_pass(self, tmp_path):
+        """End-to-end: a fresh session draws the pass a prior session did not use,
+        regardless of which pass that was (proves draw-next-unused on disk)."""
+        from pineuro.tasks.rit import RITTask
+
+        for recorded_pass, expected in ((1, 2), (2, 1)):
+            participant_dir = tmp_path / f"sub-p{recorded_pass}"
+            (participant_dir / "ses-01" / "preprocessing").mkdir(parents=True)
+            (participant_dir / "ses-03" / "preprocessing").mkdir(parents=True)
+            self._record_localizer_run(
+                participant_dir / "ses-01" / "preprocessing" / "task_state_rit",
+                slot=1,
+                target_pass=recorded_pass,
+            )
+            kw_file = participant_dir / "keywords.json"
+            kw_file.write_text(
+                json.dumps(
+                    {
+                        "memories": [
+                            {"keyword": f"kw{i}_p{p}", "pass": p, "memory_prompt": f"m{i}p{p}"}
+                            for p in (1, 2)
+                            for i in range(1, 5)
+                        ]
+                    }
+                )
+            )
+            task = RITTask.__new__(RITTask)
+            task.keywords_dir = None
+            task._keywords_file_override = kw_file
+            task.participant_id = participant_dir.name
+            task.session_id = "ses-03"
+            task.run_number = 1
+            task.n_trials_per_run = 4
+            task.total_runs = 2
+            task._task_state = None
+            task._pass_window = 0
+            task.output_dir = participant_dir / "ses-03" / "preprocessing"
+
+            task._load_keywords()
+
+            assert task._target_pass == expected
+            assert {m["pass"] for m in task._memories} == {expected}
 
 
 # =============================================================================
@@ -311,9 +558,14 @@ class TestRITTaskStatePersistence:
         task.keywords_dir = None
         task._keywords_file_override = kw_file
         task.participant_id = participant_id
+        task.session_id = "ses-01"
         task.run_number = run
         task.n_trials_per_run = 4
+        task.total_runs = 2
         task._task_state = task_state
+        task._pass_window = 0
+        task.output_dir = kw_file.parent
+        task._prior_rit_passes = lambda: []
         return task
 
     def test_fresh_run_stages_snapshot(self, tmp_path):
