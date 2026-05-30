@@ -375,6 +375,51 @@ def feedback_step_for(config: dict[str, Any], step_id: str) -> FeedbackStep | No
     return None
 
 
+def localizer_mask_names(loc: dict[str, Any]) -> list[str]:
+    """Network/contrast mask names a localizer config (raw dict) produces.
+
+    Mirrors :attr:`pineuro.session.LocalizerConfig.mask_names` for the GUI's raw
+    dict configs: networks for rest, ``manual_mask_names`` (or names derived from
+    ``manual_mask_paths``) for manual, contrast keys (plus ``_reverse`` variants
+    when enabled) for task localizers.
+    """
+    loc_type = loc.get("type", "rest")
+    if loc_type == "rest":
+        return list(loc.get("networks", []))
+    if loc_type == "manual":
+        names = list(loc.get("manual_mask_names", []))
+        if names:
+            return names
+        derived: list[str] = []
+        for p in loc.get("manual_mask_paths", []):
+            stem = Path(p).name
+            for suffix in (".nii.gz", ".nii"):
+                if stem.endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            derived.append(stem)
+        return derived
+    names = list(loc.get("contrasts", {}).keys())
+    if loc.get("include_reverse_contrasts", False):
+        names += [f"{k}_reverse" for k in loc.get("contrasts", {})]
+    return names
+
+
+def localizer_is_reused(loc: dict[str, Any]) -> bool:
+    """Whether this localizer (raw dict) reuses masks from an earlier session."""
+    return bool(loc.get("reuse_from_session"))
+
+
+def reused_localizer_indices(config: dict[str, Any]) -> list[int]:
+    """Indices of localizers whose masks are reused from an earlier session."""
+    return [i for i, loc in enumerate(config.get("localizers", [])) if localizer_is_reused(loc)]
+
+
+def has_fresh_localizer(config: dict[str, Any]) -> bool:
+    """Whether any localizer is computed fresh this session (vs every one reused)."""
+    return any(not localizer_is_reused(loc) for loc in config.get("localizers", []))
+
+
 class ThreadSafeCallback:
     """Wrapper for thread-safe GUI callbacks in Flet.
 

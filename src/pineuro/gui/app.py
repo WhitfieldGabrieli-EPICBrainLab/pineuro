@@ -382,6 +382,7 @@ class PyrtnfApp:
                 participant_id=participant_id,
                 base_dir=base_dir,
                 on_select=on_session_selected,
+                study_config=study_config,
             )
             session_dialog.show()
 

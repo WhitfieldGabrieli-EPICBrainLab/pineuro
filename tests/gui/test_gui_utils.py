@@ -10,14 +10,58 @@ from pineuro.gui.utils import (
     ValidationError,
     build_feedback_steps,
     feedback_step_for,
+    has_fresh_localizer,
+    localizer_is_reused,
+    localizer_mask_names,
     pick_directory,
     pick_file,
     pick_save_file,
+    reused_localizer_indices,
     validate_participant_id,
     validate_positive_int,
     validate_positive_number,
     validate_session_config,
 )
+
+# =============================================================================
+# Per-localizer reuse helpers
+# =============================================================================
+
+
+class TestLocalizerReuseHelpers:
+    def test_mask_names_rest(self):
+        assert localizer_mask_names({"type": "rest", "networks": ["DefaultA", "ContA"]}) == ["DefaultA", "ContA"]
+
+    def test_mask_names_task_with_reverse(self):
+        loc = {"type": "rit", "contrasts": {"self": "self>other"}, "include_reverse_contrasts": True}
+        assert localizer_mask_names(loc) == ["self", "self_reverse"]
+
+    def test_mask_names_manual(self):
+        assert localizer_mask_names({"type": "manual", "manual_mask_names": ["L_amyg", "R_amyg"]}) == [
+            "L_amyg",
+            "R_amyg",
+        ]
+
+    def test_is_reused(self):
+        assert localizer_is_reused({"reuse_from_session": "ses-01"}) is True
+        assert localizer_is_reused({}) is False
+        assert localizer_is_reused({"reuse_from_session": None}) is False
+
+    def test_reused_indices_and_fresh(self):
+        config = {
+            "localizers": [
+                {"type": "rest", "reuse_from_session": "ses-01"},
+                {"type": "rit", "contrasts": {"x": "x>0"}},
+            ]
+        }
+        assert reused_localizer_indices(config) == [0]
+        assert has_fresh_localizer(config) is True
+
+    def test_all_reused(self):
+        config = {"localizers": [{"type": "rest", "reuse_from_session": "ses-01"}]}
+        assert reused_localizer_indices(config) == [0]
+        assert has_fresh_localizer(config) is False
+
 
 # =============================================================================
 # validate_participant_id

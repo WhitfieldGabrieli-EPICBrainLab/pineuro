@@ -128,3 +128,80 @@ class TestStudyConfig:
         d = config.to_dict()
         assert "_metadata" in d
         assert len([k for k in d if k != "_metadata"]) == 0
+
+
+# =============================================================================
+# Per-session protocol: session_count / build_session_config
+# =============================================================================
+
+
+class TestBuildSessionConfig:
+    def _study(self) -> StudyConfig:
+        session_config = {
+            "paths": {"base_dir": "/data/study", "participant_id": "", "example_participant_id": "sub-001"},
+            "reference": {"initial_enabled": True, "realtime_enabled": True},
+            "sessions": [
+                {
+                    "notes": "baseline",
+                    "localizers": [{"id": "rest", "type": "rest", "networks": ["DefaultA", "ContA"]}],
+                    "feedback_runs": [{"task": "ball", "mask_source": "rest"}],
+                },
+                {
+                    "notes": "transfer",
+                    "localizers": [
+                        {
+                            "id": "rest",
+                            "type": "rest",
+                            "networks": ["DefaultA", "ContA"],
+                            "reuse_from_session": "ses-01",
+                        }
+                    ],
+                    "feedback_runs": [{"task": "thermometer", "mask_source": "rest"}],
+                },
+            ],
+        }
+        return StudyConfig(metadata=StudyMetadata(name="Multi"), session_config=session_config)
+
+    def test_session_count(self):
+        assert self._study().session_count == 2
+        assert StudyConfig(metadata=StudyMetadata(name="X"), session_config={}).session_count == 0
+
+    def test_build_lifts_protocol_and_attaches_session_block(self):
+        cfg = self._study().build_session_config(1, "sub-07", "ses-02")
+        assert cfg["localizers"][0]["reuse_from_session"] == "ses-01"
+        assert cfg["feedback_runs"][0]["task"] == "thermometer"
+        assert cfg["session"] == {"session_id": "ses-02", "session_number": 2, "notes": "transfer"}
+        # Study-wide blocks are carried over.
+        assert cfg["reference"]["realtime_enabled"] is True
+        # Per-session protocol is not left at the top of the *study* config.
+        assert "sessions" not in cfg
+
+    def test_build_rewrites_base_dir_to_participant_session(self):
+        cfg = self._study().build_session_config(0, "sub-07", "ses-01")
+        assert cfg["paths"]["base_dir"].replace("\\", "/").endswith("study/sub-07/ses-01")
+
+    def test_build_is_idempotent_on_base_dir(self):
+        study = self._study()
+        once = study.build_session_config(0, "sub-07", "ses-01")["paths"]["base_dir"]
+        # The study config itself is not mutated, so a second build matches.
+        twice = study.build_session_config(0, "sub-07", "ses-01")["paths"]["base_dir"]
+        assert once == twice
+
+    def test_build_does_not_mutate_study(self):
+        study = self._study()
+        study.build_session_config(0, "sub-07", "ses-01")
+        assert study.session_config["paths"]["base_dir"] == "/data/study"
+        assert "localizers" not in study.session_config
+
+    def test_build_rejects_out_of_range(self):
+        import pytest
+
+        with pytest.raises(IndexError):
+            self._study().build_session_config(5, "sub-07", "ses-06")
+
+    def test_build_rejects_no_sessions(self):
+        import pytest
+
+        study = StudyConfig(metadata=StudyMetadata(name="X"), session_config={"paths": {}})
+        with pytest.raises(ValueError, match="sessions"):
+            study.build_session_config(0, "sub-01", "ses-01")

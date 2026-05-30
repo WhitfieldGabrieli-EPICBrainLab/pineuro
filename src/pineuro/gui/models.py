@@ -54,6 +54,7 @@ ConfigManager : Handles loading/saving of these models
 pineuro.session : SessionConfig class for pipeline configuration
 """
 
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -134,3 +135,81 @@ class StudyConfig:
             session_config=session_config,
             file_path=file_path,
         )
+
+    @property
+    def session_count(self) -> int:
+        """Number of sessions defined in this study's protocol.
+
+        A study's ``session_config`` carries an ordered ``sessions`` list; each
+        entry holds that session's own ``localizers``/``feedback_runs``. Returns
+        0 for a config that has no ``sessions`` key yet (e.g. a brand-new editor
+        state before the first session is added).
+        """
+        sessions = self.session_config.get("sessions") or []
+        return len(sessions)
+
+    def build_session_config(
+        self,
+        session_index: int,
+        participant_id: str,
+        session_id: str,
+    ) -> dict:
+        """Flatten this study's protocol for one session into a runtime config dict.
+
+        The study-wide/environment blocks (``paths``, ``simulator``, ``scanner``,
+        ``reference``, ``sham``, ``display``, ``study`` ...) are copied verbatim;
+        the chosen session's ``localizers``/``feedback_runs`` are lifted to the top
+        level (the shape :meth:`pineuro.session.SessionConfig._from_dict` consumes),
+        and a ``session`` metadata block is attached. ``paths.base_dir`` is rewritten
+        to the participant-session directory (the GUI path convention: subdirs like
+        ``mask_extraction/`` and ``feedback/`` hang directly off ``paths.base_dir``),
+        stripping any stale participant component so re-builds are idempotent.
+
+        The study config is not mutated; a new dict is returned.
+
+        Args:
+            session_index: 0-based index into ``sessions`` (session_number == index + 1).
+            participant_id: Participant identifier (e.g. "sub-01").
+            session_id: BIDS session id (e.g. "ses-02").
+
+        Returns:
+            A new session_config dict for this participant-session.
+
+        Raises:
+            ValueError: if the study defines no ``sessions``.
+            IndexError: if ``session_index`` is out of range.
+        """
+        sessions = self.session_config.get("sessions")
+        if not sessions:
+            raise ValueError(
+                "study config has no 'sessions' list; run the per-session migration script "
+                "(scripts/migrate_studies_to_sessions.py)"
+            )
+        if not 0 <= session_index < len(sessions):
+            raise IndexError(f"session_index {session_index} out of range for {len(sessions)} session(s)")
+
+        session_proto = sessions[session_index]
+
+        # Study-wide blocks: everything except the per-session protocol list.
+        result: dict = {k: copy.deepcopy(v) for k, v in self.session_config.items() if k != "sessions"}
+
+        # Lift the chosen session's protocol to the top level.
+        result["localizers"] = copy.deepcopy(session_proto.get("localizers", []))
+        result["feedback_runs"] = copy.deepcopy(session_proto.get("feedback_runs", []))
+
+        # Attach the session metadata block (matches SessionMetadata fields).
+        result["session"] = {
+            "session_id": session_id,
+            "session_number": session_index + 1,
+            "notes": session_proto.get("notes", ""),
+        }
+
+        # Rewrite base_dir to the participant-session directory.
+        paths = result.setdefault("paths", {})
+        study_base = Path(str(paths.get("base_dir", "")))
+        parts = study_base.parts
+        if participant_id in parts:
+            study_base = Path(*parts[: parts.index(participant_id)])
+        paths["base_dir"] = str(study_base / participant_id / session_id)
+
+        return result

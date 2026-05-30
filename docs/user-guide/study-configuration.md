@@ -26,7 +26,8 @@ Configure acquisition parameters for each scan type:
 - **TR** — Repetition time in seconds
 - **Volumes** — Number of volumes per localizer run
 - **Runs** — Number of localizer runs (typically 1-2)
-- **Task Type** — `rest` (resting-state), `fixation` (fixation cross), or a task-based localizer (e.g., `selfother`)
+- **Task Type** — `rest` (resting-state), or a task-based localizer (e.g., `selfother`, `rit`)
+- **Masks** — *Compute fresh* this session, or *Reuse ses-NN* to pull this localizer's masks from an earlier session (per-localizer; see [Multi-Session](multi-session.md))
 
 **Feedback**
 - **TR** — Repetition time for feedback runs
@@ -90,13 +91,20 @@ See [Display Setup](display-setup.md).
 - **Control Monitor** — `left` or `right` (operator GUI)
 - **Presenter Monitor** — `left` or `right` (participant PsychoPy display)
 
-### Multi-Session
+### Sessions
 
-- **Enable Multi-Session** — Toggle longitudinal mode (see [Multi-Session](multi-session.md))
+A study declares an ordered list of sessions; each has its own localizer and feedback
+tasks. Use the **Sessions** strip on the Study tab to add, duplicate, select, and remove
+sessions — the Experiment Design, Localizer, and Feedback editors apply to the selected
+session. Localizers can reuse masks from earlier sessions (see [Multi-Session](multi-session.md)).
 
 ## Study File Format
 
-Studies are stored as YAML in `~/.pineuro/studies/{name}.yaml`. The file contains all configuration organized by section (paths, scan, mask, feedback, task, sham, display, study). Studies can be manually edited if needed, though the GUI is the primary interface.
+Studies are stored as YAML in `~/.pineuro/studies/{name}.yaml`. Study-wide/environment
+blocks (`paths`, `simulator`, `scanner`, `reference`, `sham`, `display`) live at the top
+level; the per-session protocol lives under a `sessions:` list, where each entry has its
+own `localizers` and `feedback_runs`. Studies can be manually edited if needed, though the
+GUI is the primary interface.
 
 ## Managing Studies
 

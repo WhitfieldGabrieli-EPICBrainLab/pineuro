@@ -1,9 +1,13 @@
 """Session selection dialog for multi-session studies.
 
 This dialog allows users to:
-- View existing sessions for a participant
-- Select an existing session to continue
-- Create a new session (with mask compute or reuse options)
+- View existing sessions for a participant and continue one
+- Create the next session declared by the study protocol
+
+Each session's protocol (its localizers, feedback tasks, and which masks are
+reused from earlier sessions) is defined in the study config's ``sessions`` list,
+so the dialog no longer asks the operator to choose a mask source — it validates
+that any session a reused localizer points at already exists with approved masks.
 """
 
 from __future__ import annotations
@@ -11,15 +15,75 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import flet as ft
 
 if TYPE_CHECKING:
-    # pineuro.session is a heavy module; import it lazily inside methods.
+    from pineuro.gui.models import StudyConfig
     from pineuro.session import SessionMetadata
 
 logger = logging.getLogger(__name__)
+
+
+def _session_number_from_id(session_id: str) -> int:
+    """Parse a BIDS session id ``'ses-NN'`` into its 1-based session number."""
+    prefix = "ses-"
+    suffix = session_id[len(prefix) :]
+    if session_id.startswith(prefix) and suffix.isdigit():
+        return int(suffix)
+    return 1
+
+
+def validate_session_start(
+    study_config: StudyConfig | None,
+    participant_id: str,
+    session_index: int,
+    base_dir: Path,
+) -> list[str]:
+    """Validate that session ``session_index`` (0-based) can be started.
+
+    Checks, for the chosen session's protocol:
+    - the session index is within the study's declared ``sessions`` list, and
+    - every localizer that reuses masks (``reuse_from_session``) points at an
+      *earlier* session that exists on disk with that localizer's thresholded
+      masks present.
+
+    Returns a list of human-readable error strings; empty means the session may
+    start. Returns ``[]`` when ``study_config`` is ``None`` (nothing to validate).
+    """
+    if study_config is None:
+        return []
+
+    from ..utils import localizer_mask_names
+
+    errors: list[str] = []
+    sessions = study_config.session_config.get("sessions") or []
+    if not 0 <= session_index < len(sessions):
+        return [f"Session {session_index + 1} is not defined in this study (it declares {len(sessions)} session(s))."]
+
+    proto = sessions[session_index]
+    for loc in proto.get("localizers", []):
+        src = loc.get("reuse_from_session")
+        if not src:
+            continue
+        loc_label = loc.get("id") or loc.get("type") or "localizer"
+        src_num = _session_number_from_id(src) if isinstance(src, str) and src.startswith("ses-") else None
+        if src_num is None:
+            errors.append(f"Localizer '{loc_label}' reuses an invalid session id '{src}'.")
+            continue
+        if src_num >= session_index + 1:
+            errors.append(f"Localizer '{loc_label}' reuses {src}, which is not an earlier session.")
+            continue
+        masks_dir = base_dir / participant_id / src / "mask_extraction" / "03_masks"
+        names = localizer_mask_names(loc)
+        missing = [n for n in names if not list(masks_dir.glob(f"*_{n}_thr.nii.gz"))]
+        if not masks_dir.exists() or missing:
+            errors.append(
+                f"Localizer '{loc_label}' reuses {src}, but its masks were not found there "
+                f"(missing: {', '.join(missing) or 'all'}). Run and approve {src} first."
+            )
+    return errors
 
 
 class SessionSelectionDialog:
@@ -31,6 +95,7 @@ class SessionSelectionDialog:
         participant_id: str,
         base_dir: Path,
         on_select: Callable[[str, SessionMetadata | None], None],
+        study_config: StudyConfig | None = None,
     ):
         """Initialize the session selection dialog.
 
@@ -38,18 +103,29 @@ class SessionSelectionDialog:
             page: Flet Page object
             participant_id: Participant ID
             base_dir: Study base directory
-            on_select: Callback when session is selected/created.
-                       Called with (session_id, session_metadata) where
-                       session_metadata is None when continuing an existing session.
+            on_select: Callback when session is selected/created. Called with
+                ``(session_id, session_metadata)`` where ``session_metadata`` is
+                ``None`` when continuing an existing session.
+            study_config: The study being run. Provides the declared session count
+                and per-session reuse requirements (used to bound new-session
+                creation and to validate reused-mask sources).
         """
         self.page = page
         self.participant_id = participant_id
         self.base_dir = Path(base_dir)
         self.on_select = on_select
+        self.study_config = study_config
         from pineuro.session import detect_existing_sessions
 
         self.existing_sessions = detect_existing_sessions(self.base_dir, participant_id)
         self.dialog: ft.AlertDialog | None = None
+
+    @property
+    def session_count(self) -> int | None:
+        """Number of sessions the study declares, or ``None`` if unknown."""
+        if self.study_config is None:
+            return None
+        return self.study_config.session_count
 
     def show(self):
         """Show the session selection dialog."""
@@ -58,52 +134,42 @@ class SessionSelectionDialog:
         else:
             self._show_multi_session_dialog()
 
-    def _show_new_participant_dialog(self):
-        """Show dialog for new participant without existing data."""
-        default_session_id = "ses-01"
+    def _make_session_metadata(self, session_id: str, session_number: int, notes: str) -> SessionMetadata:
+        from pineuro.session import SessionMetadata
 
-        content = ft.Column(
-            [
-                ft.Text(
-                    f"Participant: {self.participant_id}",
-                    size=14,
-                    weight=ft.FontWeight.BOLD,
-                ),
-                ft.Divider(),
-                ft.Text(
-                    "No existing data found for this participant.",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                ),
-                ft.Text(
-                    f"A new session ({default_session_id}) will be created.",
-                    size=12,
-                ),
-            ],
-            tight=True,
-            spacing=10,
-        )
+        return SessionMetadata(session_id=session_id, session_number=session_number, notes=notes)
+
+    def _show_new_participant_dialog(self):
+        """Show dialog for a new participant without existing data (starts ses-01)."""
+        default_session_id = "ses-01"
+        errors = validate_session_start(self.study_config, self.participant_id, 0, self.base_dir)
+
+        body: list[ft.Control] = [
+            ft.Text(f"Participant: {self.participant_id}", size=14, weight=ft.FontWeight.BOLD),
+            ft.Divider(),
+            ft.Text("No existing data found for this participant.", size=12, color=ft.Colors.GREY_600),
+            ft.Text(f"A new session ({default_session_id}) will be created.", size=12),
+        ]
+        body.extend(self._error_controls(errors))
 
         def start_new(e):
-            from pineuro.session import SessionMetadata
-
             self.page.pop_dialog()
-            session_metadata = SessionMetadata(
-                session_id=default_session_id,
-                session_number=1,
-                mask_source="compute",
-            )
-            self.on_select(default_session_id, session_metadata)
+            self.on_select(default_session_id, self._make_session_metadata(default_session_id, 1, ""))
 
         def cancel(e):
             self.page.pop_dialog()
 
         self.dialog = ft.AlertDialog(
             title=ft.Text("Start New Session"),
-            content=ft.Container(content=content, width=400),
+            content=ft.Container(content=ft.Column(body, tight=True, spacing=10), width=400),
             actions=[
                 ft.TextButton("Cancel", on_click=cancel),
-                ft.FilledButton("Start", icon=ft.Icons.PLAY_ARROW, on_click=start_new),
+                ft.FilledButton(
+                    "Start",
+                    icon=ft.Icons.PLAY_ARROW,
+                    on_click=start_new,
+                    disabled=bool(errors),
+                ),
             ],
         )
         self.page.show_dialog(self.dialog)
@@ -111,21 +177,14 @@ class SessionSelectionDialog:
     def _show_multi_session_dialog(self):
         """Show dialog when one or more sessions already exist for this participant."""
         session_tiles: list[ft.Control] = []
-        sessions_with_approved_masks = []
 
         for session in self.existing_sessions:
             session_id = session["session_id"]
-
             status_parts = []
             if session["has_masks"]:
-                if session["masks_approved"]:
-                    status_parts.append("Masks approved")
-                    sessions_with_approved_masks.append(session_id)
-                else:
-                    status_parts.append("Masks extracted")
+                status_parts.append("Masks approved" if session["masks_approved"] else "Masks extracted")
             if session["has_feedback"]:
                 status_parts.append("Feedback started")
-
             status_text = ", ".join(status_parts) if status_parts else "Not started"
 
             session_tiles.append(
@@ -137,153 +196,91 @@ class SessionSelectionDialog:
                 )
             )
 
-        # Add "New Session" option
         from pineuro.session import next_session_id
 
         new_session_id = next_session_id(self.base_dir, self.participant_id)
+        new_session_number = _session_number_from_id(new_session_id)
 
-        content = ft.Column(
-            [
+        # Bound new-session creation by the study's declared session count.
+        count = self.session_count
+        can_create_new = count is None or new_session_number <= count
+
+        body: list[ft.Control] = [
+            ft.Text(f"Participant: {self.participant_id}", size=14, weight=ft.FontWeight.BOLD),
+            ft.Divider(),
+            ft.Text("Existing sessions:", size=12, weight=ft.FontWeight.W_500),
+            ft.Container(
+                content=ft.Column(session_tiles, spacing=0),
+                border=ft.border.all(1, ft.Colors.GREY_300),
+                border_radius=8,
+                padding=0,
+            ),
+            ft.Container(height=10),
+        ]
+        if can_create_new:
+            body.append(ft.Text("Or create the next session:", size=12, weight=ft.FontWeight.W_500))
+        else:
+            body.append(
                 ft.Text(
-                    f"Participant: {self.participant_id}",
-                    size=14,
-                    weight=ft.FontWeight.BOLD,
-                ),
-                ft.Divider(),
-                ft.Text(
-                    "Existing sessions:",
+                    f"All {count} session(s) declared by this study have been created.",
                     size=12,
-                    weight=ft.FontWeight.W_500,
-                ),
-                ft.Container(
-                    content=ft.Column(session_tiles, spacing=0),
-                    border=ft.border.all(1, ft.Colors.GREY_300),
-                    border_radius=8,
-                    padding=0,
-                ),
-                ft.Container(height=10),
-                ft.Text(
-                    "Or create a new session:",
-                    size=12,
-                    weight=ft.FontWeight.W_500,
-                ),
-            ],
-            tight=True,
-            spacing=8,
-        )
+                    color=ft.Colors.GREY_600,
+                )
+            )
 
         def create_new_session(e):
             self.page.pop_dialog()
-            self._show_new_session_dialog(new_session_id, sessions_with_approved_masks)
+            self._show_new_session_dialog(new_session_id, new_session_number)
 
         def cancel(e):
             self.page.pop_dialog()
 
-        self.dialog = ft.AlertDialog(
-            title=ft.Text("Select Session"),
-            content=ft.Container(content=content, width=450, height=350),
-            actions=[
-                ft.TextButton("Cancel", on_click=cancel),
+        actions: list[ft.Control] = [ft.TextButton("Cancel", on_click=cancel)]
+        if can_create_new:
+            actions.append(
                 ft.FilledButton(
                     f"New Session ({new_session_id})",
                     icon=ft.Icons.ADD,
                     on_click=create_new_session,
-                ),
-            ],
+                )
+            )
+
+        self.dialog = ft.AlertDialog(
+            title=ft.Text("Select Session"),
+            content=ft.Container(content=ft.Column(body, tight=True, spacing=8), width=450, height=350),
+            actions=actions,
         )
         self.page.show_dialog(self.dialog)
 
     def _select_existing_session(self, session_id: str):
-        """Handle selection of existing session."""
+        """Handle selection of an existing session (continue — no new metadata)."""
         self.page.pop_dialog()
-        # Continue existing session - no new SessionMetadata needed
         self.on_select(session_id, None)
 
-    def _show_new_session_dialog(self, new_session_id: str, sessions_with_masks: list[str]):
-        """Show dialog for creating a new session."""
-        # Mask source dropdown options
-        mask_options = [
-            ft.dropdown.Option("compute", "Compute new masks (run localizer)"),
+    def _show_new_session_dialog(self, new_session_id: str, session_number: int):
+        """Confirm creation of the next session (protocol-driven; validates reuse)."""
+        errors = validate_session_start(self.study_config, self.participant_id, session_number - 1, self.base_dir)
+
+        notes_field = ft.TextField(label="Notes (optional)", multiline=True, max_lines=3, width=350)
+
+        body: list[ft.Control] = [
+            ft.Text(f"Creating session: {new_session_id}", size=14, weight=ft.FontWeight.BOLD),
+            ft.Divider(),
+            ft.Text(
+                "This session's tasks and mask sources are defined by the study protocol.",
+                size=11,
+                color=ft.Colors.GREY_600,
+            ),
         ]
-
-        for source_session in sessions_with_masks:
-            mask_options.append(
-                ft.dropdown.Option(
-                    f"reuse:{source_session}",
-                    f"Reuse masks from {source_session}",
-                )
-            )
-
-        mask_source_dropdown = ft.Dropdown(
-            label="Mask Source",
-            options=mask_options,
-            value="compute",
-            width=350,
-        )
-
-        notes_field = ft.TextField(
-            label="Notes (optional)",
-            multiline=True,
-            max_lines=3,
-            width=350,
-        )
-
-        content = ft.Column(
-            [
-                ft.Text(
-                    f"Creating session: {new_session_id}",
-                    size=14,
-                    weight=ft.FontWeight.BOLD,
-                ),
-                ft.Divider(),
-                mask_source_dropdown,
-                ft.Container(height=5),
-                ft.Text(
-                    "• 'Compute new masks': Runs full localizer and mask extraction",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                ),
-                ft.Text(
-                    "• 'Reuse masks': Skips localizer, only collects reference scan for coregistration",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                ),
-                ft.Container(height=10),
-                notes_field,
-            ],
-            tight=True,
-            spacing=8,
-        )
+        body.extend(self._error_controls(errors))
+        body.extend([ft.Container(height=10), notes_field])
 
         def create_session(e):
-            from pineuro.session import SessionMetadata
-
             self.page.pop_dialog()
-
-            mask_value = mask_source_dropdown.value or ""
-            if mask_value.startswith("reuse:"):
-                mask_source = "reuse"
-                mask_source_session = mask_value.split(":", 1)[1]
-            else:
-                mask_source = "compute"
-                mask_source_session = None
-
-            # Determine session number
-            existing_multi = [v for v in self.existing_sessions if v["session_id"] is not None]
-            session_number = len(existing_multi) + 1
-
-            session_metadata = SessionMetadata(
-                session_id=new_session_id,
-                session_number=session_number,
-                mask_source=mask_source,
-                mask_source_session=mask_source_session,
-                notes=notes_field.value.strip(),
+            session_metadata = self._make_session_metadata(
+                new_session_id, session_number, (notes_field.value or "").strip()
             )
-
-            logger.info(
-                f"Creating new session: {new_session_id}, mask_source={mask_source}, source_session={mask_source_session}"
-            )
-
+            logger.info(f"Creating new session: {new_session_id} (session_number={session_number})")
             self.on_select(new_session_id, session_metadata)
 
         def back(e):
@@ -292,10 +289,26 @@ class SessionSelectionDialog:
 
         self.dialog = ft.AlertDialog(
             title=ft.Text("New Session Options"),
-            content=ft.Container(content=content, width=400),
+            content=ft.Container(content=ft.Column(body, tight=True, spacing=8), width=400),
             actions=[
                 ft.TextButton("Back", on_click=back),
-                ft.FilledButton("Create", icon=ft.Icons.CHECK, on_click=create_session),
+                ft.FilledButton("Create", icon=ft.Icons.CHECK, on_click=create_session, disabled=bool(errors)),
             ],
         )
         self.page.show_dialog(self.dialog)
+
+    @staticmethod
+    def _error_controls(errors: list[str]) -> list[ft.Control]:
+        """Render validation errors as red warning rows (empty list when valid)."""
+        controls: list[Any] = []
+        for msg in errors:
+            controls.append(
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.WARNING_AMBER, color=ft.Colors.RED_400, size=16),
+                        ft.Text(msg, size=11, color=ft.Colors.RED_400, expand=True),
+                    ],
+                    spacing=6,
+                )
+            )
+        return controls

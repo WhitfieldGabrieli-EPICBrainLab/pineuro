@@ -1807,53 +1807,19 @@ class PipelineRunner:
         mask_extraction_dir = base_dir / "mask_extraction"
         feedback_dir = base_dir / "feedback"
 
-        # Check for mask reuse mode
-        session_metadata = config.get("session", {})
-        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
-        mask_source_session = session_metadata.get("mask_source_session")
+        from ..utils import has_fresh_localizer, localizer_mask_names
 
-        # Determine actual reference run number
-        # In mask reuse mode, realtime (run_id=2 from caller) uses reference run-01 (since no initial reference)
-        # In standard mode, run_id directly maps to reference run number
-        if is_mask_reuse and run_id == 2:
-            actual_reference_run = 1
-        else:
-            actual_reference_run = run_id
+        localizers = config.get("localizers", [])
+        study_base_dir = base_dir.parent.parent  # study root (holds reuse source sessions)
+
+        # Run-number rule: an all-reused session collects only the realtime reference
+        # (run-01); any other session has an initial reference (run-01) so realtime is
+        # run-02. (run_id=1 coregistration is only emitted when a fresh localizer exists.)
+        all_reused = bool(localizers) and not has_fresh_localizer(config)
+        actual_reference_run = 1 if run_id == 1 else (1 if all_reused else 2)
 
         run_str = f"run-{actual_reference_run:02d}"
         self._emit_progress(f"Coregistering network masks to reference {run_str}...")
-
-        # For QC overlay generation, we need the mask_extraction_dir where ICA outputs are
-        source_mask_extraction_dir = None
-
-        if is_mask_reuse and mask_source_session:
-            # Mask reuse mode: get masks and ref_file from source session
-            # The source session is at: study_base_dir / participant_id / source_session_id
-            # Current base_dir is: study_base_dir / participant_id / current_session_id
-            # So we go up one level and into the source session
-            study_base_dir = base_dir.parent.parent  # Go up from participant/session to study
-            source_session_dir = study_base_dir / self.participant_id / mask_source_session
-            source_preprocessing_dir = source_session_dir / "preprocessing"
-            source_mask_extraction_dir = source_session_dir / "mask_extraction"
-
-            localizer_task = config["localizers"][0].get("type", "rest") if config.get("localizers") else "rest"
-            task_name = localizer_task if localizer_task != "rest" else "rest"
-            ref_file = source_preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_boldref.nii.gz"
-            masks_dir = source_mask_extraction_dir / "03_masks"
-
-            self._emit_progress(f"Using masks from source session: {mask_source_session}")
-        else:
-            # Standard mode: get masks and ref_file from current session
-            loc0 = config["localizers"][0] if config.get("localizers") else {}
-            localizer_task = loc0.get("type", "rest")
-            if localizer_task == "manual":
-                # Manual localizer: masks were imported against the participant's
-                # user-supplied reference EPI — there is no preprocessing boldref.
-                ref_file = self._manual_reference_file(base_dir, mask_extraction_dir, loc0)
-            else:
-                task_name = localizer_task if localizer_task != "rest" else "rest"
-                ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{task_name}_boldref.nii.gz"
-            masks_dir = mask_extraction_dir / "03_masks"
 
         # Find the most recent complete reference collection for this run
         n_volumes = config.get("reference", {}).get("initial_n_volumes", 2)
@@ -1882,150 +1848,101 @@ class PipelineRunner:
             root_dir = feedback_dir
             output_subdir = "01_reference"
 
-        # Build mask-to-localizer map for multi-localizer coregistration
-        localizers = config.get("localizers", [])
-        is_multi_localizer = len(localizers) > 1 and not is_mask_reuse
+        # Sham hemisphere-split: drop the combined network mask (its left/right
+        # split masks are used instead).
+        sham_config = config.get("sham", {})
+        sham_combined_name: str | None = None
+        if (
+            sham_config.get("enabled", False)
+            and sham_config.get("delivery_method", "alternative_masks") == "alternative_masks"
+            and sham_config.get("sham_mask_mode", "hemisphere_split") == "hemisphere_split"
+        ):
+            sham_combined_name = sham_config.get("hemisphere_network", "SomMotA")
 
-        if is_multi_localizer:
-            # Multi-localizer: each localizer's masks need its own boldref
-            # Build mask name -> localizer index mapping
-            mask_name_to_loc: dict[str, int] = {}
-            for loc_idx, loc in enumerate(localizers):
-                loc_type = loc.get("type", "rest")
-                if loc_type == "rest":
-                    for target in loc.get("networks", []):
-                        mask_name_to_loc[target] = loc_idx
-                elif loc_type == "manual":
-                    for mask_name in loc.get("manual_mask_names", []):
-                        mask_name_to_loc[mask_name] = loc_idx
-                else:
-                    for mask_name in loc.get("contrasts", {}):
-                        mask_name_to_loc[mask_name] = loc_idx
+        # Tissue masks (WM/CSF) are created fresh this session; coregister them with
+        # the first fresh localizer group (same space). Reused-only sessions have none.
+        tissue_mask_files: list[Path] = []
+        tissue_masks_dir = mask_extraction_dir / "05_tissue"
+        if tissue_masks_dir.exists():
+            tissue_mask_files = sorted(tissue_masks_dir.glob(f"{self._bids_prefix}_tissue_*_mask.nii.gz"))
+        first_fresh_idx = next((i for i, loc in enumerate(localizers) if not loc.get("reuse_from_session")), None)
 
-            # Group masks by localizer, each with its own boldref
-            # Masks live in shared 03_masks/ but originated from different localizer spaces
-            bids_prefix_multi = f"{self.participant_id}_{self.session_id}"
-            all_mask_files = list(masks_dir.glob(f"{bids_prefix_multi}_*_thr.nii.gz"))
+        # Coregister each localizer's masks with the reference (boldref) from its
+        # own source: the current session for fresh localizers, the source session
+        # for reused ones. A session may mix the two.
+        qc_ref_file: Path | None = None
+        source_mask_extraction_dir: Path | None = None  # ICA outputs dir for QC overlays
+        coreg_masks: list[Path] = []
+        for loc_idx, loc in enumerate(localizers):
+            loc_type = loc.get("type", "rest")
+            loc_task_name = "rest" if loc_type == "rest" else loc_type
+            reuse_from = loc.get("reuse_from_session")
+            names = set(localizer_mask_names(loc))
 
-            # Filter sham hemisphere masks
-            sham_config = config.get("sham", {})
-            if sham_config.get("enabled", False):
-                delivery_method = sham_config.get("delivery_method", "alternative_masks")
-                mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
-                if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
-                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                    combined_mask_name = f"{bids_prefix_multi}_{hemisphere_network}_thr.nii.gz"
-                    all_mask_files = [f for f in all_mask_files if f.name != combined_mask_name]
-
-            # Map each mask file to its localizer index by matching mask names
-            loc_groups: dict[int, list[Path]] = {}
-            unmatched: list[Path] = []
-            prefix = f"{self._bids_prefix}_"
-            suffix = "_thr.nii.gz"
-            for mask_file in all_mask_files:
-                name = mask_file.name
-                if name.startswith(prefix) and name.endswith(suffix):
-                    mask_name = name[len(prefix) : -len(suffix)]
-                else:
-                    mask_name = name
-                matched_loc_idx = mask_name_to_loc.get(mask_name)
-                if matched_loc_idx is not None:
-                    loc_groups.setdefault(matched_loc_idx, []).append(mask_file)
-                else:
-                    unmatched.append(mask_file)
-
-            # Tissue masks go with the first localizer (they're in the same space)
-            tissue_mask_files = []
-            tissue_masks_dir = mask_extraction_dir / "05_tissue"
-            if tissue_masks_dir.exists():
-                tissue_mask_files = list(
-                    tissue_masks_dir.glob(f"{self.participant_id}_{self.session_id}_tissue_*_mask.nii.gz")
-                )
-                if tissue_mask_files:
-                    self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
-
-            # Coregister each localizer group with its own boldref
-            all_coreg_masks: list[Path] = []
-            for loc_idx, mask_files in sorted(loc_groups.items()):
-                loc = localizers[loc_idx]
-                loc_type = loc.get("type", "rest")
-                loc_task_name = "rest" if loc_type == "rest" else loc_type
+            if reuse_from:
+                src_session_dir = study_base_dir / self.participant_id / reuse_from
+                loc_me_dir = src_session_dir / "mask_extraction"
+                src_masks_dir = loc_me_dir / "03_masks"
+                src_prefix = f"{self.participant_id}_{reuse_from}"
+                loc_ref_file = src_session_dir / "preprocessing" / f"{src_prefix}_task-{loc_task_name}_boldref.nii.gz"
+            else:
+                loc_me_dir = mask_extraction_dir
+                src_masks_dir = mask_extraction_dir / "03_masks"
+                src_prefix = self._bids_prefix
                 if loc_type == "manual":
-                    # Manual localizer has no preprocessing boldref — its masks
-                    # were imported against the user-supplied reference EPI.
                     loc_dir = mask_extraction_dir / f"loc_{loc_idx}_manual"
                     loc_ref_file = self._manual_reference_file(base_dir, loc_dir, loc)
                 else:
-                    loc_ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task_name}_boldref.nii.gz"
+                    loc_ref_file = preprocessing_dir / f"{src_prefix}_task-{loc_task_name}_boldref.nii.gz"
 
-                # Add tissue masks to the first group only
-                group_files = [str(f) for f in mask_files]
-                if loc_idx == min(loc_groups.keys()) and tissue_mask_files:
-                    group_files += [str(f) for f in tissue_mask_files]
-                if unmatched and loc_idx == min(loc_groups.keys()):
-                    group_files += [str(f) for f in unmatched]
-                    unmatched = []
+            # This localizer's thresholded masks from its source dir: exact name
+            # matches plus derived variants (e.g. hemisphere "{name}_left"), minus the
+            # combined network mask when hemisphere-split sham is active.
+            group_files: list[Path] = []
+            for f in sorted(src_masks_dir.glob(f"{src_prefix}_*_thr.nii.gz")):
+                mask_name = f.name[len(src_prefix) + 1 : -len("_thr.nii.gz")]
+                if sham_combined_name and mask_name == sham_combined_name:
+                    continue
+                if mask_name in names or any(mask_name.startswith(f"{n}_") for n in names):
+                    group_files.append(f)
 
+            if not group_files:
                 self._emit_progress(
-                    f"Coregistering {len(group_files)} masks from localizer {loc_idx} "
-                    f"({loc_task_name}) with its boldref..."
+                    f"Warning: no masks found for localizer {loc_idx} ({loc_task_name}) in {src_masks_dir}"
                 )
+                continue
 
-                coreg_result = coregister_reference(
-                    participant_id=self.participant_id,
-                    session_id=self.session_id,
-                    root_dir=root_dir,
-                    input_dicom=reference_dicom,
-                    network_files=group_files,
-                    ref_file=str(loc_ref_file),
-                    run_id=actual_reference_run,
-                    overwrite=self.overwrite,
-                    output_subdir=output_subdir,
-                )
-                all_coreg_masks.extend(coreg_result)
+            group_strs = [str(f) for f in group_files]
+            if loc_idx == first_fresh_idx and tissue_mask_files:
+                group_strs += [str(f) for f in tissue_mask_files]
+                self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
 
-            coreg_masks = all_coreg_masks
-            self._emit_progress(f"Coregistered {len(coreg_masks)} masks across {len(loc_groups)} localizers")
-        else:
-            # Single localizer (or mask reuse): all masks use the same boldref
-            bids_prefix = f"{self.participant_id}_{self.session_id}"
-            network_files = list(masks_dir.glob(f"{bids_prefix}_*_thr.nii.gz"))
-
-            # Filter out combined hemisphere network mask if using hemisphere_split sham mode
-            sham_config = config.get("sham", {})
-            if sham_config.get("enabled", False):
-                delivery_method = sham_config.get("delivery_method", "alternative_masks")
-                mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
-                if delivery_method == "alternative_masks" and mask_mode == "hemisphere_split":
-                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                    combined_mask_name = f"{bids_prefix}_{hemisphere_network}_thr.nii.gz"
-                    network_files = [f for f in network_files if f.name != combined_mask_name]
-
-            # Include tissue masks for nuisance regression (WM/CSF) if they exist
-            tissue_mask_files = []
-            tissue_masks_dir = mask_extraction_dir / "05_tissue"
-            if tissue_masks_dir.exists():
-                tissue_mask_files = list(
-                    tissue_masks_dir.glob(f"{self.participant_id}_{self.session_id}_tissue_*_mask.nii.gz")
-                )
-                if tissue_mask_files:
-                    self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
-
-            all_mask_files_for_coreg = [str(f) for f in network_files] + [str(f) for f in tissue_mask_files]
-            self._emit_progress(f"Coregistering {len(all_mask_files_for_coreg)} masks to reference {run_str}...")
-
-            coreg_masks = coregister_reference(
+            origin = f"reuse {reuse_from}" if reuse_from else "this session"
+            self._emit_progress(
+                f"Coregistering {len(group_strs)} mask(s) from localizer {loc_idx} ({loc_task_name}, {origin})..."
+            )
+            coreg_result = coregister_reference(
                 participant_id=self.participant_id,
                 session_id=self.session_id,
                 root_dir=root_dir,
                 input_dicom=reference_dicom,
-                network_files=all_mask_files_for_coreg,
-                ref_file=str(ref_file),
+                network_files=group_strs,
+                ref_file=str(loc_ref_file),
                 run_id=actual_reference_run,
                 overwrite=self.overwrite,
                 output_subdir=output_subdir,
             )
-            self._emit_progress(f"Coregistered {len(coreg_masks)} masks to reference {run_str}")
+            coreg_masks.extend(coreg_result)
+            if qc_ref_file is None:
+                qc_ref_file = loc_ref_file
+                source_mask_extraction_dir = loc_me_dir
+
+        ref_file = qc_ref_file
+        self._emit_progress(f"Coregistered {len(coreg_masks)} masks to reference {run_str}")
+
+        if ref_file is None:
+            # No localizer produced masks (nothing coregistered) — skip QC overlays.
+            return
 
         # Generate reference QC overlays for visual approval
         self._emit_progress(f"Generating reference QC overlays for {run_str}...")
@@ -2081,11 +1998,13 @@ class PipelineRunner:
         base_dir = Path(config["paths"]["base_dir"])
         collection_dir = base_dir / "collection"
 
-        # In mask reuse mode, realtime reference is run-01 (no initial reference)
-        # In standard mode, realtime reference is run-02 (after initial reference)
-        session_metadata = config.get("session", {})
-        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
-        run_id = 1 if is_mask_reuse else 2
+        # Realtime reference is run-01 for an all-reused session (no initial reference
+        # collected), else run-02 (after the initial reference).
+        from ..utils import has_fresh_localizer
+
+        localizers = config.get("localizers", [])
+        all_reused = bool(localizers) and not has_fresh_localizer(config)
+        run_id = 1 if all_reused else 2
 
         n_volumes = config.get("reference", {}).get("realtime_n_volumes", 2)
 
@@ -2294,12 +2213,12 @@ class PipelineRunner:
 
         reference_realtime_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
-        # Determine reference run number for mask file pattern
-        # In mask reuse mode, reference is run-01 (no initial reference)
-        # In standard mode, reference is run-02 (after initial reference)
-        session_metadata = config.get("session", {})
-        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
-        realtime_reference_run = 1 if is_mask_reuse else 2
+        # Reference run number for the coregistered-mask file pattern: run-01 for an
+        # all-reused session (no initial reference), else run-02.
+        from ..utils import has_fresh_localizer
+
+        all_reused = bool(config.get("localizers", [])) and not has_fresh_localizer(config)
+        realtime_reference_run = 1 if all_reused else 2
 
         if reference_realtime_enabled:
             # Use reference-coregistered masks

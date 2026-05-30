@@ -51,7 +51,14 @@ from ..config_snapshot import (
     save_config_snapshot,
 )
 from ..models import StudyConfig
-from ..utils import build_feedback_steps, feedback_step_for, truncate_text
+from ..utils import (
+    build_feedback_steps,
+    feedback_step_for,
+    has_fresh_localizer,
+    localizer_is_reused,
+    reused_localizer_indices,
+    truncate_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +87,18 @@ class StepStatus(Enum):
     INTERRUPTED = "interrupted"  # Partial completion (user stopped early)
     FAILED = "failed"
     SKIPPED = "skipped"  # Bypassed: downstream step already complete
+
+
+def _session_number_from_id(session_id: str) -> int:
+    """Parse a BIDS session id ``'ses-NN'`` into its 1-based session number.
+
+    Falls back to 1 for unparseable ids (every participant has at least one session).
+    """
+    prefix = "ses-"
+    suffix = session_id[len(prefix) :]
+    if session_id.startswith(prefix) and suffix.isdigit():
+        return int(suffix)
+    return 1
 
 
 def _build_feedback_step_ids(config: dict[str, Any]) -> list[tuple[str, str]]:
@@ -128,57 +147,47 @@ class ParticipantWorkflowScreen:
         self.session_metadata = session_metadata
         self.on_back_callback = on_back
 
-        # Create participant-specific base directory
-        # Make a deep copy of study config to avoid mutating the original
-        import copy
+        # Build this session's flattened runtime config from the study's protocol.
+        # The study config carries an ordered ``sessions`` list; this session's
+        # 0-based index is its session number minus one. ``build_session_config``
+        # lifts the chosen session's localizers/feedback_runs to the top level and
+        # rewrites paths.base_dir to the participant-session directory.
+        import json
 
-        self.study_config = copy.deepcopy(study_config)
-        base_dir = Path(self.study_config.session_config["paths"]["base_dir"])
+        if session_metadata is not None:
+            session_index = session_metadata.session_number - 1
+        else:
+            session_index = _session_number_from_id(session_id) - 1
 
-        # The base_dir might already contain participant/session paths from a previous session
-        # (if the study_config object was reused). We need to get the study-level base_dir.
-        # Look for participant ID in the path parts and strip it and everything after.
-        parts = base_dir.parts
-        if participant_id in parts:
-            idx = parts.index(participant_id)
-            base_dir = Path(*parts[:idx])
-
-        participant_base_dir = base_dir / participant_id / session_id
-
-        # Update the session config with participant-specific base directory
-        self.study_config.session_config["paths"]["base_dir"] = str(participant_base_dir)
-
-        # Create the participant directory if it doesn't exist
+        flat_session_config = study_config.build_session_config(session_index, participant_id, session_id)
+        self.study_config = StudyConfig(
+            metadata=study_config.metadata,
+            session_config=flat_session_config,
+            file_path=study_config.file_path,
+        )
+        participant_base_dir = Path(flat_session_config["paths"]["base_dir"])
         participant_base_dir.mkdir(parents=True, exist_ok=True)
 
-        # Session config file path for persistence
+        # Persist a small per-session record (identity + notes + created). The
+        # protocol itself lives in the study config, not here; this only preserves
+        # the original creation timestamp across returns.
         session_metadata_file = participant_base_dir / "session_metadata.json"
-
-        # Store session config info in session config if provided (new session)
-        if session_metadata:
-            session_metadata_dict = {
-                "session_id": session_metadata.session_id,
-                "session_number": session_metadata.session_number,
-                "mask_source": session_metadata.mask_source,
-                "mask_source_session": session_metadata.mask_source_session,
-                "localizer_enabled": session_metadata.localizer_enabled,
-                "notes": session_metadata.notes,
-            }
-            self.study_config.session_config["session"] = session_metadata_dict
-
-            # Persist session config to file
-            import json
-
-            with open(session_metadata_file, "w") as f:
-                json.dump(session_metadata_dict, f, indent=2)
-
-        elif session_metadata_file.exists():
-            # Load existing session config from file (continuing existing session)
-            import json
-
-            with open(session_metadata_file) as f:
-                session_metadata_dict = json.load(f)
-            self.study_config.session_config["session"] = session_metadata_dict
+        session_block = dict(flat_session_config.get("session", {}))
+        if session_metadata_file.exists():
+            try:
+                with open(session_metadata_file) as f:
+                    saved = json.load(f)
+                if saved.get("created"):
+                    session_block["created"] = saved["created"]
+            except (json.JSONDecodeError, OSError):
+                pass
+        if "created" not in session_block and session_metadata is not None:
+            created = getattr(session_metadata, "created", None)
+            if created:
+                session_block["created"] = created
+        with open(session_metadata_file, "w") as f:
+            json.dump(session_block, f, indent=2)
+        flat_session_config["session"] = session_block
 
         # Study config snapshot: save on first run, compare on re-run
         self._config_differences = []
@@ -232,10 +241,14 @@ class ParticipantWorkflowScreen:
         # File logging for export functionality
         self._log_file_handler: logging.FileHandler | None = None
 
-        # Cache mask reuse mode flag for easy access
-        session_conf_dict: dict = self.study_config.session_config.get("session", {})
-        self._is_mask_reuse_mode = session_conf_dict.get("mask_source") == "reuse"
-        self._mask_source_session = session_conf_dict.get("mask_source_session")
+        # Cache per-localizer reuse state for easy access. ``_is_all_reused_mode`` is
+        # the whole-session case (every localizer reused — no fresh collection this
+        # session); a mix has at least one fresh localizer.
+        self._reused_localizer_indices: list[int] = reused_localizer_indices(self.study_config.session_config)
+        self._has_any_fresh_localizer: bool = has_fresh_localizer(self.study_config.session_config)
+        self._is_all_reused_mode: bool = (
+            bool(self.study_config.session_config.get("localizers")) and not self._has_any_fresh_localizer
+        )
         # Track whether user switched to MNI atlas masks mid-session
         self._is_mni_atlas_mode: bool = False
         self._log_file_path: Path | None = None
@@ -2142,9 +2155,10 @@ class ParticipantWorkflowScreen:
         reference_initial_enabled = config.get("reference", {}).get("initial_enabled", True)
         reference_realtime_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
-        # Check if this is a mask-reuse session
-        session_metadata = config.get("session", {})
-        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
+        # Per-localizer reuse: a reused localizer contributes no collection/
+        # preprocessing/extraction steps (its masks come from an earlier session);
+        # a session may mix reused and fresh localizers.
+        has_any_fresh = has_fresh_localizer(config)
 
         # Build dynamic steps list
         steps = []
@@ -2160,14 +2174,7 @@ class ParticipantWorkflowScreen:
         self._has_feedback = has_feedback
         self._has_localizers = has_localizers
 
-        if is_mask_reuse:
-            # Mask reuse mode: only need reference + coregistration + feedback
-            # Skip localizer, preprocessing, mask extraction
-            if reference_realtime_enabled:
-                steps.extend(["reference_realtime", "coregistration_realtime"])
-            # Add transfer and feedback steps
-            steps.extend(sid for sid, _label in fb_steps)
-        elif not has_localizers and has_feedback:
+        if not has_localizers and has_feedback:
             # No localizers: MNI atlas mode
             self._is_mni_atlas_mode = True
             # Use reference_realtime as registration target (masks in realtime space)
@@ -2178,34 +2185,39 @@ class ParticipantWorkflowScreen:
             # masks are already in realtime reference space)
             steps.extend(sid for sid, _label in fb_steps)
         elif has_localizers and not has_feedback:
-            # Localizer-only mode: collect localizers with QC monitoring, no feedback
-            if reference_initial_enabled:
+            # Localizer-only mode: collect fresh localizers with QC monitoring, no feedback
+            if reference_initial_enabled and has_any_fresh:
                 steps.append("reference_initial")
             if localizers and len(localizers) > 1:
                 for loc_idx, loc in enumerate(localizers):
-                    if loc.get("type") == "manual":
+                    if loc.get("type") == "manual" or localizer_is_reused(loc):
                         continue
                     loc_n_runs = loc.get("n_runs", 2)
                     for run in range(1, loc_n_runs + 1):
                         steps.append(f"localizer_{loc_idx}_run_{run}")
-            else:
+            elif not (localizers and localizer_is_reused(localizers[0])):
                 for i in range(1, n_localizer_runs + 1):
                     steps.append(f"rest_run_{i}")
         else:
-            # Standard mode: full pipeline (localizers + feedback)
-            if reference_initial_enabled:
+            # Standard pipeline (localizers + feedback). Reused/manual localizers
+            # emit no collection/preprocessing/extraction steps; the initial
+            # reference + its coregistration are only needed to align freshly-
+            # extracted masks, so an all-reused session skips straight to realtime.
+            if reference_initial_enabled and has_any_fresh:
                 steps.append("reference_initial")
 
             if localizers and len(localizers) > 1:
-                # Multi-localizer: collect ALL runs first, then per-localizer preprocess→extract→approve.
-                # Manual localizers import pre-built masks — no collection or preprocessing.
+                # Multi-localizer: collect ALL fresh runs first, then per-fresh-localizer
+                # preprocess→extract→approve. Manual/reused localizers are skipped.
                 for loc_idx, loc in enumerate(localizers):
-                    if loc.get("type") == "manual":
+                    if loc.get("type") == "manual" or localizer_is_reused(loc):
                         continue
                     loc_n_runs = loc.get("n_runs", 2)
                     for run in range(1, loc_n_runs + 1):
                         steps.append(f"localizer_{loc_idx}_run_{run}")
                 for loc_idx, loc in enumerate(localizers):
+                    if localizer_is_reused(loc):
+                        continue
                     if loc.get("type") != "manual":
                         steps.append(f"localizer_{loc_idx}_preprocessing")
                     steps.append(f"localizer_{loc_idx}_extraction")
@@ -2213,14 +2225,17 @@ class ParticipantWorkflowScreen:
             elif config.get("localizers") and config["localizers"][0].get("type") == "manual":
                 # Single manual localizer: import masks only, no collection/preprocessing
                 steps.append("mask_extraction")
+            elif config.get("localizers") and localizer_is_reused(config["localizers"][0]):
+                # Single reused localizer: no collection/preprocessing/extraction steps
+                pass
             else:
                 # Single localizer (1-element list)
                 for i in range(1, n_localizer_runs + 1):
                     steps.append(f"rest_run_{i}")
                 steps.extend(["preprocessing", "mask_extraction"])
 
-            # Add coregistration only if initial reference is enabled
-            if reference_initial_enabled:
+            # Initial-reference coregistration only when fresh masks were extracted
+            if reference_initial_enabled and has_any_fresh:
                 steps.append("coregistration")
             if reference_realtime_enabled:
                 steps.extend(["reference_realtime", "coregistration_realtime"])
@@ -2230,11 +2245,15 @@ class ParticipantWorkflowScreen:
         for step in steps:
             self.step_statuses[step] = StepStatus.PENDING
 
-        # Only check localizer/preprocessing/mask extraction steps if NOT in mask reuse mode
-        if not is_mask_reuse:
-            # Check reference initial collection (only if enabled)
+        # An all-reused session (every localizer reused) has no collection/
+        # preprocessing/extraction/initial-coregistration steps to detect.
+        all_reused = bool(localizers) and not has_any_fresh
+
+        if not all_reused:
+            # Check reference initial collection (only if enabled and a fresh localizer
+            # will produce masks to align to it)
             collection_dir = base_dir / "collection"
-            if reference_initial_enabled:
+            if reference_initial_enabled and has_any_fresh:
                 n_vols = config.get("reference", {}).get("initial_n_volumes", 2)
                 status = self._check_attempt_collection_status(collection_dir, "task-reference", 1, n_vols)
                 self.step_statuses["reference_initial"] = status
@@ -2245,8 +2264,11 @@ class ParticipantWorkflowScreen:
             localizers = config.get("localizers", [])
 
             if localizers and len(localizers) > 1:
-                # Multi-localizer: check per-localizer steps
+                # Multi-localizer: check per-fresh-localizer steps (reused are skipped —
+                # they have no collection/preprocessing/extraction steps this session)
                 for loc_idx, loc in enumerate(localizers):
+                    if localizer_is_reused(loc):
+                        continue
                     loc_type = loc.get("type", "rest")
                     loc_task_name = "rest" if loc_type == "rest" else loc_type
                     loc_dir = mask_extraction_dir / f"loc_{loc_idx}_{loc_task_name}"
@@ -2353,15 +2375,15 @@ class ParticipantWorkflowScreen:
 
         # Define directories needed for remaining checks
         feedback_dir = base_dir / "feedback"
-        if is_mask_reuse:
+        if all_reused:
             mask_extraction_dir = base_dir / "mask_extraction"  # Still needed for path references
 
         # Check reference realtime collection (only if enabled)
         collection_dir = base_dir / "collection"
         if reference_realtime_enabled:
-            # In mask reuse mode, reference is run-01 (no initial reference)
-            # In standard mode, reference is run-02 (after initial reference)
-            realtime_reference_run = 1 if is_mask_reuse else 2
+            # An all-reused session collects only the realtime reference (run-01);
+            # otherwise it follows the initial reference as run-02.
+            realtime_reference_run = 1 if all_reused else 2
             n_vols = config.get("reference", {}).get("realtime_n_volumes", 2)
             status = self._check_attempt_collection_status(
                 collection_dir, "task-reference", realtime_reference_run, n_vols
@@ -2420,7 +2442,7 @@ class ParticipantWorkflowScreen:
         else:
             any_preproc_complete = self.step_statuses.get("preprocessing") == StepStatus.COMPLETE
 
-        if not is_mask_reuse and any_preproc_complete:
+        if any_preproc_complete:
             if reference_initial_enabled and self.step_statuses.get("reference_initial") in (
                 StepStatus.PENDING,
                 StepStatus.INTERRUPTED,
@@ -2722,7 +2744,7 @@ class ParticipantWorkflowScreen:
 
         # In mask reuse mode, preprocessing and mask approval are inherited from source session
         # so these gates should not apply
-        if self._is_mask_reuse_mode:
+        if self._is_all_reused_mode:
             requires_preprocessing = False
             requires_approval = False
         else:
@@ -2908,7 +2930,7 @@ class ParticipantWorkflowScreen:
                 )
 
         # MNI atlas fallback button (skip localizer entirely)
-        if not self._is_mask_reuse_mode and not self._is_mni_atlas_mode:
+        if not self._is_all_reused_mode and not self._is_mni_atlas_mode:
             controls.extend(
                 [
                     ft.Divider(),
@@ -3244,7 +3266,7 @@ class ParticipantWorkflowScreen:
                     )
 
         # MNI fallback button (always available unless in mask-reuse or already MNI mode)
-        if not self._is_mask_reuse_mode and not self._is_mni_atlas_mode:
+        if not self._is_all_reused_mode and not self._is_mni_atlas_mode:
             controls.extend(
                 [
                     ft.Divider(),
@@ -3983,7 +4005,7 @@ class ParticipantWorkflowScreen:
         else:
             # In mask reuse mode, realtime reference is run-01 (no initial reference collection)
             # In standard mode, realtime reference is run-02
-            run_id = 1 if self._is_mask_reuse_mode else 2
+            run_id = 1 if self._is_all_reused_mode else 2
             plots = self.qc_manager.get_reference_qc_plots(run_id=run_id)
             title = "Real-time Reference QC"
 
@@ -4029,7 +4051,7 @@ class ParticipantWorkflowScreen:
             title = "Initial Reference Coregistration QC"
         else:
             # In mask reuse mode, realtime reference is run-01
-            run_id = 1 if self._is_mask_reuse_mode else 2
+            run_id = 1 if self._is_all_reused_mode else 2
             title = "Real-time Reference Coregistration QC"
 
         plots = self.qc_manager.get_reference_qc_plots(run_id=run_id)
@@ -4956,27 +4978,20 @@ class ParticipantWorkflowScreen:
         Returns:
             Dictionary with step information
         """
-        # Check for mask reuse mode
-        session_metadata = config.get("session", {})
-        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
-        mask_source_session = session_metadata.get("mask_source_session")
+        # An all-reused session collects only the realtime reference (run-01),
+        # otherwise it is run-02 (after the initial reference).
+        run_num = 1 if self._is_all_reused_mode else 2
+        input_masks_path = base_dir / "mask_extraction" / "03_masks"
 
-        # In mask reuse mode, reference is run-01 (no initial reference)
-        run_num = 1 if is_mask_reuse else 2
-
-        if is_mask_reuse and mask_source_session:
-            # Mask reuse mode: masks come from source session
-            study_base_dir = base_dir.parent.parent  # Go up from participant/session to study
-            source_session_dir = study_base_dir / self.participant_id / mask_source_session
-            me_dir = source_session_dir / "mask_extraction"
-            input_masks_path = me_dir / "03_masks"
+        if self._is_all_reused_mode:
             description = (
-                f"Register network masks from {mask_source_session} to real-time reference space for feedback runs."
+                "Register reused network masks from an earlier session to real-time reference space for feedback runs."
+            )
+        elif self._reused_localizer_indices:
+            description = (
+                "Register network masks (mixed fresh + reused) to real-time reference space for feedback runs."
             )
         else:
-            # Standard mode: masks come from current session
-            me_dir = base_dir / "mask_extraction"
-            input_masks_path = me_dir / "03_masks"
             description = "Register network masks to real-time reference space for feedback runs."
 
         return {
@@ -5060,12 +5075,9 @@ class ParticipantWorkflowScreen:
         """
         reference_enabled = config.get("reference", {}).get("realtime_enabled", True)
 
-        # Check for mask reuse mode
-        session_metadata = config.get("session", {})
-        is_mask_reuse = session_metadata.get("mask_source") == "reuse"
-
-        # In mask reuse mode, reference is run-01 (no initial reference)
-        run_num = 1 if is_mask_reuse else 2
+        # An all-reused session collects only the realtime reference (run-01),
+        # otherwise it is run-02 (after the initial reference).
+        run_num = 1 if self._is_all_reused_mode else 2
 
         if not reference_enabled:
             return {
@@ -7524,7 +7536,7 @@ class ParticipantWorkflowScreen:
             workflow.append(("mask_approval", "Review & Approve Masks"))
             if reference_initial_enabled:
                 workflow.append(("coregistration", "Coregister to Reference"))
-        elif not self._is_mask_reuse_mode:
+        elif not self._is_all_reused_mode:
             # Add Initial Reference if enabled
             if reference_initial_enabled:
                 workflow.append(("reference_initial", "Collect Initial Reference"))
@@ -7702,9 +7714,9 @@ class ParticipantWorkflowScreen:
         has_feedback = getattr(self, "_has_feedback", True)
 
         # Only show localizer and mask extraction sections if NOT in mask reuse mode
-        if not self._is_mask_reuse_mode and has_localizers:
+        if not self._is_all_reused_mode and has_localizers:
             panels.append(self._build_localizer_tasks_section())
-        if not self._is_mask_reuse_mode and has_feedback:
+        if not self._is_all_reused_mode and has_feedback:
             panels.append(self._build_mask_extraction_section())
         if has_feedback:
             panels.append(self._build_feedback_section())
@@ -7797,9 +7809,9 @@ class ParticipantWorkflowScreen:
         # Only show sections relevant to the session mode
         has_localizers = getattr(self, "_has_localizers", True)
         has_feedback = getattr(self, "_has_feedback", True)
-        if not self._is_mask_reuse_mode and has_localizers:
+        if not self._is_all_reused_mode and has_localizers:
             panels.append(self._build_localizer_tasks_section())
-        if not self._is_mask_reuse_mode and has_feedback:
+        if not self._is_all_reused_mode and has_feedback:
             panels.append(self._build_mask_extraction_section())
         if has_feedback:
             panels.append(self._build_feedback_section())

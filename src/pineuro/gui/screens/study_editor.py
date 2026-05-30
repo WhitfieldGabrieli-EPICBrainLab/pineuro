@@ -21,6 +21,15 @@ from ._localizer_tab import LocalizerTabBuilder
 logger = logging.getLogger(__name__)
 
 
+def _ses_num(session_id: str) -> int | None:
+    """Parse a BIDS session id ``'ses-NN'`` into its 1-based number, or None."""
+    prefix = "ses-"
+    suffix = session_id[len(prefix) :] if isinstance(session_id, str) else ""
+    if isinstance(session_id, str) and session_id.startswith(prefix) and suffix.isdigit():
+        return int(suffix)
+    return None
+
+
 class StudyEditorScreen:
     """Study editor screen with dynamic tabbed parameter sections."""
 
@@ -55,7 +64,13 @@ class StudyEditorScreen:
         )
         self.validation_errors: dict[str, str] = {}
 
-        # Initialize localizer and feedback configs from session_config
+        # Per-session protocol: the study config carries an ordered ``sessions``
+        # list and the editor edits one session at a time. Normalize legacy/flat
+        # shapes into ``sessions`` and start on the first session.
+        self._active_session_index = 0
+        self._ensure_sessions()
+
+        # Initialize localizer and feedback configs from the active session
         self._init_localizer_configs()
         self._init_feedback_configs()
 
@@ -85,15 +100,42 @@ class StudyEditorScreen:
     # Config initialization
     # ------------------------------------------------------------------
 
+    def _ensure_sessions(self):
+        """Normalize ``session_config`` to carry a non-empty ``sessions`` list.
+
+        A flat config (top-level ``localizers``/``feedback_runs``) is wrapped into
+        a single session; those top-level keys are then removed so the study config
+        has exactly one home for per-session protocol.
+        """
+        sc = self.study_config.session_config
+        sessions = sc.get("sessions")
+        if not sessions:
+            sc["sessions"] = [
+                {
+                    "notes": "",
+                    "localizers": sc.pop("localizers", []),
+                    "feedback_runs": sc.pop("feedback_runs", []),
+                }
+            ]
+        else:
+            sc.pop("localizers", None)
+            sc.pop("feedback_runs", None)
+        self._active_session_index = max(0, min(self._active_session_index, len(sc["sessions"]) - 1))
+
+    def _active_session(self) -> dict:
+        """Return the session dict currently being edited (clamps the index)."""
+        sessions = self.study_config.session_config["sessions"]
+        self._active_session_index = max(0, min(self._active_session_index, len(sessions) - 1))
+        session: dict = sessions[self._active_session_index]
+        return session
+
     def _init_localizer_configs(self):
-        """Initialize localizer config list from session_config."""
-        config = self.study_config.session_config
-        self._localizer_configs = config.get("localizers", [])
+        """Initialize localizer config list from the active session."""
+        self._localizer_configs = self._active_session().setdefault("localizers", [])
 
     def _init_feedback_configs(self):
-        """Initialize feedback run config list from session_config."""
-        config = self.study_config.session_config
-        self._feedback_configs = config.get("feedback_runs", [])
+        """Initialize feedback run config list from the active session."""
+        self._feedback_configs = self._active_session().setdefault("feedback_runs", [])
 
     # ------------------------------------------------------------------
     # Default config
@@ -573,14 +615,155 @@ class StudyEditorScreen:
         cfg.pop("task_params", None)
         self._rebuild_tabs()
 
+    # ------------------------------------------------------------------
+    # Session control handlers
+    # ------------------------------------------------------------------
+
+    def _default_session(self) -> dict:
+        """A new session's default protocol (one rest localizer + one ball feedback)."""
+        return {
+            "notes": "",
+            "localizers": [
+                {
+                    "id": "rest",
+                    "type": "rest",
+                    "tr": 1.2,
+                    "n_volumes": 250,
+                    "n_runs": 2,
+                    "motion_correction": "none",
+                    "networks": ["ContA", "DefaultA"],
+                    "extraction": {
+                        "network_atlas": "yeo_17",
+                        "n_components": 30,
+                        "threshold": 2000,
+                        "threshold_method": "top_n",
+                        "smooth_fwhm": 5.0,
+                        "highpass": 0.01,
+                    },
+                    "source_dicoms": ["", ""],
+                }
+            ],
+            "feedback_runs": [
+                {
+                    "task": "ball",
+                    "mask_source": "rest",
+                    "max_runs": 1,
+                    "tr": 1.2,
+                    "n_volumes": 150,
+                    "n_baseline": 25,
+                    "use_transfer_runs": True,
+                    "network_assignment": {"top_network": "ContA", "bottom_network": "DefaultA"},
+                }
+            ],
+        }
+
+    def _switch_to_session(self, index: int):
+        """Re-point the editor at session *index* and rebuild the tabs."""
+        self._active_session_index = index
+        self._init_localizer_configs()
+        self._init_feedback_configs()
+        self._rebuild_tabs()
+
+    def _on_select_session(self, index: int):
+        if index == self._active_session_index:
+            return
+        self._collect_all_configs()
+        self._switch_to_session(index)
+
+    def _on_add_session(self, e):
+        self._collect_all_configs()
+        sessions = self.study_config.session_config["sessions"]
+        sessions.append(self._default_session())
+        self._switch_to_session(len(sessions) - 1)
+
+    def _on_duplicate_session(self, e):
+        self._collect_all_configs()
+        sessions = self.study_config.session_config["sessions"]
+        sessions.insert(self._active_session_index + 1, copy.deepcopy(self._active_session()))
+        self._switch_to_session(self._active_session_index + 1)
+
+    def _on_remove_session(self, e):
+        sessions = self.study_config.session_config["sessions"]
+        if len(sessions) <= 1:
+            return
+        removed_id = f"ses-{self._active_session_index + 1:02d}"
+        removed_num = self._active_session_index + 1
+        sessions.pop(self._active_session_index)
+        # Clear now-invalid reuse references (pointing at or after the removed
+        # session, whose numbering has shifted). The user re-selects them.
+        for sess in sessions:
+            for loc in sess.get("localizers", []):
+                src = loc.get("reuse_from_session")
+                src_num = _ses_num(src) if src else None
+                if src == removed_id or (src_num is not None and src_num >= removed_num):
+                    loc.pop("reuse_from_session", None)
+        self._switch_to_session(max(0, self._active_session_index - 1))
+
+    def _on_localizer_reuse_changed(self, index: int, e):
+        """Handle the per-localizer 'Masks' (reuse) dropdown on the Study tab."""
+        self._collect_all_configs()
+        val = self._loc_reuse_dropdowns[index].value or ""
+        cfg = self._localizer_configs[index]
+        if val:
+            cfg["reuse_from_session"] = val
+        else:
+            cfg.pop("reuse_from_session", None)
+        self._rebuild_tabs()
+
+    def _build_session_selector(self) -> ft.Control:
+        """Build the per-session selector strip shown above the Experiment Design."""
+        sessions = self.study_config.session_config["sessions"]
+        active = self._active_session_index
+        chips: list[ft.Control] = []
+        for i in range(len(sessions)):
+            label = f"Session {i + 1}"
+            make = ft.FilledButton if i == active else ft.OutlinedButton
+            chips.append(make(label, on_click=lambda e, idx=i: self._on_select_session(idx)))
+
+        return ft.Column(
+            [
+                ft.Text("Sessions", size=16, weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    "Each session runs its own localizer and feedback tasks. The Experiment Design, "
+                    f"Localizer, and Feedback tabs below edit the selected session (Session {active + 1}).",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+                ft.Row(chips, wrap=True, spacing=6),
+                ft.Row(
+                    [
+                        ft.TextButton("Add Session", icon=ft.Icons.ADD, on_click=self._on_add_session),
+                        ft.TextButton("Duplicate Session", icon=ft.Icons.COPY, on_click=self._on_duplicate_session),
+                        ft.TextButton(
+                            "Remove Session",
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            on_click=self._on_remove_session,
+                            disabled=len(sessions) <= 1,
+                        ),
+                    ],
+                    spacing=6,
+                ),
+            ],
+            spacing=8,
+        )
+
     def _collect_all_configs(self):
-        """Collect current field values from all tab builders and Paths tab."""
+        """Collect current field values from all tab builders and Paths tab.
+
+        The collected localizers/feedback_runs are written back into the active
+        session so switching sessions (or saving) preserves edits.
+        """
         if hasattr(self, "_localizer_builders"):
             self._localizer_configs = [b.collect_config() for b in self._localizer_builders]
         if hasattr(self, "_feedback_builders"):
             self._feedback_configs = [b.collect_config() for b in self._feedback_builders]
         # Collect simulator paths from Paths tab into configs
         self._collect_simulator_paths()
+        # Persist the collected protocol into the active session.
+        sess = self._active_session()
+        sess["localizers"] = self._localizer_configs
+        sess["feedback_runs"] = self._feedback_configs
 
     # ------------------------------------------------------------------
     # Build
@@ -780,24 +963,37 @@ class StudyEditorScreen:
             italic=True,
         )
 
-        # --- Experiment Design: Localizer Tasks ---
+        # --- Experiment Design: Localizer Tasks (for the active session) ---
         loc_rows: list[ft.Control] = []
         self._loc_type_dropdowns: list[ft.Dropdown] = []
+        self._loc_reuse_dropdowns: list[ft.Dropdown] = []
+        earlier_sessions = [f"ses-{k:02d}" for k in range(1, self._active_session_index + 1)]
         for i, cfg in enumerate(self._localizer_configs):
             dd = ft.Dropdown(
-                width=560,
+                width=360,
                 label=f"Localizer {i + 1}",
                 options=[ft.dropdown.Option(key=o.key, text=o.text) for o in self._localizer_type_options],
                 value=cfg.get("type", "rest"),
                 on_select=lambda e, idx=i: self._on_localizer_type_changed(idx, e),
             )
             self._loc_type_dropdowns.append(dd)
+            reuse_dd = ft.Dropdown(
+                width=190,
+                label="Masks",
+                tooltip="Compute these masks fresh this session, or reuse them from an earlier session",
+                options=[ft.dropdown.Option(key="", text="Compute fresh")]
+                + [ft.dropdown.Option(key=s, text=f"Reuse {s}") for s in earlier_sessions],
+                value=cfg.get("reuse_from_session") or "",
+                on_select=lambda e, idx=i: self._on_localizer_reuse_changed(idx, e),
+                disabled=not earlier_sessions,
+            )
+            self._loc_reuse_dropdowns.append(reuse_dd)
             remove_btn = ft.IconButton(
                 icon=ft.Icons.CLOSE,
                 tooltip="Remove this localizer",
                 on_click=lambda e, idx=i: self._on_remove_localizer_at(idx),
             )
-            loc_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+            loc_rows.append(ft.Row([dd, reuse_dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
 
         add_loc_btn = ft.TextButton(
             "Add Localizer Task",
@@ -844,9 +1040,11 @@ class StudyEditorScreen:
                     self.description_field,
                     self.example_participant_id_field,
                     ft.Divider(),
+                    self._build_session_selector(),
+                    ft.Divider(),
                     ft.Text("Experiment Design", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        "Define localizer and feedback tasks. Each has its own configuration tab.",
+                        "Define this session's localizer and feedback tasks. Each has its own configuration tab.",
                         size=11,
                         color=ft.Colors.GREY_600,
                         italic=True,
@@ -1379,6 +1577,29 @@ class StudyEditorScreen:
         if self.on_cancel_callback:
             self.on_cancel_callback()
 
+    def _validate_sessions(self, sessions: list) -> str | None:
+        """Return an error string if the per-session protocol is invalid, else None.
+
+        Requires at least one session, each with a localizer or feedback task, and
+        every reusing localizer pointing at an *earlier* session.
+        """
+        if not sessions:
+            return "At least one session is required"
+        for idx, sess in enumerate(sessions):
+            locs = sess.get("localizers", [])
+            fbs = sess.get("feedback_runs", [])
+            if not locs and not fbs:
+                return f"Session {idx + 1} has no localizer or feedback task"
+            for loc in locs:
+                src = loc.get("reuse_from_session")
+                if not src:
+                    continue
+                src_num = _ses_num(src)
+                if src_num is None or src_num >= idx + 1:
+                    label = loc.get("id") or loc.get("type") or "localizer"
+                    return f"Session {idx + 1}: localizer '{label}' reuses '{src}', which is not an earlier session"
+        return None
+
     def _save_study(self) -> bool:
         """Validate and persist the current study to disk.
 
@@ -1398,15 +1619,12 @@ class StudyEditorScreen:
 
         self._update_study_from_form()
 
-        # Validate: at least one localizer or feedback run required
+        # Validate sessions: at least one session, each with a localizer or feedback
+        # task, and no localizer reusing a non-earlier session.
         config = self.study_config.session_config
-        has_localizers = len(config.get("localizers", [])) > 0
-        has_feedback = len(config.get("feedback_runs", [])) > 0
-        if not has_localizers and not has_feedback:
-            _snack = ft.SnackBar(
-                ft.Text("At least one localizer or feedback task is required"),
-                bgcolor=ft.Colors.RED_200,
-            )
+        session_error = self._validate_sessions(config.get("sessions", []))
+        if session_error:
+            _snack = ft.SnackBar(ft.Text(session_error), bgcolor=ft.Colors.RED_200)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1574,6 +1792,7 @@ class StudyEditorScreen:
                 participant_id=participant_id,
                 base_dir=base_dir,
                 on_select=on_session_selected,
+                study_config=self.study_config,
             )
             session_dialog.show()
 
@@ -1648,15 +1867,17 @@ class StudyEditorScreen:
         config["display"]["control_monitor"] = self.control_monitor_dropdown.value or "left"
         config["display"]["presenter_monitor"] = self.presenter_monitor_dropdown.value or "right"
 
-        # --- Collect from tab builders ---
-        localizer_configs = [b.collect_config() for b in self._localizer_builders]
-        self._localizer_configs = localizer_configs
-
-        feedback_configs = [b.collect_config() for b in self._feedback_builders]
-        self._feedback_configs = feedback_configs
+        # --- Collect protocol from tab builders into the active session ---
+        self._localizer_configs = [b.collect_config() for b in self._localizer_builders]
+        self._feedback_configs = [b.collect_config() for b in self._feedback_builders]
 
         # Inject Paths tab simulator paths into the collected configs
         self._collect_simulator_paths(config)
 
-        config["localizers"] = self._localizer_configs
-        config["feedback_runs"] = self._feedback_configs
+        sess = self._active_session()
+        sess["localizers"] = self._localizer_configs
+        sess["feedback_runs"] = self._feedback_configs
+
+        # Per-session protocol lives only under ``sessions`` — never at the top level.
+        config.pop("localizers", None)
+        config.pop("feedback_runs", None)

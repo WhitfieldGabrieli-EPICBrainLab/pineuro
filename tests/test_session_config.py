@@ -365,20 +365,38 @@ class TestShamConfig:
 
 class TestSessionMetadata:
     def test_construction(self):
-        config = SessionMetadata(session_id="ses-01", session_number=1)
+        config = SessionMetadata(session_id="ses-01", session_number=1, notes="baseline")
         assert config.session_id == "ses-01"
         assert config.session_number == 1
-        assert config.mask_source == "compute"
+        assert config.notes == "baseline"
 
-    def test_reuse_masks(self):
-        config = SessionMetadata(
-            session_id="ses-02",
-            session_number=2,
-            mask_source="reuse",
-            mask_source_session="ses-01",
+
+class TestLocalizerReuse:
+    """Per-localizer mask reuse (reuse_from_session)."""
+
+    def test_fresh_localizer_default(self):
+        loc = LocalizerConfig(id="rest", networks=["DefaultA", "ContA"])
+        assert loc.reuse_from_session is None
+        assert loc.is_reused is False
+
+    def test_reused_localizer(self):
+        loc = LocalizerConfig(id="rest", networks=["DefaultA", "ContA"], reuse_from_session="ses-01")
+        assert loc.reuse_from_session == "ses-01"
+        assert loc.is_reused is True
+
+    def test_invalid_reuse_session_rejected(self):
+        with pytest.raises(ValueError, match="reuse_from_session"):
+            LocalizerConfig(id="rest", networks=["DefaultA"], reuse_from_session="session-1")
+
+    def test_reuse_round_trips(self, tmp_path):
+        cfg = SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01", session_id="ses-02"),
+            localizers=[LocalizerConfig(id="rest", networks=["DefaultA", "ContA"], reuse_from_session="ses-01")],
+            feedback_runs=[FeedbackRunConfig(task="ball", mask_source="rest")],
         )
-        assert config.mask_source == "reuse"
-        assert config.mask_source_session == "ses-01"
+        cfg2 = SessionConfig._from_dict(cfg._to_dict())
+        assert cfg2.localizers[0].reuse_from_session == "ses-01"
+        assert cfg2.localizers[0].is_reused is True
 
 
 # =============================================================================

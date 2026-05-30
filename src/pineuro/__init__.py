@@ -134,10 +134,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "run_full_session": (".session", "run_full_session"),
     "run_next_task": (".session", "run_next_task"),
     "reset_task_state": (".session", "reset_task_state"),
-    "resolve_mask_source": (".session", "resolve_mask_source"),
+    "resolve_localizer_masks": (".session", "resolve_localizer_masks"),
     "detect_existing_sessions": (".session", "detect_existing_sessions"),
     "next_session_id": (".session", "next_session_id"),
-    "setup_session_with_reused_masks": (".session", "setup_session_with_reused_masks"),
     # --- sham.py ---
     "ShamActivationProvider": (".sham", "ShamActivationProvider"),
     "ReplayActivationProvider": (".sham", "ReplayActivationProvider"),
@@ -251,10 +250,9 @@ __all__ = [
     "run_next_task",
     "reset_task_state",
     # Multi-session support functions
-    "resolve_mask_source",
+    "resolve_localizer_masks",
     "detect_existing_sessions",
     "next_session_id",
-    "setup_session_with_reused_masks",
     # Timing functions
     "enable_timing",
     "disable_timing",

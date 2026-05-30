@@ -8,6 +8,7 @@ from pineuro.session import (
     _build_run_sequence,
     _is_last_feedback_for_frc,
     reset_task_state,
+    resolve_localizer_masks,
 )
 
 # =============================================================================
@@ -36,6 +37,70 @@ def _make_config(tmp_path, task_params=None, use_transfer_runs=True):
             )
         ],
     )
+
+
+# =============================================================================
+# resolve_localizer_masks (per-localizer; fresh + reused)
+# =============================================================================
+
+
+class TestResolveLocalizerMasks:
+    def _config(self, base_dir, session_id, localizers):
+        return SessionConfig(
+            paths=PathConfig(base_dir=base_dir, participant_id="sub-01", session_id=session_id),
+            localizers=localizers,
+            feedback_runs=[],
+        )
+
+    def _write_masks(self, base_dir, session_id, names):
+        md = base_dir / "sub-01" / session_id / "mask_extraction" / "03_masks"
+        md.mkdir(parents=True, exist_ok=True)
+        for n in names:
+            (md / f"sub-01_{session_id}_{n}_thr.nii.gz").write_bytes(b"")
+
+    def _write_boldref(self, base_dir, session_id, task):
+        pp = base_dir / "sub-01" / session_id / "preprocessing"
+        pp.mkdir(parents=True, exist_ok=True)
+        (pp / f"sub-01_{session_id}_task-{task}_boldref.nii.gz").write_bytes(b"")
+
+    def test_fresh_localizer(self, tmp_path):
+        base = tmp_path / "study"
+        self._write_masks(base, "ses-01", ["DefaultA", "ContA"])
+        self._write_boldref(base, "ses-01", "rest")
+        cfg = self._config(base, "ses-01", [LocalizerConfig(id="rest", type="rest", networks=["DefaultA", "ContA"])])
+        groups = resolve_localizer_masks(cfg)
+        assert len(groups) == 1
+        _loc, masks, ref = groups[0]
+        assert {m.name for m in masks} == {"sub-01_ses-01_DefaultA_thr.nii.gz", "sub-01_ses-01_ContA_thr.nii.gz"}
+        assert ref.name == "sub-01_ses-01_task-rest_boldref.nii.gz"
+
+    def test_mix_reused_and_fresh(self, tmp_path):
+        base = tmp_path / "study"
+        # ses-01 produced rest masks; ses-02 freshly extracts a rit localizer.
+        self._write_masks(base, "ses-01", ["DefaultA", "ContA"])
+        self._write_boldref(base, "ses-01", "rest")
+        self._write_masks(base, "ses-02", ["self"])
+        self._write_boldref(base, "ses-02", "rit")
+        cfg = self._config(
+            base,
+            "ses-02",
+            [
+                LocalizerConfig(id="rest", type="rest", networks=["DefaultA", "ContA"], reuse_from_session="ses-01"),
+                LocalizerConfig(id="rit", type="rit", contrasts={"self": "self>other"}),
+            ],
+        )
+        groups = resolve_localizer_masks(cfg)
+        assert len(groups) == 2
+
+        rest_loc, rest_masks, rest_ref = groups[0]
+        assert rest_loc.is_reused
+        assert {m.name for m in rest_masks} == {"sub-01_ses-01_DefaultA_thr.nii.gz", "sub-01_ses-01_ContA_thr.nii.gz"}
+        assert rest_ref.name == "sub-01_ses-01_task-rest_boldref.nii.gz"
+
+        rit_loc, rit_masks, rit_ref = groups[1]
+        assert not rit_loc.is_reused
+        assert {m.name for m in rit_masks} == {"sub-01_ses-02_self_thr.nii.gz"}
+        assert rit_ref.name == "sub-01_ses-02_task-rit_boldref.nii.gz"
 
 
 # =============================================================================

@@ -11,9 +11,10 @@ Session Layout
 --------------
 Every participant's data is organized under ``base_dir/sub-XX/ses-XX/``. A new
 participant defaults to ``ses-01``; later sessions become ``ses-02``, ``ses-03``,
-etc. Masks for each session can be:
-- Computed fresh (``mask_source='compute'``)
-- Reused from a previous session (``mask_source='reuse'``)
+etc. Each localizer's masks can be:
+- Computed fresh this session (``LocalizerConfig.reuse_from_session is None``)
+- Reused from an earlier session (``LocalizerConfig.reuse_from_session='ses-01'``)
+A session may mix fresh and reused localizers.
 
 Components
 ----------
@@ -23,35 +24,36 @@ Configuration Dataclasses:
 - MaskConfig: Mask extraction parameters
 - FeedbackConfig: Feedback task parameters
 - TaskConfig: Generic task parameters (task_type, task_params, network_assignment)
-- SessionMetadata: Session-level configuration (visit number, mask source)
+- SessionMetadata: Session-level identity (session id/number, notes)
 - ShamConfig: Sham/control condition configuration
 - SessionConfig: Top-level config combining all above
 
 Orchestration Functions:
 - setup_session(): Run all setup steps (collection, preprocessing, mask extraction)
-- setup_session_with_reused_masks(): Set up session reusing masks from another session
 - run_single_task(): Run one transfer/feedback task
 - run_full_session(): Run complete workflow (Transfer -> Feedback x N -> Transfer)
 - run_next_task(): Run next task in sequence (for incremental progression)
 - reset_task_state(): Reset task state for a new session
 
 Session Helpers:
-- resolve_mask_source(): Get mask paths based on session configuration
+- resolve_localizer_masks(): Per-localizer mask paths + reference (fresh or reused)
 - detect_existing_sessions(): List sessions for a participant
 - next_session_id(): Get next session ID (ses-01, ses-02, etc.)
 
 Workflow
 --------
 First session, fresh masks:
-1. Create SessionConfig with PathConfig(..., session_id='ses-01') and
-   SessionMetadata(mask_source='compute')
+1. Create SessionConfig with PathConfig(..., session_id='ses-01') and one or more
+   localizers with reuse_from_session=None
 2. Call setup_session() for the full pipeline
 3. Run feedback task
 
 Later session, reusing masks from an earlier session:
-1. Create SessionConfig with PathConfig(..., session_id='ses-02') and
-   SessionMetadata(mask_source='reuse', mask_source_session='ses-01')
-2. Call setup_session() - only runs reference collection + coregistration
+1. Create SessionConfig with PathConfig(..., session_id='ses-02'); set
+   reuse_from_session='ses-01' on the localizers whose masks should be reused
+   (others are computed fresh — a session may mix the two)
+2. Call setup_session() - reused localizers skip collection/preprocessing/extraction
+   and only get coregistered; fresh ones run the full pipeline
 3. Run feedback task
 
 Dependencies
@@ -261,7 +263,12 @@ class SimulatorSourceMapping:
 
 @dataclass
 class SessionMetadata:
-    """Session-level configuration for multi-session studies.
+    """Session-level identity for multi-session studies.
+
+    The per-session protocol — which localizers/feedback tasks run, and whether
+    a localizer reuses an earlier session's masks (via
+    :attr:`LocalizerConfig.reuse_from_session`) — lives in the study config's
+    ``sessions`` list, not here. This block carries only identity + notes.
 
     Parameters
     ----------
@@ -269,13 +276,6 @@ class SessionMetadata:
         Session identifier (e.g., 'ses-01', 'ses-02')
     session_number : int
         1-indexed session number
-    mask_source : str
-        How masks are obtained: 'compute' (run localizer + extraction)
-        or 'reuse' (reuse from another session)
-    mask_source_session : str, optional
-        If mask_source='reuse', the session ID to copy masks from (e.g., 'ses-01')
-    localizer_enabled : bool
-        Whether to run localizer (resting-state) collection
     notes : str
         Optional notes about this session
     created : str
@@ -284,21 +284,8 @@ class SessionMetadata:
 
     session_id: str
     session_number: int
-    mask_source: str = "compute"  # "compute" or "reuse"
-    mask_source_session: str | None = None
-    localizer_enabled: bool = True
     notes: str = ""
     created: str = field(default_factory=lambda: datetime.now().isoformat())
-
-    def __post_init__(self) -> None:
-        """Validate configuration."""
-        if self.mask_source not in ("compute", "reuse"):
-            raise ValueError(f"mask_source must be 'compute' or 'reuse', got '{self.mask_source}'")
-        if self.mask_source == "reuse" and not self.mask_source_session:
-            raise ValueError("mask_source_session is required when mask_source='reuse'")
-        if self.mask_source == "reuse":
-            # Disable localizer when reusing masks
-            self.localizer_enabled = False
 
 
 @dataclass
@@ -753,6 +740,13 @@ class LocalizerConfig:
     type: str = "rest"
     id: str = ""  # stable identifier referenced by feedback_runs[*].mask_source
 
+    # Cross-session mask reuse: when set (e.g. "ses-01"), this localizer is NOT
+    # run this session — its masks are pulled from that earlier session's
+    # mask_extraction/03_masks (matched by this localizer's id / mask_names) and
+    # coregistered to the current session's reference. None => compute fresh.
+    # A session may mix reused and fresh localizers.
+    reuse_from_session: str | None = None
+
     # Scan parameters
     tr: float = 1.2
     n_volumes: int = 250
@@ -795,6 +789,11 @@ class LocalizerConfig:
         return self.type == "manual"
 
     @property
+    def is_reused(self) -> bool:
+        """Whether this localizer's masks are reused from an earlier session."""
+        return self.reuse_from_session is not None
+
+    @property
     def task_name(self) -> str:
         """Name used for file naming and directory structure."""
         return "rest" if self.is_rest else self.type
@@ -830,6 +829,11 @@ class LocalizerConfig:
             self.events_file = Path(self.events_file)
         if not self.id:
             self.id = self.type
+        if self.reuse_from_session is not None and not re.match(r"^ses-\d+$", self.reuse_from_session):
+            raise ValueError(
+                f"reuse_from_session must be a BIDS session id 'ses-NN' (e.g. 'ses-01'), "
+                f"got {self.reuse_from_session!r}"
+            )
         if self.is_manual:
             if self.manual_mask_space not in ("native", "anat", "mni"):
                 raise ValueError(
@@ -911,7 +915,7 @@ class SessionConfig:
     task : TaskConfig
         BallTask parameters
     session : SessionMetadata, optional
-        Session-specific configuration (visit number, mask source).
+        Session-level identity (session id/number, notes).
     sham : ShamConfig, optional
         Sham/control condition configuration.
         If None or sham.enabled=False, all participants receive real feedback.
@@ -921,13 +925,15 @@ class SessionConfig:
     >>> # First session, fresh masks
     >>> config = SessionConfig(
     ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", session_id="ses-01"),
-    ...     session=SessionMetadata(session_id="ses-01", session_number=1, mask_source="compute"),
+    ...     session=SessionMetadata(session_id="ses-01", session_number=1),
+    ...     localizers=[LocalizerConfig(id="rest", networks=["DefaultA", "ContA"])],
     ... )
 
-    >>> # Multi-session with mask reuse
+    >>> # Multi-session reusing the rest masks from ses-01 (per-localizer)
     >>> config = SessionConfig(
     ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", session_id="ses-02"),
-    ...     session=SessionMetadata(session_id="ses-02", session_number=2, mask_source="reuse", mask_source_session="ses-01"),
+    ...     session=SessionMetadata(session_id="ses-02", session_number=2),
+    ...     localizers=[LocalizerConfig(id="rest", networks=["DefaultA", "ContA"], reuse_from_session="ses-01")],
     ... )
     """
 
@@ -1444,44 +1450,57 @@ def discard_attempt(
 # =============================================================================
 
 
-def resolve_mask_source(config: SessionConfig) -> tuple[list[Path], Path]:
-    """Resolve mask file paths based on session configuration.
+def _masks_for_localizer(mask_dir: Path, localizer: LocalizerConfig) -> list[Path]:
+    """Return the thresholded masks in ``mask_dir`` belonging to one localizer.
 
-    For sessions that compute their own masks, returns paths from the current session's
-    mask_extraction directory. For sessions that reuse masks from another session,
-    returns paths from the source session.
+    Localizers share a single ``03_masks/`` directory, so masks are attributed by
+    matching the localizer's own ``mask_names`` (network short names for rest /
+    contrast keys for task localizers) against the ``..._{name}_thr.nii.gz``
+    filenames. Returns them in ``mask_names`` order.
+    """
+    if not mask_dir.exists():
+        return []
+    out: list[Path] = []
+    for name in localizer.mask_names:
+        matches = sorted(mask_dir.glob(f"*_{name}_thr.nii.gz"))
+        out.extend(m for m in matches if m not in out)
+    return out
 
-    Parameters
-    ----------
-    config : SessionConfig
-        Session configuration
+
+def resolve_localizer_masks(config: SessionConfig) -> list[tuple[LocalizerConfig, list[Path], Path]]:
+    """Resolve each localizer's thresholded masks and BOLD reference.
+
+    Per-localizer (so a session can mix fresh and reused localizers):
+
+    - A **fresh** localizer (``reuse_from_session is None``) takes its masks from
+      the current session's ``mask_extraction/03_masks`` and its reference from
+      this session's boldref.
+    - A **reused** localizer takes its masks from the source session's
+      ``mask_extraction/03_masks`` and its reference from that session's boldref.
+
+    Masks are filtered to each localizer's own ``mask_names`` so a shared
+    ``03_masks`` directory holding several localizers' outputs is split correctly.
 
     Returns
     -------
-    tuple[list[Path], Path]
-        (mask_files, ref_file) where mask_files are thresholded network masks
-        and ref_file is the BOLD reference from preprocessing
+    list[tuple[LocalizerConfig, list[Path], Path]]
+        One ``(localizer, mask_files, ref_file)`` tuple per ``config.localizers``.
     """
-    if config.session is None or config.session.mask_source == "compute":
-        # Masks computed in this session
-        if config.paths.mask_extraction_dir is None:
-            raise ValueError("config.paths.mask_extraction_dir must be set when mask_source='compute'")
-        mask_dir = config.paths.mask_extraction_dir / "03_masks"
-        mask_files = sorted(mask_dir.glob("*_thr.nii.gz")) if mask_dir.exists() else []
-        ref = ref_file_path(config)
-        return (mask_files, ref)
-    elif config.session.mask_source == "reuse":
-        # Masks from another session
-        if config.session.mask_source_session is None:
-            raise ValueError("config.session.mask_source_session must be set when mask_source='reuse'")
-        source_session = config.session.mask_source_session
-        source_base = config.paths.base_dir / config.paths.participant_id / source_session / "mask_extraction"
-        source_mask_dir = source_base / "03_masks"
-        mask_files = sorted(source_mask_dir.glob("*_thr.nii.gz")) if source_mask_dir.exists() else []
-        ref = ref_file_path(config, source_session=source_session)
-        return (mask_files, ref)
-    else:
-        raise ValueError(f"Unknown mask_source: {config.session.mask_source}")
+    results: list[tuple[LocalizerConfig, list[Path], Path]] = []
+    for loc in config.localizers:
+        if loc.is_reused:
+            source_session = loc.reuse_from_session
+            assert source_session is not None  # is_reused guarantees this
+            source_me = config.paths.base_dir / config.paths.participant_id / source_session / "mask_extraction"
+            mask_dir = source_me / "03_masks"
+            ref = ref_file_path(config, task=loc.task_name, source_session=source_session)
+        else:
+            if config.paths.mask_extraction_dir is None:
+                raise ValueError("config.paths.mask_extraction_dir must be set for fresh localizers")
+            mask_dir = config.paths.mask_extraction_dir / "03_masks"
+            ref = ref_file_path(config, task=loc.task_name)
+        results.append((loc, _masks_for_localizer(mask_dir, loc), ref))
+    return results
 
 
 def detect_existing_sessions(base_dir: Path, participant_id: str) -> list[dict[str, Any]]:
@@ -1897,7 +1916,7 @@ def run_localizer_extraction(
 
     Each localizer gets its own subdirectory under ``mask_extraction/`` to
     avoid file collisions. The resulting thresholded masks are also copied
-    into the shared ``03_masks/`` directory so that :func:`resolve_mask_source`
+    into the shared ``03_masks/`` directory so that :func:`resolve_localizer_masks`
     can find them.
 
     Parameters
@@ -1981,7 +2000,7 @@ def run_localizer_extraction(
             overwrite=overwrite,
         )
 
-    # Copy masks to shared 03_masks/ so resolve_mask_source() finds them
+    # Copy masks to shared 03_masks/ so resolve_localizer_masks() finds them
     shared_mask_dir = config.paths.mask_extraction_dir / "03_masks"
     shared_mask_dir.mkdir(parents=True, exist_ok=True)
     shared_files = []
@@ -2082,93 +2101,6 @@ def run_coregistration(
     return network_coreg
 
 
-def setup_session_with_reused_masks(
-    config: SessionConfig,
-    reference_dicoms: Path,
-    overwrite: bool = False,
-) -> list[Path]:
-    """Set up a session that reuses masks from a previous session.
-
-    This is used when config.session.mask_source='reuse'. Only collects reference
-    and coregisters masks from the source session - skips localizer, preprocessing,
-    and mask extraction.
-
-    Parameters
-    ----------
-    config : SessionConfig
-        Session configuration with session.mask_source='reuse'
-    reference_dicoms : Path
-        Path to collected reference DICOMs for this session
-    overwrite : bool
-        Whether to overwrite existing coregistration outputs
-
-    Returns
-    -------
-    list[Path]
-        Coregistered mask files in current session's feedback/01_reference/masks/
-    """
-    from .mask_extraction import coregister_reference
-
-    logger.info("")
-    logger.info("=" * 60)
-    logger.info("MASK REUSE: Coregistering masks from previous session")
-    logger.info("=" * 60)
-
-    if config.session is None or config.session.mask_source != "reuse":
-        raise ValueError("setup_session_with_reused_masks requires config.session.mask_source='reuse'")
-
-    if config.session.mask_source_session is None:
-        raise ValueError("config.session.mask_source_session must be set when mask_source='reuse'")
-    source_session = config.session.mask_source_session
-    logger.info(f"Source session: {source_session}")
-
-    # Resolve source masks and reference
-    source_masks, source_ref = resolve_mask_source(config)
-
-    if not source_masks:
-        source_base = config.paths.base_dir / config.paths.participant_id / source_session / "mask_extraction"
-        raise FileNotFoundError(
-            f"No masks found in source session {source_session}. Expected masks in: {source_base / '03_masks'}"
-        )
-
-    if not source_ref.exists():
-        raise FileNotFoundError(f"Reference file not found in source session {source_session}: {source_ref}")
-
-    logger.info(f"Found {len(source_masks)} masks from {source_session}")
-    logger.info(f"Reference file: {source_ref}")
-
-    # Coregister source masks to current session's reference
-    # Output goes to feedback_dir instead of mask_extraction_dir
-    if config.paths.feedback_dir is None:
-        raise RuntimeError("config.paths.feedback_dir must be set before coregistration")
-    coreg_masks = coregister_reference(
-        participant_id=config.paths.participant_id,
-        session_id=config.paths.session_id,
-        root_dir=str(config.paths.feedback_dir),  # feedback/ directory
-        input_dicom=str(reference_dicoms),
-        network_files=source_masks,
-        ref_file=source_ref,
-        output_subdir="01_reference",
-        overwrite=overwrite,
-    )
-
-    # Copy mask_selections.json from source session for reference
-    source_selections = source_masks[0].parent / "mask_selections.json"
-    dest_dir = config.paths.feedback_dir / "01_reference"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    if source_selections.exists():
-        dest_selections = dest_dir / "mask_selections.json"
-        shutil.copy2(source_selections, dest_selections)
-        logger.info("Copied mask selections from source session")
-
-    logger.info("")
-    logger.info("Mask reuse complete! Coregistered masks ready for feedback:")
-    for f in coreg_masks:
-        logger.info(f"  {f}")
-
-    return coreg_masks
-
-
 def setup_session(
     config: SessionConfig,
     overwrite: bool = False,
@@ -2178,8 +2110,11 @@ def setup_session(
     """Run all setup steps: collection, preprocessing, mask extraction, coregistration.
 
     This should be run once per participant/session before the feedback tasks.
-    For sessions with mask_source='reuse', skips localizer/preprocessing/extraction
-    and only runs reference collection + coregistration.
+    Localizers are processed individually: a *fresh* localizer is collected,
+    preprocessed and extracted; a *reused* localizer (``reuse_from_session`` set)
+    is skipped and its masks are pulled from the source session. A session may
+    mix the two; whole-session reuse is just the case where every localizer is
+    reused.
 
     Parameters
     ----------
@@ -2202,30 +2137,6 @@ def setup_session(
     logger.info("=" * 60)
     logger.info("SESSION SETUP")
     logger.info("=" * 60)
-
-    # Check if this is a mask-reuse session
-    if config.session and config.session.mask_source == "reuse":
-        logger.info(f"Session {config.session.session_id}: Reusing masks from {config.session.mask_source_session}")
-
-        # Only need reference collection for mask reuse
-        reference_source = config.resolve_simulator_source("reference_realtime")
-        if skip_collection:
-            logger.info("Skipping reference collection (using source DICOMs directly)")
-            assert reference_source is not None, "reference_realtime source required for mask reuse"
-            reference_dicoms = reference_source
-        else:
-            reference_list = run_dicom_collection(
-                config,
-                use_simulator=use_simulator,
-                task_name="reference",
-                source_dirs=[reference_source] if reference_source else [],
-                n_volumes_list=[config.reference.initial_n_volumes],
-                start_run=1,
-                max_runs=1,
-            )
-            reference_dicoms = reference_list[0]
-
-        return setup_session_with_reused_masks(config, reference_dicoms, overwrite=overwrite)
 
     # Manual ROI import: skip localizer + preprocessing, just import + coregister
     if config.localizers and config.localizers[0].type == "manual":
@@ -2289,18 +2200,41 @@ def setup_session(
 
     # Multi-localizer pipeline: collect, preprocess, extract for each localizer
     if config.localizers:
-        # Track per-localizer (ref_file, network_files) so each group is
-        # coregistered with the correct BOLD reference.
-        localizer_groups: list[tuple[Path, list[Path]]] = []
-        last_ref_file: Path | None = None
+        # Track per-localizer (ref_file, network_files, is_reused) so each group
+        # is coregistered with the correct BOLD reference. Reused localizers carry
+        # their source session's masks + reference; fresh ones are computed here.
+        localizer_groups: list[tuple[Path, list[Path], bool]] = []
+        last_fresh_ref: Path | None = None
 
         for i, localizer in enumerate(config.localizers):
             logger.info("")
             logger.info("=" * 60)
-            logger.info(f"LOCALIZER {i}: {localizer.task_name} ({localizer.type})")
+            kind = f"reuse {localizer.reuse_from_session}" if localizer.is_reused else localizer.type
+            logger.info(f"LOCALIZER {i}: {localizer.task_name} ({kind})")
             logger.info("=" * 60)
 
-            # Collection
+            # Reused localizer: pull masks + reference from the source session;
+            # no collection / preprocessing / extraction this session.
+            if localizer.is_reused:
+                source_session = localizer.reuse_from_session
+                assert source_session is not None
+                source_me = config.paths.base_dir / config.paths.participant_id / source_session / "mask_extraction"
+                source_masks = _masks_for_localizer(source_me / "03_masks", localizer)
+                if not source_masks:
+                    raise FileNotFoundError(
+                        f"Localizer {localizer.id!r} reuses {source_session} but no matching masks were found in "
+                        f"{source_me / '03_masks'} (expected names: {localizer.mask_names})"
+                    )
+                source_ref = ref_file_path(config, task=localizer.task_name, source_session=source_session)
+                if not source_ref.exists():
+                    raise FileNotFoundError(
+                        f"Reference for reused localizer {localizer.id!r} not found in {source_session}: {source_ref}"
+                    )
+                logger.info(f"Reusing {len(source_masks)} mask(s) from {source_session} (ref {source_ref.name})")
+                localizer_groups.append((source_ref, source_masks, True))
+                continue
+
+            # Fresh localizer: collect, preprocess, extract.
             loc_sources = list(localizer.source_dicoms)
             n_volumes_list = [localizer.n_volumes] * localizer.n_runs
             if skip_collection:
@@ -2324,7 +2258,7 @@ def setup_session(
                 overwrite=overwrite,
                 task_name=localizer.task_name,
             )
-            last_ref_file = ref_file
+            last_fresh_ref = ref_file
 
             # Mask extraction (each localizer gets its own subdirectory)
             network_files = run_localizer_extraction(
@@ -2336,11 +2270,20 @@ def setup_session(
                 ref_file,
                 overwrite,
             )
-            localizer_groups.append((ref_file, network_files))
+            localizer_groups.append((ref_file, network_files, False))
 
-        # Create WM/CSF tissue masks (shared, using last ref_file)
-        assert last_ref_file is not None
-        if any(frc.glm.include_wm_regressor or frc.glm.include_csf_regressor for frc in config.feedback_runs):
+        # Create WM/CSF tissue masks (shared, anchored to the last FRESH localizer's
+        # reference). If every localizer is reused there is no freshly-preprocessed
+        # reference to build them against, so they are skipped (and nuisance
+        # regression with them).
+        nuisance_on = any(frc.glm.include_wm_regressor or frc.glm.include_csf_regressor for frc in config.feedback_runs)
+        if nuisance_on and last_fresh_ref is None:
+            logger.warning(
+                "Nuisance regression is enabled but every localizer this session reuses masks "
+                "(no freshly-preprocessed reference); WM/CSF tissue masks cannot be created and "
+                "nuisance regression will be skipped."
+            )
+        if nuisance_on and last_fresh_ref is not None:
             from .mask_extraction import create_tissue_masks
 
             assert config.paths.mask_extraction_dir is not None
@@ -2362,7 +2305,7 @@ def setup_session(
                         break
 
             create_tissue_masks(
-                ref_file=last_ref_file,
+                ref_file=last_fresh_ref,
                 output_dir=tissue_dir,
                 participant_id=config.paths.participant_id,
                 session_id=config.paths.session_id,
@@ -2372,18 +2315,21 @@ def setup_session(
 
         # Coregistration — each localizer's masks use their own BOLD reference
         # so the boldref→reference transform is correct for each set of masks.
-        # Tissue masks (WM/CSF) are included only with the last group since
-        # they are created using last_ref_file.
+        # Tissue masks (WM/CSF) are included only with the last FRESH group, since
+        # they are created from last_fresh_ref (reused groups have no local tissue).
+        last_fresh_idx = max(
+            (idx for idx, (_ref, _masks, reused) in enumerate(localizer_groups) if not reused),
+            default=None,
+        )
         coreg_mask_files = []
-        for group_idx, (group_ref, group_masks) in enumerate(localizer_groups):
-            is_last = group_idx == len(localizer_groups) - 1
+        for group_idx, (group_ref, group_masks, _reused) in enumerate(localizer_groups):
             coreg = run_coregistration(
                 config,
                 group_masks,
                 group_ref,
                 reference_dicom_dir=initial_reference[0],
                 overwrite=overwrite,
-                include_tissue=is_last,
+                include_tissue=(group_idx == last_fresh_idx),
             )
             coreg_mask_files.extend(coreg)
     else:
