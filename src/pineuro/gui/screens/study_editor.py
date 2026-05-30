@@ -565,11 +565,12 @@ class StudyEditorScreen:
             cfg.setdefault("manual_mask_space", "native")
             cfg.setdefault("manual_mask_names", [])
         elif new_type != "rest":
-            # Switching to task: set contrast defaults from task metadata
+            # Switching to task: set contrast and run-count defaults from metadata
             try:
                 meta = get_task_metadata(new_type)
                 if meta.default_contrasts:
                     cfg["contrasts"] = dict(meta.default_contrasts)
+                cfg["n_runs"] = meta.default_n_runs
             except (KeyError, ValueError):
                 pass
             cfg["include_reverse_contrasts"] = cfg.get("include_reverse_contrasts", False)

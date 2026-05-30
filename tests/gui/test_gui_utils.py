@@ -435,11 +435,12 @@ class TestValidateSessionConfig:
         ok, err = validate_session_config(config)
         assert ok is False
 
-    def test_single_run_fails(self):
+    def test_single_run_passes(self):
         config = self._valid_config()
         config["localizers"][0]["n_runs"] = 1
         ok, err = validate_session_config(config)
-        assert ok is False
+        assert ok is True
+        assert err is None
 
     def test_invalid_network_atlas_fails(self):
         config = self._valid_config()

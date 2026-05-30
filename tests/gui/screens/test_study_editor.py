@@ -142,3 +142,40 @@ def test_inner_tab_index_is_clamped_to_tab_count():
     editor._last_inner_index = 99
     editor._render_detail()
     assert editor._inner_tabs.selected_index == 1  # min(99, 2 - 1)
+
+
+# ----------------------------------------------------------------------
+# Localizer type change applies the task's default run count
+# ----------------------------------------------------------------------
+
+
+def _editor_for_type_change(loc: dict, new_type: str) -> StudyEditorScreen:
+    """Editor primed to switch its single localizer to ``new_type`` via the dropdown.
+
+    The UI-touching collect/rebuild steps are stubbed so the test isolates the
+    type-change defaulting logic.
+    """
+    editor = _make_editor([_session([_rest_loc()], [])])
+    editor._localizer_configs = [loc]
+    dropdown = MagicMock()
+    dropdown.value = new_type
+    editor._loc_type_dropdowns = [dropdown]
+    editor._collect_all_configs = MagicMock()
+    editor._rebuild_tabs = MagicMock()
+    return editor
+
+
+def test_type_change_to_rit_defaults_to_one_run():
+    # RIT declares default_n_runs=1, so selecting it should set n_runs to 1.
+    editor = _editor_for_type_change({"type": "rest", "n_runs": 2}, "rit")
+    editor._on_localizer_type_changed(0, None)
+    assert editor._localizer_configs[0]["type"] == "rit"
+    assert editor._localizer_configs[0]["n_runs"] == 1
+
+
+def test_type_change_to_other_task_keeps_default_two_runs():
+    # Tasks without a default_n_runs override fall back to the metadata default of 2.
+    editor = _editor_for_type_change({"type": "rest", "n_runs": 5}, "selfother")
+    editor._on_localizer_type_changed(0, None)
+    assert editor._localizer_configs[0]["type"] == "selfother"
+    assert editor._localizer_configs[0]["n_runs"] == 2

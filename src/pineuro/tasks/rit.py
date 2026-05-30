@@ -9,11 +9,16 @@ followed by sadness/focus ratings. Used to define participant-specific
 rumination network ROIs via the contrast "rumination > distraction" in
 the GLM-based mask extraction pipeline.
 
-Protocol (per Shreiner et al., 2025)
--------------------------------------
-- 2 runs per session, 4 trials each
-- Pass → run assignment is shuffled deterministically per participant,
-  and memories within the chosen pass are shuffled before presentation.
+Protocol
+--------
+Each trial's structure (below) follows Shreiner et al. (2025). The paper
+introduced the task but did not prescribe how it is packaged into a session,
+so the number of runs and the number of trials per run are
+study-configuration choices.
+
+- Each run draws its trials from one of two memory passes; the pass → run
+  assignment is shuffled deterministically per participant, and memories
+  within the chosen pass are shuffled before presentation.
 - Each trial (~120-125s):
     1. Memory prompt + keyword (5s)
     2. Reflection: "Think about this memory in detail" (25s)
@@ -125,6 +130,7 @@ RIT_METADATA = TaskMetadata(
     roles={"localizer"},
     n_networks=0,
     default_contrasts={"rumination_network": "rumination - distraction"},
+    default_n_runs=1,
     design_type="block",
     parameters=[
         TaskParameter(

@@ -235,8 +235,6 @@ def validate_session_config(config_dict: dict) -> tuple[bool, str | None]:
         validate_positive_number(loc0.get("tr", 0), "localizers[0].tr")
         validate_positive_int(loc0.get("n_volumes", 0), "localizers[0].n_volumes")
         validate_positive_int(loc0.get("n_runs", 0), "localizers[0].n_runs")
-        if loc0.get("n_runs", 0) < 2:
-            raise ValidationError("localizers[0].n_runs must be at least 2")
 
         # Validate extraction sub-block for ICA (rest) localizers
         if loc0.get("type", "rest") == "rest":

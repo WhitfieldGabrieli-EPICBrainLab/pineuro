@@ -328,6 +328,9 @@ class TaskMetadata:
         default_contrasts: Default GLM contrasts for localizer tasks. Maps
             mask name to contrast expression (e.g., {"STG_self": "self - other"}).
             Used to pre-populate the GUI; users can still edit them.
+        default_n_runs: Default number of localizer runs to pre-populate in the
+            GUI when this task is selected as a localizer. Users can still edit
+            it. Default is 2.
         network_roles: Descriptions of network slots required by this task.
             Allows the GUI to render labeled dropdowns for each network role
             instead of hardcoding task-specific network names.
@@ -364,6 +367,7 @@ class TaskMetadata:
     n_networks: int = 1
     roles: set[str] = field(default_factory=lambda: {"feedback"})
     default_contrasts: dict[str, str] = field(default_factory=dict)
+    default_n_runs: int = 2
     network_roles: list[NetworkRole] = field(default_factory=list)
     task_state_fields: list[TaskStateField] = field(default_factory=list)
     post_run_questions: list[PostRunQuestion] = field(default_factory=list)
