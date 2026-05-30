@@ -71,6 +71,15 @@ class StudyEditorScreen:
         self._active_session_index = 0
         self._ensure_sessions()
 
+        # Master-detail navigation state. The left sidebar selects a *scope*:
+        # "study" (study-wide config) or "session" (the active session's protocol).
+        # A new study opens on study-wide so the name/paths are set first; an existing
+        # study opens on its first session's protocol. ``_last_inner_index`` remembers
+        # which session sub-tab (Protocol / Localizer N / Feedback N) was selected so
+        # switching sessions lands on the same sub-tab (compare-across-sessions).
+        self._active_scope = "study" if self.is_new else "session"
+        self._last_inner_index = 0
+
         # Initialize localizer and feedback configs from the active session
         self._init_localizer_configs()
         self._init_feedback_configs()
@@ -520,28 +529,37 @@ class StudyEditorScreen:
         self._sync_paths_tab_visibility()
 
     def _sync_paths_tab_visibility(self):
-        """Update visibility of Paths tab simulator fields based on Study tab checkboxes."""
+        """Sync reference simulator-source field visibility with the reference checkboxes.
+
+        The reference source fields live on the study-wide pane; updates are guarded so
+        this is a no-op when that pane is not currently mounted (e.g. fired from a
+        localizer/feedback edit while a session is shown).
+        """
         # Initial reference visibility
         ref_row = getattr(self, "_sim_loc_ref_row", None)
         if ref_row is not None:
             enabled = self.reference_initial_enabled_checkbox.value
             ref_row.visible = enabled
-            ref_row.update()
             ref_label = getattr(self, "_sim_loc_ref_label", None)
             if ref_label is not None:
                 ref_label.visible = enabled
-                ref_label.update()
+            with contextlib.suppress(Exception):
+                ref_row.update()
+                if ref_label is not None:
+                    ref_label.update()
 
         # Realtime reference visibility
         rt_ref_row = getattr(self, "_sim_fb_ref_row", None)
         if rt_ref_row is not None:
             enabled = self.reference_realtime_enabled_checkbox.value
             rt_ref_row.visible = enabled
-            rt_ref_row.update()
             rt_ref_label = getattr(self, "_sim_fb_ref_label", None)
             if rt_ref_label is not None:
                 rt_ref_label.visible = enabled
-                rt_ref_label.update()
+            with contextlib.suppress(Exception):
+                rt_ref_row.update()
+                if rt_ref_label is not None:
+                    rt_ref_label.update()
 
     # ------------------------------------------------------------------
     # Count control handlers
@@ -685,14 +703,17 @@ class StudyEditorScreen:
         }
 
     def _switch_to_session(self, index: int):
-        """Re-point the editor at session *index* and rebuild the tabs."""
+        """Re-point the editor at session *index* and show its protocol."""
         self._active_session_index = index
+        self._active_scope = "session"
         self._init_localizer_configs()
         self._init_feedback_configs()
-        self._rebuild_tabs()
+        self._refresh_layout()
 
     def _on_select_session(self, index: int):
-        if index == self._active_session_index:
+        # Selecting the already-active session is a no-op only when already on it;
+        # from study-wide scope it must still switch into the session view.
+        if self._active_scope == "session" and index == self._active_session_index:
             return
         self._collect_all_configs()
         self._switch_to_session(index)
@@ -726,72 +747,50 @@ class StudyEditorScreen:
                         del srcs[name]
         self._switch_to_session(max(0, self._active_session_index - 1))
 
-    def _build_session_selector(self) -> ft.Control:
-        """Build the per-session selector strip shown above the Experiment Design."""
-        sessions = self.study_config.session_config["sessions"]
-        active = self._active_session_index
-        chips: list[ft.Control] = []
-        for i in range(len(sessions)):
-            label = f"Session {i + 1}"
-            make = ft.FilledButton if i == active else ft.OutlinedButton
-            chips.append(make(label, on_click=lambda e, idx=i: self._on_select_session(idx)))
-
-        return ft.Column(
-            [
-                ft.Text("Sessions", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "Each session runs its own localizer and feedback tasks. The Experiment Design, "
-                    f"Localizer, and Feedback tabs below edit the selected session (Session {active + 1}).",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                ft.Row(chips, wrap=True, spacing=6),
-                ft.Row(
-                    [
-                        ft.TextButton("Add Session", icon=ft.Icons.ADD, on_click=self._on_add_session),
-                        ft.TextButton("Duplicate Session", icon=ft.Icons.COPY, on_click=self._on_duplicate_session),
-                        ft.TextButton(
-                            "Remove Session",
-                            icon=ft.Icons.DELETE_OUTLINE,
-                            on_click=self._on_remove_session,
-                            disabled=len(sessions) <= 1,
-                        ),
-                    ],
-                    spacing=6,
-                ),
-            ],
-            spacing=8,
-        )
-
     def _collect_all_configs(self):
-        """Collect current field values from all tab builders and Paths tab.
+        """Collect current field values from the session tab builders and sim fields.
 
-        The collected localizers/feedback_runs are written back into the active
+        The collected localizers/feedback_runs/notes are written back into the active
         session so switching sessions (or saving) preserves edits.
         """
+        # Remember which session sub-tab is open so switching sessions lands on the
+        # same sub-tab (compare-across-sessions).
+        if getattr(self, "_inner_tabs", None) is not None:
+            with contextlib.suppress(Exception):
+                self._last_inner_index = self._inner_tabs.selected_index or 0
         if hasattr(self, "_localizer_builders"):
             self._localizer_configs = [b.collect_config() for b in self._localizer_builders]
         if hasattr(self, "_feedback_builders"):
             self._feedback_configs = [b.collect_config() for b in self._feedback_builders]
-        # Collect simulator paths from Paths tab into configs
+        # Collect per-session simulator source paths into configs
         self._collect_simulator_paths()
         # Persist the collected protocol into the active session.
         sess = self._active_session()
         sess["localizers"] = self._localizer_configs
         sess["feedback_runs"] = self._feedback_configs
+        if getattr(self, "_notes_field", None) is not None:
+            sess["notes"] = self._notes_field.value or ""
 
     # ------------------------------------------------------------------
     # Build
     # ------------------------------------------------------------------
 
     def build(self) -> ft.Control:
-        """Build the study editor UI."""
-        # Create tab builders
+        """Build the study editor UI (master-detail: sidebar selects the scope)."""
+        # Create tab builders for the active session
         self._create_tab_builders()
 
-        # Build tabs
-        self._build_tab_controls()
+        # Study-wide pane is built once and reused; the detail pane swaps between it
+        # and the active session's protocol as the sidebar scope selection changes.
+        self._study_wide_pane = self._build_study_wide_pane()
+        self._detail_pane = ft.Container(expand=True)
+        self._sidebar = ft.Container(
+            width=250,
+            bgcolor=ft.Colors.GREY_50,
+            padding=ft.padding.symmetric(vertical=12, horizontal=8),
+            content=self._build_sidebar_content(),
+        )
+        self._render_detail()
 
         # Action buttons
         action_buttons = ft.Row(
@@ -831,10 +830,17 @@ class StudyEditorScreen:
                     padding=20,
                     bgcolor=ft.Colors.BLUE_50,
                 ),
-                # Tabs
+                # Master-detail body: scope sidebar + detail pane
                 ft.Container(
-                    content=self.tabs_widget,
-                    padding=20,
+                    content=ft.Row(
+                        [
+                            self._sidebar,
+                            ft.VerticalDivider(width=1),
+                            ft.Container(content=self._detail_pane, padding=20, expand=True),
+                        ],
+                        spacing=0,
+                        expand=True,
+                    ),
                     expand=True,
                 ),
                 # Actions
@@ -879,84 +885,213 @@ class StudyEditorScreen:
         prefix = f"Feedback {index + 1}" if n > 1 else "Feedback"
         return f"{prefix} ({short})"
 
-    def _build_tab_controls(self):
-        """Build the TabBar + TabBarView with dynamic tabs."""
-        n_loc = len(self._localizer_configs)
-        n_fb = len(self._feedback_configs)
+    # ------------------------------------------------------------------
+    # Master-detail navigation (sidebar scope + detail pane)
+    # ------------------------------------------------------------------
 
-        # Tab labels
-        tabs = [ft.Tab(label="Study")]
-        for i in range(n_loc):
-            tabs.append(ft.Tab(label=self._get_localizer_tab_label(i)))
-        for i in range(n_fb):
-            tabs.append(ft.Tab(label=self._get_feedback_tab_label(i)))
-        tabs.append(ft.Tab(label="Paths"))
+    def _loc_type_short(self, loc_type: str) -> str:
+        """Short display name for a localizer type (Rest / Manual / task name)."""
+        if loc_type == "rest":
+            return "Rest"
+        if loc_type == "manual":
+            return "Manual"
+        try:
+            return get_task_metadata(loc_type).display_name
+        except (KeyError, ValueError):
+            return loc_type
 
-        self.tab_bar = ft.TabBar(tabs=tabs)
+    def _session_summary(self, index: int) -> str:
+        """One-line protocol fingerprint for session *index*.
 
-        # Tab content
-        content = [self._build_study_tab()]
-        for builder in self._localizer_builders:
-            content.append(builder.build())
-        for builder in self._feedback_builders:
-            content.append(builder.build())
-        content.append(self._build_paths_tab())
+        Lists localizer types and feedback tasks, with a trailing ``<- ses-NN`` marker
+        when a feedback run pulls masks from an earlier session. This gives each
+        session a distinct fingerprint even when two sessions collect identical scans.
+        """
+        sessions = self.study_config.session_config.get("sessions", [])
+        if not 0 <= index < len(sessions):
+            return ""
+        sess = sessions[index]
+        parts = [self._loc_type_short(loc.get("type", "rest")) for loc in sess.get("localizers", [])]
+        reuse_sources: set[str] = set()
+        for frc in sess.get("feedback_runs", []):
+            task = frc.get("task", "ball")
+            try:
+                parts.append(get_task_metadata(task).display_name)
+            except (KeyError, ValueError):
+                parts.append(task)
+            for src in (frc.get("mask_sources", {}) or {}).values():
+                if src:
+                    reuse_sources.add(src)
+        summary = "; ".join(parts) if parts else "(empty)"
+        if reuse_sources:
+            summary += "  <- " + ", ".join(sorted(reuse_sources))
+        return summary
 
-        self.tab_view = ft.TabBarView(controls=content, expand=True)
+    def _build_sidebar_content(self) -> ft.Control:
+        """Build the left scope list: Study-wide + one row per session."""
+        sessions = self.study_config.session_config["sessions"]
 
-        self.tabs_content = ft.Column(
-            [self.tab_bar, self.tab_view],
-            spacing=0,
+        def _row(title: str, subtitle: str, selected: bool, on_click) -> ft.Control:
+            lines: list[ft.Control] = [
+                ft.Text(title, size=14, weight=ft.FontWeight.BOLD if selected else ft.FontWeight.W_500)
+            ]
+            if subtitle:
+                lines.append(ft.Text(subtitle, size=11, color=ft.Colors.GREY_700, italic=True))
+            return ft.Container(
+                content=ft.Column(lines, spacing=1),
+                on_click=on_click,
+                bgcolor=ft.Colors.BLUE_100 if selected else None,
+                border=ft.border.only(left=ft.BorderSide(3, ft.Colors.BLUE_700)) if selected else None,
+                border_radius=6,
+                padding=ft.padding.symmetric(vertical=8, horizontal=10),
+                ink=True,
+            )
+
+        items: list[ft.Control] = [
+            ft.Text("STUDY", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY_600),
+            _row(
+                "Study-wide settings",
+                "Paths, scanner, reference, display",
+                self._active_scope == "study",
+                lambda e: self._select_study_wide(),
+            ),
+            ft.Container(height=8),
+            ft.Row(
+                [
+                    ft.Text("SESSIONS", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY_600),
+                    ft.IconButton(
+                        icon=ft.Icons.ADD, icon_size=18, tooltip="Add session", on_click=self._on_add_session
+                    ),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+        ]
+        for i in range(len(sessions)):
+            active = self._active_scope == "session" and i == self._active_session_index
+            items.append(
+                _row(
+                    f"ses-{i + 1:02d}", self._session_summary(i), active, lambda e, idx=i: self._on_select_session(idx)
+                )
+            )
+        return ft.Column(items, spacing=4, scroll=ft.ScrollMode.AUTO, expand=True)
+
+    def _build_session_header(self, index: int) -> ft.Control:
+        """Scope banner + session lifecycle actions shown above the inner tabs."""
+        n = len(self.study_config.session_config["sessions"])
+        ses_id = f"ses-{index + 1:02d}"
+        banner = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.INFO_OUTLINE, size=16, color=ft.Colors.BLUE_700),
+                    ft.Text(
+                        f"Editing {ses_id} (Session {index + 1} of {n}) — the localizer & feedback "
+                        f"tabs below apply to {ses_id} only.",
+                        size=12,
+                        color=ft.Colors.BLUE_900,
+                    ),
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor=ft.Colors.BLUE_50,
+            border=ft.border.only(left=ft.BorderSide(4, ft.Colors.BLUE_700)),
+            border_radius=6,
+            padding=10,
             expand=True,
         )
-
-        self.tabs_widget = ft.Tabs(
-            content=self.tabs_content,
-            length=len(tabs),
+        return ft.Row(
+            [
+                banner,
+                ft.IconButton(
+                    icon=ft.Icons.COPY, tooltip="Duplicate this session", on_click=self._on_duplicate_session
+                ),
+                ft.IconButton(
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    tooltip="Remove this session",
+                    on_click=self._on_remove_session,
+                    disabled=n <= 1,
+                ),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
-    def _rebuild_tabs(self):
-        """Rebuild all tabs after count or type change."""
-        # Recreate builders from current configs
-        self._create_tab_builders()
-
+    def _build_inner_tabs(self, index: int) -> ft.Control:
+        """Inner tabs for the active session: Protocol + Localizer N + Feedback N."""
         n_loc = len(self._localizer_configs)
         n_fb = len(self._feedback_configs)
 
-        # Rebuild tab labels
-        tabs = [ft.Tab(label="Study")]
+        tabs: list[ft.Control] = [ft.Tab(label="Protocol")]
         for i in range(n_loc):
             tabs.append(ft.Tab(label=self._get_localizer_tab_label(i)))
         for i in range(n_fb):
             tabs.append(ft.Tab(label=self._get_feedback_tab_label(i)))
-        tabs.append(ft.Tab(label="Paths"))
 
-        self.tab_bar.tabs = tabs
+        content: list[ft.Control] = [self._build_protocol_tab()]
+        for loc_builder in self._localizer_builders:
+            content.append(loc_builder.build())
+        for fb_builder in self._feedback_builders:
+            content.append(fb_builder.build())
 
-        # Rebuild content
-        content = [self._build_study_tab()]
-        for builder in self._localizer_builders:
-            content.append(builder.build())
-        for builder in self._feedback_builders:
-            content.append(builder.build())
-        content.append(self._build_paths_tab())
+        n = len(tabs)
+        self._inner_tab_bar = ft.TabBar(tabs=tabs)
+        self._inner_tab_view = ft.TabBarView(controls=content, expand=True)
+        self._inner_tabs = ft.Tabs(
+            content=ft.Column([self._inner_tab_bar, self._inner_tab_view], spacing=0, expand=True),
+            length=n,
+            selected_index=max(0, min(self._last_inner_index, n - 1)),
+            expand=True,
+        )
+        return self._inner_tabs
 
-        self.tab_view.controls = content
+    def _render_detail(self):
+        """Point the detail pane at the current scope's content."""
+        if self._active_scope == "study":
+            self._detail_pane.content = self._study_wide_pane
+        else:
+            # Recreate (and build) the active session's tab builders so their lazy
+            # network/contrast widgets exist for this session. Only done here — the
+            # study-wide branch must NOT recreate builders, or in-progress network
+            # selections (lazy checkboxes) would be dropped on the next collect.
+            self._create_tab_builders()
+            idx = self._active_session_index
+            self._detail_pane.content = ft.Column(
+                [self._build_session_header(idx), self._build_inner_tabs(idx)],
+                spacing=10,
+                expand=True,
+            )
 
-        # Update length
-        self.tabs_widget.length = len(tabs)
-
+    def _refresh_layout(self):
+        """Rebuild the sidebar (summaries + highlight) and the detail pane."""
+        if getattr(self, "_sidebar", None) is not None:
+            self._sidebar.content = self._build_sidebar_content()
+        self._render_detail()
         with contextlib.suppress(Exception):
-            self.tab_bar.update()
-            self.tab_view.update()
             self.page.update()
 
+    def _select_study_wide(self):
+        """Switch the detail pane to study-wide config."""
+        if self._active_scope == "study":
+            return
+        self._collect_all_configs()
+        self._active_scope = "study"
+        self._refresh_layout()
+
+    def _rebuild_tabs(self):
+        """Back-compat entry point: count/type-change handlers call this to refresh."""
+        self._refresh_layout()
+
     # ------------------------------------------------------------------
-    # Study tab
+    # Study-wide pane
     # ------------------------------------------------------------------
 
-    def _build_study_tab(self) -> ft.Container:
-        """Build the study information tab."""
+    def _build_study_wide_pane(self) -> ft.Container:
+        """Study-wide configuration that applies to every session.
+
+        Holds study metadata, output directory, reference scans, scanner/simulator
+        settings, the simulator source mode + mapping/reference sources, and display
+        settings. Per-session protocol (localizers/feedback) lives on the session
+        Protocol tab, not here.
+        """
         self.scanner_dicom_dir_browse_btn = self._create_browse_button(self.scanner_dicom_dir_field)
 
         is_simulator = self.simulator_enabled_checkbox.value
@@ -979,58 +1114,49 @@ class StudyEditorScreen:
             italic=True,
         )
 
-        # --- Experiment Design: Localizer Tasks (for the active session) ---
-        # A session computes its localizers fresh. To use an earlier session's masks,
-        # a feedback run selects them directly (the feedback tab's mask dropdowns list
-        # every earlier session's masks); cross-session reuse is materialized when the
-        # study is flattened, so no per-localizer reuse control is needed here.
-        loc_rows: list[ft.Control] = []
-        self._loc_type_dropdowns: list[ft.Dropdown] = []
-        for i, cfg in enumerate(self._localizer_configs):
-            dd = ft.Dropdown(
-                width=360,
-                label=f"Localizer {i + 1}",
-                options=[ft.dropdown.Option(key=o.key, text=o.text) for o in self._localizer_type_options],
-                value=cfg.get("type", "rest"),
-                on_select=lambda e, idx=i: self._on_localizer_type_changed(idx, e),
-            )
-            self._loc_type_dropdowns.append(dd)
-            remove_btn = ft.IconButton(
-                icon=ft.Icons.CLOSE,
-                tooltip="Remove this localizer",
-                on_click=lambda e, idx=i: self._on_remove_localizer_at(idx),
-            )
-            loc_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
-
-        add_loc_btn = ft.TextButton(
-            "Add Localizer Task",
-            icon=ft.Icons.ADD,
-            on_click=self._on_add_localizer,
+        # Simulator source paths: mode radio + (mapping file | reference-scan sources).
+        # Per-localizer/feedback sources are session-scoped and live on the Protocol tab.
+        is_mapping = self.simulator_source_mode_radio.value == "mapping"
+        self.simulator_source_mapping_row = ft.Row(
+            [
+                self.simulator_source_mapping_field,
+                self._create_file_browse_button(
+                    self.simulator_source_mapping_field,
+                    filetypes=[("CSV/TSV files", "*.csv *.tsv"), ("All files", "*.*")],
+                ),
+            ]
         )
-
-        # --- Experiment Design: Feedback Tasks ---
-        fb_rows: list[ft.Control] = []
-        self._fb_type_dropdowns: list[ft.Dropdown] = []
-        for i, cfg in enumerate(self._feedback_configs):
-            dd = ft.Dropdown(
-                width=560,
-                label=f"Feedback {i + 1}",
-                options=[ft.dropdown.Option(key=o.key, text=o.text) for o in self._feedback_type_options],
-                value=cfg.get("task", "ball"),
-                on_select=lambda e, idx=i: self._on_feedback_type_changed(idx, e),
-            )
-            self._fb_type_dropdowns.append(dd)
-            remove_btn = ft.IconButton(
-                icon=ft.Icons.CLOSE,
-                tooltip="Remove this feedback task",
-                on_click=lambda e, idx=i: self._on_remove_feedback_at(idx),
-            )
-            fb_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
-
-        add_fb_btn = ft.TextButton(
-            "Add Feedback Task",
-            icon=ft.Icons.ADD,
-            on_click=self._on_add_feedback,
+        self.simulator_mapping_container = ft.Column(
+            [
+                ft.Text(
+                    "Columns: subject, rest1, rest2, ..., reference_realtime, feedback_run-01, ...",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                ),
+                self.simulator_source_mapping_row,
+            ],
+            visible=is_mapping,
+        )
+        self._studywide_sources_container = ft.Column(
+            self._build_reference_simulator_paths(),
+            visible=not is_mapping,
+        )
+        self.simulator_paths_container = ft.Column(
+            [
+                ft.Divider(),
+                ft.Text("Simulator Source Paths", size=16, weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    "DICOM source directories for offline testing. Per-task sources live on each "
+                    "session's Protocol tab.",
+                    size=11,
+                    color=ft.Colors.GREY_600,
+                    italic=True,
+                ),
+                self.simulator_source_mode_radio,
+                self.simulator_mapping_container,
+                self._studywide_sources_container,
+            ],
+            visible=is_simulator,
         )
 
         return ft.Container(
@@ -1047,21 +1173,14 @@ class StudyEditorScreen:
                     self.description_field,
                     self.example_participant_id_field,
                     ft.Divider(),
-                    self._build_session_selector(),
-                    ft.Divider(),
-                    ft.Text("Experiment Design", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text("Output Directory", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        "Define this session's localizer and feedback tasks. Each has its own configuration tab.",
+                        "All processed data, masks, and feedback output will be saved under this directory.",
                         size=11,
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
-                    ft.Text("Localizer Tasks", size=14, weight=ft.FontWeight.W_500),
-                    *loc_rows,
-                    add_loc_btn,
-                    ft.Text("Feedback Tasks", size=14, weight=ft.FontWeight.W_500),
-                    *fb_rows,
-                    add_fb_btn,
+                    ft.Row([self.base_dir_field, self._create_browse_button(self.base_dir_field)]),
                     ft.Divider(),
                     ft.Text("Reference Scans", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text(
@@ -1095,6 +1214,7 @@ class StudyEditorScreen:
                     ),
                     self._f(self.scanner_trigger_keys_field),
                     self.simulator_instruction_text,
+                    self.simulator_paths_container,
                     ft.Divider(),
                     ft.Text("Display Settings", size=16, weight=ft.FontWeight.BOLD),
                     ft.Row([self.control_monitor_dropdown, self.presenter_monitor_dropdown]),
@@ -1112,71 +1232,100 @@ class StudyEditorScreen:
         )
 
     # ------------------------------------------------------------------
-    # Paths tab
+    # Session Protocol tab
     # ------------------------------------------------------------------
 
-    def _build_paths_tab(self) -> ft.Container:
-        """Build the file paths tab with simulator source path management."""
+    def _build_protocol_tab(self) -> ft.Container:
+        """The active session's protocol: experiment design, notes, simulator sources.
+
+        A session computes its localizers fresh. To use an earlier session's masks,
+        a feedback run selects them directly (the feedback tab's mask dropdowns list
+        every earlier session's masks); cross-session reuse is materialized when the
+        study is flattened, so no per-localizer reuse control is needed here.
+        """
+        # --- Experiment Design: Localizer Tasks ---
+        loc_rows: list[ft.Control] = []
+        self._loc_type_dropdowns: list[ft.Dropdown] = []
+        for i, cfg in enumerate(self._localizer_configs):
+            dd = ft.Dropdown(
+                width=360,
+                label=f"Localizer {i + 1}",
+                options=[ft.dropdown.Option(key=o.key, text=o.text) for o in self._localizer_type_options],
+                value=cfg.get("type", "rest"),
+                on_select=lambda e, idx=i: self._on_localizer_type_changed(idx, e),
+            )
+            self._loc_type_dropdowns.append(dd)
+            remove_btn = ft.IconButton(
+                icon=ft.Icons.CLOSE,
+                tooltip="Remove this localizer",
+                on_click=lambda e, idx=i: self._on_remove_localizer_at(idx),
+            )
+            loc_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+
+        add_loc_btn = ft.TextButton("Add Localizer Task", icon=ft.Icons.ADD, on_click=self._on_add_localizer)
+
+        # --- Experiment Design: Feedback Tasks ---
+        fb_rows: list[ft.Control] = []
+        self._fb_type_dropdowns: list[ft.Dropdown] = []
+        for i, cfg in enumerate(self._feedback_configs):
+            dd = ft.Dropdown(
+                width=560,
+                label=f"Feedback {i + 1}",
+                options=[ft.dropdown.Option(key=o.key, text=o.text) for o in self._feedback_type_options],
+                value=cfg.get("task", "ball"),
+                on_select=lambda e, idx=i: self._on_feedback_type_changed(idx, e),
+            )
+            self._fb_type_dropdowns.append(dd)
+            remove_btn = ft.IconButton(
+                icon=ft.Icons.CLOSE,
+                tooltip="Remove this feedback task",
+                on_click=lambda e, idx=i: self._on_remove_feedback_at(idx),
+            )
+            fb_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+
+        add_fb_btn = ft.TextButton("Add Feedback Task", icon=ft.Icons.ADD, on_click=self._on_add_feedback)
+
+        self._notes_field = ft.TextField(
+            width=600,
+            label="Session notes",
+            value=self._active_session().get("notes", ""),
+            multiline=True,
+            min_lines=1,
+            max_lines=3,
+            hint_text="Optional notes for this session",
+        )
+
+        # Per-session simulator source DICOMs (only shown in individual simulator mode).
         is_simulator = self.simulator_enabled_checkbox.value
-        is_mapping = self.simulator_source_mode_radio.value == "mapping"
-
-        self.simulator_source_mapping_row = ft.Row(
-            [
-                self.simulator_source_mapping_field,
-                self._create_file_browse_button(
-                    self.simulator_source_mapping_field,
-                    filetypes=[("CSV/TSV files", "*.csv *.tsv"), ("All files", "*.*")],
-                ),
-            ]
-        )
-        self.simulator_mapping_container = ft.Column(
-            [
-                ft.Text(
-                    "Columns: subject, rest1, rest2, ..., reference_realtime, feedback_run-01, ...",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                ),
-                self.simulator_source_mapping_row,
-            ],
-            visible=is_mapping,
-        )
-
-        # Build individual simulator source path sections
-        individual_controls = self._build_individual_simulator_paths()
-        self.simulator_individual_container = ft.Column(
-            individual_controls,
-            visible=not is_mapping,
-        )
-
-        self.simulator_paths_container = ft.Column(
+        is_individual = self.simulator_source_mode_radio.value != "mapping"
+        self._session_sim_container = ft.Column(
             [
                 ft.Divider(),
-                ft.Text("Simulator Source Paths", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "Configure DICOM source directories for offline testing with the simulator",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                self.simulator_source_mode_radio,
-                self.simulator_mapping_container,
-                self.simulator_individual_container,
+                ft.Text("Simulator Source DICOMs (this session)", size=14, weight=ft.FontWeight.W_500),
+                *self._build_session_simulator_paths(),
             ],
-            visible=is_simulator,
+            visible=is_simulator and is_individual,
         )
 
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Output Directory", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text("Experiment Design", size=16, weight=ft.FontWeight.BOLD),
                     ft.Text(
-                        "All processed data, masks, and feedback output will be saved under this directory.",
+                        "Define this session's localizer and feedback tasks. Each has its own configuration tab above.",
                         size=11,
                         color=ft.Colors.GREY_600,
                         italic=True,
                     ),
-                    ft.Row([self.base_dir_field, self._create_browse_button(self.base_dir_field)]),
-                    self.simulator_paths_container,
+                    ft.Text("Localizer Tasks", size=14, weight=ft.FontWeight.W_500),
+                    *loc_rows,
+                    add_loc_btn,
+                    ft.Text("Feedback Tasks", size=14, weight=ft.FontWeight.W_500),
+                    *fb_rows,
+                    add_fb_btn,
+                    ft.Divider(),
+                    self._notes_field,
+                    self._session_sim_container,
                 ],
                 scroll=ft.ScrollMode.AUTO,
             ),
@@ -1184,19 +1333,17 @@ class StudyEditorScreen:
         )
 
     # ------------------------------------------------------------------
-    # Simulator source paths (Paths tab)
+    # Simulator source paths (split: per-session sources vs study-wide references)
     # ------------------------------------------------------------------
 
-    def _build_individual_simulator_paths(self) -> list[ft.Control]:
-        """Build individual simulator source path fields for all localizers and feedback runs."""
+    def _build_session_simulator_paths(self) -> list[ft.Control]:
+        """Per-localizer/feedback simulator source DICOM fields for the active session."""
         controls: list[ft.Control] = []
 
-        # Store fields for later collection
+        # Store fields for later collection (per active session).
         self._sim_loc_source_fields: list[list[ft.TextField]] = []
-        self._sim_loc_ref_field: ft.TextField | None = None
         self._sim_fb_source_fields: list[ft.TextField] = []
         self._sim_fb_transfer_fields: list[ft.TextField] = []
-        self._sim_fb_ref_field: ft.TextField | None = None
 
         # --- Localizer sources ---
         for loc_idx, cfg in enumerate(self._localizer_configs):
@@ -1206,15 +1353,7 @@ class StudyEditorScreen:
             if loc_type == "manual":
                 self._sim_loc_source_fields.append([])
                 continue
-            if loc_type == "rest":
-                label = f"Localizer {loc_idx + 1} (Rest)"
-            else:
-                try:
-                    meta = get_task_metadata(loc_type)
-                    label = f"Localizer {loc_idx + 1} ({meta.display_name})"
-                except (KeyError, ValueError):
-                    label = f"Localizer {loc_idx + 1} ({loc_type})"
-
+            label = f"Localizer {loc_idx + 1} ({self._loc_type_short(loc_type)})"
             controls.append(ft.Text(label, size=14, weight=ft.FontWeight.W_500))
 
             source_dicoms = cfg.get("source_dicoms", [])
@@ -1236,8 +1375,7 @@ class StudyEditorScreen:
                     hint_text="Path to DICOM directory",
                 )
                 loc_fields.append(field)
-                browse = self._create_browse_button(field)
-                controls.append(ft.Row([field, browse]))
+                controls.append(ft.Row([field, self._create_browse_button(field)]))
 
             self._sim_loc_source_fields.append(loc_fields)
             controls.append(ft.Divider())
@@ -1253,7 +1391,6 @@ class StudyEditorScreen:
 
             controls.append(ft.Text(label, size=14, weight=ft.FontWeight.W_500))
 
-            # Feedback run source
             fb_field = ft.TextField(
                 width=540,
                 label="Feedback run source DICOMs",
@@ -1261,8 +1398,7 @@ class StudyEditorScreen:
                 hint_text="Path to DICOM directory",
             )
             self._sim_fb_source_fields.append(fb_field)
-            browse = self._create_browse_button(fb_field)
-            controls.append(ft.Row([fb_field, browse]))
+            controls.append(ft.Row([fb_field, self._create_browse_button(fb_field)]))
 
             # Transfer run source (only if transfers enabled)
             use_transfers = cfg.get("use_transfer_runs", False)
@@ -1274,49 +1410,51 @@ class StudyEditorScreen:
                 visible=use_transfers,
             )
             self._sim_fb_transfer_fields.append(tf_field)
-            tf_browse = self._create_browse_button(tf_field)
-            tf_row = ft.Row([tf_field, tf_browse], visible=use_transfers)
-            controls.append(tf_row)
+            controls.append(ft.Row([tf_field, self._create_browse_button(tf_field)], visible=use_transfers))
 
             controls.append(ft.Divider())
 
-        # --- Reference scans (session-level) ---
+        return controls
+
+    def _build_reference_simulator_paths(self) -> list[ft.Control]:
+        """Reference-scan simulator source DICOM fields (study-wide).
+
+        Reference scans live in the top-level ``reference`` block, so their source
+        DICOMs belong with the study-wide config, not a session's protocol.
+        """
+        controls: list[ft.Control] = []
         reference_config = self.study_config.session_config.get("reference", {})
 
         # Initial reference
         init_enabled = self.reference_initial_enabled_checkbox.value
-        init_val = reference_config.get("initial_dicoms", "")
         self._sim_loc_ref_label = ft.Text("Initial Reference Scan", size=14, weight=ft.FontWeight.W_500)
         self._sim_loc_ref_label.visible = init_enabled
         controls.append(self._sim_loc_ref_label)
         self._sim_loc_ref_field = ft.TextField(
             width=540,
             label="Initial Reference Scan source DICOMs",
-            value=init_val,
+            value=reference_config.get("initial_dicoms", ""),
             hint_text="Path to DICOM directory",
         )
-        browse = self._create_browse_button(self._sim_loc_ref_field)
         self._sim_loc_ref_row = ft.Row(
-            [self._sim_loc_ref_field, browse],
+            [self._sim_loc_ref_field, self._create_browse_button(self._sim_loc_ref_field)],
             visible=init_enabled,
         )
         controls.append(self._sim_loc_ref_row)
 
         # Real-time reference
         rt_enabled = self.reference_realtime_enabled_checkbox.value
-        rt_val = reference_config.get("realtime_dicoms", "")
         self._sim_fb_ref_label = ft.Text("Real-Time Reference Scan", size=14, weight=ft.FontWeight.W_500)
         self._sim_fb_ref_label.visible = rt_enabled
         controls.append(self._sim_fb_ref_label)
         self._sim_fb_ref_field = ft.TextField(
             width=540,
             label="Real-Time Reference Scan source DICOMs",
-            value=rt_val,
+            value=reference_config.get("realtime_dicoms", ""),
             hint_text="Path to DICOM directory",
         )
-        browse = self._create_browse_button(self._sim_fb_ref_field)
         self._sim_fb_ref_row = ft.Row(
-            [self._sim_fb_ref_field, browse],
+            [self._sim_fb_ref_field, self._create_browse_button(self._sim_fb_ref_field)],
             visible=rt_enabled,
         )
         controls.append(self._sim_fb_ref_row)
@@ -1397,6 +1535,8 @@ class StudyEditorScreen:
             )
         if hasattr(self, "simulator_paths_container"):
             self.simulator_paths_container.visible = is_simulator
+        if getattr(self, "_session_sim_container", None) is not None:
+            self._session_sim_container.visible = is_simulator and self.simulator_source_mode_radio.value != "mapping"
 
         self.page.update()
 
@@ -1404,8 +1544,10 @@ class StudyEditorScreen:
         mode = self.simulator_source_mode_radio.value
         if hasattr(self, "simulator_mapping_container"):
             self.simulator_mapping_container.visible = mode == "mapping"
-        if hasattr(self, "simulator_individual_container"):
-            self.simulator_individual_container.visible = mode != "mapping"
+        if getattr(self, "_studywide_sources_container", None) is not None:
+            self._studywide_sources_container.visible = mode != "mapping"
+        if getattr(self, "_session_sim_container", None) is not None:
+            self._session_sim_container.visible = mode != "mapping" and self.simulator_enabled_checkbox.value
         self.page.update()
 
     # ------------------------------------------------------------------
@@ -1915,6 +2057,8 @@ class StudyEditorScreen:
         sess = self._active_session()
         sess["localizers"] = self._localizer_configs
         sess["feedback_runs"] = self._feedback_configs
+        if getattr(self, "_notes_field", None) is not None:
+            sess["notes"] = self._notes_field.value or ""
 
         # Per-session protocol lives only under ``sessions`` — never at the top level.
         config.pop("localizers", None)
