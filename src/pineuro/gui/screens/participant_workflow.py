@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 # are deferred to method bodies to avoid loading numpy/nibabel/scipy at import time.
 import flet as ft
 
+from .. import styles as st
 from ..components.activation_plot import ActivationPlot
 from ..components.collection_progress import CollectionProgressPanel
 from ..components.csv_poller import FeedbackMonitor
@@ -2525,11 +2526,11 @@ class ParticipantWorkflowScreen:
             Flet Icon control
         """
         icon_map = {
-            StepStatus.PENDING: ft.icons.Icons.PAUSE_CIRCLE_OUTLINE,
-            StepStatus.RUNNING: ft.icons.Icons.SYNC,
-            StepStatus.COMPLETE: ft.icons.Icons.CHECK_CIRCLE,
-            StepStatus.INTERRUPTED: ft.icons.Icons.WARNING_AMBER,
-            StepStatus.FAILED: ft.icons.Icons.ERROR,
+            StepStatus.PENDING: ft.Icons.PAUSE_CIRCLE_OUTLINE,
+            StepStatus.RUNNING: ft.Icons.SYNC,
+            StepStatus.COMPLETE: ft.Icons.CHECK_CIRCLE,
+            StepStatus.INTERRUPTED: ft.Icons.WARNING_AMBER,
+            StepStatus.FAILED: ft.Icons.ERROR,
             StepStatus.SKIPPED: ft.Icons.FAST_FORWARD,
         }
 
@@ -4315,7 +4316,7 @@ class ParticipantWorkflowScreen:
         # Create draggable divider using Container with drag events
         drag_divider = ft.Container(
             content=ft.Row(
-                [ft.Icon(ft.icons.Icons.DRAG_HANDLE, size=20, color=ft.Colors.GREY_600)],
+                [ft.Icon(ft.Icons.DRAG_HANDLE, size=20, color=ft.Colors.GREY_600)],
                 alignment=ft.MainAxisAlignment.CENTER,
             ),
             height=8,
@@ -4342,7 +4343,7 @@ class ParticipantWorkflowScreen:
                             ft.Text("Log Console", weight=ft.FontWeight.BOLD),
                             ft.TextButton(
                                 "Clear",
-                                icon=ft.icons.Icons.CLEAR,
+                                icon=ft.Icons.CLEAR,
                                 on_click=self._clear_log,
                             ),
                         ],
@@ -4653,12 +4654,12 @@ class ParticipantWorkflowScreen:
         if next_step is None:
             button_text = "Session Complete"
             button_disabled = True
-            button_icon = ft.icons.Icons.CHECK_CIRCLE
+            button_icon = ft.Icons.CHECK_CIRCLE
         else:
             step_id, step_label = next_step
             button_text = f"Run Next: {step_label}"
             button_disabled = self._is_running  # Disable when running
-            button_icon = ft.icons.Icons.PLAY_ARROW
+            button_icon = ft.Icons.PLAY_ARROW
 
         # Recreate the button with new properties
         self.run_next_button = ft.FilledButton(
@@ -4674,7 +4675,7 @@ class ParticipantWorkflowScreen:
                 ft.Row(
                     [
                         ft.IconButton(
-                            icon=ft.icons.Icons.ARROW_BACK,
+                            icon=ft.Icons.ARROW_BACK,
                             on_click=self._on_back,
                             tooltip="Back to Studies",
                             disabled=self._is_running,  # Disable when running
@@ -4742,13 +4743,13 @@ class ParticipantWorkflowScreen:
             if is_collection or is_feedback_transfer:
                 # Collection and feedback steps use attempt numbering - previous data is archived
                 warning_text = "Previous run data exists and will be archived before starting fresh."
-                warning_icon = ft.icons.Icons.ARCHIVE
+                warning_icon = ft.Icons.ARCHIVE
             else:
                 warning_text = (
                     "Output files from a previous run exist. After you click Start you'll "
                     "choose Skip Existing (keep them) or Overwrite All (re-run from scratch)."
                 )
-                warning_icon = ft.icons.Icons.REPLAY
+                warning_icon = ft.Icons.REPLAY
 
             overwrite_warning = ft.Container(
                 content=ft.Row(
@@ -4805,7 +4806,7 @@ class ParticipantWorkflowScreen:
                         ft.TextButton("Cancel", on_click=lambda e: self._on_preview_cancel()),
                         ft.FilledButton(
                             "Start",
-                            icon=ft.icons.Icons.PLAY_ARROW,
+                            icon=ft.Icons.PLAY_ARROW,
                             on_click=lambda e: self._on_preview_start(step_id),
                         ),
                     ],
@@ -7679,12 +7680,12 @@ class ParticipantWorkflowScreen:
         if next_step is None:
             self.run_next_button.text = "Session Complete"
             self.run_next_button.disabled = True
-            self.run_next_button.icon = ft.icons.CHECK_CIRCLE
+            self.run_next_button.icon = ft.Icons.CHECK_CIRCLE
         else:
             step_id, step_label = next_step
             self.run_next_button.text = f"Run Next: {step_label}"
             self.run_next_button.disabled = False
-            self.run_next_button.icon = ft.icons.Icons.PLAY_ARROW
+            self.run_next_button.icon = ft.Icons.PLAY_ARROW
 
         # Force immediate visual update
         try:
@@ -7760,12 +7761,12 @@ class ParticipantWorkflowScreen:
         if next_step is None:
             button_text = "Session Complete"
             button_disabled = True
-            button_icon = ft.icons.Icons.CHECK_CIRCLE
+            button_icon = ft.Icons.CHECK_CIRCLE
         else:
             step_id, step_label = next_step
             button_text = f"Run Next: {step_label}"
             button_disabled = False
-            button_icon = ft.icons.Icons.PLAY_ARROW
+            button_icon = ft.Icons.PLAY_ARROW
 
         self.run_next_button = ft.FilledButton(
             button_text,
@@ -7781,30 +7782,31 @@ class ParticipantWorkflowScreen:
                     ft.Row(
                         [
                             ft.IconButton(
-                                icon=ft.icons.Icons.ARROW_BACK,
+                                icon=ft.Icons.ARROW_BACK,
                                 on_click=self._on_back,
                                 tooltip="Back to Studies",
                                 disabled=self._is_running,  # Disable when running
                             ),
-                            ft.Text(
+                            st.title(
                                 f"pineuro: {self.study_config.metadata.name}",
-                                size=20,
-                                weight=ft.FontWeight.BOLD,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
                             ),
                             ft.Text(
                                 f"| Participant: {self.participant_id}{self._simulator_text}",
-                                size=16,
-                                color=ft.Colors.GREY_700,
+                                size=st.BODY,
+                                color=st.MUTED,
                             ),
                         ],
-                        spacing=10,
+                        spacing=st.GAP_MD,
+                        expand=True,
                     ),
                     self.run_next_button,
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
-            padding=20,
-            bgcolor=ft.Colors.BLUE_50,
+            padding=st.PAD,
+            bgcolor=st.HEADER_BG,
         )
 
         # Left panel: Step dashboard

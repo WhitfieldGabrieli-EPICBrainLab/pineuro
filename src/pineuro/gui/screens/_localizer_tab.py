@@ -17,6 +17,7 @@ import flet as ft
 
 from pineuro.tasks.task_registry import TaskParameter, get_task_metadata
 
+from .. import styles as st
 from ..utils import (
     ValidationError,
     validate_positive_int,
@@ -27,15 +28,6 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-# Uniform widths matching StudyEditorScreen
-FIELD_W = 400
-PAIR_W = 195
-
-
-def _f(control: ft.Control) -> ft.Row:
-    """Wrap a control in a Row so Column doesn't stretch it."""
-    return ft.Row([control])
 
 
 class LocalizerTabBuilder:
@@ -106,20 +98,19 @@ class LocalizerTabBuilder:
             type_label,
             size=14,
             weight=ft.FontWeight.W_500,
-            color=ft.Colors.BLUE_700,
+            color=st.ACCENT,
         )
 
         # Contrast info text
         self.contrast_info_text = ft.Text(
             value=self._get_contrast_info_text(loc_type),
             size=12,
-            color=ft.Colors.BLUE_700,
+            color=st.ACCENT,
             italic=True,
         )
 
         # Scan params
         self.tr_field = ft.TextField(
-            width=600,
             label="TR (seconds)",
             value=str(c.get("tr", 1.2)),
             hint_text="Repetition time of the localizer sequence (e.g. 1.2)",
@@ -128,7 +119,6 @@ class LocalizerTabBuilder:
         )
 
         self.n_volumes_field = ft.TextField(
-            width=600,
             label="Volumes per localizer run",
             value=str(c.get("n_volumes", 250)),
             hint_text="Volumes acquired per localizer run",
@@ -142,13 +132,12 @@ class LocalizerTabBuilder:
         self.n_volumes_info_text = ft.Text(
             "",
             size=12,
-            color=ft.Colors.BLUE_700,
+            color=st.ACCENT,
             italic=True,
             visible=False,
         )
 
         self.n_runs_field = ft.TextField(
-            width=600,
             label="Number of localizer runs",
             value=str(c.get("n_runs", 2)),
             hint_text="Number of localizer runs",
@@ -160,7 +149,6 @@ class LocalizerTabBuilder:
         mc_value = c.get("motion_correction", "siemens_moco")
         self.motion_correction_dropdown = ft.Dropdown(
             label="Motion correction",
-            width=600,
             value=mc_value,
             options=[
                 ft.dropdown.Option(key="siemens_moco", text="Siemens MoCo"),
@@ -184,7 +172,6 @@ class LocalizerTabBuilder:
         extraction_cfg = c.get("extraction", {}) or {}
         network_atlas = extraction_cfg.get("network_atlas", "yeo_17")
         self.network_atlas_dropdown = ft.Dropdown(
-            width=600,
             label="Network atlas",
             options=[
                 ft.dropdown.Option(key=k, text=v["display_name"])
@@ -204,7 +191,6 @@ class LocalizerTabBuilder:
         net_options = self._get_yeo_network_options(current_n)
 
         self.n_target_networks_dropdown = ft.Dropdown(
-            width=600,
             label="Number of networks",
             options=[ft.dropdown.Option(str(i), str(i)) for i in range(1, MAX_NETWORKS + 1)],
             value=str(self._n_target_networks),
@@ -225,7 +211,6 @@ class LocalizerTabBuilder:
 
         # ICA settings (rest only) — read from extraction sub-block
         self.n_components_field = ft.TextField(
-            width=600,
             label="ICA components",
             value=str(extraction_cfg.get("n_components", 20)),
             hint_text="Number of ICA components for decomposition",
@@ -234,7 +219,6 @@ class LocalizerTabBuilder:
         )
 
         self.smooth_fwhm_field = ft.TextField(
-            width=600,
             label="Spatial smoothing (mm FWHM)",
             value=str(extraction_cfg.get("smooth_fwhm", 5.0)),
             hint_text="Gaussian kernel size in mm",
@@ -242,7 +226,6 @@ class LocalizerTabBuilder:
         )
 
         self.highpass_field = ft.TextField(
-            width=600,
             label="Highpass filter (Hz)",
             value=str(extraction_cfg.get("highpass", 0.01)),
             hint_text="Cutoff frequency for highpass filter",
@@ -255,7 +238,6 @@ class LocalizerTabBuilder:
             return v if v is not None else default
 
         self.threshold_field = ft.TextField(
-            width=600,
             label="Voxels per mask",
             value=str(_ex("threshold", 2000)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -265,7 +247,6 @@ class LocalizerTabBuilder:
 
         threshold_method = _ex("threshold_method", "top_n")
         self.threshold_method_dropdown = ft.Dropdown(
-            width=600,
             label="Thresholding method",
             options=[
                 ft.dropdown.Option(key="top_n", text="Top N voxels"),
@@ -284,7 +265,6 @@ class LocalizerTabBuilder:
         ]
         atlas_source = _ex("atlas_source", "harvard_oxford")
         self.atlas_source_dropdown = ft.Dropdown(
-            width=600,
             label="Atlas",
             options=cluster_atlas_options,
             value=atlas_source,
@@ -293,7 +273,6 @@ class LocalizerTabBuilder:
 
         current_regions = _ex("atlas_regions") or []
         self.atlas_region_dropdown = ft.Dropdown(
-            width=600,
             label="Region",
             options=[],
             value=current_regions[0] if current_regions else None,
@@ -322,12 +301,13 @@ class LocalizerTabBuilder:
 
         self.cluster_settings_section = ft.Column(
             [
-                self.atlas_source_dropdown,
-                self.atlas_region_dropdown,
-                ft.Row([self.cluster_start_threshold_field, self.cluster_step_field]),
+                st.field_row(self.atlas_source_dropdown),
+                st.field_row(self.atlas_region_dropdown),
+                st.field_pair(self.cluster_start_threshold_field, self.cluster_step_field),
                 self.cluster_return_all_checkbox,
             ],
             visible=threshold_method == "cluster",
+            spacing=st.GAP_MD,
         )
 
         # Cluster-extent settings
@@ -363,11 +343,12 @@ class LocalizerTabBuilder:
 
         self.cluster_extent_settings_section = ft.Column(
             [
-                ft.Row([self.extent_stat_threshold_field, self.min_cluster_size_field]),
-                self.max_total_voxels_field,
+                st.field_pair(self.extent_stat_threshold_field, self.min_cluster_size_field),
+                st.field_row(self.max_total_voxels_field),
                 self.extent_grey_matter_checkbox,
             ],
             visible=threshold_method == "cluster_extent",
+            spacing=st.GAP_MD,
         )
 
         # Create localizer task parameter fields
@@ -392,27 +373,23 @@ class LocalizerTabBuilder:
 
         # Network dropdowns row (shows only visible ones)
         visible_dropdowns: list[ft.Control] = [dd for dd in self._network_dropdowns if dd.visible]
-        self.network_dropdowns_row = ft.Row(visible_dropdowns, wrap=True)
+        self.network_dropdowns_row = ft.Row(visible_dropdowns, wrap=True, spacing=st.GAP_SM, run_spacing=st.GAP_SM)
 
         # Target Networks section (rest-only for ICA)
         self.target_networks_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Target Networks", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Select target networks for neurofeedback training.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    st.section("Target Networks"),
+                    st.caption("Select target networks for neurofeedback training."),
                     ft.Divider(),
-                    ft.Text("Network Atlas", size=14, weight=ft.FontWeight.BOLD),
-                    self.network_atlas_dropdown,
+                    st.subsection("Network Atlas"),
+                    st.field_row(self.network_atlas_dropdown),
                     ft.Divider(),
-                    self.n_target_networks_dropdown,
+                    st.field_row(self.n_target_networks_dropdown),
                     self.network_dropdowns_row,
                     ft.Divider(),
-                ]
+                ],
+                spacing=st.GAP_MD,
             ),
             visible=is_rest,
         )
@@ -421,26 +398,22 @@ class LocalizerTabBuilder:
         self.networks_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("ICA Settings", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "ICA decomposition parameters for resting-state localizer",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    st.section("ICA Settings"),
+                    st.caption("ICA decomposition parameters for resting-state localizer"),
                     ft.Divider(),
-                    self.n_components_field,
-                    self.smooth_fwhm_field,
-                    self.highpass_field,
+                    st.field_row(self.n_components_field),
+                    st.field_row(self.smooth_fwhm_field),
+                    st.field_row(self.highpass_field),
                     ft.Divider(),
-                ]
+                ],
+                spacing=st.GAP_MD,
             ),
             visible=is_rest,
         )
 
         # Task-specific parameters section
         task_params = self._build_task_specific_params()
-        self.task_params_section = ft.Column(task_params)
+        self.task_params_section = ft.Column(task_params, spacing=st.GAP_MD)
 
         # Manual mask import section
         self.manual_section = self._build_manual_section()
@@ -449,50 +422,40 @@ class LocalizerTabBuilder:
         # scan, ICA/GLM extraction, or task parameters.
         if is_manual:
             controls: list[ft.Control] = [
-                ft.Text("Localizer Type", size=16, weight=ft.FontWeight.BOLD),
+                st.section("Localizer Type"),
                 self.type_display_text,
                 ft.Divider(),
                 self.manual_section,
             ]
         else:
             controls = [
-                ft.Text("Localizer Type", size=16, weight=ft.FontWeight.BOLD),
+                st.section("Localizer Type"),
                 self.type_display_text,
                 self.contrast_info_text,
                 ft.Divider(),
-                ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "Configure the localizer scan that identifies participant-specific brain networks.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                _f(self.tr_field),
-                self.n_volumes_field,
+                st.section("Scan Parameters"),
+                st.caption("Configure the localizer scan that identifies participant-specific brain networks."),
+                st.field_row(self.tr_field),
+                st.field_row(self.n_volumes_field),
                 self.n_volumes_info_text,
-                self.n_runs_field,
-                self.motion_correction_dropdown,
+                st.field_row(self.n_runs_field),
+                st.field_row(self.motion_correction_dropdown),
                 ft.Divider(),
                 self.target_networks_section,
                 self.networks_section,
                 self.task_params_section,
                 self.include_reverse_contrasts_checkbox,
-                ft.Text("Mask Extraction", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
-                    "Configure how network masks are extracted from the stat maps.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
-                ),
-                self.threshold_field,
-                self.threshold_method_dropdown,
+                st.section("Mask Extraction"),
+                st.caption("Configure how network masks are extracted from the stat maps."),
+                st.field_row(self.threshold_field),
+                st.field_row(self.threshold_method_dropdown),
                 self.cluster_settings_section,
                 self.cluster_extent_settings_section,
             ]
 
         return ft.Container(
-            content=ft.Column(controls, scroll=ft.ScrollMode.AUTO),
-            padding=20,
+            content=ft.Column(controls, scroll=ft.ScrollMode.AUTO, spacing=st.GAP_MD),
+            padding=st.PAD,
         )
 
     # ------------------------------------------------------------------
@@ -628,7 +591,6 @@ class LocalizerTabBuilder:
         c = self.config
 
         self.manual_mask_space_dropdown = ft.Dropdown(
-            width=600,
             label="Mask space",
             value=c.get("manual_mask_space", "native"),
             options=[
@@ -650,22 +612,19 @@ class LocalizerTabBuilder:
     def _make_manual_mask_row(self, name: str) -> dict[str, Any]:
         """Build one network-name row (name field + remove button)."""
         name_field = ft.TextField(
-            width=300,
             label="Network name",
             value=name,
             hint_text="e.g. DefaultA",
             on_change=lambda _: self._notify_change(),
         )
         row_data: dict[str, Any] = {"name": name_field}
-        row_data["row"] = ft.Row(
-            [
-                name_field,
-                ft.IconButton(
-                    icon=ft.Icons.DELETE_OUTLINE,
-                    tooltip="Remove this network",
-                    on_click=lambda _, rd=row_data: self._on_remove_mask_row(rd),
-                ),
-            ]
+        row_data["row"] = st.browse_row(
+            name_field,
+            ft.IconButton(
+                icon=ft.Icons.DELETE_OUTLINE,
+                tooltip="Remove this network",
+                on_click=lambda _, rd=row_data: self._on_remove_mask_row(rd),
+            ),
         )
         return row_data
 
@@ -674,28 +633,21 @@ class LocalizerTabBuilder:
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Manual Mask Import", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
+                    st.section("Manual Mask Import"),
+                    st.caption(
                         "Use pre-built masks instead of extracting them. The mask files, "
                         "reference EPI, and T1 differ per participant — they are selected in "
                         "each participant's workflow at the Import Masks step. Here you only "
                         "set the mask space and the network names.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
                     ),
                     ft.Divider(),
-                    self.manual_mask_space_dropdown,
-                    ft.Text("Network names", size=14, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Each network becomes a feedback mask; the name wires it to feedback runs.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    st.field_row(self.manual_mask_space_dropdown),
+                    st.subsection("Network names"),
+                    st.caption("Each network becomes a feedback mask; the name wires it to feedback runs."),
                     self.manual_masks_column,
                     ft.TextButton("Add network", icon=ft.Icons.ADD, on_click=self._on_add_mask_row),
-                ]
+                ],
+                spacing=st.GAP_MD,
             ),
         )
 
@@ -987,37 +939,33 @@ class LocalizerTabBuilder:
             return ft.Checkbox(label=param.label, value=current_value)
         elif param.type in ["float", "int"]:
             return ft.TextField(
-                width=600,
                 label=param.label,
                 value=str(current_value),
                 keyboard_type=ft.KeyboardType.NUMBER,
                 hint_text=param.hint,
             )
         elif param.type == "dir":
-            field = ft.TextField(width=600, label=param.label, value=current_value, hint_text=param.hint)
+            field = ft.TextField(label=param.label, value=current_value, hint_text=param.hint)
             if self._create_browse_button:
-                return ft.Row([field, self._create_browse_button(field)])
+                return st.browse_row(field, self._create_browse_button(field))
             return field
         elif param.type == "str":
             if param.choices:
                 return ft.Dropdown(
-                    width=600,
                     label=param.label,
                     value=current_value,
                     hint_text=param.hint,
                     options=[ft.dropdown.Option(c) for c in param.choices],
                 )
-            return ft.TextField(width=600, label=param.label, value=current_value, hint_text=param.hint)
+            return ft.TextField(label=param.label, value=current_value, hint_text=param.hint)
         elif param.type == "list[str]":
             value_str = ", ".join(current_value) if isinstance(current_value, list) else current_value
             return ft.TextField(
-                width=600,
                 label=param.label,
                 value=value_str,
                 hint_text=f"{param.hint} (comma-separated)" if param.hint else "Comma-separated values",
             )
         return ft.TextField(
-            width=600,
             label=param.label,
             value=str(current_value) if current_value is not None else "",
             hint_text=param.hint,
@@ -1038,16 +986,18 @@ class LocalizerTabBuilder:
             return []
 
         controls: list[ft.Control] = [
-            ft.Text(f"{meta.display_name} Parameters", size=16, weight=ft.FontWeight.BOLD),
+            st.section(f"{meta.display_name} Parameters"),
             ft.Divider(),
         ]
 
         for param in meta.parameters:
             field = self.task_param_fields.get(param.key)
             if field is not None:
-                controls.append(field)
+                # Checkboxes and field+browse rows keep their own layout; size
+                # plain inputs to fill the form width.
+                controls.append(field if isinstance(field, (ft.Row, ft.Checkbox)) else st.field_row(field))
                 if param.hint and param.type != "bool":
-                    controls.append(ft.Text(param.hint, size=11, color=ft.Colors.GREY_600, italic=True))
+                    controls.append(st.caption(param.hint))
 
         controls.append(ft.Divider())
         return controls

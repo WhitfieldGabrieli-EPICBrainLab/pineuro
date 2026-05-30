@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 import flet as ft
 
+from pineuro.gui import styles as st
 from pineuro.scanner_setup import ConnectionTestResult, test_scanner_connection
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ class ScannerConnectionDialog:
                     ],
                     spacing=8,
                 ),
-                width=500,
+                width=st.DIALOG_MD,
             ),
             actions=[
                 ft.TextButton("Close", on_click=lambda e: self._close()),

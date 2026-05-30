@@ -16,6 +16,7 @@ import flet as ft
 
 from pineuro.tasks.task_registry import TaskParameter, get_task_metadata
 
+from .. import styles as st
 from ..utils import (
     ValidationError,
     validate_positive_int,
@@ -26,9 +27,6 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-
-FIELD_W = 400
-PAIR_W = 195
 
 # Mask dropdown options are session-qualified: a selection carries both the mask
 # name and the session that produces it. The dropdown option key joins them with a
@@ -51,11 +49,6 @@ def _split_mask_key(key: str) -> tuple[str, str]:
         source, name = key.split(_SRC_SEP, 1)
         return source, name
     return "", key
-
-
-def _f(control: ft.Control) -> ft.Row:
-    """Wrap a control in a Row so Column doesn't stretch it."""
-    return ft.Row([control])
 
 
 class FeedbackTabBuilder:
@@ -160,14 +153,13 @@ class FeedbackTabBuilder:
             self._task_network_roles = []
         self.type_display_text = ft.Text(
             type_label,
-            size=14,
+            size=st.SUBSECTION,
             weight=ft.FontWeight.W_500,
-            color=ft.Colors.BLUE_700,
+            color=st.ACCENT,
         )
 
         # Number of runs for this feedback task
         self.max_runs_field = ft.TextField(
-            width=600,
             label="Number of runs",
             value=str(c.get("max_runs", 1)),
             hint_text="How many times this feedback task is repeated per session",
@@ -177,7 +169,6 @@ class FeedbackTabBuilder:
 
         # Scan params
         self.tr_field = ft.TextField(
-            width=600,
             label="TR (seconds)",
             value=str(c.get("tr", 1.2)),
             hint_text="Repetition time of the feedback sequence (e.g. 1.2)",
@@ -186,7 +177,6 @@ class FeedbackTabBuilder:
         )
 
         self.n_volumes_field = ft.TextField(
-            width=600,
             label="Volumes per feedback run",
             value=str(c.get("n_volumes", 150)),
             hint_text="Volumes acquired per feedback run",
@@ -198,7 +188,6 @@ class FeedbackTabBuilder:
         n_baseline_default = c.get("n_baseline", 25)
 
         self.n_baseline_field = ft.TextField(
-            width=600,
             label="Baseline volumes",
             value=str(n_baseline_default),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -208,7 +197,6 @@ class FeedbackTabBuilder:
 
         # Quality thresholds (qc sub-block)
         self.fd_threshold_field = ft.TextField(
-            width=600,
             label="FD threshold (mm)",
             value=str(qc_cfg.get("fd_threshold", 0.5)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -217,7 +205,6 @@ class FeedbackTabBuilder:
         )
 
         self.dvars_threshold_field = ft.TextField(
-            width=600,
             label="DVARS threshold (standardized)",
             value=str(qc_cfg.get("dvars_threshold", 1.5)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -228,7 +215,6 @@ class FeedbackTabBuilder:
         )
 
         self.tsnr_threshold_field = ft.TextField(
-            width=600,
             label="tSNR threshold",
             value=str(qc_cfg.get("tsnr_threshold", 20)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -243,7 +229,6 @@ class FeedbackTabBuilder:
 
         self.motion_correction_dropdown = ft.Dropdown(
             label="Motion correction",
-            width=600,
             value=mc_value,
             options=[
                 ft.dropdown.Option(key="siemens_moco", text="Siemens MoCo"),
@@ -285,7 +270,6 @@ class FeedbackTabBuilder:
             on_change=self._on_rt_smooth_enabled_changed,
         )
         self.rt_smooth_fwhm_field = ft.TextField(
-            width=600,
             label="Smoothing FWHM (mm)",
             value=str(rt_smooth_val) if rt_smooth_val is not None else "6.0",
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -301,7 +285,6 @@ class FeedbackTabBuilder:
         feedback_mode_val = c.get("feedback_mode", "activation")
 
         self.feedback_mode_dropdown = ft.Dropdown(
-            width=600,
             label="Feedback signal",
             options=[
                 ft.dropdown.Option("activation", "Activation (differential)"),
@@ -314,7 +297,6 @@ class FeedbackTabBuilder:
 
         # ROI combine method — how per-voxel activations are aggregated per mask.
         self.roi_combine_dropdown = ft.Dropdown(
-            width=600,
             label="ROI combine method",
             options=[
                 ft.dropdown.Option("inverse_sd", "Inverse-SD weighting (Hinds 2011)"),
@@ -342,7 +324,6 @@ class FeedbackTabBuilder:
             else "Target mask"
         )
         self.single_mask_dropdown = ft.Dropdown(
-            width=600,
             label=single_mask_label,
             options=mask_options,
             value=single_value,
@@ -365,7 +346,6 @@ class FeedbackTabBuilder:
             else:
                 blank_label = "(unassigned)"
             dd = ft.Dropdown(
-                width=600,
                 label=role.label,
                 options=[ft.dropdown.Option(key="", text=blank_label), *mask_options],
                 value=self._mask_value_for(network_assignment.get(role.key)) or "",
@@ -374,8 +354,9 @@ class FeedbackTabBuilder:
             )
             self._extra_role_dropdowns.append((role.key, dd))
         self._extra_roles_column = ft.Column(
-            [dd for _, dd in self._extra_role_dropdowns],
+            [st.field_row(dd) for _, dd in self._extra_role_dropdowns],
             visible=len(self._extra_role_dropdowns) > 0,
+            spacing=st.GAP_MD,
         )
 
         # Differential pair — for 2-network tasks, the positive/negative dropdowns map
@@ -399,13 +380,15 @@ class FeedbackTabBuilder:
         )
         self.differential_row = ft.Column(
             [
-                ft.Text("Differential Signal", size=14, weight=ft.FontWeight.W_500),
+                st.subsection("Differential Signal"),
                 ft.Row(
                     [
                         self.differential_positive_dropdown,
-                        ft.Text("minus", size=14),
+                        ft.Text("minus", size=st.BODY),
                         self.differential_negative_dropdown,
-                    ]
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=st.GAP_SM,
                 ),
             ],
             visible=needs_multi_network and has_multi_mask and feedback_mode_val == "activation",
@@ -435,14 +418,12 @@ class FeedbackTabBuilder:
             value=conn_pair_b,
         )
         self.connectivity_window_field = ft.TextField(
-            width=600,
             label="Sliding window size (volumes)",
             value=str(conn_window),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Number of volumes in correlation window",
         )
         self.connectivity_target_dropdown = ft.Dropdown(
-            width=600,
             label="Target direction",
             options=[
                 ft.dropdown.Option("increase", "Increase correlation"),
@@ -452,18 +433,21 @@ class FeedbackTabBuilder:
         )
         self.connectivity_section = ft.Column(
             [
-                ft.Text("Connectivity Pair", size=14, weight=ft.FontWeight.W_500),
+                st.subsection("Connectivity Pair"),
                 ft.Row(
                     [
                         self.connectivity_pair_a_dropdown,
-                        ft.Text("corr", size=14),
+                        ft.Text("corr", size=st.BODY),
                         self.connectivity_pair_b_dropdown,
-                    ]
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=st.GAP_SM,
                 ),
-                self.connectivity_window_field,
-                self.connectivity_target_dropdown,
+                st.field_row(self.connectivity_window_field),
+                st.field_row(self.connectivity_target_dropdown),
             ],
             visible=needs_multi_network and is_conn,
+            spacing=st.GAP_MD,
         )
 
         # Intermittent feedback (intermittent sub-block)
@@ -474,7 +458,6 @@ class FeedbackTabBuilder:
             on_change=self._on_intermittent_enabled_changed,
         )
         self.feedback_interval_field = ft.TextField(
-            width=600,
             label="Feedback interval (volumes)",
             value=str(interval_val) if interval_val is not None else "5",
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -520,7 +503,6 @@ class FeedbackTabBuilder:
         yeo_options = [ft.dropdown.Option(key=label, text=label) for label in YEO_17_LABELS]
 
         self.sham_hemisphere_network_dropdown = ft.Dropdown(
-            width=600,
             label="Network to Split",
             options=yeo_options,
             value=sham_config.get("hemisphere_network", "SomMotA"),
@@ -537,19 +519,16 @@ class FeedbackTabBuilder:
 
         sham_targets = sham_config.get("alternative_mask_targets", ["SomMotA", "DefaultA"])
         self.sham_first_network_dropdown = ft.Dropdown(
-            width=290,
             label="First Sham Network",
             options=yeo_options,
             value=sham_targets[0] if len(sham_targets) > 0 else None,
         )
         self.sham_second_network_dropdown = ft.Dropdown(
-            width=290,
             label="Second Sham Network",
             options=yeo_options,
             value=sham_targets[1] if len(sham_targets) > 1 else None,
         )
         self.sham_randomization_file_field = ft.TextField(
-            width=540,
             label="Randomization File",
             value=sham_config.get("randomization_file", ""),
             hint_text="TSV file with subject_id, condition, matched_participant columns",
@@ -575,19 +554,14 @@ class FeedbackTabBuilder:
 
         # Scanner parameters section
         scanner_section = [
-            ft.Text("Task Type", size=16, weight=ft.FontWeight.BOLD),
+            st.section("Task Type"),
             self.type_display_text,
             ft.Divider(),
-            ft.Text("Scan Parameters", size=16, weight=ft.FontWeight.BOLD),
-            ft.Text(
-                "Configure feedback run parameters (must match scanner sequence settings).",
-                size=11,
-                color=ft.Colors.GREY_600,
-                italic=True,
-            ),
-            self.max_runs_field,
-            _f(self.tr_field),
-            self.n_volumes_field,
+            st.section("Scan Parameters"),
+            st.caption("Configure feedback run parameters (must match scanner sequence settings)."),
+            st.field_row(self.max_runs_field),
+            st.field_row(self.tr_field),
+            st.field_row(self.n_volumes_field),
             ft.Divider(),
         ]
 
@@ -595,35 +569,30 @@ class FeedbackTabBuilder:
         self.session_structure_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Real-Time Processing", size=16, weight=ft.FontWeight.BOLD),
-                    self.n_baseline_field,
-                    _f(self.fd_threshold_field),
-                    _f(self.dvars_threshold_field),
-                    _f(self.tsnr_threshold_field),
-                    self.motion_correction_dropdown,
-                    ft.Text(
+                    st.section("Real-Time Processing"),
+                    st.field_row(self.n_baseline_field),
+                    st.field_row(self.fd_threshold_field),
+                    st.field_row(self.dvars_threshold_field),
+                    st.field_row(self.tsnr_threshold_field),
+                    st.field_row(self.motion_correction_dropdown),
+                    st.caption(
                         "Siemens MoCo: parse from scanner JSON (~0ms). "
                         "Software: ANTsPy registration (~400-500ms/vol). "
                         "None: no motion correction.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
                     ),
-                    ft.Text("GLM Nuisance Regressors", size=14, weight=ft.FontWeight.W_500),
-                    ft.Text(
-                        "Select which regressors to include in the real-time GLM (intercept is always included).",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
+                    st.subsection("GLM Nuisance Regressors"),
+                    st.caption(
+                        "Select which regressors to include in the real-time GLM (intercept is always included)."
                     ),
                     self.drift_checkbox,
                     self.motion_regressors_checkbox,
                     self.wm_regressor_checkbox,
                     self.csf_regressor_checkbox,
                     self.rt_smooth_enabled_checkbox,
-                    self.rt_smooth_fwhm_field,
+                    st.field_row(self.rt_smooth_fwhm_field),
                     ft.Divider(),
-                ]
+                ],
+                spacing=st.GAP_MD,
             ),
         )
 
@@ -631,30 +600,26 @@ class FeedbackTabBuilder:
         self.feedback_signal_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Feedback Signal", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Configure which brain signal drives the feedback display.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
-                    self.single_mask_dropdown,
+                    st.section("Feedback Signal"),
+                    st.caption("Configure which brain signal drives the feedback display."),
+                    st.field_row(self.single_mask_dropdown),
                     self._extra_roles_column,
-                    self.feedback_mode_dropdown,
-                    self.roi_combine_dropdown,
+                    st.field_row(self.feedback_mode_dropdown),
+                    st.field_row(self.roi_combine_dropdown),
                     self.differential_row,
                     self.connectivity_section,
                     self.intermittent_enabled_checkbox,
-                    self.feedback_interval_field,
+                    st.field_row(self.feedback_interval_field),
                     ft.Divider(),
-                ]
+                ],
+                spacing=st.GAP_MD,
             ),
         )
 
         # Task-specific parameters
         task_specific_controls = self._build_task_specific_params()
         self.task_specific_section = ft.Container(
-            content=ft.Column(task_specific_controls),
+            content=ft.Column(task_specific_controls, spacing=st.GAP_MD),
             visible=has_parameters,
         )
 
@@ -670,8 +635,8 @@ class FeedbackTabBuilder:
         ]
 
         return ft.Container(
-            content=ft.Column(all_controls, scroll=ft.ScrollMode.AUTO),
-            padding=20,
+            content=ft.Column(all_controls, scroll=ft.ScrollMode.AUTO, spacing=st.GAP_MD),
+            padding=st.PAD,
         )
 
     # ------------------------------------------------------------------
@@ -1100,26 +1065,24 @@ class FeedbackTabBuilder:
             visible=not is_conn,
         )
 
-        self.sham_hemisphere_description = ft.Text(
+        self.sham_hemisphere_description = st.caption(
             "Split the selected network into left and right hemispheres. "
             + (
                 "Compute correlation between hemispheres for sham participants."
                 if is_conn
                 else "One hemisphere is target, the other is non-target."
             ),
-            size=11,
-            color=ft.Colors.GREY_600,
-            italic=True,
         )
 
         self.sham_hemisphere_split_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Hemisphere Split", size=13, weight=ft.FontWeight.BOLD),
-                    self.sham_hemisphere_network_dropdown,
+                    st.subsection("Hemisphere Split"),
+                    st.field_row(self.sham_hemisphere_network_dropdown),
                     self.sham_target_hemisphere_container,
                     self.sham_hemisphere_description,
-                ]
+                ],
+                spacing=st.GAP_MD,
             ),
             visible=is_enabled and method == "alternative_masks" and mask_mode == "hemisphere_split",
         )
@@ -1127,15 +1090,11 @@ class FeedbackTabBuilder:
         self.sham_two_networks_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Alternative Networks", size=13, weight=ft.FontWeight.BOLD),
-                    ft.Row([self.sham_first_network_dropdown, self.sham_second_network_dropdown]),
-                    ft.Text(
-                        "Use two distinct networks for sham",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
-                ]
+                    st.subsection("Alternative Networks"),
+                    st.field_pair(self.sham_first_network_dropdown, self.sham_second_network_dropdown),
+                    st.caption("Use two distinct networks for sham"),
+                ],
+                spacing=st.GAP_MD,
             ),
             visible=is_enabled and method == "alternative_masks" and mask_mode == "two_networks",
         )
@@ -1143,11 +1102,12 @@ class FeedbackTabBuilder:
         self.sham_alternative_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Alternative Mask Mode", size=14, weight=ft.FontWeight.BOLD),
+                    st.subsection("Alternative Mask Mode"),
                     self.sham_mask_mode_radio,
                     self.sham_hemisphere_split_section,
                     self.sham_two_networks_section,
-                ]
+                ],
+                spacing=st.GAP_MD,
             ),
             visible=is_enabled and method == "alternative_masks",
         )
@@ -1155,14 +1115,10 @@ class FeedbackTabBuilder:
         self.sham_replay_section = ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Replay Configuration", size=14, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Replay mode uses the matched_participant column from the randomization file.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
-                ]
+                    st.subsection("Replay Configuration"),
+                    st.caption("Replay mode uses the matched_participant column from the randomization file."),
+                ],
+                spacing=st.GAP_MD,
             ),
             visible=is_enabled and method == "replay",
         )
@@ -1170,23 +1126,24 @@ class FeedbackTabBuilder:
         self.sham_config_container = ft.Column(
             [
                 ft.Divider(),
-                ft.Text("Delivery Method", size=14, weight=ft.FontWeight.BOLD),
+                st.subsection("Delivery Method"),
                 self.sham_delivery_method_radio,
                 ft.Divider(),
             ],
             visible=is_enabled,
+            spacing=st.GAP_MD,
         )
 
-        # Randomization file row with browse button
-        rand_controls: list[ft.Control] = [self.sham_randomization_file_field]
+        # Randomization file row: field fills, with browse + shuffle buttons.
+        rand_buttons: list[ft.Control] = []
         if self._create_file_browse_button:
-            rand_controls.append(
+            rand_buttons.append(
                 self._create_file_browse_button(
                     self.sham_randomization_file_field,
                     filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")],
                 )
             )
-        rand_controls.append(
+        rand_buttons.append(
             ft.IconButton(
                 icon=ft.Icons.SHUFFLE,
                 tooltip="Generate randomization file",
@@ -1197,42 +1154,31 @@ class FeedbackTabBuilder:
         self.sham_randomization_section = ft.Column(
             [
                 ft.Divider(),
-                ft.Text("Randomization", size=14, weight=ft.FontWeight.BOLD),
-                ft.Row(rand_controls),
-                ft.Text(
+                st.subsection("Randomization"),
+                st.browse_row(self.sham_randomization_file_field, *rand_buttons),
+                st.caption(
                     "TSV file with columns: subject_id, condition (real/sham), "
                     "matched_participant (for replay), matched_session",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
                 ),
             ],
             visible=is_enabled,
+            spacing=st.GAP_MD,
         )
 
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Sham/Control Conditions", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Configure real/sham neurofeedback for controlled studies.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    st.section("Sham/Control Conditions"),
+                    st.caption("Configure real/sham neurofeedback for controlled studies."),
                     self.sham_enabled_checkbox,
                     self.blind_mode_checkbox,
-                    ft.Text(
-                        "Shows Target/Non-Target instead of network names in the task display.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    st.caption("Shows Target/Non-Target instead of network names in the task display."),
                     self.sham_config_container,
                     self.sham_alternative_section,
                     self.sham_replay_section,
                     self.sham_randomization_section,
-                ]
+                ],
+                spacing=st.GAP_MD,
             ),
         )
 
@@ -1263,37 +1209,33 @@ class FeedbackTabBuilder:
             return ft.Checkbox(label=param.label, value=current_value)
         elif param.type in ["float", "int"]:
             return ft.TextField(
-                width=600,
                 label=param.label,
                 value=str(current_value),
                 keyboard_type=ft.KeyboardType.NUMBER,
                 hint_text=param.hint,
             )
         elif param.type == "dir":
-            field = ft.TextField(width=600, label=param.label, value=current_value, hint_text=param.hint)
+            field = ft.TextField(label=param.label, value=current_value, hint_text=param.hint)
             if self._create_browse_button:
-                return ft.Row([field, self._create_browse_button(field)])
+                return st.browse_row(field, self._create_browse_button(field))
             return field
         elif param.type == "str":
             if param.choices:
                 return ft.Dropdown(
-                    width=600,
                     label=param.label,
                     value=current_value,
                     hint_text=param.hint,
                     options=[ft.dropdown.Option(c) for c in param.choices],
                 )
-            return ft.TextField(width=600, label=param.label, value=current_value, hint_text=param.hint)
+            return ft.TextField(label=param.label, value=current_value, hint_text=param.hint)
         elif param.type == "list[str]":
             value_str = ", ".join(current_value) if isinstance(current_value, list) else current_value
             return ft.TextField(
-                width=600,
                 label=param.label,
                 value=value_str,
                 hint_text=f"{param.hint} (comma-separated)" if param.hint else "Comma-separated values",
             )
         return ft.TextField(
-            width=600,
             label=param.label,
             value=str(current_value) if current_value is not None else "",
             hint_text=param.hint,
@@ -1306,20 +1248,22 @@ class FeedbackTabBuilder:
         try:
             meta = get_task_metadata(task_type)
         except ValueError:
-            return [ft.Text(f"Unknown task type: {task_type}", size=14, color=ft.Colors.ORANGE_700)]
+            return [ft.Text(f"Unknown task type: {task_type}", size=st.SUBSECTION, color=ft.Colors.ORANGE_700)]
 
         controls: list[ft.Control] = [
-            ft.Text(f"{meta.display_name} Parameters", size=16, weight=ft.FontWeight.BOLD),
-            ft.Text(meta.description, size=12, color=ft.Colors.GREY_600, italic=True),
+            st.section(f"{meta.display_name} Parameters"),
+            st.caption(meta.description),
             ft.Divider(),
         ]
 
         for param in meta.parameters:
             field = self.task_param_fields.get(param.key)
             if field is not None:
-                controls.append(field)
+                # Checkboxes and field+browse rows keep their own layout; size
+                # plain inputs to fill the form width.
+                controls.append(field if isinstance(field, (ft.Row, ft.Checkbox)) else st.field_row(field))
                 if param.hint and param.type != "bool":
-                    controls.append(ft.Text(param.hint, size=11, color=ft.Colors.GREY_600, italic=True))
+                    controls.append(st.caption(param.hint))
 
         return controls
 

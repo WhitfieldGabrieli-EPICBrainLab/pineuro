@@ -13,6 +13,7 @@ import flet as ft
 
 from pineuro.tasks.task_registry import get_task_metadata, list_available_tasks
 
+from .. import styles as st
 from ..config_manager import ConfigManager
 from ..models import StudyConfig, StudyMetadata
 from ..utils import frc_referenced_masks, localizer_is_reused, localizer_mask_names
@@ -33,14 +34,6 @@ def _ses_num(session_id: str) -> int | None:
 
 class StudyEditorScreen:
     """Study editor screen with dynamic tabbed parameter sections."""
-
-    FIELD_W = 400
-    PAIR_W = 195
-
-    @staticmethod
-    def _f(control):
-        """Wrap a control in a Row so Column doesn't stretch it."""
-        return ft.Row([control])
 
     def __init__(
         self,
@@ -203,14 +196,12 @@ class StudyEditorScreen:
         config = self.study_config.session_config
 
         self.name_field = ft.TextField(
-            width=600,
             label="Study Name",
             value=self.study_config.metadata.name,
             hint_text="Unique name shown in the study manager",
             on_change=self._on_name_change,
         )
         self.description_field = ft.TextField(
-            width=600,
             label="Description",
             value=self.study_config.metadata.description,
             hint_text="Brief summary shown on the study card",
@@ -219,7 +210,6 @@ class StudyEditorScreen:
             max_lines=4,
         )
         self.example_participant_id_field = ft.TextField(
-            width=600,
             label="Example Participant ID",
             value=config["paths"].get("example_participant_id", "sub-001"),
             hint_text="Shown as hint when starting a session (e.g., sub-001)",
@@ -233,21 +223,18 @@ class StudyEditorScreen:
             on_change=self._on_simulator_mode_changed,
         )
         self.collection_speed_field = ft.TextField(
-            width=290,
             label="Localizer speed (× realtime)",
             value=str(simulator_cfg.get("collection_speed", 1.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Speed for localizer/setup runs",
         )
         self.feedback_simulator_speed_field = ft.TextField(
-            width=290,
             label="Feedback speed (× realtime)",
             value=str(simulator_cfg.get("feedback_speed", 1.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
             hint_text="Speed for feedback runs",
         )
         self.simulator_trigger_mode_dropdown = ft.Dropdown(
-            width=290,
             label="Simulator trigger mode",
             value=simulator_cfg.get("trigger_mode", "manual"),
             options=[
@@ -260,13 +247,11 @@ class StudyEditorScreen:
         # Scanner settings
         scanner_cfg = config.get("scanner", {})
         self.scanner_dicom_dir_field = ft.TextField(
-            width=540,
             label="Scanner DICOM Directory",
             value=scanner_cfg.get("dicom_dir", "/BOLD_DICOM"),
             hint_text="Directory where scanner exports DICOMs",
         )
         self.scanner_ip_field = ft.TextField(
-            width=290,
             label="Scanner IP Address",
             value=scanner_cfg.get("ip", ""),
             hint_text="e.g., 192.168.2.1",
@@ -277,7 +262,6 @@ class StudyEditorScreen:
             on_click=lambda e: self._show_scanner_setup_guide(),
         )
         self.scanner_trigger_keys_field = ft.TextField(
-            width=540,
             label="Scanner Trigger Keys",
             value=", ".join(scanner_cfg.get("trigger_keys") or ["t", "+", "5", "="]),
             hint_text="Comma-separated keys delivered by the scanner per volume (e.g. t, +, 5, =)",
@@ -291,7 +275,7 @@ class StudyEditorScreen:
             on_change=self._on_reference_scan_changed,
         )
         self.reference_initial_n_volumes_field = ft.TextField(
-            width=160,
+            width=st.COMPACT_W,
             label="Volumes",
             value=str(reference_cfg.get("initial_n_volumes", 2)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -303,7 +287,7 @@ class StudyEditorScreen:
             on_change=self._on_reference_scan_changed,
         )
         self.reference_realtime_n_volumes_field = ft.TextField(
-            width=160,
+            width=st.COMPACT_W,
             label="Volumes",
             value=str(reference_cfg.get("realtime_n_volumes", 2)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -313,7 +297,6 @@ class StudyEditorScreen:
         # Display settings
         display_config = config.get("display", {})
         self.control_monitor_dropdown = ft.Dropdown(
-            width=290,
             label="Control Monitor (GUI)",
             options=[
                 ft.dropdown.Option(key="left", text="Left"),
@@ -322,7 +305,6 @@ class StudyEditorScreen:
             value=display_config.get("control_monitor", "left"),
         )
         self.presenter_monitor_dropdown = ft.Dropdown(
-            width=290,
             label="Presenter Monitor (Task)",
             options=[
                 ft.dropdown.Option(key="left", text="Left"),
@@ -365,7 +347,6 @@ class StudyEditorScreen:
         config = self.study_config.session_config
 
         self.base_dir_field = ft.TextField(
-            width=540,
             label="Base data directory",
             value=config["paths"]["base_dir"],
             hint_text="Root directory for participant data (e.g., /data/pineuro)",
@@ -386,7 +367,6 @@ class StudyEditorScreen:
         )
 
         self.simulator_source_mapping_field = ft.TextField(
-            width=540,
             label="Mapping File",
             value=sim_cfg.get("source_mapping", ""),
             hint_text="CSV/TSV file mapping subjects to DICOM paths",
@@ -701,20 +681,21 @@ class StudyEditorScreen:
         self._detail_pane = ft.Container(expand=True)
         self._sidebar = ft.Container(
             width=250,
-            bgcolor=ft.Colors.GREY_50,
-            padding=ft.padding.symmetric(vertical=12, horizontal=8),
+            bgcolor=st.SIDEBAR_BG,
+            padding=ft.padding.symmetric(vertical=st.GAP_MD, horizontal=st.GAP_SM),
             content=self._build_sidebar_content(),
         )
         self._render_detail()
 
-        # Action buttons
+        # Action buttons — primary: Save & Start (Filled); secondary: Save As
+        # (Outlined); tertiary: Cancel (Text).
         action_buttons = ft.Row(
             [
                 ft.TextButton("Cancel", on_click=self._on_cancel),
                 ft.Row(
                     [
-                        ft.ElevatedButton("Save", on_click=self._on_save),
-                        ft.ElevatedButton("Save As", on_click=self._on_save_as),
+                        ft.OutlinedButton("Save As", on_click=self._on_save_as),
+                        ft.FilledButton("Save", icon=ft.Icons.SAVE, on_click=self._on_save),
                         ft.FilledButton(
                             "Start Session",
                             icon=ft.Icons.PLAY_ARROW,
@@ -722,7 +703,7 @@ class StudyEditorScreen:
                             disabled=self.is_new,
                         ),
                     ],
-                    spacing=5,
+                    spacing=st.GAP_SM,
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -734,16 +715,17 @@ class StudyEditorScreen:
                 ft.Container(
                     content=ft.Row(
                         [
-                            ft.Text(
+                            st.title(
                                 f"Study Editor - {self.study_config.metadata.name}",
-                                size=24,
-                                weight=ft.FontWeight.BOLD,
+                                expand=True,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
                             ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
-                    padding=20,
-                    bgcolor=ft.Colors.BLUE_50,
+                    padding=st.PAD,
+                    bgcolor=st.HEADER_BG,
                 ),
                 # Master-detail body: scope sidebar + detail pane
                 ft.Container(
@@ -751,7 +733,7 @@ class StudyEditorScreen:
                         [
                             self._sidebar,
                             ft.VerticalDivider(width=1),
-                            ft.Container(content=self._detail_pane, padding=20, expand=True),
+                            ft.Container(content=self._detail_pane, padding=st.PAD, expand=True),
                         ],
                         spacing=0,
                         expand=True,
@@ -761,8 +743,8 @@ class StudyEditorScreen:
                 # Actions
                 ft.Container(
                     content=action_buttons,
-                    padding=20,
-                    bgcolor=ft.Colors.GREY_100,
+                    padding=st.PAD,
+                    bgcolor=st.SUBTLE_BG,
                 ),
             ],
             spacing=0,
@@ -848,32 +830,32 @@ class StudyEditorScreen:
 
         def _row(title: str, subtitle: str, selected: bool, on_click) -> ft.Control:
             lines: list[ft.Control] = [
-                ft.Text(title, size=14, weight=ft.FontWeight.BOLD if selected else ft.FontWeight.W_500)
+                ft.Text(title, size=st.SUBSECTION, weight=ft.FontWeight.BOLD if selected else ft.FontWeight.W_500)
             ]
             if subtitle:
-                lines.append(ft.Text(subtitle, size=11, color=ft.Colors.GREY_700, italic=True))
+                lines.append(ft.Text(subtitle, size=11, color=st.MUTED, italic=True))
             return ft.Container(
                 content=ft.Column(lines, spacing=1),
                 on_click=on_click,
-                bgcolor=ft.Colors.BLUE_100 if selected else None,
-                border=ft.border.only(left=ft.BorderSide(3, ft.Colors.BLUE_700)) if selected else None,
+                bgcolor=st.SELECTED_BG if selected else None,
+                border=ft.border.only(left=ft.BorderSide(3, st.ACCENT)) if selected else None,
                 border_radius=6,
-                padding=ft.padding.symmetric(vertical=8, horizontal=10),
+                padding=ft.padding.symmetric(vertical=st.GAP_SM, horizontal=st.GAP_MD),
                 ink=True,
             )
 
         items: list[ft.Control] = [
-            ft.Text("STUDY", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY_600),
+            ft.Text("STUDY", size=11, weight=ft.FontWeight.BOLD, color=st.MUTED),
             _row(
                 "Study-wide settings",
                 "Paths, scanner, reference, display",
                 self._active_scope == "study",
                 lambda e: self._select_study_wide(),
             ),
-            ft.Container(height=8),
+            ft.Container(height=st.GAP_SM),
             ft.Row(
                 [
-                    ft.Text("SESSIONS", size=11, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY_600),
+                    ft.Text("SESSIONS", size=11, weight=ft.FontWeight.BOLD, color=st.MUTED),
                     ft.IconButton(
                         icon=ft.Icons.ADD, icon_size=18, tooltip="Add session", on_click=self._on_add_session
                     ),
@@ -897,21 +879,21 @@ class StudyEditorScreen:
         banner = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.INFO_OUTLINE, size=16, color=ft.Colors.BLUE_700),
+                    ft.Icon(ft.Icons.INFO_OUTLINE, size=16, color=st.ACCENT),
                     ft.Text(
                         f"Editing {ses_id} (Session {index + 1} of {n}) — the localizer & feedback "
                         f"tabs below apply to {ses_id} only.",
-                        size=12,
-                        color=ft.Colors.BLUE_900,
+                        size=st.CAPTION,
+                        color=st.ON_HEADER,
                     ),
                 ],
-                spacing=8,
+                spacing=st.GAP_SM,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            bgcolor=ft.Colors.BLUE_50,
-            border=ft.border.only(left=ft.BorderSide(4, ft.Colors.BLUE_700)),
+            bgcolor=st.HEADER_BG,
+            border=ft.border.only(left=ft.BorderSide(4, st.ACCENT)),
             border_radius=6,
-            padding=10,
+            padding=st.GAP_MD,
             expand=True,
         )
         return ft.Row(
@@ -1018,35 +1000,29 @@ class StudyEditorScreen:
         self.scanner_ip_field.visible = not is_simulator
         self.scanner_setup_guide_btn.visible = not is_simulator
 
-        self.simulator_instruction_text = ft.Text(
+        self.simulator_instruction_text = st.caption(
             "Simulator replays volumes from source directories at configurable speed for offline testing. "
             "Speed settings only control the rate at which DICOMs are delivered to the pipeline — "
             "the PsychoPy task itself always runs at real time."
             if is_simulator
             else "Scanner DICOM directory will be monitored for real-time acquisition.",
-            size=11,
-            color=ft.Colors.GREY_600,
-            italic=True,
         )
 
         # Simulator source paths: mode radio + (mapping file | reference-scan sources).
         # Per-localizer/feedback sources are session-scoped and live on the Protocol tab.
         is_mapping = self.simulator_source_mode_radio.value == "mapping"
-        self.simulator_source_mapping_row = ft.Row(
-            [
+        self.simulator_source_mapping_row = st.browse_row(
+            self.simulator_source_mapping_field,
+            self._create_file_browse_button(
                 self.simulator_source_mapping_field,
-                self._create_file_browse_button(
-                    self.simulator_source_mapping_field,
-                    filetypes=[("CSV/TSV files", "*.csv *.tsv"), ("All files", "*.*")],
-                ),
-            ]
+                filetypes=[("CSV/TSV files", "*.csv *.tsv"), ("All files", "*.*")],
+            ),
         )
         self.simulator_mapping_container = ft.Column(
             [
-                ft.Text(
+                st.caption(
                     "Columns: subject, rest1, rest2, ..., reference_realtime, feedback_run-01, ...",
-                    size=11,
-                    color=ft.Colors.GREY_600,
+                    italic=False,
                 ),
                 self.simulator_source_mapping_row,
             ],
@@ -1059,13 +1035,10 @@ class StudyEditorScreen:
         self.simulator_paths_container = ft.Column(
             [
                 ft.Divider(),
-                ft.Text("Simulator Source Paths", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text(
+                st.section("Simulator Source Paths"),
+                st.caption(
                     "DICOM source directories for offline testing. Per-task sources live on each "
                     "session's Protocol tab.",
-                    size=11,
-                    color=ft.Colors.GREY_600,
-                    italic=True,
                 ),
                 self.simulator_source_mode_radio,
                 self.simulator_mapping_container,
@@ -1077,73 +1050,54 @@ class StudyEditorScreen:
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Study Information", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Study metadata shown in the GUI and used for organizing session data.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
-                    self._f(self.name_field),
-                    self.description_field,
-                    self.example_participant_id_field,
+                    st.section("Study Information"),
+                    st.caption("Study metadata shown in the GUI and used for organizing session data."),
+                    st.field_row(self.name_field),
+                    st.field_row(self.description_field),
+                    st.field_row(self.example_participant_id_field),
                     ft.Divider(),
-                    ft.Text("Output Directory", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "All processed data, masks, and feedback output will be saved under this directory.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
-                    ft.Row([self.base_dir_field, self._create_browse_button(self.base_dir_field)]),
+                    st.section("Output Directory"),
+                    st.caption("All processed data, masks, and feedback output will be saved under this directory."),
+                    st.browse_row(self.base_dir_field, self._create_browse_button(self.base_dir_field)),
                     ft.Divider(),
-                    ft.Text("Reference Scans", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Short scans used for spatial registration. Can be re-collected at any time during the session.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
+                    st.section("Reference Scans"),
+                    st.caption(
+                        "Short scans used for spatial registration. Can be re-collected at any time during the session."
                     ),
                     ft.Row(
                         [
-                            ft.Container(self.reference_initial_enabled_checkbox, width=420),
+                            ft.Container(self.reference_initial_enabled_checkbox, expand=True),
                             self.reference_initial_n_volumes_field,
-                        ]
-                    ),
-                    ft.Row(
-                        [
-                            ft.Container(self.reference_realtime_enabled_checkbox, width=420),
-                            self.reference_realtime_n_volumes_field,
-                        ]
-                    ),
-                    ft.Divider(),
-                    ft.Text("Scanner & Simulator", size=16, weight=ft.FontWeight.BOLD),
-                    self.simulator_enabled_checkbox,
-                    ft.Row([self.collection_speed_field, self.feedback_simulator_speed_field]),
-                    ft.Row([self.simulator_trigger_mode_dropdown]),
-                    ft.Row([self.scanner_dicom_dir_field, self.scanner_dicom_dir_browse_btn]),
-                    ft.Row(
-                        [self.scanner_ip_field, self.scanner_setup_guide_btn],
-                        alignment=ft.MainAxisAlignment.START,
+                        ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    self._f(self.scanner_trigger_keys_field),
+                    ft.Row(
+                        [
+                            ft.Container(self.reference_realtime_enabled_checkbox, expand=True),
+                            self.reference_realtime_n_volumes_field,
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Divider(),
+                    st.section("Scanner & Simulator"),
+                    self.simulator_enabled_checkbox,
+                    st.field_pair(self.collection_speed_field, self.feedback_simulator_speed_field),
+                    st.field_row(self.simulator_trigger_mode_dropdown),
+                    st.browse_row(self.scanner_dicom_dir_field, self.scanner_dicom_dir_browse_btn),
+                    st.browse_row(self.scanner_ip_field, self.scanner_setup_guide_btn),
+                    st.field_row(self.scanner_trigger_keys_field),
                     self.simulator_instruction_text,
                     self.simulator_paths_container,
                     ft.Divider(),
-                    ft.Text("Display Settings", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Row([self.control_monitor_dropdown, self.presenter_monitor_dropdown]),
+                    st.section("Display Settings"),
+                    st.field_pair(self.control_monitor_dropdown, self.presenter_monitor_dropdown),
                     self._build_monitor_preview(),
-                    ft.Text(
-                        "Configure which monitor shows the control GUI vs the participant task display.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
-                    ),
+                    st.caption("Configure which monitor shows the control GUI vs the participant task display."),
                 ],
                 scroll=ft.ScrollMode.AUTO,
+                spacing=st.GAP_MD,
             ),
-            padding=20,
+            padding=st.PAD,
         )
 
     # ------------------------------------------------------------------
@@ -1163,7 +1117,6 @@ class StudyEditorScreen:
         self._loc_type_dropdowns: list[ft.Dropdown] = []
         for i, cfg in enumerate(self._localizer_configs):
             dd = ft.Dropdown(
-                width=360,
                 label=f"Localizer {i + 1}",
                 options=[ft.dropdown.Option(key=o.key, text=o.text) for o in self._localizer_type_options],
                 value=cfg.get("type", "rest"),
@@ -1175,7 +1128,7 @@ class StudyEditorScreen:
                 tooltip="Remove this localizer",
                 on_click=lambda e, idx=i: self._on_remove_localizer_at(idx),
             )
-            loc_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+            loc_rows.append(st.browse_row(dd, remove_btn))
 
         add_loc_btn = ft.TextButton("Add Localizer Task", icon=ft.Icons.ADD, on_click=self._on_add_localizer)
 
@@ -1184,7 +1137,6 @@ class StudyEditorScreen:
         self._fb_type_dropdowns: list[ft.Dropdown] = []
         for i, cfg in enumerate(self._feedback_configs):
             dd = ft.Dropdown(
-                width=560,
                 label=f"Feedback {i + 1}",
                 options=[ft.dropdown.Option(key=o.key, text=o.text) for o in self._feedback_type_options],
                 value=cfg.get("task", "ball"),
@@ -1196,12 +1148,11 @@ class StudyEditorScreen:
                 tooltip="Remove this feedback task",
                 on_click=lambda e, idx=i: self._on_remove_feedback_at(idx),
             )
-            fb_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+            fb_rows.append(st.browse_row(dd, remove_btn))
 
         add_fb_btn = ft.TextButton("Add Feedback Task", icon=ft.Icons.ADD, on_click=self._on_add_feedback)
 
         self._notes_field = ft.TextField(
-            width=600,
             label="Session notes",
             value=self._active_session().get("notes", ""),
             multiline=True,
@@ -1216,35 +1167,34 @@ class StudyEditorScreen:
         self._session_sim_container = ft.Column(
             [
                 ft.Divider(),
-                ft.Text("Simulator Source DICOMs (this session)", size=14, weight=ft.FontWeight.W_500),
+                st.subsection("Simulator Source DICOMs (this session)"),
                 *self._build_session_simulator_paths(),
             ],
             visible=is_simulator and is_individual,
+            spacing=st.GAP_MD,
         )
 
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Text("Experiment Design", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        "Define this session's localizer and feedback tasks. Each has its own configuration tab above.",
-                        size=11,
-                        color=ft.Colors.GREY_600,
-                        italic=True,
+                    st.section("Experiment Design"),
+                    st.caption(
+                        "Define this session's localizer and feedback tasks. Each has its own configuration tab above."
                     ),
-                    ft.Text("Localizer Tasks", size=14, weight=ft.FontWeight.W_500),
+                    st.subsection("Localizer Tasks"),
                     *loc_rows,
                     add_loc_btn,
-                    ft.Text("Feedback Tasks", size=14, weight=ft.FontWeight.W_500),
+                    st.subsection("Feedback Tasks"),
                     *fb_rows,
                     add_fb_btn,
                     ft.Divider(),
-                    self._notes_field,
+                    st.field_row(self._notes_field),
                     self._session_sim_container,
                 ],
                 scroll=ft.ScrollMode.AUTO,
+                spacing=st.GAP_MD,
             ),
-            padding=20,
+            padding=st.PAD,
         )
 
     # ------------------------------------------------------------------
@@ -1269,7 +1219,7 @@ class StudyEditorScreen:
                 self._sim_loc_source_fields.append([])
                 continue
             label = f"Localizer {loc_idx + 1} ({self._loc_type_short(loc_type)})"
-            controls.append(ft.Text(label, size=14, weight=ft.FontWeight.W_500))
+            controls.append(st.subsection(label))
 
             source_dicoms = cfg.get("source_dicoms", [])
             if isinstance(source_dicoms, str):
@@ -1284,13 +1234,12 @@ class StudyEditorScreen:
             for run_idx in range(n_runs):
                 val = source_dicoms[run_idx] if run_idx < len(source_dicoms) else ""
                 field = ft.TextField(
-                    width=540,
                     label=f"Run {run_idx + 1} source DICOMs",
                     value=val,
                     hint_text="Path to DICOM directory",
                 )
                 loc_fields.append(field)
-                controls.append(ft.Row([field, self._create_browse_button(field)]))
+                controls.append(st.browse_row(field, self._create_browse_button(field)))
 
             self._sim_loc_source_fields.append(loc_fields)
             controls.append(ft.Divider())
@@ -1304,28 +1253,28 @@ class StudyEditorScreen:
             except (KeyError, ValueError):
                 label = f"Feedback {fb_idx + 1} ({task_type})"
 
-            controls.append(ft.Text(label, size=14, weight=ft.FontWeight.W_500))
+            controls.append(st.subsection(label))
 
             fb_field = ft.TextField(
-                width=540,
                 label="Feedback run source DICOMs",
                 value=cfg.get("source_dicoms", ""),
                 hint_text="Path to DICOM directory",
             )
             self._sim_fb_source_fields.append(fb_field)
-            controls.append(ft.Row([fb_field, self._create_browse_button(fb_field)]))
+            controls.append(st.browse_row(fb_field, self._create_browse_button(fb_field)))
 
             # Transfer run source (only if transfers enabled)
             use_transfers = cfg.get("use_transfer_runs", False)
             tf_field = ft.TextField(
-                width=540,
                 label="Transfer run source DICOMs",
                 value=cfg.get("transfer_source_dicoms", ""),
                 hint_text="Path to DICOM directory",
                 visible=use_transfers,
             )
             self._sim_fb_transfer_fields.append(tf_field)
-            controls.append(ft.Row([tf_field, self._create_browse_button(tf_field)], visible=use_transfers))
+            tf_row = st.browse_row(tf_field, self._create_browse_button(tf_field))
+            tf_row.visible = use_transfers
+            controls.append(tf_row)
 
             controls.append(ft.Divider())
 
@@ -1342,36 +1291,32 @@ class StudyEditorScreen:
 
         # Initial reference
         init_enabled = self.reference_initial_enabled_checkbox.value
-        self._sim_loc_ref_label = ft.Text("Initial Reference Scan", size=14, weight=ft.FontWeight.W_500)
+        self._sim_loc_ref_label = st.subsection("Initial Reference Scan")
         self._sim_loc_ref_label.visible = init_enabled
         controls.append(self._sim_loc_ref_label)
         self._sim_loc_ref_field = ft.TextField(
-            width=540,
             label="Initial Reference Scan source DICOMs",
             value=reference_config.get("initial_dicoms", ""),
             hint_text="Path to DICOM directory",
         )
-        self._sim_loc_ref_row = ft.Row(
-            [self._sim_loc_ref_field, self._create_browse_button(self._sim_loc_ref_field)],
-            visible=init_enabled,
+        self._sim_loc_ref_row = st.browse_row(
+            self._sim_loc_ref_field, self._create_browse_button(self._sim_loc_ref_field)
         )
+        self._sim_loc_ref_row.visible = init_enabled
         controls.append(self._sim_loc_ref_row)
 
         # Real-time reference
         rt_enabled = self.reference_realtime_enabled_checkbox.value
-        self._sim_fb_ref_label = ft.Text("Real-Time Reference Scan", size=14, weight=ft.FontWeight.W_500)
+        self._sim_fb_ref_label = st.subsection("Real-Time Reference Scan")
         self._sim_fb_ref_label.visible = rt_enabled
         controls.append(self._sim_fb_ref_label)
         self._sim_fb_ref_field = ft.TextField(
-            width=540,
             label="Real-Time Reference Scan source DICOMs",
             value=reference_config.get("realtime_dicoms", ""),
             hint_text="Path to DICOM directory",
         )
-        self._sim_fb_ref_row = ft.Row(
-            [self._sim_fb_ref_field, self._create_browse_button(self._sim_fb_ref_field)],
-            visible=rt_enabled,
-        )
+        self._sim_fb_ref_row = st.browse_row(self._sim_fb_ref_field, self._create_browse_button(self._sim_fb_ref_field))
+        self._sim_fb_ref_row.visible = rt_enabled
         controls.append(self._sim_fb_ref_row)
 
         return controls
@@ -1544,16 +1489,16 @@ class StudyEditorScreen:
             for m in monitors:
                 position = "Left" if m.index == 0 else "Right"
                 monitor_texts.append(
-                    ft.Text(f"{position}: {m.name} ({m.width}x{m.height})", size=12, color=ft.Colors.GREY_700)
+                    ft.Text(f"{position}: {m.name} ({m.width}x{m.height})", size=st.CAPTION, color=st.MUTED)
                 )
 
             return ft.Container(
                 content=ft.Column(
-                    [ft.Text("Detected monitors:", size=12, weight=ft.FontWeight.BOLD), *monitor_texts],
+                    [ft.Text("Detected monitors:", size=st.CAPTION, weight=ft.FontWeight.BOLD), *monitor_texts],
                     spacing=2,
                 ),
-                bgcolor=ft.Colors.GREY_100,
-                padding=10,
+                bgcolor=st.SUBTLE_BG,
+                padding=st.GAP_MD,
                 border_radius=5,
             )
         except Exception as e:
@@ -1610,15 +1555,15 @@ class StudyEditorScreen:
             content=ft.Container(
                 content=ft.Column(
                     [
-                        ft.Text("SMB Share Setup", size=14, weight=ft.FontWeight.BOLD),
+                        st.subsection("SMB Share Setup"),
                         ft.Container(content=tabs, height=300),
                         ft.Divider(),
-                        ft.Text("Scanner Console Configuration", size=14, weight=ft.FontWeight.BOLD),
-                        ft.Text(instructions["scanner_notes"], size=12),
+                        st.subsection("Scanner Console Configuration"),
+                        ft.Text(instructions["scanner_notes"], size=st.CAPTION),
                     ],
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                width=700,
+                width=st.DIALOG_LG,
                 height=550,
             ),
             actions=[ft.TextButton("Close", on_click=lambda e: _close())],

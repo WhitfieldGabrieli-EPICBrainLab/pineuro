@@ -72,6 +72,7 @@ from typing import TYPE_CHECKING
 
 import flet as ft
 
+from . import styles as st
 from .config_manager import ConfigManager
 from .models import StudyConfig
 from .utils import validate_participant_id
@@ -115,9 +116,7 @@ class PyrtnfApp:
         self.page.window.maximized = True
         self.page.padding = 0
         self.page.theme_mode = ft.ThemeMode.LIGHT
-        self.page.theme = ft.Theme(
-            visual_density=ft.VisualDensity.COMPACT,
-        )
+        self.page.theme = st.theme()
 
         logger.info("pineuro GUI initialized")
 
@@ -152,11 +151,7 @@ class PyrtnfApp:
                         ft.Container(
                             content=ft.Row(
                                 [
-                                    ft.Text(
-                                        "pineuro Study Manager",
-                                        size=24,
-                                        weight=ft.FontWeight.BOLD,
-                                    ),
+                                    st.title("pineuro Study Manager"),
                                     ft.Row(
                                         [
                                             ft.OutlinedButton(
@@ -165,22 +160,23 @@ class PyrtnfApp:
                                                 on_click=lambda _: self._import_study(),
                                             ),
                                             ft.FilledButton(
-                                                "+ New Study",
+                                                "New Study",
+                                                icon=ft.Icons.ADD,
                                                 on_click=lambda _: self.show_study_editor(None),
                                             ),
                                         ],
-                                        spacing=8,
+                                        spacing=st.GAP_SM,
                                     ),
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             ),
-                            padding=20,
-                            bgcolor=ft.Colors.BLUE_50,
+                            padding=st.PAD,
+                            bgcolor=st.HEADER_BG,
                         ),
                         # Study list
                         ft.Container(
                             content=self._build_study_list(),
-                            padding=20,
+                            padding=st.PAD,
                             expand=True,
                         ),
                     ],
@@ -204,25 +200,17 @@ class PyrtnfApp:
             return ft.Container(
                 content=ft.Column(
                     [
-                        ft.Icon(ft.Icons.FOLDER_OPEN, size=100, color=ft.Colors.GREY_400),
-                        ft.Text(
-                            "No studies found",
-                            size=20,
-                            color=ft.Colors.GREY_600,
-                        ),
-                        ft.Text(
-                            "Create your first study to get started!",
-                            size=14,
-                            color=ft.Colors.GREY_500,
-                        ),
-                        ft.ElevatedButton(
-                            "Create New Study",
-                            icon=ft.Icons.CREATE,
+                        ft.Icon(ft.Icons.FOLDER_OPEN, size=100, color=ft.Colors.OUTLINE),
+                        ft.Text("No studies found", size=st.TITLE, color=st.MUTED),
+                        st.caption("Create your first study to get started!", italic=False),
+                        ft.FilledButton(
+                            "New Study",
+                            icon=ft.Icons.ADD,
                             on_click=lambda _: self.show_study_editor(None),
                         ),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=10,
+                    spacing=st.GAP_MD,
                 ),
                 alignment=ft.Alignment(0, 0),
             )
@@ -256,25 +244,17 @@ class PyrtnfApp:
             content=ft.Container(
                 content=ft.Column(
                     [
-                        ft.Text(
-                            study_meta.name,
-                            size=24,
-                            weight=ft.FontWeight.BOLD,
-                        ),
+                        st.section(study_meta.name, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                         ft.Divider(),
                         ft.Container(
                             content=ft.Text(
                                 truncate_text(study_meta.description, 80),
-                                size=16,
-                                color=ft.Colors.GREY_700,
+                                size=st.BODY,
+                                color=st.MUTED,
                             ),
                             height=60,
                         ),
-                        ft.Text(
-                            f"Modified: {format_timestamp(study_meta.modified)}",
-                            size=14,
-                            color=ft.Colors.GREY_500,
-                        ),
+                        st.caption(f"Modified: {format_timestamp(study_meta.modified)}", italic=False),
                         ft.Divider(),
                         ft.Row(
                             [
@@ -394,24 +374,15 @@ class PyrtnfApp:
             content=ft.Container(
                 content=ft.Column(
                     [
-                        ft.Text(
-                            f"Study: {study_name}",
-                            size=14,
-                            weight=ft.FontWeight.BOLD,
-                        ),
+                        st.subsection(f"Study: {study_name}"),
                         ft.Divider(),
                         participant_id_field,
-                        ft.Text(
-                            "Enter the participant ID to begin the neurofeedback session.",
-                            size=12,
-                            color=ft.Colors.GREY_600,
-                            italic=True,
-                        ),
+                        st.caption("Enter the participant ID to begin the neurofeedback session."),
                     ],
                     tight=True,
-                    spacing=10,
+                    spacing=st.GAP_MD,
                 ),
-                width=400,
+                width=st.DIALOG_SM,
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=cancel_start),
@@ -559,9 +530,9 @@ class PyrtnfApp:
         for v in reversed(versions):
             version_rows.append(
                 ft.ListTile(
-                    leading=ft.Icon(ft.Icons.SAVE, color=ft.Colors.BLUE_400),
+                    leading=ft.Icon(ft.Icons.SAVE, color=st.ACCENT),
                     title=ft.Text(f"Version {v['version']}"),
-                    subtitle=ft.Text(v["timestamp"], size=12, color=ft.Colors.GREY_600),
+                    subtitle=st.caption(v["timestamp"], italic=False),
                     trailing=ft.OutlinedButton(
                         "Restore",
                         on_click=lambda _, info=v: restore_version(info),
@@ -572,19 +543,19 @@ class PyrtnfApp:
         dialog = ft.AlertDialog(
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.HISTORY, color=ft.Colors.BLUE_400),
+                    ft.Icon(ft.Icons.HISTORY, color=st.ACCENT),
                     ft.Text(f"Version History: {study_name}", weight=ft.FontWeight.BOLD),
                 ],
-                spacing=8,
+                spacing=st.GAP_SM,
             ),
             content=ft.Container(
                 content=ft.Column(
                     version_rows,
-                    spacing=4,
+                    spacing=st.GAP_XS,
                     tight=True,
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                width=500,
+                width=st.DIALOG_MD,
                 height=400,
             ),
             actions=[ft.TextButton("Close", on_click=lambda _: self.page.pop_dialog())],
