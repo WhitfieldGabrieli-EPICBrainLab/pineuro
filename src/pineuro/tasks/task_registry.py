@@ -305,6 +305,35 @@ def read_live_metrics(log_path: Path, metrics: list[LiveMetric]) -> dict[str, di
         return {}
 
 
+@dataclass(frozen=True)
+class TriggeredEventReport:
+    """Declarative opt-in for surfacing triggered-episode durations in QC.
+
+    Tasks that fire discrete, run-time-triggered episodes (e.g. activation-
+    triggered prompts or feedback episodes) record each episode's onset and
+    duration in their BIDS ``_events.tsv``. Declaring this on a task's
+    ``TaskMetadata`` tells ``generate_feedback_report`` to surface those
+    episodes in the Activation Timeseries section: each episode window is
+    shaded on the activation plot and a per-episode duration table is added
+    below it. Tasks that leave ``TaskMetadata.triggered_event_report`` as
+    ``None`` (the default) get neither -- block-design tasks that also write an
+    events TSV are excluded automatically.
+
+    Attributes:
+        label: Heading for the durations table / section (e.g.
+            "Triggered Prompt Durations").
+        episode_noun: Singular noun for one episode, used as the table's first
+            column header and in the plot legend (e.g. "Prompt", "Episode").
+        non_episode_types: ``trial_type`` values that are NOT episodes and must
+            be excluded from the summary -- the per-volume ``"activation"``
+            rows and the ``"baseline"`` row both triggered tasks emit.
+    """
+
+    label: str = "Triggered Task Durations"
+    episode_noun: str = "Episode"
+    non_episode_types: tuple[str, ...] = ("baseline", "activation")
+
+
 @dataclass
 class TaskMetadata:
     """Metadata for a task type.
@@ -353,6 +382,12 @@ class TaskMetadata:
             columns to a labeled display (e.g., "Hits: ContA: 5"). Tasks that
             do not write per-frame logs or have nothing meaningful to surface
             leave this empty -- the GUI hides the row entirely.
+        triggered_event_report: Optional declaration that this task fires
+            discrete, run-time-triggered episodes whose durations should be
+            surfaced in the feedback QC report (activation-plot overlay + a
+            duration table). None (default) means the task has no such episodes
+            -- block-design tasks that also write an events TSV are excluded.
+            See ``TriggeredEventReport``.
         localizer_params_from_scan: When True, the localizer's runtime
             parameters are derived from the scan parameters (n_volumes * tr)
             rather than read from a per-task ``localizer_task`` config section.
@@ -374,6 +409,7 @@ class TaskMetadata:
     design_type: str = "block"
     compute_max_run_seconds: Callable[[dict[str, Any]], float] | None = None
     live_metrics: list[LiveMetric] = field(default_factory=list)
+    triggered_event_report: TriggeredEventReport | None = None
     localizer_params_from_scan: bool = False
 
     def validate_config(self, config: dict[str, Any]) -> None:

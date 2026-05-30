@@ -2824,12 +2824,170 @@ def _classify_feedbacklog_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     }
 
 
+def _summarize_triggered_events(events_path: Path, non_episode_types: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Summarize triggered episodes from a task's BIDS events TSV.
+
+    Returns one dict per triggered episode (e.g. rating prompt / feedback
+    episode), excluding the task's ``non_episode_types`` -- the per-volume
+    ``"activation"`` rows and the ``"baseline"`` row. Each dict has keys
+    ``episode`` (1-based ordinal), ``trial_type``, ``onset`` (s),
+    ``volume`` (trigger volume index), ``duration`` (s), and ``start_vol`` /
+    ``end_vol`` (volume indices spanning the episode, for overlaying on the
+    activation timeseries).
+
+    Start/end volumes are derived from the file's own per-volume
+    ``"activation"`` rows -- each carries both an ``onset`` (s) and a
+    ``volume`` -- so the seconds->volume mapping stays on the events file's
+    internal (task-clock) time base and needs no TR. When no activation rows
+    are present, ``end_vol`` falls back to ``start_vol + round(duration / tr)``
+    with ``tr`` inferred from consecutive activation onsets (else 1.0).
+
+    Returns ``[]`` when the file is missing or has no episode rows.
+    """
+    if not events_path.exists():
+        return []
+    try:
+        df = pd.read_csv(events_path, sep="\t")
+    except Exception:
+        logger.warning(f"Could not read events TSV {events_path}; skipping triggered-event summary")
+        return []
+    if df.empty or "trial_type" not in df.columns or "duration" not in df.columns:
+        return []
+
+    nan_series = pd.Series([np.nan] * len(df))
+    onset = pd.to_numeric(df["onset"], errors="coerce") if "onset" in df.columns else nan_series
+    duration = pd.to_numeric(df["duration"], errors="coerce")
+    volume = pd.to_numeric(df["volume"], errors="coerce") if "volume" in df.columns else nan_series
+    trial_type = df["trial_type"].astype(str)
+
+    # Build an onset(s) -> volume map from the per-volume activation rows so the
+    # end of each episode (onset + duration) can be located on the volume axis.
+    act_mask = (trial_type == "activation").to_numpy()
+    act_onsets = onset.to_numpy()[act_mask]
+    act_volumes = volume.to_numpy()[act_mask]
+    finite = np.isfinite(act_onsets) & np.isfinite(act_volumes)
+    act_onsets, act_volumes = act_onsets[finite], act_volumes[finite]
+    order = np.argsort(act_onsets)
+    act_onsets, act_volumes = act_onsets[order], act_volumes[order]
+
+    if act_onsets.size >= 2:
+        diffs = np.diff(act_onsets)
+        diffs = diffs[diffs > 0]
+        tr_est = float(np.median(diffs)) if diffs.size else 1.0
+    else:
+        tr_est = 1.0
+
+    def _onset_to_volume(t: float, fallback: float) -> float:
+        if act_onsets.size == 0 or not np.isfinite(t):
+            return fallback
+        idx = int(np.searchsorted(act_onsets, t, side="right")) - 1
+        idx = max(0, min(idx, act_volumes.size - 1))
+        return float(act_volumes[idx])
+
+    episodes: list[dict[str, Any]] = []
+    for i in range(len(df)):
+        tt = trial_type.iat[i]
+        if tt in non_episode_types:
+            continue
+        dur = float(duration.iat[i]) if np.isfinite(duration.iat[i]) else float("nan")
+        if not np.isfinite(dur) or dur <= 0:
+            continue
+        ons = float(onset.iat[i]) if np.isfinite(onset.iat[i]) else float("nan")
+        vol = volume.iat[i]
+        start_vol = float(vol) if np.isfinite(vol) else _onset_to_volume(ons, 0.0)
+        if act_onsets.size > 0 and np.isfinite(ons):
+            end_vol = _onset_to_volume(ons + dur, start_vol)
+        else:
+            end_vol = start_vol + max(1.0, round(dur / tr_est))
+        end_vol = max(end_vol, start_vol)
+        episodes.append(
+            {
+                "episode": len(episodes) + 1,
+                "trial_type": tt,
+                "onset": ons if np.isfinite(ons) else None,
+                "volume": int(vol) if np.isfinite(vol) else None,
+                "duration": dur,
+                "start_vol": start_vol,
+                "end_vol": end_vol,
+            }
+        )
+    return episodes
+
+
+# Colorblind-safe fills + legend labels per episode kind.
+_EPISODE_STYLES = {
+    "triggered": ("#009E73", "Triggered"),
+    "timeout": ("#DE8F05", "Timeout"),
+    "incomplete": ("#949494", "Incomplete"),
+}
+
+
+def _episode_kind(trial_type: str) -> str:
+    """Classify a triggered-episode trial_type for coloring/legend grouping."""
+    if "incomplete" in trial_type:
+        return "incomplete"
+    if "timeout" in trial_type:
+        return "timeout"
+    return "triggered"
+
+
+def _overlay_triggered_episodes(ax: Any, episodes: list[dict[str, Any]], volumes: Any) -> None:
+    """Shade each triggered episode window on an activation axis.
+
+    Spans are colored by episode kind (triggered / timeout / incomplete),
+    clipped to the plotted volume range, with one legend entry per kind.
+    """
+    vmin = float(np.nanmin(volumes)) if len(volumes) else 0.0
+    vmax = float(np.nanmax(volumes)) if len(volumes) else 0.0
+    labeled: set[str] = set()
+    for ep in episodes:
+        kind = _episode_kind(str(ep.get("trial_type", "")))
+        color, legend_label = _EPISODE_STYLES[kind]
+        start = max(float(ep["start_vol"]) - 0.5, vmin - 0.5)
+        end = min(float(ep["end_vol"]) + 0.5, vmax + 0.5)
+        if end <= start:
+            end = min(start + 0.5, vmax + 0.5)
+        ax.axvspan(start, end, color=color, alpha=0.15, label=legend_label if kind not in labeled else None)
+        labeled.add(kind)
+
+
+def _triggered_durations_table(episodes: list[dict[str, Any]], spec: Any) -> dict[str, Any]:
+    """Build a QC ``table`` section summarizing triggered-episode durations.
+
+    One row per episode (number, raw trial_type, onset, trigger volume,
+    duration) plus a final count / total / mean summary row.
+    """
+    rows: list[list[str]] = []
+    for ep in episodes:
+        onset = ep.get("onset")
+        volume = ep.get("volume")
+        rows.append(
+            [
+                str(ep["episode"]),
+                str(ep.get("trial_type", "")),
+                f"{onset:.1f}" if onset is not None else "—",
+                str(volume) if volume is not None else "—",
+                f"{ep['duration']:.1f} s",
+            ]
+        )
+    durations = [float(ep["duration"]) for ep in episodes]
+    total_d = sum(durations)
+    mean_d = total_d / len(durations)
+    rows.append(["Total", f"n={len(episodes)}", "", "", f"{total_d:.1f} s (mean {mean_d:.1f} s)"])
+    return {
+        "type": "table",
+        "headers": [spec.episode_noun, "Type", "Onset (s)", "Volume", "Duration (s)"],
+        "rows": rows,
+    }
+
+
 def plot_activation_timeseries(
     feedback_log_path: Path,
     out_path: Path,
     n_baseline: int | None = None,
     title: str | None = None,
     display_names: dict[str, str] | None = None,
+    episodes: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Plot per-mask activation timeseries from feedback log.
@@ -2847,6 +3005,9 @@ def plot_activation_timeseries(
         Number of baseline volumes (will be shaded differently)
     title : str, optional
         Figure title
+    episodes : list of dict, optional
+        Triggered-episode spans to overlay (from ``_summarize_triggered_events``).
+        Each dict needs ``start_vol``, ``end_vol``, and ``trial_type``.
     """
     df = pd.read_csv(feedback_log_path, sep="\t")
 
@@ -2877,6 +3038,9 @@ def plot_activation_timeseries(
     if n_baseline is not None and n_baseline > 0:
         ax.axvspan(-0.5, n_baseline - 0.5, color="gray", alpha=0.1, label="Baseline")
         ax.axvline(n_baseline - 0.5, color="gray", linestyle="--", linewidth=1.0, alpha=0.5)
+
+    if episodes:
+        _overlay_triggered_episodes(ax, episodes, df["volume"])
 
     ax.axhline(0, color="gray", linestyle="-", linewidth=0.8, alpha=0.3)
     ax.set_xlabel("Volume Index", fontweight="bold")
@@ -3469,6 +3633,22 @@ def generate_feedback_report(
     if feedback_log.exists():
         sections.append({"type": "heading", "content": "Activation Timeseries"})
 
+        # Triggered-episode durations: only for tasks that declare them on their
+        # TaskMetadata (block-design tasks that also emit an events TSV are
+        # excluded). When present, the episodes overlay the activation plot and
+        # are tabulated below it.
+        report_spec = None
+        try:
+            from pineuro.tasks.task_registry import get_task_metadata
+
+            report_spec = get_task_metadata(task).triggered_event_report
+        except Exception:
+            report_spec = None
+        triggered_episodes: list[dict[str, Any]] = []
+        if report_spec is not None:
+            events_file = feedback_dir / f"{bids_prefix}_task-{task}_run-{run:02d}_events.tsv"
+            triggered_episodes = _summarize_triggered_events(events_file, report_spec.non_episode_types)
+
         timeseries_out = output_dir / "activation_timeseries.png"
         if overwrite or not timeseries_out.exists():
             logger.info("Generating activation timeseries")
@@ -3478,6 +3658,7 @@ def generate_feedback_report(
                 n_baseline=n_baseline,
                 title=f"Activation Timeseries - {subject} (task: {task}, run: {run})",
                 display_names=display_names,
+                episodes=triggered_episodes,
             )
 
         sections.append(
@@ -3487,6 +3668,10 @@ def generate_feedback_report(
                 "alt": "Activation timeseries",
             }
         )
+
+        if triggered_episodes and report_spec is not None:
+            sections.append({"type": "heading", "content": report_spec.label})
+            sections.append(_triggered_durations_table(triggered_episodes, report_spec))
 
     # FD timeseries
     if feedback_log.exists():

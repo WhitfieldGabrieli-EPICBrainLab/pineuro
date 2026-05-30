@@ -52,6 +52,7 @@ from .task_registry import (
     NetworkRole,
     TaskMetadata,
     TaskParameter,
+    TriggeredEventReport,
     register_task,
 )
 from .utils import make_bids_run_prefix
@@ -1048,6 +1049,7 @@ RIT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
         LiveMetric(key="triggered", label="Triggered", column_pattern="triggered_prompts"),
         LiveMetric(key="timeout", label="Timeout", column_pattern="timeout_prompts"),
     ],
+    triggered_event_report=TriggeredEventReport(label="Triggered Prompt Durations", episode_noun="Prompt"),
 )
 
 register_task(RIT_EXPERIENCE_SAMPLING_METADATA)

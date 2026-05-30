@@ -17,6 +17,14 @@ class TestRITTriggeredBallMetadata:
         # the dual-mode networks are optional roles.
         assert meta.n_networks == 1
 
+    def test_declares_triggered_event_report(self):
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("rittriggeredball")
+        assert meta.triggered_event_report is not None
+        assert meta.triggered_event_report.label == "Triggered Episode Durations"
+        assert meta.triggered_event_report.episode_noun == "Episode"
+
     def test_has_network_roles(self):
         from pineuro.tasks.task_registry import get_task_metadata
 

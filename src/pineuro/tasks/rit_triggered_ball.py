@@ -68,6 +68,7 @@ from .task_registry import (
     NetworkRole,
     TaskMetadata,
     TaskParameter,
+    TriggeredEventReport,
     register_task,
 )
 from .utils import is_activation_outlier, make_bids_run_prefix
@@ -1269,6 +1270,7 @@ RIT_TRIGGERED_BALL_METADATA = TaskMetadata(
     live_metrics=[
         LiveMetric(key="triggers", label="Triggers", column_pattern="triggers"),
     ],
+    triggered_event_report=TriggeredEventReport(label="Triggered Episode Durations", episode_noun="Episode"),
 )
 
 register_task(RIT_TRIGGERED_BALL_METADATA)

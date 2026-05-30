@@ -23,6 +23,14 @@ class TestRITExperienceSamplingRegistration:
         assert meta.design_type == "nuisance_only"
         assert "feedback" in meta.roles
 
+    def test_declares_triggered_event_report(self):
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("ritexperiencesampling")
+        assert meta.triggered_event_report is not None
+        assert meta.triggered_event_report.label == "Triggered Prompt Durations"
+        assert meta.triggered_event_report.episode_noun == "Prompt"
+
     def test_task_parameters_defined(self):
         from pineuro.tasks.task_registry import get_task_metadata
 
