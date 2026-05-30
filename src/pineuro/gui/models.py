@@ -59,6 +59,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from pineuro.gui.utils import (
+    frc_referenced_masks,
+    localizer_mask_names,
+    synthesize_reused_localizers,
+    tissue_required_in_session,
+)
+
 
 @dataclass
 class StudyMetadata:
@@ -196,6 +203,31 @@ class StudyConfig:
         # Lift the chosen session's protocol to the top level.
         result["localizers"] = copy.deepcopy(session_proto.get("localizers", []))
         result["feedback_runs"] = copy.deepcopy(session_proto.get("feedback_runs", []))
+
+        # Materialize cross-session mask reuse: synthesize a reused localizer for each
+        # mask a feedback run sources from an earlier session (its ``mask_sources``
+        # map), so the existing per-localizer coregistration loop pulls those masks
+        # from their source session. Then rewrite each run's ``mask_source`` to the
+        # producing localizer id (fresh or synthesized) so the SessionConfig
+        # cross-reference check resolves.
+        result["localizers"] += synthesize_reused_localizers(sessions, result["feedback_runs"])
+        name_to_loc_id: dict[str, str] = {}
+        for loc in result["localizers"]:
+            loc_id = loc.get("id") or loc.get("type") or ""
+            for mask_name in localizer_mask_names(loc):
+                name_to_loc_id.setdefault(mask_name, loc_id)
+        for frc in result["feedback_runs"]:
+            mask_source = ""
+            for mask_name in sorted(frc_referenced_masks(frc)):
+                if mask_name in name_to_loc_id:
+                    mask_source = name_to_loc_id[mask_name]
+                    break
+            frc["mask_source"] = mask_source
+
+        # Whether this session must extract WM/CSF tissue masks: its own feedback or
+        # any later session reusing its masks needs nuisance regressors. Consumed by
+        # the pipeline runner's tissue step.
+        result["_tissue_required"] = tissue_required_in_session(sessions, session_index)
 
         # Attach the session metadata block (matches SessionMetadata fields).
         result["session"] = {

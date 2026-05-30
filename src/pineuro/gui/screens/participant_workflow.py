@@ -2693,6 +2693,11 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
         localizers = config.get("localizers", [])
 
+        # Masks reused from an earlier session were approved there; an all-reused
+        # session runs no approval step, so its feedback is never gated on one.
+        if self._is_all_reused_mode:
+            return True
+
         if not (localizers and len(localizers) > 1):
             # Single-localizer: use blanket approval flag
             return self._initial_qc_approved
@@ -2711,8 +2716,11 @@ class ParticipantWorkflowScreen:
                 return self._initial_qc_approved
             mask_to_loc = self._build_mask_to_localizer_map()
             required_loc_indices = {mask_to_loc[m] for m in needed_masks if m in mask_to_loc}
+            # Reused localizers carry no approval step this session (masks were
+            # approved in their source session), so they impose no requirement.
+            required_loc_indices = {i for i in required_loc_indices if not localizer_is_reused(localizers[i])}
             if not required_loc_indices:
-                # Masks not mapped to any localizer — fall back to all approved
+                # Masks not mapped to any fresh localizer — fall back to all approved
                 return self._initial_qc_approved
             return all(
                 self.step_statuses.get(f"localizer_{i}_approval") == StepStatus.COMPLETE for i in required_loc_indices

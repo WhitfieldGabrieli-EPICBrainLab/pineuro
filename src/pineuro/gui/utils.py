@@ -48,10 +48,11 @@ Examples
 Valid TR: 1.2
 """
 
+import copy
 import logging
 import threading
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import flet as ft
 
@@ -418,6 +419,159 @@ def reused_localizer_indices(config: dict[str, Any]) -> list[int]:
 def has_fresh_localizer(config: dict[str, Any]) -> bool:
     """Whether any localizer is computed fresh this session (vs every one reused)."""
     return any(not localizer_is_reused(loc) for loc in config.get("localizers", []))
+
+
+def ses_num(session_id: str) -> int | None:
+    """Parse a BIDS session id ``'ses-NN'`` into its 1-based number, or None."""
+    prefix = "ses-"
+    if not isinstance(session_id, str) or not session_id.startswith(prefix):
+        return None
+    suffix = session_id[len(prefix) :]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def frc_needs_tissue(frc: dict[str, Any]) -> bool:
+    """Whether a feedback run requests WM or CSF nuisance regressors."""
+    glm = frc.get("glm", {}) or {}
+    return bool(glm.get("include_wm_regressor", False) or glm.get("include_csf_regressor", False))
+
+
+def frc_referenced_masks(frc: dict[str, Any]) -> set[str]:
+    """Mask names a feedback run uses.
+
+    ``network_assignment`` values for activation/differential modes, or connectivity
+    pair names for connectivity mode. Mirrors
+    ``participant_workflow._get_masks_for_frc``.
+    """
+    masks: set[str] = set()
+    mode = frc.get("feedback_mode", "activation")
+    if mode in ("activation", "differential"):
+        for name in (frc.get("network_assignment", {}) or {}).values():
+            if name:
+                masks.add(name)
+    elif mode == "connectivity":
+        for pair in (frc.get("connectivity", {}) or {}).get("pairs") or []:
+            for name in pair or []:
+                if name:
+                    masks.add(name)
+    return masks
+
+
+def localizer_producing(session: dict[str, Any], name: str) -> dict[str, Any] | None:
+    """The *fresh* localizer in ``session`` that produces mask ``name``, or None.
+
+    Reused localizers are skipped so a cross-session lookup resolves to the session
+    that originally computed the mask, never to a reuse pointer.
+    """
+    for loc in session.get("localizers", []):
+        if localizer_is_reused(loc):
+            continue
+        if name in localizer_mask_names(loc):
+            return cast("dict[str, Any]", loc)
+    return None
+
+
+def synthesize_reused_localizers(
+    sessions: list[dict[str, Any]],
+    feedback_runs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Derive reused-localizer entries from a session's cross-session mask selections.
+
+    For each mask a feedback run sources from an earlier session (its ``mask_sources``
+    map: name -> ``"ses-NN"``), find the localizer in that session producing it, group
+    by ``(source_session, producer id/type)``, and emit one reused localizer per group
+    restricted to the resolved names. The runtime per-localizer coregistration loop
+    then pulls each group from its source session. Names with no resolvable producer
+    are skipped (validation surfaces the error). Deterministic name ordering keeps the
+    synthesized ``loc_idx`` reproducible.
+    """
+    reused: dict[str, str] = {}  # mask name -> source "ses-NN"
+    for frc in feedback_runs:
+        srcs = frc.get("mask_sources", {}) or {}
+        for name in frc_referenced_masks(frc):
+            src = srcs.get(name, "")
+            if src:
+                reused[name] = src
+
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str]] = []
+    for name in sorted(reused):
+        src = reused[name]
+        num = ses_num(src)
+        if num is None or not (0 <= num - 1 < len(sessions)):
+            continue
+        producer = localizer_producing(sessions[num - 1], name)
+        if producer is None:
+            continue
+        pid = producer.get("id") or producer.get("type") or "localizer"
+        key = (src, pid)
+        if key not in groups:
+            groups[key] = {"producer": producer, "src": src, "pid": pid, "names": []}
+            order.append(key)
+        groups[key]["names"].append(name)
+
+    synthesized: list[dict[str, Any]] = []
+    for key in order:
+        g = groups[key]
+        src_loc: dict[str, Any] = g["producer"]
+        names: list[str] = g["names"]
+        ptype = src_loc.get("type", "rest")
+        entry: dict[str, Any] = {"id": g["pid"], "type": ptype, "reuse_from_session": g["src"]}
+        if src_loc.get("extraction"):
+            entry["extraction"] = copy.deepcopy(src_loc["extraction"])
+        if ptype == "rest":
+            entry["networks"] = names
+        elif ptype == "manual":
+            entry["manual_mask_names"] = names
+        else:  # task localizer
+            base_contrasts = src_loc.get("contrasts", {}) or {}
+            contrasts: dict[str, str] = {}
+            include_reverse = False
+            for nm in names:
+                if nm.endswith("_reverse"):
+                    include_reverse = True
+                    base = nm[: -len("_reverse")]
+                    if base in base_contrasts:
+                        contrasts[base] = base_contrasts[base]
+                elif nm in base_contrasts:
+                    contrasts[nm] = base_contrasts[nm]
+            entry["contrasts"] = contrasts
+            if include_reverse:
+                entry["include_reverse_contrasts"] = True
+        synthesized.append(entry)
+    return synthesized
+
+
+def session_reuse_sources(sessions: list[dict[str, Any]], session_index: int) -> set[str]:
+    """The set of earlier session ids that session ``session_index`` pulls masks from."""
+    if not (0 <= session_index < len(sessions)):
+        return set()
+    sources: set[str] = set()
+    for frc in sessions[session_index].get("feedback_runs", []):
+        for src in (frc.get("mask_sources", {}) or {}).values():
+            if src:
+                sources.add(src)
+    return sources
+
+
+def tissue_required_in_session(sessions: list[dict[str, Any]], session_index: int) -> bool:
+    """Whether session ``session_index`` must extract WM/CSF tissue masks.
+
+    True if the session's own feedback needs nuisance regressors, or any *later*
+    session that reuses this session's masks does — so a fresh-localizer session
+    produces tissue masks a downstream feedback-only session can coregister.
+    """
+    if not (0 <= session_index < len(sessions)):
+        return False
+    if any(frc_needs_tissue(frc) for frc in sessions[session_index].get("feedback_runs", [])):
+        return True
+    this_id = f"ses-{session_index + 1:02d}"
+    for later_idx in range(session_index + 1, len(sessions)):
+        if this_id in session_reuse_sources(sessions, later_idx) and any(
+            frc_needs_tissue(frc) for frc in sessions[later_idx].get("feedback_runs", [])
+        ):
+            return True
+    return False
 
 
 class ThreadSafeCallback:

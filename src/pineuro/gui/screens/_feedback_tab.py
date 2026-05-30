@@ -30,6 +30,28 @@ logger = logging.getLogger(__name__)
 FIELD_W = 400
 PAIR_W = 195
 
+# Mask dropdown options are session-qualified: a selection carries both the mask
+# name and the session that produces it. The dropdown option key joins them with a
+# unit-separator (won't appear in session ids or mask names); the bare name goes to
+# ``network_assignment`` and the source (when not the current session) to
+# ``mask_sources``.
+_SRC_SEP = "␟"
+
+
+def _mask_key(source: str, name: str) -> str:
+    """Build a session-qualified dropdown option key. ``source`` is ``""`` for the
+    current session or ``"ses-NN"`` for an earlier session."""
+    return f"{source}{_SRC_SEP}{name}"
+
+
+def _split_mask_key(key: str) -> tuple[str, str]:
+    """Inverse of :func:`_mask_key` → ``(source, name)``. A bare name (no separator,
+    from older configs) parses as ``("", name)``."""
+    if _SRC_SEP in key:
+        source, name = key.split(_SRC_SEP, 1)
+        return source, name
+    return "", key
+
 
 def _f(control: ft.Control) -> ft.Row:
     """Wrap a control in a Row so Column doesn't stretch it."""
@@ -46,7 +68,7 @@ class FeedbackTabBuilder:
         page: ft.Page,
         *,
         on_change: Callable[[], None] | None = None,
-        available_mask_names: list[str] | None = None,
+        available_mask_options: list[tuple[str, str, str]] | None = None,
         create_browse_button: Callable[[ft.TextField], ft.IconButton] | None = None,
         create_file_browse_button: Callable[..., ft.IconButton] | None = None,
     ):
@@ -62,8 +84,12 @@ class FeedbackTabBuilder:
             Flet page for updates
         on_change : callable, optional
             Called when feedback config changes
-        available_mask_names : list[str], optional
-            Mask names available from all localizers
+        available_mask_options : list[tuple[str, str, str]], optional
+            Session-qualified masks available to this feedback run, as
+            ``(source_session, name, label)`` triples. ``source_session`` is ``""``
+            for masks produced fresh this session, or ``"ses-NN"`` for an earlier
+            session; ``label`` is the dropdown display text (e.g. ``"ses-01 ·
+            Trigger"``).
         create_browse_button : callable, optional
             Factory for directory browse buttons
         create_file_browse_button : callable, optional
@@ -75,7 +101,7 @@ class FeedbackTabBuilder:
         self.config = copy.deepcopy(config)
         self.page = page
         self._on_change = on_change
-        self._available_mask_names = available_mask_names or []
+        self._available_mask_options: list[tuple[str, str, str]] = list(available_mask_options or [])
         self._create_browse_button = create_browse_button
         self._create_file_browse_button = create_file_browse_button
 
@@ -83,6 +109,30 @@ class FeedbackTabBuilder:
         self.task_param_fields: dict[str, Any] = {}
 
         self._create_fields()
+
+    # ------------------------------------------------------------------
+    # Session-qualified mask option helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def _available_mask_names(self) -> list[str]:
+        """Bare mask names from the available options (may repeat across sessions)."""
+        return [name for _, name, _ in self._available_mask_options]
+
+    def _mask_dd_options(self) -> list[ft.dropdown.Option]:
+        """Dropdown options for the available session-qualified masks."""
+        return [
+            ft.dropdown.Option(key=_mask_key(src, name), text=label)
+            for src, name, label in self._available_mask_options
+        ]
+
+    def _mask_value_for(self, name: str | None) -> str | None:
+        """The dropdown option key for an assigned mask ``name``, resolving its source
+        session from ``self._mask_sources`` (empty source => current session). None
+        when ``name`` is falsy."""
+        if not name:
+            return None
+        return _mask_key(self._mask_sources.get(name, ""), name)
 
     # ------------------------------------------------------------------
     # Field creation
@@ -244,8 +294,9 @@ class FeedbackTabBuilder:
         )
 
         # Feedback mode — only relevant for multi-network tasks (n_networks >= 2)
-        mask_options = [ft.dropdown.Option(key=n, text=n) for n in self._available_mask_names]
-        has_multi_mask = len(self._available_mask_names) >= 2
+        self._mask_sources = dict(c.get("mask_sources", {}) or {})
+        mask_options = self._mask_dd_options()
+        has_multi_mask = len(self._available_mask_options) >= 2
         needs_multi_network = self._task_n_networks >= 2
         feedback_mode_val = c.get("feedback_mode", "activation")
 
@@ -282,9 +333,9 @@ class FeedbackTabBuilder:
             if self._task_n_networks == 1 and self._task_network_roles
             else "target_mask"
         )
-        single_mask = network_assignment.get(single_role_key)
-        if not single_mask and self._available_mask_names:
-            single_mask = self._available_mask_names[0]
+        single_value = self._mask_value_for(network_assignment.get(single_role_key))
+        if single_value is None and mask_options:
+            single_value = mask_options[0].key
         single_mask_label = (
             self._task_network_roles[0].label
             if self._task_n_networks == 1 and self._task_network_roles
@@ -294,7 +345,7 @@ class FeedbackTabBuilder:
             width=600,
             label=single_mask_label,
             options=mask_options,
-            value=single_mask,
+            value=single_value,
             visible=(self._task_n_networks == 1),
         )
 
@@ -317,7 +368,7 @@ class FeedbackTabBuilder:
                 width=600,
                 label=role.label,
                 options=[ft.dropdown.Option(key="", text=blank_label), *mask_options],
-                value=network_assignment.get(role.key) or "",
+                value=self._mask_value_for(network_assignment.get(role.key)) or "",
                 tooltip=role.description,
                 visible=self._role_visible(role),
             )
@@ -332,19 +383,19 @@ class FeedbackTabBuilder:
         diff_roles = self._task_network_roles[len(self._extra_role_dropdowns) :]
         diff_pos_key = diff_roles[0].key if len(diff_roles) >= 2 else None
         diff_neg_key = diff_roles[1].key if len(diff_roles) >= 2 else None
-        diff_pos_val = network_assignment.get(diff_pos_key) if diff_pos_key else None
-        diff_neg_val = network_assignment.get(diff_neg_key) if diff_neg_key else None
+        diff_pos_val = self._mask_value_for(network_assignment.get(diff_pos_key)) if diff_pos_key else None
+        diff_neg_val = self._mask_value_for(network_assignment.get(diff_neg_key)) if diff_neg_key else None
         self.differential_positive_dropdown = ft.Dropdown(
             width=250,
             label="Positive mask",
             options=mask_options,
-            value=diff_pos_val or (self._available_mask_names[0] if self._available_mask_names else None),
+            value=diff_pos_val or (mask_options[0].key if mask_options else None),
         )
         self.differential_negative_dropdown = ft.Dropdown(
             width=250,
             label="Negative mask",
             options=mask_options,
-            value=diff_neg_val or (self._available_mask_names[1] if has_multi_mask else None),
+            value=diff_neg_val or (mask_options[1].key if has_multi_mask else None),
         )
         self.differential_row = ft.Column(
             [
@@ -365,16 +416,12 @@ class FeedbackTabBuilder:
         conn_window = connectivity_cfg.get("window", 15)
         is_conn = feedback_mode_val == "connectivity"
 
-        conn_pair_a = (
-            conn_pairs[0][0]
-            if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2
-            else (self._available_mask_names[0] if self._available_mask_names else None)
-        )
-        conn_pair_b = (
-            conn_pairs[0][1]
-            if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2
-            else (self._available_mask_names[1] if has_multi_mask else None)
-        )
+        if conn_pairs and len(conn_pairs) > 0 and len(conn_pairs[0]) == 2:
+            conn_pair_a = self._mask_value_for(conn_pairs[0][0])
+            conn_pair_b = self._mask_value_for(conn_pairs[0][1])
+        else:
+            conn_pair_a = mask_options[0].key if mask_options else None
+            conn_pair_b = mask_options[1].key if has_multi_mask else None
         self.connectivity_pair_a_dropdown = ft.Dropdown(
             width=250,
             label="ROI A",
@@ -674,36 +721,61 @@ class FeedbackTabBuilder:
         # Network assignment — single source of truth for role-to-mask mapping.
         # Always emit it (no more 3+ network gating; differential_pair / target_mask
         # / top_network / bottom_network are derived from this map at runtime).
+        # Dropdown values are session-qualified keys: split into a bare mask name
+        # (-> network_assignment) and its source session (-> mask_sources, only when
+        # an earlier session supplies the mask).
+        assignment: dict[str, str] = {}
+        mask_sources: dict[str, str] = {}
+
+        def _record(role_key: str, dd_value: str | None) -> None:
+            if not dd_value:
+                return
+            source, name = _split_mask_key(dd_value)
+            if not name:
+                return
+            assignment[role_key] = name
+            if source:
+                mask_sources[name] = source
+
         pos = self.differential_positive_dropdown.value
         neg = self.differential_negative_dropdown.value
-        assignment: dict[str, str] = {}
         for role_key, dd in self._extra_role_dropdowns:
             # Only persist a non-blank, currently-visible optional role. This
             # drops the blank "(unassigned)" sentinel and avoids saving stale
             # dual-mode masks while in single mode (and vice versa).
             if dd.value and dd.visible:
-                assignment[role_key] = dd.value
+                _record(role_key, dd.value)
         diff_roles = self._task_network_roles[len(self._extra_role_dropdowns) :]
         if len(diff_roles) >= 2 and pos and neg:
-            assignment[diff_roles[0].key] = pos
-            assignment[diff_roles[1].key] = neg
+            _record(diff_roles[0].key, pos)
+            _record(diff_roles[1].key, neg)
         elif self._task_n_networks == 1 and self.single_mask_dropdown.value:
             single_role_key = self._task_network_roles[0].key if self._task_network_roles else "target_mask"
-            assignment[single_role_key] = self.single_mask_dropdown.value
+            _record(single_role_key, self.single_mask_dropdown.value)
         cfg["network_assignment"] = assignment
 
         # Connectivity (sub-block)
         connectivity_block: dict[str, Any] = {"target": self.connectivity_target_dropdown.value or "increase"}
         if feedback_mode == "connectivity":
-            a = self.connectivity_pair_a_dropdown.value
-            b = self.connectivity_pair_b_dropdown.value
-            connectivity_block["pairs"] = [[a, b]] if a and b and a != b else None
+            a_src, a = _split_mask_key(self.connectivity_pair_a_dropdown.value or "")
+            b_src, b = _split_mask_key(self.connectivity_pair_b_dropdown.value or "")
+            if a and b and a != b:
+                connectivity_block["pairs"] = [[a, b]]
+                if a_src:
+                    mask_sources[a] = a_src
+                if b_src:
+                    mask_sources[b] = b_src
+            else:
+                connectivity_block["pairs"] = None
             window_str = self.connectivity_window_field.value.strip()
             connectivity_block["window"] = int(window_str) if window_str else 15
         else:
             connectivity_block["pairs"] = None
             connectivity_block["window"] = 15
         cfg["connectivity"] = connectivity_block
+
+        # Cross-session mask sources (name -> "ses-NN"); empty for an all-fresh run.
+        cfg["mask_sources"] = mask_sources
 
         # Intermittent feedback (sub-block)
         if self.intermittent_enabled_checkbox.value:
@@ -749,11 +821,15 @@ class FeedbackTabBuilder:
     # Update methods
     # ------------------------------------------------------------------
 
-    def update_available_masks(self, mask_names: list[str]):
-        """Update available mask names in feedback dropdowns."""
-        self._available_mask_names = mask_names
-        new_options = [ft.dropdown.Option(key=n, text=n) for n in mask_names]
-        has_multi = len(mask_names) >= 2
+    def update_available_masks(self, mask_options: list[tuple[str, str, str]]):
+        """Update the session-qualified masks available in the feedback dropdowns.
+
+        ``mask_options`` is a list of ``(source_session, name, label)`` triples, as
+        passed to the constructor.
+        """
+        self._available_mask_options = list(mask_options or [])
+        new_options = self._mask_dd_options()
+        has_multi = len(self._available_mask_options) >= 2
 
         for dropdown in [
             self.single_mask_dropdown,

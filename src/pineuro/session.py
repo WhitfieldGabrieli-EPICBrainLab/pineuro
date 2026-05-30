@@ -629,6 +629,14 @@ class FeedbackRunConfig:
         Free-form task-specific parameters passed to ``create_task()``.
     network_assignment : dict
         Maps network role keys (declared by ``TaskMetadata.network_roles``) to mask names.
+    mask_sources : dict
+        Maps a referenced mask *name* to the session id (``"ses-NN"``) that produces
+        it, when that source is an earlier session. A name absent from this map is
+        produced fresh in the current session. Keying by name (rather than role)
+        enforces "one source per mask name per session" and covers both activation
+        roles and connectivity pair names. Consumed when flattening the study config
+        (:meth:`pineuro.gui.models.StudyConfig.build_session_config` synthesizes a
+        reused localizer per source); the runtime never reads it.
     sham : dict
         Optional per-run sham override. Empty dict means use the top-level
         ``SessionConfig.sham`` block.
@@ -663,6 +671,10 @@ class FeedbackRunConfig:
     # Task-specific
     task_params: dict[str, Any] = field(default_factory=dict)
     network_assignment: dict[str, str] = field(default_factory=dict)
+
+    # Cross-session mask reuse: maps a referenced mask name -> source "ses-NN".
+    # Absent name => produced fresh this session. Consumed by build_session_config.
+    mask_sources: dict[str, str] = field(default_factory=dict)
 
     # Sham (per-run override; if empty, the top-level SessionConfig.sham applies)
     sham: dict[str, Any] = field(default_factory=dict)
@@ -946,6 +958,12 @@ class SessionConfig:
     localizers: list[LocalizerConfig] = field(default_factory=list)
     feedback_runs: list[FeedbackRunConfig] = field(default_factory=list)
 
+    # Cross-session override for WM/CSF tissue-mask extraction. None => derive from
+    # this session's own feedback runs; True/False force it. Set when a study is
+    # flattened (the ``_tissue_required`` key) so a source session extracts tissue
+    # masks a later feedback-only session reuses.
+    tissue_required: bool | None = None
+
     # Runtime-only fields (not serialized to YAML). Set by coregister_before_first_transfer
     # / tissue-mask resolution and consumed by run_feedback_task. Previously lived on
     # FeedbackConfig.wm_mask_path / csf_mask_path; moved here so they don't appear in YAML.
@@ -1018,6 +1036,7 @@ class SessionConfig:
             sham=sham,
             localizers=localizers,
             feedback_runs=feedback_runs,
+            tissue_required=data.get("_tissue_required"),
         )
 
     @staticmethod
@@ -1077,6 +1096,8 @@ class SessionConfig:
             result["localizers"] = [_path_to_str(asdict(loc)) for loc in self.localizers]
         if self.feedback_runs:
             result["feedback_runs"] = [_path_to_str(asdict(frc)) for frc in self.feedback_runs]
+        if self.tissue_required is not None:
+            result["_tissue_required"] = self.tissue_required
         return result
 
     @property
@@ -2276,7 +2297,12 @@ def setup_session(
         # reference). If every localizer is reused there is no freshly-preprocessed
         # reference to build them against, so they are skipped (and nuisance
         # regression with them).
-        nuisance_on = any(frc.glm.include_wm_regressor or frc.glm.include_csf_regressor for frc in config.feedback_runs)
+        own_nuisance = any(
+            frc.glm.include_wm_regressor or frc.glm.include_csf_regressor for frc in config.feedback_runs
+        )
+        # ``tissue_required`` (set when a study is flattened) forces extraction so a
+        # source session produces tissue masks a later feedback-only session reuses.
+        nuisance_on = config.tissue_required if config.tissue_required is not None else own_nuisance
         if nuisance_on and last_fresh_ref is None:
             logger.warning(
                 "Nuisance regression is enabled but every localizer this session reuses masks "

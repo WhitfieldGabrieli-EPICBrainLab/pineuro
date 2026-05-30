@@ -205,3 +205,103 @@ class TestBuildSessionConfig:
         study = StudyConfig(metadata=StudyMetadata(name="X"), session_config={"paths": {}})
         with pytest.raises(ValueError, match="sessions"):
             study.build_session_config(0, "sub-01", "ses-01")
+
+
+# =============================================================================
+# Cross-session mask reuse: synthesis during build_session_config
+# =============================================================================
+
+
+class TestBuildSessionConfigReuse:
+    def _study(self) -> StudyConfig:
+        session_config = {
+            "paths": {"base_dir": "/data/study", "participant_id": ""},
+            "reference": {"initial_enabled": True, "realtime_enabled": True},
+            "sessions": [
+                {
+                    "notes": "localizer + ES",
+                    "localizers": [{"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b", "Movement": "c>d"}}],
+                    "feedback_runs": [
+                        {"task": "ritexperiencesampling", "network_assignment": {"target_network": "Trigger"}}
+                    ],
+                },
+                {
+                    "notes": "feedback only — reuse ses-01 masks",
+                    "localizers": [],
+                    "feedback_runs": [
+                        {
+                            "task": "rittriggeredball",
+                            "network_assignment": {"trigger_network": "Trigger", "movement_network": "Movement"},
+                            "mask_sources": {"Trigger": "ses-01", "Movement": "ses-01"},
+                        }
+                    ],
+                },
+            ],
+        }
+        return StudyConfig(metadata=StudyMetadata(name="Reuse"), session_config=session_config)
+
+    def test_synthesizes_reused_localizer_for_feedback_only_session(self):
+        cfg = self._study().build_session_config(1, "sub-07", "ses-02")
+        locs = cfg["localizers"]
+        assert len(locs) == 1
+        assert locs[0]["reuse_from_session"] == "ses-01"
+        assert locs[0]["type"] == "rit"
+        assert locs[0]["id"] == "rit"
+        assert set(locs[0]["contrasts"]) == {"Trigger", "Movement"}
+        # mask_source rewritten to the producing (synthesized) localizer id.
+        assert cfg["feedback_runs"][0]["mask_source"] == "rit"
+
+    def test_feedback_only_session_is_all_reused(self):
+        cfg = self._study().build_session_config(1, "sub-07", "ses-02")
+        assert cfg["localizers"]
+        assert all(loc.get("reuse_from_session") for loc in cfg["localizers"])
+
+    def test_no_synthesis_for_fresh_session(self):
+        cfg = self._study().build_session_config(0, "sub-07", "ses-01")
+        assert len(cfg["localizers"]) == 1
+        assert not cfg["localizers"][0].get("reuse_from_session")
+        # mask_source rewritten to the fresh producer of the referenced mask.
+        assert cfg["feedback_runs"][0]["mask_source"] == "rit"
+
+    def test_tissue_required_stamped_false_without_nuisance(self):
+        cfg = self._study().build_session_config(0, "sub-07", "ses-01")
+        assert cfg["_tissue_required"] is False
+
+    def test_tissue_required_stamped_cross_session(self):
+        # ses-02 (reusing ses-01) needs WM regressors -> ses-01 must extract tissue.
+        study = self._study()
+        study.session_config["sessions"][1]["feedback_runs"][0]["glm"] = {"include_wm_regressor": True}
+        assert study.build_session_config(0, "sub-07", "ses-01")["_tissue_required"] is True
+        assert study.build_session_config(1, "sub-07", "ses-02")["_tissue_required"] is True
+
+    def test_two_prior_sources_two_synthesized_entries(self):
+        session_config = {
+            "paths": {"base_dir": "/data/study", "participant_id": ""},
+            "sessions": [
+                {"localizers": [{"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}}], "feedback_runs": []},
+                {"localizers": [{"id": "rest", "type": "rest", "networks": ["Movement"]}], "feedback_runs": []},
+                {
+                    "localizers": [],
+                    "feedback_runs": [
+                        {
+                            "task": "rittriggeredball",
+                            "network_assignment": {"trigger_network": "Trigger", "movement_network": "Movement"},
+                            "mask_sources": {"Trigger": "ses-01", "Movement": "ses-02"},
+                        }
+                    ],
+                },
+            ],
+        }
+        study = StudyConfig(metadata=StudyMetadata(name="Two"), session_config=session_config)
+        cfg = study.build_session_config(2, "sub-07", "ses-03")
+        assert len(cfg["localizers"]) == 2
+        assert {loc["reuse_from_session"] for loc in cfg["localizers"]} == {"ses-01", "ses-02"}
+
+    def test_synthesized_config_passes_session_config_validation(self):
+        from pineuro.session import SessionConfig
+
+        cfg = self._study().build_session_config(1, "sub-07", "ses-02")
+        # mask_source resolves to the synthesized localizer id, so no ValueError.
+        sc = SessionConfig._from_dict(cfg)
+        assert sc.localizers[0].reuse_from_session == "ses-01"
+        assert sc.tissue_required is False

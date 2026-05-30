@@ -1303,11 +1303,15 @@ class PipelineRunner:
         Triggered when *any* feedback run requests WM or CSF nuisance regressors.
         """
         feedback_runs = self.config.get("feedback_runs", []) or []
-        if not any(
+        own_need = any(
             frc.get("glm", {}).get("include_wm_regressor", False)
             or frc.get("glm", {}).get("include_csf_regressor", False)
             for frc in feedback_runs
-        ):
+        )
+        # ``_tissue_required`` (stamped when the study is flattened) also covers later
+        # sessions that reuse this session's masks and need nuisance regressors, so a
+        # feedback-only session has tissue masks to coregister from here.
+        if not self.config.get("_tissue_required", own_need):
             return
         if not ref_file:
             self._emit_progress("WM/CSF regressors enabled but no reference volume available; skipping tissue masks")
@@ -1859,13 +1863,39 @@ class PipelineRunner:
         ):
             sham_combined_name = sham_config.get("hemisphere_network", "SomMotA")
 
-        # Tissue masks (WM/CSF) are created fresh this session; coregister them with
-        # the first fresh localizer group (same space). Reused-only sessions have none.
-        tissue_mask_files: list[Path] = []
-        tissue_masks_dir = mask_extraction_dir / "05_tissue"
-        if tissue_masks_dir.exists():
-            tissue_mask_files = sorted(tissue_masks_dir.glob(f"{self._bids_prefix}_tissue_*_mask.nii.gz"))
+        # Tissue masks (WM/CSF). A fresh-localizer session created them locally and
+        # coregisters them with its first fresh localizer group (same space). A
+        # feedback-only / all-reused session has none locally: when nuisance
+        # regression is needed it pulls them from a source session's 05_tissue and
+        # coregisters with that source's reused group (whose boldref->reference
+        # transform matches the tissue masks' space).
+        local_tissue_files: list[Path] = []
+        local_tissue_dir = mask_extraction_dir / "05_tissue"
+        if local_tissue_dir.exists():
+            local_tissue_files = sorted(local_tissue_dir.glob(f"{self._bids_prefix}_tissue_*_mask.nii.gz"))
         first_fresh_idx = next((i for i, loc in enumerate(localizers) if not loc.get("reuse_from_session")), None)
+
+        own_tissue_need = any(
+            frc.get("glm", {}).get("include_wm_regressor", False)
+            or frc.get("glm", {}).get("include_csf_regressor", False)
+            for frc in (config.get("feedback_runs", []) or [])
+        )
+        tissue_required = config.get("_tissue_required", own_tissue_need)
+        reused_tissue_idx: int | None = None
+        reused_tissue_files: list[Path] = []
+        if tissue_required and not local_tissue_files:
+            for i, loc in enumerate(localizers):
+                src = loc.get("reuse_from_session")
+                if not src:
+                    continue
+                src_prefix = f"{self.participant_id}_{src}"
+                src_tissue_dir = study_base_dir / self.participant_id / src / "mask_extraction" / "05_tissue"
+                if src_tissue_dir.exists():
+                    files = sorted(src_tissue_dir.glob(f"{src_prefix}_tissue_*_mask.nii.gz"))
+                    if files:
+                        reused_tissue_idx = i
+                        reused_tissue_files = files
+                        break
 
         # Coregister each localizer's masks with the reference (boldref) from its
         # own source: the current session for fresh localizers, the source session
@@ -1913,9 +1943,14 @@ class PipelineRunner:
                 continue
 
             group_strs = [str(f) for f in group_files]
-            if loc_idx == first_fresh_idx and tissue_mask_files:
-                group_strs += [str(f) for f in tissue_mask_files]
-                self._emit_progress(f"Including {len(tissue_mask_files)} tissue masks for coregistration")
+            group_tissue: list[Path] = []
+            if loc_idx == first_fresh_idx:
+                group_tissue = local_tissue_files
+            elif loc_idx == reused_tissue_idx:
+                group_tissue = reused_tissue_files
+            if group_tissue:
+                group_strs += [str(f) for f in group_tissue]
+                self._emit_progress(f"Including {len(group_tissue)} tissue masks for coregistration")
 
             origin = f"reuse {reuse_from}" if reuse_from else "this session"
             self._emit_progress(

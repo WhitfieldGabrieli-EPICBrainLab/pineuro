@@ -10,13 +10,20 @@ from pineuro.gui.utils import (
     ValidationError,
     build_feedback_steps,
     feedback_step_for,
+    frc_needs_tissue,
+    frc_referenced_masks,
     has_fresh_localizer,
     localizer_is_reused,
     localizer_mask_names,
+    localizer_producing,
     pick_directory,
     pick_file,
     pick_save_file,
     reused_localizer_indices,
+    ses_num,
+    session_reuse_sources,
+    synthesize_reused_localizers,
+    tissue_required_in_session,
     validate_participant_id,
     validate_positive_int,
     validate_positive_number,
@@ -61,6 +68,175 @@ class TestLocalizerReuseHelpers:
         config = {"localizers": [{"type": "rest", "reuse_from_session": "ses-01"}]}
         assert reused_localizer_indices(config) == [0]
         assert has_fresh_localizer(config) is False
+
+
+# =============================================================================
+# Cross-session mask reuse helpers (synthesis, source resolution, tissue)
+# =============================================================================
+
+
+class TestCrossSessionReuseHelpers:
+    def test_ses_num(self):
+        assert ses_num("ses-01") == 1
+        assert ses_num("ses-12") == 12
+        assert ses_num("session-1") is None
+        assert ses_num("") is None
+
+    def test_frc_referenced_masks_activation(self):
+        frc = {"feedback_mode": "activation", "network_assignment": {"top": "DefaultA", "bottom": "ContA", "x": ""}}
+        assert frc_referenced_masks(frc) == {"DefaultA", "ContA"}
+
+    def test_frc_referenced_masks_connectivity(self):
+        frc = {"feedback_mode": "connectivity", "connectivity": {"pairs": [["A", "B"], ["C", ""]]}}
+        assert frc_referenced_masks(frc) == {"A", "B", "C"}
+
+    def test_frc_needs_tissue(self):
+        assert frc_needs_tissue({"glm": {"include_wm_regressor": True}}) is True
+        assert frc_needs_tissue({"glm": {"include_csf_regressor": True}}) is True
+        assert frc_needs_tissue({"glm": {}}) is False
+        assert frc_needs_tissue({}) is False
+
+    def test_localizer_producing_skips_reused(self):
+        sess = {
+            "localizers": [
+                {"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}},
+                {"id": "rest", "type": "rest", "networks": ["DefaultA"], "reuse_from_session": "ses-01"},
+            ]
+        }
+        assert localizer_producing(sess, "Trigger")["id"] == "rit"
+        # DefaultA only appears on a *reused* localizer -> not a fresh producer here.
+        assert localizer_producing(sess, "DefaultA") is None
+
+    def test_synthesize_rest_source(self):
+        sessions = [
+            {"localizers": [{"id": "rest", "type": "rest", "networks": ["DefaultA", "ContA"]}], "feedback_runs": []},
+            {
+                "localizers": [],
+                "feedback_runs": [
+                    {
+                        "network_assignment": {"top": "DefaultA", "bottom": "ContA"},
+                        "mask_sources": {"DefaultA": "ses-01", "ContA": "ses-01"},
+                    }
+                ],
+            },
+        ]
+        out = synthesize_reused_localizers(sessions, sessions[1]["feedback_runs"])
+        assert len(out) == 1
+        entry = out[0]
+        assert entry["reuse_from_session"] == "ses-01"
+        assert entry["type"] == "rest"
+        assert entry["id"] == "rest"
+        assert sorted(entry["networks"]) == ["ContA", "DefaultA"]
+
+    def test_synthesize_task_source_restricts_contrasts(self):
+        sessions = [
+            {
+                "localizers": [
+                    {"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b", "Movement": "c>d", "Other": "e>f"}}
+                ],
+                "feedback_runs": [],
+            },
+            {
+                "localizers": [],
+                "feedback_runs": [
+                    {
+                        "network_assignment": {"trigger_network": "Trigger", "movement_network": "Movement"},
+                        "mask_sources": {"Trigger": "ses-01", "Movement": "ses-01"},
+                    }
+                ],
+            },
+        ]
+        out = synthesize_reused_localizers(sessions, sessions[1]["feedback_runs"])
+        assert len(out) == 1
+        assert out[0]["type"] == "rit"
+        assert set(out[0]["contrasts"]) == {"Trigger", "Movement"}  # "Other" excluded
+
+    def test_synthesize_two_sources_two_entries(self):
+        sessions = [
+            {"localizers": [{"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}}], "feedback_runs": []},
+            {"localizers": [{"id": "rest", "type": "rest", "networks": ["Movement"]}], "feedback_runs": []},
+            {
+                "localizers": [],
+                "feedback_runs": [
+                    {
+                        "network_assignment": {"t": "Trigger", "m": "Movement"},
+                        "mask_sources": {"Trigger": "ses-01", "Movement": "ses-02"},
+                    }
+                ],
+            },
+        ]
+        out = synthesize_reused_localizers(sessions, sessions[2]["feedback_runs"])
+        assert len(out) == 2
+        assert {e["reuse_from_session"] for e in out} == {"ses-01", "ses-02"}
+
+    def test_synthesize_reuse_chain_resolves_to_producer(self):
+        # ses-02 itself reuses ses-01's Trigger (feedback-only). ses-03 also sources
+        # Trigger; the producer is ses-01 (the fresh producer), never ses-02.
+        sessions = [
+            {"localizers": [{"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}}], "feedback_runs": []},
+            {
+                "localizers": [],
+                "feedback_runs": [{"network_assignment": {"t": "Trigger"}, "mask_sources": {"Trigger": "ses-01"}}],
+            },
+            {
+                "localizers": [],
+                "feedback_runs": [{"network_assignment": {"t": "Trigger"}, "mask_sources": {"Trigger": "ses-01"}}],
+            },
+        ]
+        out = synthesize_reused_localizers(sessions, sessions[2]["feedback_runs"])
+        assert len(out) == 1
+        assert out[0]["reuse_from_session"] == "ses-01"
+
+    def test_synthesize_no_sources(self):
+        sessions = [
+            {
+                "localizers": [{"id": "rest", "type": "rest", "networks": ["DefaultA"]}],
+                "feedback_runs": [{"network_assignment": {"t": "DefaultA"}}],
+            }
+        ]
+        assert synthesize_reused_localizers(sessions, sessions[0]["feedback_runs"]) == []
+
+    def test_session_reuse_sources(self):
+        sessions = [
+            {"localizers": [], "feedback_runs": []},
+            {"localizers": [], "feedback_runs": [{"mask_sources": {"X": "ses-01", "Y": "ses-01"}}]},
+        ]
+        assert session_reuse_sources(sessions, 1) == {"ses-01"}
+        assert session_reuse_sources(sessions, 0) == set()
+
+    def test_tissue_required_own_feedback(self):
+        sessions = [
+            {
+                "localizers": [{"type": "rest", "networks": ["X"]}],
+                "feedback_runs": [{"glm": {"include_wm_regressor": True}}],
+            }
+        ]
+        assert tissue_required_in_session(sessions, 0) is True
+
+    def test_tissue_required_later_reusing_session(self):
+        sessions = [
+            {
+                "localizers": [{"id": "rest", "type": "rest", "networks": ["X"]}],
+                "feedback_runs": [{"network_assignment": {"t": "X"}}],
+            },
+            {
+                "localizers": [],
+                "feedback_runs": [
+                    {
+                        "network_assignment": {"t": "X"},
+                        "mask_sources": {"X": "ses-01"},
+                        "glm": {"include_csf_regressor": True},
+                    }
+                ],
+            },
+        ]
+        # ses-01's own feedback needs no tissue, but ses-02 (reusing it) does.
+        assert tissue_required_in_session(sessions, 0) is True
+        assert tissue_required_in_session(sessions, 1) is True
+
+    def test_tissue_not_required(self):
+        sessions = [{"localizers": [{"type": "rest", "networks": ["X"]}], "feedback_runs": [{"glm": {}}]}]
+        assert tissue_required_in_session(sessions, 0) is False
 
 
 # =============================================================================

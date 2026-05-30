@@ -15,6 +15,7 @@ from pineuro.tasks.task_registry import get_task_metadata, list_available_tasks
 
 from ..config_manager import ConfigManager
 from ..models import StudyConfig, StudyMetadata
+from ..utils import frc_referenced_masks, localizer_is_reused, localizer_mask_names
 from ._feedback_tab import FeedbackTabBuilder
 from ._localizer_tab import LocalizerTabBuilder
 
@@ -457,8 +458,8 @@ class StudyEditorScreen:
             )
             self._localizer_builders.append(builder)
 
-        # Aggregate mask names from all localizers
-        all_masks = self._aggregate_mask_names()
+        # Session-qualified masks available to this session's feedback runs
+        all_masks = self._aggregate_mask_options()
 
         # Create feedback builders
         self._feedback_builders: list[FeedbackTabBuilder] = []
@@ -468,22 +469,48 @@ class StudyEditorScreen:
                 config=cfg,
                 page=self.page,
                 on_change=self._on_feedback_changed,
-                available_mask_names=all_masks,
+                available_mask_options=all_masks,
                 create_browse_button=self._create_browse_button,
                 create_file_browse_button=self._create_file_browse_button,
             )
             self._feedback_builders.append(builder)
 
-    def _aggregate_mask_names(self) -> list[str]:
-        """Aggregate mask names from all localizer builders."""
-        names: list[str] = []
+    def _aggregate_mask_options(self) -> list[tuple[str, str, str]]:
+        """Session-qualified masks a feedback run in the active session can use.
+
+        Current-session localizer masks (source ``""``) from the live builders, plus
+        every earlier session's localizer masks (source ``"ses-NN"``). Returned as
+        ``(source, name, label)`` triples, de-duplicated with current/fresh first so
+        the same ``(source, name)`` appears once. Earlier reused localizers are
+        skipped so a source always names the session that produces the mask fresh.
+        """
+        options: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def _add(source: str, name: str) -> None:
+            key = (source, name)
+            if not name or key in seen:
+                return
+            seen.add(key)
+            label = f"{name}  (this session)" if not source else f"{name}  ({source})"
+            options.append((source, name, label))
+
         for builder in self._localizer_builders:
-            names.extend(builder.get_mask_names())
-        return names
+            for name in builder.get_mask_names():
+                _add("", name)
+        sessions = self.study_config.session_config.get("sessions", [])
+        for idx in range(self._active_session_index):
+            src = f"ses-{idx + 1:02d}"
+            for loc in sessions[idx].get("localizers", []):
+                if localizer_is_reused(loc):
+                    continue
+                for name in localizer_mask_names(loc):
+                    _add(src, name)
+        return options
 
     def _on_localizer_changed(self):
         """Called when any localizer tab changes networks/type."""
-        all_masks = self._aggregate_mask_names()
+        all_masks = self._aggregate_mask_options()
         for fb in self._feedback_builders:
             fb.update_available_masks(all_masks)
         self._sync_paths_tab_visibility()
@@ -686,29 +713,18 @@ class StudyEditorScreen:
         sessions = self.study_config.session_config["sessions"]
         if len(sessions) <= 1:
             return
-        removed_id = f"ses-{self._active_session_index + 1:02d}"
         removed_num = self._active_session_index + 1
         sessions.pop(self._active_session_index)
-        # Clear now-invalid reuse references (pointing at or after the removed
-        # session, whose numbering has shifted). The user re-selects them.
+        # Clear now-invalid cross-session mask sources (pointing at or after the
+        # removed session, whose numbering has shifted). The user re-selects them.
         for sess in sessions:
-            for loc in sess.get("localizers", []):
-                src = loc.get("reuse_from_session")
-                src_num = _ses_num(src) if src else None
-                if src == removed_id or (src_num is not None and src_num >= removed_num):
-                    loc.pop("reuse_from_session", None)
+            for frc in sess.get("feedback_runs", []):
+                srcs = frc.get("mask_sources", {})
+                for name in list(srcs.keys()):
+                    src_num = _ses_num(srcs[name])
+                    if src_num is None or src_num >= removed_num:
+                        del srcs[name]
         self._switch_to_session(max(0, self._active_session_index - 1))
-
-    def _on_localizer_reuse_changed(self, index: int, e):
-        """Handle the per-localizer 'Masks' (reuse) dropdown on the Study tab."""
-        self._collect_all_configs()
-        val = self._loc_reuse_dropdowns[index].value or ""
-        cfg = self._localizer_configs[index]
-        if val:
-            cfg["reuse_from_session"] = val
-        else:
-            cfg.pop("reuse_from_session", None)
-        self._rebuild_tabs()
 
     def _build_session_selector(self) -> ft.Control:
         """Build the per-session selector strip shown above the Experiment Design."""
@@ -964,10 +980,12 @@ class StudyEditorScreen:
         )
 
         # --- Experiment Design: Localizer Tasks (for the active session) ---
+        # A session computes its localizers fresh. To use an earlier session's masks,
+        # a feedback run selects them directly (the feedback tab's mask dropdowns list
+        # every earlier session's masks); cross-session reuse is materialized when the
+        # study is flattened, so no per-localizer reuse control is needed here.
         loc_rows: list[ft.Control] = []
         self._loc_type_dropdowns: list[ft.Dropdown] = []
-        self._loc_reuse_dropdowns: list[ft.Dropdown] = []
-        earlier_sessions = [f"ses-{k:02d}" for k in range(1, self._active_session_index + 1)]
         for i, cfg in enumerate(self._localizer_configs):
             dd = ft.Dropdown(
                 width=360,
@@ -977,23 +995,12 @@ class StudyEditorScreen:
                 on_select=lambda e, idx=i: self._on_localizer_type_changed(idx, e),
             )
             self._loc_type_dropdowns.append(dd)
-            reuse_dd = ft.Dropdown(
-                width=190,
-                label="Masks",
-                tooltip="Compute these masks fresh this session, or reuse them from an earlier session",
-                options=[ft.dropdown.Option(key="", text="Compute fresh")]
-                + [ft.dropdown.Option(key=s, text=f"Reuse {s}") for s in earlier_sessions],
-                value=cfg.get("reuse_from_session") or "",
-                on_select=lambda e, idx=i: self._on_localizer_reuse_changed(idx, e),
-                disabled=not earlier_sessions,
-            )
-            self._loc_reuse_dropdowns.append(reuse_dd)
             remove_btn = ft.IconButton(
                 icon=ft.Icons.CLOSE,
                 tooltip="Remove this localizer",
                 on_click=lambda e, idx=i: self._on_remove_localizer_at(idx),
             )
-            loc_rows.append(ft.Row([dd, reuse_dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+            loc_rows.append(ft.Row([dd, remove_btn], vertical_alignment=ft.CrossAxisAlignment.CENTER))
 
         add_loc_btn = ft.TextButton(
             "Add Localizer Task",
@@ -1580,24 +1587,55 @@ class StudyEditorScreen:
     def _validate_sessions(self, sessions: list) -> str | None:
         """Return an error string if the per-session protocol is invalid, else None.
 
-        Requires at least one session, each with a localizer or feedback task, and
-        every reusing localizer pointing at an *earlier* session.
+        Requires at least one session, each with a localizer or feedback task; every
+        mask a feedback run uses must be produced by a fresh localizer in the chosen
+        source session (this session for an unqualified mask, or the earlier session
+        recorded in its ``mask_sources``); and a mask name must not be sourced from
+        two different sessions within one session.
         """
         if not sessions:
             return "At least one session is required"
+
+        def _fresh_names(sess: dict) -> set[str]:
+            names: set[str] = set()
+            for loc in sess.get("localizers", []):
+                if not localizer_is_reused(loc):
+                    names.update(localizer_mask_names(loc))
+            return names
+
         for idx, sess in enumerate(sessions):
             locs = sess.get("localizers", [])
             fbs = sess.get("feedback_runs", [])
             if not locs and not fbs:
                 return f"Session {idx + 1} has no localizer or feedback task"
-            for loc in locs:
-                src = loc.get("reuse_from_session")
-                if not src:
-                    continue
-                src_num = _ses_num(src)
-                if src_num is None or src_num >= idx + 1:
-                    label = loc.get("id") or loc.get("type") or "localizer"
-                    return f"Session {idx + 1}: localizer '{label}' reuses '{src}', which is not an earlier session"
+
+            this_fresh = _fresh_names(sess)
+            chosen_source: dict[str, str] = {}  # name -> source label (collision check)
+            for frc in fbs:
+                srcs = frc.get("mask_sources", {}) or {}
+                for name in sorted(frc_referenced_masks(frc)):
+                    source = srcs.get(name, "")
+                    prior = chosen_source.get(name)
+                    if prior is not None and prior != source:
+                        a = prior or "this session"
+                        b = source or "this session"
+                        return f"Session {idx + 1}: mask '{name}' is sourced from both {a} and {b}"
+                    chosen_source[name] = source
+
+                    if not source:
+                        if name not in this_fresh:
+                            return (
+                                f"Session {idx + 1}: feedback mask '{name}' is not produced by a localizer "
+                                f"in this session (choose an earlier session that produces it)"
+                            )
+                        continue
+                    src_num = _ses_num(source)
+                    if src_num is None or not (1 <= src_num < idx + 1):
+                        return (
+                            f"Session {idx + 1}: mask '{name}' sources from '{source}', which is not an earlier session"
+                        )
+                    if name not in _fresh_names(sessions[src_num - 1]):
+                        return f"Session {idx + 1}: mask '{name}' is not produced by {source}"
         return None
 
     def _save_study(self) -> bool:

@@ -398,6 +398,32 @@ class TestLocalizerReuse:
         assert cfg2.localizers[0].reuse_from_session == "ses-01"
         assert cfg2.localizers[0].is_reused is True
 
+    def test_mask_sources_round_trips(self, tmp_path):
+        cfg = SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01", session_id="ses-02"),
+            localizers=[LocalizerConfig(id="rest", networks=["DefaultA"], reuse_from_session="ses-01")],
+            feedback_runs=[FeedbackRunConfig(task="ball", mask_source="rest", mask_sources={"DefaultA": "ses-01"})],
+        )
+        cfg2 = SessionConfig._from_dict(cfg._to_dict())
+        assert cfg2.feedback_runs[0].mask_sources == {"DefaultA": "ses-01"}
+
+    def test_tissue_required_round_trips(self, tmp_path):
+        cfg = SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01", session_id="ses-01"),
+            localizers=[LocalizerConfig(id="rest", networks=["DefaultA"])],
+            feedback_runs=[FeedbackRunConfig(task="ball", mask_source="rest")],
+            tissue_required=True,
+        )
+        cfg2 = SessionConfig._from_dict(cfg._to_dict())
+        assert cfg2.tissue_required is True
+        # Default (None) is not serialized.
+        cfg3 = SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01", session_id="ses-01"),
+            localizers=[LocalizerConfig(id="rest", networks=["DefaultA"])],
+            feedback_runs=[FeedbackRunConfig(task="ball", mask_source="rest")],
+        )
+        assert "_tissue_required" not in cfg3._to_dict()
+
 
 # =============================================================================
 # detect_existing_sessions / next_session_id

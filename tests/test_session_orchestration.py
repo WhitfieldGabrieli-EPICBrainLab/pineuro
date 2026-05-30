@@ -102,6 +102,33 @@ class TestResolveLocalizerMasks:
         assert {m.name for m in rit_masks} == {"sub-01_ses-02_self_thr.nii.gz"}
         assert rit_ref.name == "sub-01_ses-02_task-rit_boldref.nii.gz"
 
+    def test_all_reused_feedback_only(self, tmp_path):
+        # A feedback-only session: its single (synthesized) localizer reuses ses-01.
+        base = tmp_path / "study"
+        self._write_masks(base, "ses-01", ["Trigger", "Movement"])
+        self._write_boldref(base, "ses-01", "rit")
+        cfg = self._config(
+            base,
+            "ses-02",
+            [
+                LocalizerConfig(
+                    id="rit",
+                    type="rit",
+                    contrasts={"Trigger": "a>b", "Movement": "c>d"},
+                    reuse_from_session="ses-01",
+                )
+            ],
+        )
+        groups = resolve_localizer_masks(cfg)
+        assert len(groups) == 1
+        loc, masks, ref = groups[0]
+        assert loc.is_reused
+        assert {m.name for m in masks} == {
+            "sub-01_ses-01_Trigger_thr.nii.gz",
+            "sub-01_ses-01_Movement_thr.nii.gz",
+        }
+        assert ref.name == "sub-01_ses-01_task-rit_boldref.nii.gz"
+
 
 # =============================================================================
 # _build_run_sequence
