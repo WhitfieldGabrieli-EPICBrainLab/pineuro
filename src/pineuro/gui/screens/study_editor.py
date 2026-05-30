@@ -152,12 +152,12 @@ class StudyEditorScreen:
     # ------------------------------------------------------------------
 
     def _create_default_config(self) -> StudyConfig:
-        metadata = StudyMetadata(name="New Study", description="")
+        metadata = StudyMetadata(name="", description="")
         session_config = {
             "paths": {
                 "participant_id": "",
-                "base_dir": "/data/pineuro",
-                "example_participant_id": "sub-001",
+                "base_dir": "",
+                "example_participant_id": "",
             },
             "simulator": {
                 "enabled": True,
@@ -189,64 +189,8 @@ class StudyEditorScreen:
                 "control_monitor": "left",
                 "presenter_monitor": "right",
             },
-            "localizers": [
-                {
-                    "id": "rest",
-                    "type": "rest",
-                    "tr": 1.2,
-                    "n_volumes": 250,
-                    "n_runs": 2,
-                    "motion_correction": "none",
-                    "networks": ["ContA", "DefaultA"],
-                    "extraction": {
-                        "network_atlas": "yeo_17",
-                        "n_components": 30,
-                        "threshold": 2000,
-                        "threshold_method": "top_n",
-                        "smooth_fwhm": 5.0,
-                        "highpass": 0.01,
-                        "lowpass": None,
-                        "atlas_mask": None,
-                        "atlas_source": None,
-                        "atlas_regions": None,
-                        "cluster_start_threshold": 2.0,
-                        "cluster_step": 0.1,
-                        "cluster_return_all": False,
-                        "min_cluster_size": 50,
-                        "max_total_voxels": None,
-                    },
-                    "source_dicoms": ["", ""],
-                }
-            ],
-            "feedback_runs": [
-                {
-                    "task": "ball",
-                    "mask_source": "rest",
-                    "max_runs": 1,
-                    "tr": 1.2,
-                    "n_volumes": 150,
-                    "n_baseline": 25,
-                    "feedback_mode": "activation",
-                    "roi_combine_method": "inverse_sd",
-                    "use_transfer_runs": True,
-                    "network_assignment": {"top_network": "ContA", "bottom_network": "DefaultA"},
-                    "qc": {"fd_threshold": 0.5, "dvars_threshold": 1.5, "tsnr_threshold": 20.0},
-                    "glm": {
-                        "motion_correction": "siemens_moco",
-                        "include_drift": True,
-                        "include_motion_regressors": True,
-                        "include_wm_regressor": False,
-                        "include_csf_regressor": False,
-                        "smooth_fwhm": None,
-                    },
-                    "connectivity": {"pairs": None, "window": 15, "target": "increase"},
-                    "intermittent": {"interval": None},
-                    "task_params": {},
-                    "sham": {},
-                    "source_dicoms": "",
-                    "transfer_source_dicoms": "",
-                }
-            ],
+            "localizers": [],
+            "feedback_runs": [],
         }
         return StudyConfig(metadata=metadata, session_config=session_config)
 
@@ -665,41 +609,11 @@ class StudyEditorScreen:
     # ------------------------------------------------------------------
 
     def _default_session(self) -> dict:
-        """A new session's default protocol (one rest localizer + one ball feedback)."""
+        """A new session's default protocol (blank — no localizers or feedback runs)."""
         return {
             "notes": "",
-            "localizers": [
-                {
-                    "id": "rest",
-                    "type": "rest",
-                    "tr": 1.2,
-                    "n_volumes": 250,
-                    "n_runs": 2,
-                    "motion_correction": "none",
-                    "networks": ["ContA", "DefaultA"],
-                    "extraction": {
-                        "network_atlas": "yeo_17",
-                        "n_components": 30,
-                        "threshold": 2000,
-                        "threshold_method": "top_n",
-                        "smooth_fwhm": 5.0,
-                        "highpass": 0.01,
-                    },
-                    "source_dicoms": ["", ""],
-                }
-            ],
-            "feedback_runs": [
-                {
-                    "task": "ball",
-                    "mask_source": "rest",
-                    "max_runs": 1,
-                    "tr": 1.2,
-                    "n_volumes": 150,
-                    "n_baseline": 25,
-                    "use_transfer_runs": True,
-                    "network_assignment": {"top_network": "ContA", "bottom_network": "DefaultA"},
-                }
-            ],
+            "localizers": [],
+            "feedback_runs": [],
         }
 
     def _switch_to_session(self, index: int):
