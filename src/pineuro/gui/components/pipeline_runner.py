@@ -812,7 +812,7 @@ class PipelineRunner:
         presenter_monitor = display_config.get("presenter_monitor", "right")
 
         scanner_cfg = config.get("scanner", {}) or {}
-        trigger_keys = scanner_cfg.get("trigger_keys") or ["t", "+", "5", "equal"]
+        trigger_keys = scanner_cfg.get("trigger_keys") or ["t", "+", "5", "="]
 
         task = create_localizer_task(
             task_id=task_id,

@@ -130,9 +130,6 @@ class BallTask(BaseTask):
         Additional scaling to slow down movement
     pda_outlier_threshold : float, default=2.0
         Threshold for outlier detection (skip movement if |activation| > threshold)
-    trigger_keys : list of str, optional
-        Keys that trigger acquisition start. Default is ['t'] for scanner trigger.
-        In simulation mode, trigger is sent automatically.
     left_button : str, default='1'
         Key for moving slider left during post-run questions.
     right_button : str, default='2'
@@ -186,7 +183,6 @@ class BallTask(BaseTask):
         scale_factor: float = 10.0,
         internal_scaler: float = 10.0,
         pda_outlier_threshold: float = 2.0,
-        trigger_keys: list[str] | None = None,
         left_button: str = "1",
         right_button: str = "2",
         enter_button: str = "0",
@@ -240,7 +236,6 @@ class BallTask(BaseTask):
         self.internal_scaler = internal_scaler
         self.pda_outlier_threshold = pda_outlier_threshold
 
-        self.trigger_keys = trigger_keys if trigger_keys is not None else ["t"]
         self.instruction_advance_keys = ["space"]
 
         self.left_button = left_button

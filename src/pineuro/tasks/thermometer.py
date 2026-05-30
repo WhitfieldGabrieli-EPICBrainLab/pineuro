@@ -114,8 +114,6 @@ class ThermometerTask(BaseTask):
         Lower clamp for thermometer bar height.
     task_state : TaskState, optional
         Task state for persistence across runs.
-    trigger_keys : list of str
-        Keys that trigger acquisition start.
     presenter_monitor : str
         Monitor position for task window.
     """
@@ -141,7 +139,6 @@ class ThermometerTask(BaseTask):
         right_button: str = "2",
         confirm_button: str = "3",
         task_state: TaskState | None = None,
-        trigger_keys: list[str] | None = None,
         presenter_monitor: str = "right",
         **kwargs,
     ):
@@ -157,7 +154,6 @@ class ThermometerTask(BaseTask):
 
         self.mask_names = mask_names
         self.stim_dir = Path(stim_dir) if stim_dir else None
-        self.trigger_keys = trigger_keys or ["t", "+", "5", "equal"]
         self.presenter_monitor = presenter_monitor
 
         # Response button mapping

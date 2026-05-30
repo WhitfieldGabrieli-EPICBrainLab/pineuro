@@ -175,8 +175,6 @@ class RITTriggeredBallTask(BaseTask):
         True for feedback runs, False for transfer runs.
     task_state : TaskState, optional
         Task state for persistence across runs.
-    trigger_keys : list of str
-        Keys that trigger volume acquisition.
     presenter_monitor : str
         Monitor position for task window.
     """
@@ -203,7 +201,6 @@ class RITTriggeredBallTask(BaseTask):
         reset_ball_each_episode: bool = True,
         feedback_mode: bool = True,
         task_state: TaskState | None = None,
-        trigger_keys: list[str] | None = None,
         presenter_monitor: str = "right",
         **kwargs,
     ):
@@ -227,7 +224,6 @@ class RITTriggeredBallTask(BaseTask):
             mask_name=mask_names[0],  # Trigger network
             feedback_mode=feedback_mode,
             task_state=task_state,
-            trigger_keys=trigger_keys or ["t", "+", "5", "equal"],
             **kwargs,
         )
 

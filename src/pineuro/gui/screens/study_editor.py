@@ -279,8 +279,8 @@ class StudyEditorScreen:
         self.scanner_trigger_keys_field = ft.TextField(
             width=540,
             label="Scanner Trigger Keys",
-            value=", ".join(scanner_cfg.get("trigger_keys") or ["t", "+", "5", "equal"]),
-            hint_text="Comma-separated keys delivered by the scanner per volume (e.g. t, +, 5, equal)",
+            value=", ".join(scanner_cfg.get("trigger_keys") or ["t", "+", "5", "="]),
+            hint_text="Comma-separated keys delivered by the scanner per volume (e.g. t, +, 5, =)",
         )
 
         # Reference scan settings (session-level)
@@ -1948,7 +1948,7 @@ class StudyEditorScreen:
         config["scanner"]["dicom_dir"] = self.scanner_dicom_dir_field.value.strip() or "/BOLD_DICOM"
         config["scanner"]["ip"] = self.scanner_ip_field.value.strip()
         trigger_keys = [k.strip() for k in (self.scanner_trigger_keys_field.value or "").split(",") if k.strip()]
-        config["scanner"]["trigger_keys"] = trigger_keys or ["t", "+", "5", "equal"]
+        config["scanner"]["trigger_keys"] = trigger_keys or ["t", "+", "5", "="]
 
         # Simulator source mapping
         if self.simulator_source_mode_radio.value == "mapping":

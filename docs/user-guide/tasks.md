@@ -175,9 +175,9 @@ During transfer runs, the task displays modified instructions informing the part
 
 All tasks support scanner trigger keys for synchronization. The scanner sends a trigger pulse at the start of each TR, which pineuro uses to time-lock the task display.
 
-Default trigger keys: `t`, `+`, `5`, `equal` (covers most scanner button boxes).
+Default trigger keys: `t`, `+`, `5`, `=` (covers most scanner button boxes). Enter keys as the symbols they produce — use `=`, not the word `equal`. (Studies created before this change may still show `equal`; it continues to work and is equivalent to `=`.)
 
-Configure trigger keys per-task in the Study Editor Task tab.
+Configure trigger keys in the Study Editor's Scanner settings; they apply to every task in the study.
 
 ## Task Output Files
 

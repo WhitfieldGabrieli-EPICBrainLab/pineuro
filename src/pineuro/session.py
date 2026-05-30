@@ -485,7 +485,7 @@ class ScannerConfig:
 
     dicom_dir: str = "/BOLD_DICOM"
     ip: str = ""
-    trigger_keys: list[str] = field(default_factory=lambda: ["t", "+", "5", "equal"])
+    trigger_keys: list[str] = field(default_factory=lambda: ["t", "+", "5", "="])
 
 
 @dataclass

@@ -48,7 +48,9 @@ class TaskBase(ABC):  # noqa: B024
     Parameters
     ----------
     trigger_keys : list of str, optional
-        Keys that trigger acquisition start (default: ["t", "+", "5", "equal"])
+        Keys that trigger acquisition start (default: ["t", "+", "5", "="]). The
+        symbol "=" is normalized to PsychoPy's event name "equal" for runtime
+        matching; every task inherits this handling via the base class.
     simulator : VolumeSimulator, optional
         Volume simulator for offline testing. Replicates real scanner behavior:
         injects a synthetic trigger key, then produces DICOMs at TR intervals.
@@ -67,7 +69,10 @@ class TaskBase(ABC):  # noqa: B024
         simulator=None,
         **kwargs,
     ):
-        self.trigger_keys = trigger_keys or ["t", "+", "5", "equal"]
+        # "=" is the user-facing symbol; PsychoPy reports that key as "equal",
+        # which is also what the VK/keysym maps below are keyed by. Normalize
+        # here so this is the single place any task's trigger keys are resolved.
+        self.trigger_keys = ["equal" if k == "=" else k for k in (trigger_keys or ["t", "+", "5", "="])]
         self._simulator = simulator
         self._simulator_thread: threading.Thread | None = None
 

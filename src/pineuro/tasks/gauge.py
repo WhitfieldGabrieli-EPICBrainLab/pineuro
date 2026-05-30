@@ -91,8 +91,6 @@ class GaugeTask(BaseTask):
         Duration of button press prompt between blocks (seconds).
     warmup_duration : float, default=2.0
         Duration of warm-up trial at start of each block (feedback off).
-    trigger_keys : list of str, optional
-        Keys that trigger acquisition start.
     button_key : str, default="1"
         Key for button press responses.
     presenter_monitor : str, default="right"
@@ -112,7 +110,6 @@ class GaugeTask(BaseTask):
         label_swap_after_block: int = 3,
         button_press_duration: float = 2.0,
         warmup_duration: float = 2.0,
-        trigger_keys: list[str] | None = None,
         button_key: str = "1",
         presenter_monitor: str = "right",
         feedback_mode: bool = True,
@@ -146,7 +143,6 @@ class GaugeTask(BaseTask):
         self.label_swap_after_block = label_swap_after_block
         self.button_press_duration = button_press_duration
         self.warmup_duration = warmup_duration
-        self.trigger_keys = trigger_keys if trigger_keys is not None else ["t", "+", "5", "equal"]
         self.button_key = button_key
         self.presenter_monitor = presenter_monitor
 
