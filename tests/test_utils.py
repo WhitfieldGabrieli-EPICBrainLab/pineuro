@@ -683,3 +683,46 @@ class TestParseSiemensMotionComment:
 
     def test_empty_string_returns_none(self):
         assert parse_siemens_motion_comment("") is None
+
+
+class TestParallelWorkerErrors:
+    """Parallel-job failures must carry a traceback back to the parent, not just str(e)."""
+
+    def test_worker_captures_traceback(self):
+        from pineuro.utils import _run_job_worker
+
+        # Missing the required "cmd_name" key raises KeyError inside the worker (an
+        # unexpected error, not a CalledProcessError); the traceback is what tells you
+        # where it failed across the process boundary.
+        result = _run_job_worker({"description": "bad job"})
+
+        assert result["success"] is False
+        assert result["description"] == "bad job"
+        assert "Traceback (most recent call last)" in result["traceback"]
+        assert "KeyError" in result["traceback"]
+
+    def test_parallel_run_command_surfaces_traceback(self, monkeypatch):
+        from pineuro.utils import parallel_run_command
+
+        # Run the worker in-process via a fake Pool so the test never spawns processes.
+        class _FakePool:
+            def __init__(self, processes):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def map(self, fn, items):
+                return [fn(i) for i in items]
+
+        monkeypatch.setattr("multiprocessing.Pool", _FakePool)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            parallel_run_command([{"description": "bad job"}], n_jobs=1)
+
+        message = str(exc_info.value)
+        assert "bad job" in message
+        assert "Traceback (most recent call last)" in message

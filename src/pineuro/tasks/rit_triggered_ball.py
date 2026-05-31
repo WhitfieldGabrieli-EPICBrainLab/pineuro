@@ -817,7 +817,7 @@ class RITTriggeredBallTask(BaseTask):
             self._trigger_state.last_prompt_time = self._task_clock.getTime() - self.min_prompt_interval
             self._trigger_state.monitoring_start_time = self._task_clock.getTime()
             self._phase = _PHASE_MONITORING
-            logger.debug("Baseline complete, entering monitoring phase")
+            logger.info("Baseline complete, entering monitoring phase")
 
         self._fixation.draw()
         self._capture_and_emit_screenshot()

@@ -6,6 +6,7 @@ network activation timeseries during feedback runs.
 Requires flet-charts package: pip install flet-charts
 """
 
+import contextlib
 import logging
 import math
 from dataclasses import dataclass, field
@@ -394,10 +395,9 @@ class ActivationPlot:
         if self.chart.left_axis:
             self.chart.left_axis.labels = self._create_y_axis_labels(min_y, max_y)
 
-        try:
+        # Chart update can fail during shutdown; safe to ignore.
+        with contextlib.suppress(Exception):
             self.chart.update()
-        except Exception as e:
-            logger.debug(f"Chart update failed (may be expected during shutdown): {e}")
 
     def clear(self):
         """Clear all data and reset chart."""

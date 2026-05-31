@@ -850,8 +850,7 @@ def _run_osascript(script: str, *args: str) -> str | None:
         return None
 
     if proc.returncode != 0:
-        # Non-zero is the normal "cancelled" path (-128); log anything else.
-        logger.debug("osascript returned %s: %s", proc.returncode, proc.stderr.strip())
+        # Non-zero is the normal "cancelled" path (e.g. -128 when the user cancels).
         return None
 
     return proc.stdout.strip() or None

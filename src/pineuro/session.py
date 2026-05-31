@@ -1211,7 +1211,6 @@ class SessionConfig:
                 mapping = SimulatorSourceMapping.from_file(Path(self.simulator.source_mapping))
                 source = mapping.get_source(self.paths.participant_id, run_type)
                 if source is not None:
-                    logger.debug(f"Resolved {run_type} for {self.paths.participant_id} from mapping: {source}")
                     return source
             except (FileNotFoundError, ValueError) as e:
                 logger.warning(f"Failed to load simulator source mapping: {e}")

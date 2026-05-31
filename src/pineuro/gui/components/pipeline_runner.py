@@ -627,8 +627,6 @@ class PipelineRunner:
                         logger.info(f"Localizer source from mapping: {source_dir}")
                 except Exception as e:
                     logger.warning(f"Failed to resolve localizer source from mapping: {e}")
-            else:
-                logger.debug("Skipping source mapping (no mapping_path or participant_id)")
 
             # 2. Fall back to individual localizer_source_dicoms field
             if not source_dir:
@@ -793,10 +791,6 @@ class PipelineRunner:
         else:
             # Task-localizer parameters live on the localizer entry itself
             localizer_params = loc.get("task_params", {})
-
-        # Debug: log the parameters being passed
-        logger.debug(f"Localizer task ID: {task_id}")
-        logger.debug(f"Localizer params: {localizer_params}")
 
         # Output events to the preprocessing directory (survives cleanup)
         events_dir = base_dir / "preprocessing"

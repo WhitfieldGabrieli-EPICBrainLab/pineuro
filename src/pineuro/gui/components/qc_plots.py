@@ -271,8 +271,9 @@ class BaseQCPlot:
             self.chart.update()
             if self._summary_text is not None:
                 self._summary_text.update()
-        except Exception as e:
-            logger.debug(f"Chart update failed: {e}")
+        except Exception:
+            # Chart update can fail during shutdown; safe to ignore.
+            pass
 
     def _create_data_series(self) -> list:
         if LineChartData is None:

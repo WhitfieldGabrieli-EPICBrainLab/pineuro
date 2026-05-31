@@ -466,7 +466,6 @@ class BallTask(BaseTask):
 
         # Show instruction screen (BallTask-specific)
         if not hasattr(self, "slider_instruction_text"):
-            logger.debug("Slider instruction text not initialized; skipping post-run questions")
             return []
         self.slider_instruction_text.draw()
         self._capture_and_emit_screenshot(force=True)
@@ -529,11 +528,6 @@ class BallTask(BaseTask):
             # For "decrease" target, negate so negative correlation → ball UP
             directed_val = -val if self._connectivity_target == "decrease" else val
             self.current_direction = 1.0 if directed_val >= 0 else -1.0
-            direction_label = "UP" if self.current_direction > 0 else "DOWN"
-            logger.debug(
-                f"Connectivity: r={val:.4f}, target={self._connectivity_target}, "
-                f"directed={directed_val:.4f} → {direction_label}"
-            )
             return
 
         # Dual-network activation mode
@@ -796,7 +790,6 @@ class BallTask(BaseTask):
         """
         state = task_state or self._task_state
         if state is None:
-            logger.debug("No task state provided, skipping save")
             return
 
         run_type = "feedback" if self.feedback_mode else "transfer"
@@ -1140,10 +1133,6 @@ class BallTask(BaseTask):
                 )
             logger.info(f"Total hits: {sum(self.hit_counters)}")
             logger.info(f"Final scale factor: {self.scale_factor:.1f}")
-            logger.debug(f"Total frames rendered: {self._frame_counter}")
-            if self.current_volume > 0:
-                avg_frames_per_vol = self._frame_counter / self.current_volume
-                logger.debug(f"Average frames per volume: {avg_frames_per_vol:.1f}")
             logger.info(f"PsychoPy log saved: {self._psychopy_log_path}")
 
             # cleanup() handles post-run questions via super().cleanup()

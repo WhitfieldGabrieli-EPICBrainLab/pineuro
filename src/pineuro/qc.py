@@ -291,21 +291,10 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                        logger.debug(
-                            f"Scheduled window positioning: screen {screen}, position ({window_x}, {window_y}), size {window_width}x{window_height}"
-                        )
-                    else:
-                        logger.debug(f"Could not detect screen {screen} geometry")
 
-            except Exception as e:
+            except Exception:
                 # xrandr or wmctrl not available - browser still opened successfully
-                logger.debug(f"Window positioning unavailable: {type(e).__name__}")
-        elif screen != 0:
-            # Log why window positioning was skipped
-            if config.is_wayland():
-                logger.debug("Window positioning skipped (Wayland detected)")
-            else:
-                logger.debug(f"Window positioning not supported on {platform.system()}")
+                pass
 
     except Exception as e:
         logger.warning(f"Failed to open HTML in browser: {e}")

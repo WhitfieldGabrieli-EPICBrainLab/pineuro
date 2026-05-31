@@ -538,7 +538,6 @@ class VolumeSimulator:
         n_total = len(files_to_send)
 
         logger.info(f"Starting {self.source_type} simulator: {n_total} volumes at {self.speed}x speed")
-        logger.debug(f"TR: {self.tr}s | Delay: {self.delay:.3f}s")
 
         # Issue or wait for the trigger before copying any volumes. The
         # start_time is reset afterward so volume 0's deadline is measured
@@ -590,17 +589,10 @@ class VolumeSimulator:
                 return
 
             # Copy the file (and JSON sidecar for NIfTI)
-            copy_start = time.monotonic()
             self._copy_volume_file(src_file)
-            copy_duration = time.monotonic() - copy_start
             volumes_copied += 1
 
             actual_elapsed = time.monotonic() - self.start_time
-            logger.debug(
-                f"Copied volume {i + 1}/{n_total}: {src_file.name} "
-                f"(expected={expected_time:.3f}s, actual={actual_elapsed:.3f}s, "
-                f"copy={copy_duration * 1000:.1f}ms)"
-            )
 
             # Invoke callback if set
             if self.volume_copied_callback is not None:
@@ -690,12 +682,9 @@ def main():
     parser.add_argument("--n", type=int, default=None, dest="n_volumes", help="Number of volumes")
     parser.add_argument("--no-clear", action="store_true", help="Keep existing files")
     parser.add_argument("--cleanup", action="store_true", help="Delete target directory after completion")
-    parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     sim = VolumeSimulator(
         source_dir=args.source,

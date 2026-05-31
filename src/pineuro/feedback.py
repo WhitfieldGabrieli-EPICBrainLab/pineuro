@@ -1369,8 +1369,6 @@ class FeedbackEstimator:
         # Store flat indices for this mask
         flat_indices = np.ravel_multi_index(indices, self._shape)
 
-        logger.debug(f"Mask '{name}': {len(coords)} voxels")
-
         return flat_indices, coords
 
     def _build_master_voxel_index(
@@ -2017,7 +2015,7 @@ def _detect_interrupted_run(
         with open(feedbacklog_path) as f:
             row_count = sum(1 for _ in f) - 1  # Subtract header
     except Exception as e:
-        logger.debug(f"Could not read feedbacklog {feedbacklog_path}: {e}")
+        logger.warning(f"Could not read feedbacklog {feedbacklog_path}: {e}")
         return None
 
     # Complete if row count matches expected volumes
@@ -2088,7 +2086,6 @@ def _archive_interrupted_run(
         if item.exists():
             dest = archive_dir / item.name
             shutil.move(str(item), str(dest))
-            logger.debug(f"Archived {item.name} to {archive_dir}")
 
     logger.info(f"Archived interrupted run to: {archive_dir}")
     return archive_dir
@@ -3024,13 +3021,10 @@ class NeurofeedbackCoordinator:
                                     f"waiting for MoCoSeries: {file_path.name} "
                                     f"(skipped {self._skipped_originals_no_moco} so far)"
                                 )
-                            else:
-                                logger.debug(f"Skipping original volume (using MoCo): {file_path.name}")
                             continue
                         if not self._keep_moco and moco:
                             heapq.heappop(self._pending_heap)
                             self._processed_files.add(key)
-                            logger.debug(f"Skipping MoCo-derived volume: {file_path.name}")
                             continue
 
                     heapq.heappop(self._pending_heap)
@@ -3044,11 +3038,7 @@ class NeurofeedbackCoordinator:
                     if retries >= self._MAX_RETRIES:
                         self._processed_files.add(key)
                         logger.warning(f"Skipping volume after {retries} failed validations: {file_path.name}")
-                    else:
-                        logger.debug(
-                            f"Validation failed for {file_path.name} "
-                            f"(attempt {retries}/{self._MAX_RETRIES}), will retry"
-                        )
+                    # else: leave out of _processed_files so the file is re-queued for another attempt
 
             return None
 
@@ -3079,6 +3069,27 @@ class NeurofeedbackCoordinator:
             logger.error(msg)
             self._error = RuntimeError(msg)
             self._stop_event.set()
+
+    def _check_moco_shape_mismatch(self, vol_data: NDArray[np.float64], volume_num: int) -> bool:
+        """Abort the run if an incoming volume's shape no longer matches the MoCo reference.
+
+        Software motion correction registers every frame to the reference set from the first
+        volume. A mid-run shape change means the incoming series geometry changed, so every
+        later volume would mismatch too — fail fast with an actionable message instead of
+        feeding mismatched data into registration. Returns True if the run was stopped.
+        """
+        assert self._moco_reference_vol is not None
+        if vol_data.shape == self._moco_reference_vol.shape:
+            return False
+        msg = (
+            f"Software motion correction shape mismatch on volume {volume_num}: "
+            f"reference {self._moco_reference_vol.shape} != incoming {vol_data.shape}. "
+            "The incoming series geometry changed mid-run; stopping the run."
+        )
+        logger.error(msg)
+        self._error = RuntimeError(msg)
+        self._stop_event.set()
+        return True
 
     def _get_queue_depth(self) -> int:
         """Get current queue depth (files waiting to be processed)."""
@@ -3242,9 +3253,8 @@ class NeurofeedbackCoordinator:
                     assert self._moco_reference_ants is not None
                     assert self._moco_reference_affine is not None
                     assert self._moco_spacing is not None
-                    # Verify shapes match
-                    if vol_data.shape != self._moco_reference_vol.shape:
-                        logger.error(f"MoCo shape mismatch: ref={self._moco_reference_vol.shape}, mov={vol_data.shape}")
+                    if self._check_moco_shape_mismatch(vol_data, volume_num):
+                        return
 
                     # Register to REFERENCE volume (frame-to-ref) with warm-start
                     _reg_start = time.monotonic()
@@ -3444,8 +3454,6 @@ class NeurofeedbackCoordinator:
             for f in self.watch_dir.rglob("*"):
                 if f.is_file():
                     self._processed_files.add(str(f))
-            if self._processed_files:
-                logger.debug(f"Cataloged {len(self._processed_files)} existing files in watch dir")
 
             # Set up watchdog observer (recursive=True for Siemens-style subfolders)
             event_handler = _DicomEventHandler(self._on_new_file)
@@ -3455,7 +3463,6 @@ class NeurofeedbackCoordinator:
             logger.info(f"Watching {self.watch_dir} for DICOMs (recursive)...")
 
             self._ready_event.set()
-            logger.debug("Coordinator ready signal set")
 
             logger.info("Waiting for trigger...")
             self._trigger_event.wait()  # Block until trigger received or stop() sets it
@@ -3605,8 +3612,7 @@ class NeurofeedbackCoordinator:
             )
             logger.info(f"QC report saved to: {report_path}")
         except Exception as e:
-            logger.error(f"Failed to generate QC report: {e}")
-            logger.debug("QC report generation error", exc_info=True)
+            logger.error(f"Failed to generate QC report: {e}", exc_info=True)
 
     def get_timing_stats(self) -> dict:
         """Get timing statistics for analysis.

@@ -73,7 +73,7 @@ def _dicom_middle_slice_png(pixel_array: np.ndarray) -> str | None:
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
         return f"data:image/png;base64,{b64}"
     except Exception as e:
-        logger.debug(f"Slice PNG generation failed: {e}")
+        logger.warning(f"Slice PNG generation failed: {e}")
         return None
 
 
@@ -123,6 +123,8 @@ class CollectionQCMonitor:
         self._csv_file: IO[str] | None = None
         self._csv_writer: Any = None
         self._start_time: float | None = None
+        # Warn at most once if the QC delivery callback raises (it runs per-volume).
+        self._qc_callback_warned = False
 
     def _ensure_csv(self) -> None:
         """Open the TSV file and write the header if not yet open."""
@@ -309,6 +311,8 @@ class CollectionQCMonitor:
             try:
                 self._on_qc_data(volume_num, fd, dvars_val, tsnr_val, slice_b64)
             except Exception as e:
-                logger.debug(f"QC callback error: {e}")
+                if not self._qc_callback_warned:
+                    logger.warning(f"QC callback error (further occurrences suppressed): {e}")
+                    self._qc_callback_warned = True
 
         return {"fd": fd, "dvars": dvars_val, "tsnr": tsnr_val, "slice_image": slice_b64}

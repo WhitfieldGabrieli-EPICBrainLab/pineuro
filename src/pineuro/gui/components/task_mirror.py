@@ -101,10 +101,9 @@ class TaskMirror:
                     self._image.src = img_data
                 else:
                     self._image.src = f"data:image/png;base64,{img_data}"
-                try:
+                # Image update can fail during shutdown; safe to ignore.
+                with contextlib.suppress(Exception):
                     self._image.update()
-                except Exception as e:
-                    logger.debug(f"Image update failed: {e}")
 
     def reset(self) -> None:
         """Reset to empty state."""

@@ -6368,10 +6368,8 @@ class ParticipantWorkflowScreen:
         """Remove and close the session log file handler if one is active."""
         if self._log_file_handler is not None:
             logging.getLogger("pineuro").removeHandler(self._log_file_handler)
-            try:
+            with contextlib.suppress(Exception):
                 self._log_file_handler.close()
-            except Exception:
-                logger.debug("Failed to close session log file handler", exc_info=True)
             self._log_file_handler = None
 
     def _setup_file_logging(self):
@@ -6387,9 +6385,12 @@ class ParticipantWorkflowScreen:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file_path = logs_dir / f"session_{timestamp}.log"
 
-        # Create file handler for the root logger to capture all pineuro logs
+        # Create file handler for the pineuro logger. The pineuro loggers sit at INFO, so
+        # this handler only ever receives INFO+; set it explicitly to match. (A prior DEBUG
+        # level implied a richer-than-console trace that never materialized, since nothing
+        # lowers the pineuro/root logger to DEBUG.)
         self._log_file_handler = logging.FileHandler(self._log_file_path)
-        self._log_file_handler.setLevel(logging.DEBUG)
+        self._log_file_handler.setLevel(logging.INFO)
         formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         self._log_file_handler.setFormatter(formatter)
 

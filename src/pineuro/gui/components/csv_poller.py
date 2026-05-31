@@ -113,7 +113,6 @@ class FeedbackLogPoller:
                     with self._lock:
                         self._headers = headers
                         self._file_offset = f.tell()
-                    logger.debug(f"Log headers: {headers}")
                     return
 
                 # Subsequent calls: read only new content from last position

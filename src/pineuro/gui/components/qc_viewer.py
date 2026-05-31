@@ -441,7 +441,6 @@ class QCReportManager:
         qc_dir = self.base_dir / "qc"
 
         if not qc_dir.exists():
-            logger.debug(f"QC directory not found: {qc_dir}")
             return plots
 
         # Reference overlays only - filter by run number
@@ -459,9 +458,6 @@ class QCReportManager:
                 plots.append((f"{network} Mask (Reference Space)", overlay))
 
         plots = self._sort_overlays(plots)
-
-        if not plots:
-            logger.debug(f"No reference overlay plots found in {reference_dir} for {run_pattern}")
 
         return plots
 

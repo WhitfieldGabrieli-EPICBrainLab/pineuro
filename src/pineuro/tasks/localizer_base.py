@@ -161,7 +161,6 @@ class BaseLocalizerTask(TaskBase):
         ev = {"onset": round(onset, 3), "duration": round(duration, 3), "trial_type": trial_type}
         ev.update(extras)
         self._events.append(ev)
-        logger.debug(f"Event: {trial_type} onset={onset:.1f} dur={duration:.1f}")
 
     def save_events(self, path: Path | None = None) -> Path:
         """Write recorded events to a BIDS-compatible TSV file.

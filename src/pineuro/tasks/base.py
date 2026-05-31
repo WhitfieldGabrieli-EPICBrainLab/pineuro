@@ -52,6 +52,7 @@ PsychoPy tasks that need thread-safe access to live activations.
 """
 
 # Standard library imports
+import contextlib
 import logging
 import threading
 import time
@@ -219,10 +220,8 @@ class BaseTask(TaskBase):
     def _emit_mirror_state(self) -> None:
         """Emit current visual state to mirror callback if set."""
         if self._mirror_callback is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._mirror_callback(self.get_mirror_state())
-            except Exception as e:
-                logger.debug(f"Mirror callback failed: {e}")
 
     # =========================================================================
     # Thread-safe Coordinator Data Access

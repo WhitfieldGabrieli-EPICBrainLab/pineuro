@@ -470,7 +470,6 @@ def resolve_sham_masks(
             if matches:
                 mask_files.append(matches[0])
                 found = True
-                logger.debug(f"Found alternative mask for {target}: {matches[0]}")
                 break
 
         if not found:

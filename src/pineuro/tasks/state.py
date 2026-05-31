@@ -281,8 +281,6 @@ class TaskState:
 
     def save(self) -> None:
         """Save current state to task_state.json."""
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-
         data: dict[str, Any] = {
             "task_id": self.task_id,
             "task_state": self.task_state,
@@ -293,8 +291,13 @@ class TaskState:
         if self.max_feedback_runs is not None:
             data["max_feedback_runs"] = self.max_feedback_runs
 
-        with open(self.state_file, "w") as f:
-            json.dump(data, f, indent=2)
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.state_file, "w") as f:
+                json.dump(data, f, indent=2)
+        except OSError as e:
+            logger.error(f"Failed to save task state for '{self.task_id}' to {self.state_file}: {e}")
+            raise
 
         logger.info(f"Task state saved to {self.state_file}")
 
@@ -509,6 +512,3 @@ class TaskState:
         self.save()
 
         logger.info(f"Recorded run {run_info.run_number} ({run_type})")
-        if slot_run_number is not None:
-            logger.debug(f"  Slot: {slot_run_number}, Attempt: {attempt}")
-        logger.debug(f"  Task state: {self.task_state}")

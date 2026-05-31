@@ -637,3 +637,30 @@ class TestConnectivityValidation:
     def test_valid_pair_succeeds(self, sample_mask, tmp_path):
         coordinator = self._coordinator(sample_mask, tmp_path, connectivity_pairs=[["DMN", "Motor"]])
         assert coordinator._connectivity_estimator is not None
+
+
+class TestMocoShapeMismatch:
+    """Software MoCo: a mid-run change in volume shape must abort, not crash registration."""
+
+    def test_shape_mismatch_aborts_run(self):
+        c = _bare_coordinator(keep_moco=False)
+        c._moco_reference_vol = np.zeros((4, 4, 4), dtype=np.float64)
+
+        aborted = c._check_moco_shape_mismatch(np.zeros((4, 4, 5), dtype=np.float64), volume_num=7)
+
+        assert aborted is True
+        assert isinstance(c._error, RuntimeError)
+        assert c._stop_event.is_set()
+        msg = str(c._error)
+        assert "shape mismatch" in msg
+        assert "volume 7" in msg
+
+    def test_matching_shape_does_not_abort(self):
+        c = _bare_coordinator(keep_moco=False)
+        c._moco_reference_vol = np.zeros((4, 4, 4), dtype=np.float64)
+
+        aborted = c._check_moco_shape_mismatch(np.zeros((4, 4, 4), dtype=np.float64), volume_num=2)
+
+        assert aborted is False
+        assert c._error is None
+        assert not c._stop_event.is_set()

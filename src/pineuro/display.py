@@ -88,10 +88,6 @@ def get_monitors() -> list[MonitorInfo]:
                 )
             )
 
-        logger.debug(f"Detected {len(monitors)} monitor(s)")
-        for mon in monitors:
-            logger.debug(f"  {mon.name}: {mon.width}x{mon.height} at ({mon.x}, {mon.y})")
-
         return monitors
 
     except ImportError:
@@ -124,7 +120,6 @@ def get_monitor_by_position(position: str) -> MonitorInfo | None:
         return None
 
     if len(monitors) == 1:
-        logger.debug(f"Single monitor detected, using it for '{position}'")
         return monitors[0]
 
     if position == "left":

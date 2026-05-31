@@ -495,8 +495,8 @@ class TaskBase(ABC):  # noqa: B024
 
             # Emit to callback
             self._mirror_callback({"type": "screenshot", "image": f"data:image/jpeg;base64,{img_base64}"})
-        except Exception as e:
-            logger.debug(f"Screenshot capture failed: {e}")
+        except Exception:
+            pass
         finally:
             # Clean up PIL Images and BytesIO to prevent memory leaks
             if buffer is not None:
@@ -690,11 +690,8 @@ class TaskBase(ABC):  # noqa: B024
                 import threading
 
                 current_thread = threading.get_ident()
-        except Exception as e:
-            logger.debug(f"Could not get current thread ID: {e}")
+        except Exception:
             current_thread = None
-
-        logger.debug("Resetting stale pyglet state for new PsychoPy window")
 
         try:
             import pyglet
@@ -718,8 +715,8 @@ class TaskBase(ABC):  # noqa: B024
             # 2. Re-bind the platform event loop to the current thread.
             if current_thread is not None:
                 pyglet.app.platform_event_loop._event_thread = current_thread
-        except Exception as e:
-            logger.debug(f"Could not reset pyglet state: {e}")
+        except Exception:
+            pass
 
     def _clear_font_caches(self) -> None:
         """Clear all font / glyph caches that hold OpenGL texture IDs.
@@ -751,9 +748,8 @@ class TaskBase(ABC):  # noqa: B024
             from psychopy.visual.textbox2.textbox2 import allFonts
 
             allFonts._glFonts.clear()
-            logger.debug("Cleared PsychoPy allFonts._glFonts cache")
-        except Exception as e:
-            logger.debug(f"Could not clear PsychoPy font cache: {e}")
+        except Exception:
+            pass
 
         # 2. Pyglet per-context font cache — clears glyph textures used by TextStim
         try:
@@ -766,9 +762,8 @@ class TaskBase(ABC):  # noqa: B024
                     ospace.pyglet_font_font_cache.clear()
                 if hasattr(ospace, "pyglet_font_font_hold"):
                     ospace.pyglet_font_font_hold.clear()
-                logger.debug("Cleared pyglet font cache on context object_space")
-        except Exception as e:
-            logger.debug(f"Could not clear pyglet font cache: {e}")
+        except Exception:
+            pass
 
     def _reset_pyglet_gl_info(self) -> None:
         """Reset pyglet's gl_info cached state after closing a window.
@@ -788,9 +783,8 @@ class TaskBase(ABC):  # noqa: B024
             gl_info.vendor = ""
             gl_info.renderer = ""
             gl_info.extensions = set()
-            logger.debug("Reset pyglet gl_info state for clean window recreation")
-        except Exception as e:
-            logger.debug(f"Could not reset pyglet gl_info state: {e}")
+        except Exception:
+            pass
 
     def _resolve_pyglet_screen_index(self, target_x: int, target_y: int) -> int:
         """Find pyglet screen index matching a screeninfo monitor position.
@@ -911,10 +905,8 @@ class TaskBase(ABC):  # noqa: B024
         if self.win is None:
             return False
 
-        try:
+        with contextlib.suppress(Exception):
             self.win.winHandle.activate()
-        except Exception as e:
-            logger.debug(f"winHandle.activate failed: {e}")
 
         if sys.platform != "win32":
             return True  # Linux/macOS: trust the activate call
@@ -947,8 +939,7 @@ class TaskBase(ABC):  # noqa: B024
                     user32.AttachThreadInput(cur_tid, fg_tid, False)
 
             return bool(user32.GetForegroundWindow() == hwnd)
-        except Exception as e:
-            logger.debug(f"Win32 activation failed: {e}")
+        except Exception:
             return False
 
     def wait_for_trigger(self, message: str = "Waiting for scanner...") -> None:

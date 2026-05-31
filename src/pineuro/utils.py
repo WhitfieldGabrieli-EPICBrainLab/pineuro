@@ -120,6 +120,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import traceback
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
@@ -686,8 +687,6 @@ def _check_command_installation(cmd: Union[str, Path] = "fsl") -> None:
     if shutil.which(cmd) is None:
         raise CommandNotFoundError(f"{cmd} is not found in PATH.")
 
-    logger.debug(f"{cmd} installation verified")
-
 
 # ==============================================================
 #  DICOM Utilities
@@ -1011,7 +1010,7 @@ def is_moco_series(file_path: Path) -> bool | None:
             return None
         return bool(desc == "MoCoSeries")
     except Exception as e:
-        logger.debug(f"Could not check MoCo series: {e}")
+        logger.warning(f"Could not check MoCo series: {e}")
         return None
 
 
@@ -1214,13 +1213,7 @@ def run_command(
     # Run command with timing
     with Timer(f"{cmd_name}: {description}", timing_category):
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-
-            # Log output
-            if result.stdout and verbose:
-                logger.debug(f"stdout:\n{result.stdout}")
-            if result.stderr and verbose:
-                logger.debug(f"stderr:\n{result.stderr}")
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
 
             if verbose:
                 logger.info(f"{description} completed successfully")
@@ -1277,7 +1270,13 @@ def _run_job_worker(job_spec: dict) -> dict:
         )
         return {"success": True, "description": job_spec.get("description")}
     except Exception as e:
-        return {"success": False, "description": job_spec.get("description"), "error": str(e)}
+        logger.exception("Parallel job failed: %s", job_spec.get("description"))
+        return {
+            "success": False,
+            "description": job_spec.get("description"),
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
 
 
 def parallel_run_command(jobs: list[dict], n_jobs: int = -1, timing_category: str = "parallel") -> None:
@@ -1343,7 +1342,7 @@ def parallel_run_command(jobs: list[dict], n_jobs: int = -1, timing_category: st
     # Check for failures
     failures = [r for r in results if not r["success"]]
     if failures:
-        error_msgs = [f"{r['description']}: {r['error']}" for r in failures]
+        error_msgs = [f"{r['description']}:\n{r.get('traceback') or r['error']}" for r in failures]
         raise RuntimeError(f"Parallel execution failed for {len(failures)} jobs:\n" + "\n".join(error_msgs))
 
     logger.info(f"All {len(jobs)} parallel jobs completed successfully")

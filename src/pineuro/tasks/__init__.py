@@ -158,8 +158,6 @@ def discover_tasks(plugin_dirs: list[Path] | None = None) -> list[str]:
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
 
-                logger.debug(f"Loaded plugin module: {py_file.name}")
-
             except Exception as e:
                 logger.warning(f"Failed to load plugin {py_file.name}: {e}")
                 continue

@@ -513,7 +513,6 @@ class SelfOtherTask(BaseLocalizerTask):
                 rt = f"{response_clock.getTime():.3f}"
             core.wait(0.01)
 
-        logger.debug(f"Question {block_num + 1}: response={response or 'none'}, rt={rt or 'n/a'}")
         # Record BIDS "n/a" when no key was pressed, so a timeout is
         # distinguishable from an empty value downstream.
         return (response or "n/a", rt or "n/a")
