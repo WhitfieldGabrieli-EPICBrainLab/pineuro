@@ -56,6 +56,8 @@ from typing import Any, NamedTuple, cast
 
 import flet as ft
 
+from . import styles as st
+
 logger = logging.getLogger(__name__)
 
 
@@ -645,7 +647,7 @@ def build_placeholder(text: str, height: float | None = None) -> ft.Container:
         A centred ``ft.Container`` with the placeholder text.
     """
     return ft.Container(
-        content=ft.Text(text, size=16, color=ft.Colors.GREY_500),
+        content=ft.Text(text, size=st.SECTION, color=st.NEUTRAL),
         height=height,
         alignment=ft.Alignment(0, 0),
     )

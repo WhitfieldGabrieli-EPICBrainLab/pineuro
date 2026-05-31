@@ -200,7 +200,7 @@ class PyrtnfApp:
             return ft.Container(
                 content=ft.Column(
                     [
-                        ft.Icon(ft.Icons.FOLDER_OPEN, size=100, color=ft.Colors.OUTLINE),
+                        ft.Icon(ft.Icons.FOLDER_OPEN, size=st.ICON_HERO, color=ft.Colors.OUTLINE),
                         ft.Text("No studies found", size=st.TITLE, color=st.MUTED),
                         st.caption("Create your first study to get started!", italic=False),
                         ft.FilledButton(
@@ -225,8 +225,8 @@ class PyrtnfApp:
             runs_count=3,
             max_extent=500,
             child_aspect_ratio=1.2,
-            spacing=10,
-            run_spacing=10,
+            spacing=st.GAP_SM,
+            run_spacing=st.GAP_SM,
         )
 
     def _create_study_card(self, study_meta) -> ft.Card:
@@ -290,12 +290,12 @@ class PyrtnfApp:
                                 ),
                             ],
                             alignment=ft.MainAxisAlignment.CENTER,
-                            spacing=5,
+                            spacing=st.GAP_XS,
                         ),
                     ],
-                    spacing=12,
+                    spacing=st.GAP_MD,
                 ),
-                padding=20,
+                padding=st.PAD,
                 ink=True,
                 on_click=lambda _, name=study_meta.name: self._prompt_start_session(name),
             ),

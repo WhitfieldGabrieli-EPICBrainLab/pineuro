@@ -424,18 +424,18 @@ class ParticipantWorkflowScreen:
                         "This will skip the localizer/ICA pipeline and create masks "
                         "directly from the MNI atlas registered to subject space."
                     ),
-                    ft.Container(height=10),
-                    ft.Text(f"Reference: {ref_source}", size=12, color=ft.Colors.GREY_600),
-                    ft.Text(f"Atlas: {atlas_name}", size=12, color=ft.Colors.GREY_600),
-                    ft.Text(f"Networks: {targets_str}", size=12, color=ft.Colors.GREY_600),
-                    ft.Container(height=10),
+                    ft.Container(height=st.GAP_MD),
+                    ft.Text(f"Reference: {ref_source}", size=st.CAPTION, color=st.MUTED),
+                    ft.Text(f"Atlas: {atlas_name}", size=st.CAPTION, color=st.MUTED),
+                    ft.Text(f"Networks: {targets_str}", size=st.CAPTION, color=st.MUTED),
+                    ft.Container(height=st.GAP_MD),
                     ft.Text(
                         "Note: Atlas masks reflect population-average network boundaries, "
                         "not individual functional topography. They are less specific than "
                         "ICA-derived masks.",
-                        size=11,
+                        size=st.CAPTION,
                         italic=True,
-                        color=ft.Colors.ORANGE_700,
+                        color=st.WARNING,
                     ),
                 ],
                 tight=True,
@@ -539,7 +539,7 @@ class ParticipantWorkflowScreen:
         if not has_original:
             _snack = ft.SnackBar(
                 ft.Text("No original ICA/GLM outputs found. Run the full localizer pipeline first."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=st.WARNING,
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -682,7 +682,7 @@ class ParticipantWorkflowScreen:
         corr_file = masks_dir / "network_IC_spatial_correlation.csv"
         if not corr_file.exists():
             _snack = ft.SnackBar(
-                ft.Text("Correlation matrix not found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE
+                ft.Text("Correlation matrix not found. Run mask extraction first."), bgcolor=st.WARNING
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -697,9 +697,7 @@ class ParticipantWorkflowScreen:
         # Find required files
         components_files = sorted(glob(str(ica_dir / "*_components.nii.gz")))
         if not components_files:
-            _snack = ft.SnackBar(
-                ft.Text("ICA components not found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("ICA components not found. Run mask extraction first."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -708,7 +706,7 @@ class ParticipantWorkflowScreen:
 
         yeo2sub_files = sorted(glob(str(mask_extraction_dir / "02_mnireg" / "Yeo_to_*.nii.gz")))
         if not yeo2sub_files:
-            _snack = ft.SnackBar(ft.Text("Yeo atlas in subject space not found."), bgcolor=ft.Colors.ORANGE)
+            _snack = ft.SnackBar(ft.Text("Yeo atlas in subject space not found."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -802,7 +800,7 @@ class ParticipantWorkflowScreen:
             self._add_log(f"[SUCCESS] Masks reviewed and approved{loc_label}")
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(ft.Text(f"Masks approved{loc_label}!"), bgcolor=ft.Colors.GREEN)
+            _snack = ft.SnackBar(ft.Text(f"Masks approved{loc_label}!"), bgcolor=st.SUCCESS)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -907,7 +905,7 @@ class ParticipantWorkflowScreen:
 
         masks_dir = mask_extraction_dir / "03_masks"
         if not masks_dir.exists():
-            _snack = ft.SnackBar(ft.Text("Task masks not found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE)
+            _snack = ft.SnackBar(ft.Text("Task masks not found. Run mask extraction first."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -918,9 +916,7 @@ class ParticipantWorkflowScreen:
             key=lambda p: ("_reverse" in p.name, p.name),  # Forward first, reverse after
         )
         if not mask_files:
-            _snack = ft.SnackBar(
-                ft.Text("No thresholded masks found. Run mask extraction first."), bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text("No thresholded masks found. Run mask extraction first."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -965,20 +961,20 @@ class ParticipantWorkflowScreen:
             # Add divider before first reverse contrast mask
             if "_reverse" in mask_name and not added_reverse_divider:
                 added_reverse_divider = True
-                mask_cards.append(ft.Divider(height=2, color=ft.Colors.ORANGE_200))
+                mask_cards.append(ft.Divider(height=2, color=st.WARNING_BORDER))
                 mask_cards.append(
                     ft.Container(
                         content=ft.Row(
                             [
-                                ft.Icon(ft.Icons.SWAP_VERT, color=ft.Colors.ORANGE, size=16),
+                                ft.Icon(ft.Icons.SWAP_VERT, color=st.WARNING, size=st.SECTION),
                                 ft.Text(
                                     "Reverse Contrasts",
-                                    size=12,
-                                    color=ft.Colors.ORANGE_700,
+                                    size=st.CAPTION,
+                                    color=st.WARNING,
                                     weight=ft.FontWeight.W_500,
                                 ),
                             ],
-                            spacing=8,
+                            spacing=st.GAP_SM,
                         ),
                         padding=ft.padding.only(left=5, bottom=5),
                     )
@@ -1032,14 +1028,14 @@ class ParticipantWorkflowScreen:
                 overlay_content: ft.Control = ft.Image(
                     src=f"data:image/png;base64,{b64}",
                     fit=ft.BoxFit.CONTAIN,
-                    height=150,
+                    height=st.PREVIEW_H_SM,
                 )
             else:
                 overlay_content = ft.Container(
-                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
-                    height=150,
+                    content=ft.Text("No preview available", color=st.NEUTRAL),
+                    height=st.PREVIEW_H_SM,
                     alignment=ft.Alignment(0, 0),
-                    bgcolor=ft.Colors.GREY_200,
+                    bgcolor=st.NEUTRAL_BG,
                 )
 
             # Build collapsible cluster table widget if available
@@ -1053,10 +1049,10 @@ class ParticipantWorkflowScreen:
                     table_rows.append(
                         ft.DataRow(
                             cells=[
-                                ft.DataCell(ft.Text(str(c.get("cluster_id", "")), size=11)),
-                                ft.DataCell(ft.Text(str(c.get("n_voxels", "")), size=11)),
-                                ft.DataCell(ft.Text(f"{c.get('peak_stat', 0):.2f}", size=11)),
-                                ft.DataCell(ft.Text(region if region else "—", size=11)),
+                                ft.DataCell(ft.Text(str(c.get("cluster_id", "")), size=st.CAPTION)),
+                                ft.DataCell(ft.Text(str(c.get("n_voxels", "")), size=st.CAPTION)),
+                                ft.DataCell(ft.Text(f"{c.get('peak_stat', 0):.2f}", size=st.CAPTION)),
+                                ft.DataCell(ft.Text(region if region else "—", size=st.CAPTION)),
                             ],
                         )
                     )
@@ -1064,9 +1060,11 @@ class ParticipantWorkflowScreen:
                     table_rows.append(
                         ft.DataRow(
                             cells=[
-                                ft.DataCell(ft.Text("...", size=11, italic=True)),
+                                ft.DataCell(ft.Text("...", size=st.CAPTION, italic=True)),
                                 ft.DataCell(
-                                    ft.Text(f"+{len(cluster_table_data) - max_display} more", size=11, italic=True)
+                                    ft.Text(
+                                        f"+{len(cluster_table_data) - max_display} more", size=st.CAPTION, italic=True
+                                    )
                                 ),
                                 ft.DataCell(ft.Text("")),
                                 ft.DataCell(ft.Text("")),
@@ -1076,13 +1074,13 @@ class ParticipantWorkflowScreen:
                 table_content = ft.Container(
                     content=ft.DataTable(
                         columns=[
-                            ft.DataColumn(ft.Text("#", size=11, weight=ft.FontWeight.BOLD)),  # type: ignore[arg-type, call-arg]
-                            ft.DataColumn(ft.Text("Voxels", size=11, weight=ft.FontWeight.BOLD), numeric=True),  # type: ignore[arg-type, call-arg]
-                            ft.DataColumn(ft.Text("Peak", size=11, weight=ft.FontWeight.BOLD), numeric=True),  # type: ignore[arg-type, call-arg]
-                            ft.DataColumn(ft.Text("Region", size=11, weight=ft.FontWeight.BOLD)),  # type: ignore[arg-type, call-arg]
+                            ft.DataColumn(ft.Text("#", size=st.CAPTION, weight=ft.FontWeight.BOLD)),  # type: ignore[arg-type, call-arg]
+                            ft.DataColumn(ft.Text("Voxels", size=st.CAPTION, weight=ft.FontWeight.BOLD), numeric=True),  # type: ignore[arg-type, call-arg]
+                            ft.DataColumn(ft.Text("Peak", size=st.CAPTION, weight=ft.FontWeight.BOLD), numeric=True),  # type: ignore[arg-type, call-arg]
+                            ft.DataColumn(ft.Text("Region", size=st.CAPTION, weight=ft.FontWeight.BOLD)),  # type: ignore[arg-type, call-arg]
                         ],
                         rows=table_rows,
-                        column_spacing=15,
+                        column_spacing=st.GAP,
                         data_row_min_height=28,
                         heading_row_height=30,
                     ),
@@ -1103,7 +1101,7 @@ class ParticipantWorkflowScreen:
                         ft.TextButton(
                             f"Clusters ({len(cluster_table_data)})",
                             icon=ft.Icons.EXPAND_MORE,
-                            style=ft.ButtonStyle(color=ft.Colors.BLUE_700),
+                            style=ft.ButtonStyle(color=st.ACCENT),
                             on_click=_toggle_table,
                         ),
                         table_content,
@@ -1114,14 +1112,14 @@ class ParticipantWorkflowScreen:
             card_children: list[ft.Control] = [
                 ft.Row(
                     [
-                        ft.Text(mask_name, size=16, weight=ft.FontWeight.W_500),
+                        ft.Text(mask_name, size=st.SECTION, weight=ft.FontWeight.W_500),
                         ft.Container(expand=True),
-                        ft.Text(stat_text, size=13, color=ft.Colors.GREY_700),
+                        ft.Text(stat_text, size=st.BODY, color=st.MUTED),
                     ],
                 ),
                 ft.Container(
                     content=overlay_content,
-                    border=ft.border.all(1, ft.Colors.GREY_300),
+                    border=ft.border.all(1, st.PANEL_BORDER),
                     border_radius=5,
                     clip_behavior=ft.ClipBehavior.HARD_EDGE,
                 ),
@@ -1130,11 +1128,11 @@ class ParticipantWorkflowScreen:
                 card_children.append(cluster_table_widget)
 
             card = ft.Container(
-                content=ft.Column(card_children, spacing=10),
-                padding=15,
-                bgcolor=ft.Colors.GREY_100,
+                content=ft.Column(card_children, spacing=st.GAP_SM),
+                padding=st.GAP,
+                bgcolor=st.SUBTLE_BG,
                 border_radius=8,
-                border=ft.border.all(2, ft.Colors.GREY_300),
+                border=ft.border.all(2, st.PANEL_BORDER),
             )
             mask_cards.append(card)
 
@@ -1144,20 +1142,20 @@ class ParticipantWorkflowScreen:
             tissue_labels = {"wm": "White Matter", "csf": "CSF"}
             tissue_files = list(tissue_dir.glob(f"{self._bids_prefix}_tissue_*_mask.nii.gz"))
             if tissue_files:
-                mask_cards.append(ft.Divider(height=2, color=ft.Colors.PURPLE_200))
+                mask_cards.append(ft.Divider(height=2, color=st.MASK_TISSUE_BORDER))
                 mask_cards.append(
                     ft.Container(
                         content=ft.Row(
                             [
-                                ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.PURPLE, size=16),
+                                ft.Icon(ft.Icons.INFO_OUTLINE, color=st.MASK_TISSUE, size=st.SECTION),
                                 ft.Text(
                                     "Tissue Masks (nuisance regression, view only)",
-                                    size=12,
-                                    color=ft.Colors.PURPLE_700,
+                                    size=st.CAPTION,
+                                    color=st.MASK_TISSUE_FG,
                                     weight=ft.FontWeight.W_500,
                                 ),
                             ],
-                            spacing=8,
+                            spacing=st.GAP_SM,
                         ),
                         padding=ft.padding.only(left=5, bottom=5),
                     )
@@ -1195,14 +1193,14 @@ class ParticipantWorkflowScreen:
                         t_overlay_content: ft.Control = ft.Image(
                             src=f"data:image/png;base64,{t_b64}",
                             fit=ft.BoxFit.CONTAIN,
-                            height=120,
+                            height=st.PREVIEW_H_XS,
                         )
                     else:
                         t_overlay_content = ft.Container(
-                            content=ft.Text("No preview available", color=ft.Colors.GREY_500),
-                            height=120,
+                            content=ft.Text("No preview available", color=st.NEUTRAL),
+                            height=st.PREVIEW_H_XS,
                             alignment=ft.Alignment(0, 0),
-                            bgcolor=ft.Colors.GREY_200,
+                            bgcolor=st.NEUTRAL_BG,
                         )
 
                     tissue_card = ft.Container(
@@ -1210,24 +1208,24 @@ class ParticipantWorkflowScreen:
                             [
                                 ft.Row(
                                     [
-                                        ft.Text(tissue_label, size=14, weight=ft.FontWeight.W_500),
+                                        ft.Text(tissue_label, size=st.BODY, weight=ft.FontWeight.W_500),
                                         ft.Container(expand=True),
-                                        ft.Text("MNI template prior", size=11, color=ft.Colors.PURPLE_400),
+                                        ft.Text("MNI template prior", size=st.CAPTION, color=st.MASK_TISSUE_LABEL),
                                     ]
                                 ),
                                 ft.Container(
                                     content=t_overlay_content,
-                                    border=ft.border.all(1, ft.Colors.GREY_300),
+                                    border=ft.border.all(1, st.PANEL_BORDER),
                                     border_radius=5,
                                     clip_behavior=ft.ClipBehavior.HARD_EDGE,
                                 ),
                             ],
-                            spacing=8,
+                            spacing=st.GAP_SM,
                         ),
-                        padding=12,
-                        bgcolor=ft.Colors.PURPLE_50,
+                        padding=st.GAP_MD,
+                        bgcolor=st.MASK_TISSUE_BG,
                         border_radius=6,
-                        border=ft.border.all(1, ft.Colors.PURPLE_200),
+                        border=ft.border.all(1, st.MASK_TISSUE_BORDER),
                     )
                     mask_cards.append(tissue_card)
 
@@ -1245,7 +1243,7 @@ class ParticipantWorkflowScreen:
             self.page.update()
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(ft.Text(f"Masks approved{loc_label}!"), bgcolor=ft.Colors.GREEN)
+            _snack = ft.SnackBar(ft.Text(f"Masks approved{loc_label}!"), bgcolor=st.SUCCESS)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1303,7 +1301,7 @@ class ParticipantWorkflowScreen:
                 self._add_log("[SUCCESS] Using atlas region mask — approved")
                 self._refresh_step_list()
                 self._update_run_next_button()
-                _snack = ft.SnackBar(ft.Text("Atlas mask applied and approved."), bgcolor=ft.Colors.GREEN)
+                _snack = ft.SnackBar(ft.Text("Atlas mask applied and approved."), bgcolor=st.SUCCESS)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1323,7 +1321,7 @@ class ParticipantWorkflowScreen:
                 modal=True,
                 title=ft.Row(
                     [
-                        ft.Icon(ft.Icons.MAP, color=ft.Colors.TEAL),
+                        ft.Icon(ft.Icons.MAP, color=st.MASK_MANUAL),
                         ft.Text("Alternative: Atlas Region Mask", expand=True),
                         ft.IconButton(
                             icon=ft.Icons.CLOSE,
@@ -1339,8 +1337,8 @@ class ParticipantWorkflowScreen:
                                 "The cluster mask was rejected. You can use the full "
                                 "atlas region (warped to subject space) as an alternative, "
                                 "or go back to re-examine the cluster mask.",
-                                size=13,
-                                color=ft.Colors.GREY_700,
+                                size=st.BODY,
+                                color=st.MUTED,
                             ),
                             ft.Container(
                                 content=ft.Column(
@@ -1349,14 +1347,14 @@ class ParticipantWorkflowScreen:
                                             [
                                                 ft.Text(
                                                     f"Atlas: {atlas_source}",
-                                                    size=14,
+                                                    size=st.BODY,
                                                     weight=ft.FontWeight.W_500,
                                                 ),
                                                 ft.Container(expand=True),
                                                 ft.Text(
                                                     "In subject space",
-                                                    size=12,
-                                                    color=ft.Colors.GREY_600,
+                                                    size=st.CAPTION,
+                                                    color=st.MUTED,
                                                 ),
                                             ],
                                         ),
@@ -1364,25 +1362,25 @@ class ParticipantWorkflowScreen:
                                             content=ft.Image(
                                                 src=f"data:image/png;base64,{b64_atlas}",
                                                 fit=ft.BoxFit.CONTAIN,
-                                                height=180,
+                                                height=st.OVERLAY_H,
                                             ),
-                                            border=ft.border.all(1, ft.Colors.TEAL_200),
+                                            border=ft.border.all(1, st.MASK_MANUAL_BORDER),
                                             border_radius=5,
                                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                                         ),
                                     ],
-                                    spacing=8,
+                                    spacing=st.GAP_SM,
                                 ),
-                                padding=15,
-                                bgcolor=ft.Colors.TEAL_50,
+                                padding=st.GAP,
+                                bgcolor=st.MASK_MANUAL_BG,
                                 border_radius=8,
-                                border=ft.border.all(2, ft.Colors.TEAL_200),
+                                border=ft.border.all(2, st.MASK_MANUAL_BORDER),
                             ),
                         ],
-                        spacing=15,
+                        spacing=st.GAP,
                         scroll=ft.ScrollMode.AUTO,
                     ),
-                    width=650,
+                    width=st.DIALOG_LG,
                     height=400,
                 ),
                 actions=[
@@ -1408,7 +1406,7 @@ class ParticipantWorkflowScreen:
             if qc_report and qc_report.exists():
                 open_qc_report(qc_report)
             else:
-                _snack = ft.SnackBar(ft.Text("QC report not found."), bgcolor=ft.Colors.ORANGE)
+                _snack = ft.SnackBar(ft.Text("QC report not found."), bgcolor=st.WARNING)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1420,7 +1418,7 @@ class ParticipantWorkflowScreen:
             modal=True,
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.BIOTECH, color=ft.Colors.BLUE),
+                    ft.Icon(ft.Icons.BIOTECH, color=st.ACCENT),
                     ft.Text("Review Task Masks", expand=True),
                     ft.IconButton(
                         icon=ft.Icons.CLOSE,
@@ -1435,15 +1433,15 @@ class ParticipantWorkflowScreen:
                         ft.Text(
                             f"Extracted {len(mask_files)} mask(s) from GLM contrasts. "
                             "Review the overlays below, then approve or reject.",
-                            size=13,
-                            color=ft.Colors.GREY_700,
+                            size=st.BODY,
+                            color=st.MUTED,
                         ),
                         *mask_cards,
                     ],
-                    spacing=15,
+                    spacing=st.GAP,
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                width=650,
+                width=st.DIALOG_LG,
                 height=500,
             ),
             actions=[
@@ -1493,7 +1491,7 @@ class ParticipantWorkflowScreen:
 
         masks_dir = mask_extraction_dir / "03_masks"
         if not masks_dir.exists():
-            _snack = ft.SnackBar(ft.Text(f"Masks not found. Run {_step_hint} first."), bgcolor=ft.Colors.ORANGE)
+            _snack = ft.SnackBar(ft.Text(f"Masks not found. Run {_step_hint} first."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1501,9 +1499,7 @@ class ParticipantWorkflowScreen:
 
         mask_files = sorted(masks_dir.glob(f"{self._bids_prefix}_*_thr.nii.gz"))
         if not mask_files:
-            _snack = ft.SnackBar(
-                ft.Text(f"No thresholded masks found. Run {_step_hint} first."), bgcolor=ft.Colors.ORANGE
-            )
+            _snack = ft.SnackBar(ft.Text(f"No thresholded masks found. Run {_step_hint} first."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1595,14 +1591,14 @@ class ParticipantWorkflowScreen:
                 overlay_content: ft.Control = ft.Image(
                     src=f"data:image/png;base64,{b64}",
                     fit=ft.BoxFit.CONTAIN,
-                    height=150,
+                    height=st.PREVIEW_H_SM,
                 )
             else:
                 overlay_content = ft.Container(
-                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
-                    height=150,
+                    content=ft.Text("No preview available", color=st.NEUTRAL),
+                    height=st.PREVIEW_H_SM,
                     alignment=ft.Alignment(0, 0),
-                    bgcolor=ft.Colors.GREY_200,
+                    bgcolor=st.NEUTRAL_BG,
                 )
 
             card = ft.Container(
@@ -1610,24 +1606,24 @@ class ParticipantWorkflowScreen:
                     [
                         ft.Row(
                             [
-                                ft.Text(mask_name, size=16, weight=ft.FontWeight.W_500),
+                                ft.Text(mask_name, size=st.SECTION, weight=ft.FontWeight.W_500),
                                 ft.Container(expand=True),
-                                ft.Text(stat_text, size=13, color=ft.Colors.GREY_700),
+                                ft.Text(stat_text, size=st.BODY, color=st.MUTED),
                             ],
                         ),
                         ft.Container(
                             content=overlay_content,
-                            border=ft.border.all(1, ft.Colors.GREY_300),
+                            border=ft.border.all(1, st.PANEL_BORDER),
                             border_radius=5,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
-                padding=15,
-                bgcolor=ft.Colors.GREY_100,
+                padding=st.GAP,
+                bgcolor=st.SUBTLE_BG,
                 border_radius=8,
-                border=ft.border.all(2, ft.Colors.GREY_300),
+                border=ft.border.all(2, st.PANEL_BORDER),
             )
             mask_cards.append(card)
 
@@ -1642,9 +1638,7 @@ class ParticipantWorkflowScreen:
             self.page.update()
             self._refresh_step_list()
             self._update_run_next_button()
-            _snack = ft.SnackBar(
-                ft.Text(f"{source_label} masks approved! You can now proceed."), bgcolor=ft.Colors.GREEN
-            )
+            _snack = ft.SnackBar(ft.Text(f"{source_label} masks approved! You can now proceed."), bgcolor=st.SUCCESS)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1657,7 +1651,7 @@ class ParticipantWorkflowScreen:
             if qc_report and qc_report.exists():
                 open_qc_report(qc_report)
             else:
-                _snack = ft.SnackBar(ft.Text("QC report not found."), bgcolor=ft.Colors.ORANGE)
+                _snack = ft.SnackBar(ft.Text("QC report not found."), bgcolor=st.WARNING)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1680,7 +1674,7 @@ class ParticipantWorkflowScreen:
             modal=True,
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.UPLOAD_FILE if is_manual_source else ft.Icons.MAP, color=ft.Colors.TEAL),
+                    ft.Icon(ft.Icons.UPLOAD_FILE if is_manual_source else ft.Icons.MAP, color=st.MASK_MANUAL),
                     ft.Text(
                         "Review Imported Masks" if is_manual_source else "Review MNI Atlas Masks",
                         expand=True,
@@ -1697,15 +1691,15 @@ class ParticipantWorkflowScreen:
                     [
                         ft.Text(
                             intro_text,
-                            size=13,
-                            color=ft.Colors.GREY_700,
+                            size=st.BODY,
+                            color=st.MUTED,
                         ),
                         *mask_cards,
                     ],
-                    spacing=15,
+                    spacing=st.GAP,
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                width=650,
+                width=st.DIALOG_LG,
                 height=500,
             ),
             actions=[
@@ -1822,26 +1816,26 @@ class ParticipantWorkflowScreen:
             read_only=True,
             hint_text="T1 the masks were drawn on",
         )
-        error_text = ft.Text("", color=ft.Colors.RED, size=12, visible=False)
+        error_text = ft.Text("", color=st.ERROR, size=st.CAPTION, visible=False)
 
         content_items: list[ft.Control] = [
             ft.Text(
                 f"Select this participant's mask files ({mask_space} space). They are saved "
                 "with this participant and not shared across the study.",
-                size=12,
-                color=ft.Colors.GREY_700,
+                size=st.CAPTION,
+                color=st.MUTED,
             ),
             ft.Divider(),
-            ft.Text("Network masks", size=13, weight=ft.FontWeight.BOLD),
+            ft.Text("Network masks", size=st.BODY, weight=ft.FontWeight.BOLD),
             *mask_rows,
             ft.Divider(),
-            ft.Text("Reference EPI", size=13, weight=ft.FontWeight.BOLD),
+            ft.Text("Reference EPI", size=st.BODY, weight=ft.FontWeight.BOLD),
             _file_row(ref_field, "Select reference EPI"),
         ]
         if mask_space == "anat":
             content_items += [
                 ft.Divider(),
-                ft.Text("Anatomical (T1)", size=13, weight=ft.FontWeight.BOLD),
+                ft.Text("Anatomical (T1)", size=st.BODY, weight=ft.FontWeight.BOLD),
                 _file_row(anat_field, "Select T1 image"),
             ]
         content_items.append(error_text)
@@ -1891,13 +1885,13 @@ class ParticipantWorkflowScreen:
             modal=True,
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.UPLOAD_FILE, color=ft.Colors.TEAL),
+                    ft.Icon(ft.Icons.UPLOAD_FILE, color=st.MASK_MANUAL),
                     ft.Text(f"Manual Mask Files — {self.participant_id}", expand=True),
                 ]
             ),
             content=ft.Container(
-                content=ft.Column(content_items, spacing=10, scroll=ft.ScrollMode.AUTO),
-                width=660,
+                content=ft.Column(content_items, spacing=st.GAP_SM, scroll=ft.ScrollMode.AUTO),
+                width=st.DIALOG_LG,
                 height=480,
             ),
             actions=[
@@ -2534,19 +2528,10 @@ class ParticipantWorkflowScreen:
             StepStatus.SKIPPED: ft.Icons.FAST_FORWARD,
         }
 
-        color_map = {
-            StepStatus.PENDING: ft.Colors.GREY_400,
-            StepStatus.RUNNING: ft.Colors.BLUE_500,
-            StepStatus.COMPLETE: ft.Colors.GREEN_500,
-            StepStatus.INTERRUPTED: ft.Colors.ORANGE_500,
-            StepStatus.FAILED: ft.Colors.RED_500,
-            StepStatus.SKIPPED: ft.Colors.BLUE_GREY_300,
-        }
-
         return ft.Icon(
             icon_map[status],
-            color=color_map[status],
-            size=20,
+            color=st.STEP_STATUS_COLORS[status.value],
+            size=st.ICON_MD,
         )
 
     def _build_mask_to_localizer_map(self) -> dict[str, int]:
@@ -2823,7 +2808,7 @@ class ParticipantWorkflowScreen:
 
         # Show lock icon if blocked, otherwise show status icon
         if requires_preprocessing or requires_approval:
-            icon = ft.Icon(ft.Icons.LOCK, color=ft.Colors.ORANGE_500, size=20)
+            icon = ft.Icon(ft.Icons.LOCK, color=st.WARNING, size=st.ICON_MD)
         else:
             icon = self._get_status_icon(status)
 
@@ -2833,10 +2818,10 @@ class ParticipantWorkflowScreen:
                     button,
                     icon,
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
-            padding=5,
+            padding=st.GAP_XS,
         )
 
     def _build_localizer_tasks_section(self) -> ft.ExpansionPanel:
@@ -2852,7 +2837,7 @@ class ParticipantWorkflowScreen:
         if config.get("reference", {}).get("initial_enabled", True):
             controls.extend(
                 [
-                    ft.Text("Initial Reference", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Initial Reference", size=st.BODY, weight=ft.FontWeight.W_500),
                     self._create_step_button(
                         "reference_initial",
                         "Collect",
@@ -2888,7 +2873,9 @@ class ParticipantWorkflowScreen:
 
                 if loc_idx > 0:
                     controls.append(ft.Divider())
-                controls.append(ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500))
+                controls.append(
+                    ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=st.BODY, weight=ft.FontWeight.W_500)
+                )
 
                 for run_num in range(1, loc_n_runs + 1):
                     step_id = f"localizer_{loc_idx}_run_{run_num}"
@@ -2904,8 +2891,8 @@ class ParticipantWorkflowScreen:
             controls.append(
                 ft.Text(
                     "Manual mask import — no localizer scan is collected.",
-                    size=12,
-                    color=ft.Colors.GREY_600,
+                    size=st.CAPTION,
+                    color=st.MUTED,
                     italic=True,
                 )
             )
@@ -2926,7 +2913,7 @@ class ParticipantWorkflowScreen:
                 except (ValueError, ImportError):
                     localizer_label = f"Localizer Task ({loc_type})"
 
-            controls.append(ft.Text(localizer_label, size=14, weight=ft.FontWeight.W_500))
+            controls.append(ft.Text(localizer_label, size=st.BODY, weight=ft.FontWeight.W_500))
 
             for run_num in range(1, n_localizer_runs + 1):
                 step_id = f"rest_run_{run_num}"
@@ -2958,7 +2945,7 @@ class ParticipantWorkflowScreen:
             header=ft.ListTile(
                 title=ft.Text("Localizer Tasks", weight=ft.FontWeight.BOLD),
             ),
-            content=ft.Column(controls, spacing=10),
+            content=ft.Column(controls, spacing=st.GAP_SM),
             expanded=self._get_section_for_next_step() == "localizer",
         )
 
@@ -2973,7 +2960,7 @@ class ParticipantWorkflowScreen:
         # In MNI atlas mode, show simplified section
         if self._is_mni_atlas_mode:
             controls: list[ft.Control] = [
-                ft.Text("MNI Atlas Masks", size=14, weight=ft.FontWeight.W_500),
+                ft.Text("MNI Atlas Masks", size=st.BODY, weight=ft.FontWeight.W_500),
             ]
             mni_status = self.step_statuses.get("mni_mask_extraction", StepStatus.PENDING)
             if mni_status == StepStatus.COMPLETE:
@@ -2982,10 +2969,10 @@ class ParticipantWorkflowScreen:
                     ft.Container(
                         content=ft.Row(
                             [
-                                ft.Text(f"MNI Atlas ({atlas_name})", size=12, color=ft.Colors.GREY_600),
-                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                ft.Text(f"MNI Atlas ({atlas_name})", size=st.CAPTION, color=st.MUTED),
+                                ft.Icon(ft.Icons.CHECK_CIRCLE, color=st.SUCCESS, size=st.ICON_MD),
                             ],
-                            spacing=5,
+                            spacing=st.GAP_XS,
                         ),
                         padding=ft.padding.only(left=10),
                     )
@@ -3001,9 +2988,9 @@ class ParticipantWorkflowScreen:
                                         icon=ft.Icons.TUNE,
                                         on_click=lambda e: self._show_mask_review_dialog(),
                                     ),
-                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=st.SUCCESS, size=st.ICON_MD),
                                 ],
-                                spacing=5,
+                                spacing=st.GAP_XS,
                             ),
                             padding=ft.padding.only(left=10),
                         )
@@ -3014,7 +3001,7 @@ class ParticipantWorkflowScreen:
                             content=ft.FilledButton(
                                 "Review & Approve Masks",
                                 icon=ft.Icons.APPROVAL,
-                                bgcolor=ft.Colors.ORANGE,
+                                bgcolor=st.WARNING,
                                 on_click=lambda e: self._show_mask_review_dialog(),
                             ),
                             padding=ft.padding.only(left=10, top=5),
@@ -3034,7 +3021,7 @@ class ParticipantWorkflowScreen:
                 controls.extend(
                     [
                         ft.Divider(),
-                        ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+                        ft.Text("Coregistration", size=st.BODY, weight=ft.FontWeight.W_500),
                         self._create_step_button(
                             "coregistration",
                             "Coregister to Reference",
@@ -3073,7 +3060,7 @@ class ParticipantWorkflowScreen:
                 header=ft.ListTile(
                     title=ft.Text("Mask Extraction", weight=ft.FontWeight.BOLD),
                 ),
-                content=ft.Column(controls, spacing=10),
+                content=ft.Column(controls, spacing=st.GAP_SM),
                 expanded=self._get_section_for_next_step() == "mask_extraction",
             )
 
@@ -3105,7 +3092,9 @@ class ParticipantWorkflowScreen:
                 preproc_id = f"localizer_{loc_idx}_preprocessing"
                 extract_id = f"localizer_{loc_idx}_extraction"
                 approval_id = f"localizer_{loc_idx}_approval"
-                controls.append(ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=14, weight=ft.FontWeight.W_500))
+                controls.append(
+                    ft.Text(f"Localizer {loc_idx + 1}: {loc_label}", size=st.BODY, weight=ft.FontWeight.W_500)
+                )
                 # Manual localizers skip preprocessing — they import pre-built masks.
                 if not is_manual:
                     controls.append(
@@ -3148,9 +3137,9 @@ class ParticipantWorkflowScreen:
                                             icon=ft.Icons.TUNE,
                                             on_click=lambda e, idx=loc_idx: self._show_mask_review_dialog(loc_idx=idx),
                                         ),
-                                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=st.SUCCESS, size=st.ICON_MD),
                                     ],
-                                    spacing=5,
+                                    spacing=st.GAP_XS,
                                 ),
                                 padding=ft.padding.only(left=10),
                             )
@@ -3161,7 +3150,7 @@ class ParticipantWorkflowScreen:
                                 content=ft.FilledButton(
                                     "Review & Approve Masks",
                                     icon=ft.Icons.APPROVAL,
-                                    bgcolor=ft.Colors.ORANGE,
+                                    bgcolor=st.WARNING,
                                     on_click=lambda e, idx=loc_idx: self._show_mask_review_dialog(loc_idx=idx),
                                 ),
                                 padding=ft.padding.only(left=10, top=5),
@@ -3171,7 +3160,7 @@ class ParticipantWorkflowScreen:
             # Single manual localizer: import masks only — no preprocessing.
             controls.extend(
                 [
-                    ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Network Masks", size=st.BODY, weight=ft.FontWeight.W_500),
                     self._create_step_button(
                         "mask_extraction",
                         "Import Masks",
@@ -3200,9 +3189,9 @@ class ParticipantWorkflowScreen:
                                         icon=ft.Icons.TUNE,
                                         on_click=lambda e: self._show_mask_review_dialog(),
                                     ),
-                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=st.SUCCESS, size=st.ICON_MD),
                                 ],
-                                spacing=5,
+                                spacing=st.GAP_XS,
                             ),
                             padding=ft.padding.only(left=10),
                         )
@@ -3213,7 +3202,7 @@ class ParticipantWorkflowScreen:
                             content=ft.FilledButton(
                                 "Review & Approve Masks",
                                 icon=ft.Icons.APPROVAL,
-                                bgcolor=ft.Colors.ORANGE,
+                                bgcolor=st.WARNING,
                                 on_click=lambda e: self._show_mask_review_dialog(),
                             ),
                             padding=ft.padding.only(left=10, top=5),
@@ -3223,14 +3212,14 @@ class ParticipantWorkflowScreen:
             # Single localizer
             controls.extend(
                 [
-                    ft.Text("Preprocessing", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Preprocessing", size=st.BODY, weight=ft.FontWeight.W_500),
                     self._create_step_button(
                         "preprocessing",
                         "Run Preprocessing",
                         lambda e: self._on_step_clicked("preprocessing"),
                     ),
                     ft.Divider(),
-                    ft.Text("Network Masks", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Network Masks", size=st.BODY, weight=ft.FontWeight.W_500),
                     self._create_step_button(
                         "mask_extraction",
                         "Extract Masks",
@@ -3253,9 +3242,9 @@ class ParticipantWorkflowScreen:
                                         icon=ft.Icons.TUNE,
                                         on_click=lambda e: self._show_mask_review_dialog(),
                                     ),
-                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=20),
+                                    ft.Icon(ft.Icons.CHECK_CIRCLE, color=st.SUCCESS, size=st.ICON_MD),
                                 ],
-                                spacing=5,
+                                spacing=st.GAP_XS,
                             ),
                             padding=ft.padding.only(left=10),
                         )
@@ -3267,7 +3256,7 @@ class ParticipantWorkflowScreen:
                             content=ft.FilledButton(
                                 "Review & Approve Masks",
                                 icon=ft.Icons.APPROVAL,
-                                bgcolor=ft.Colors.ORANGE,
+                                bgcolor=st.WARNING,
                                 on_click=lambda e: self._show_mask_review_dialog(),
                             ),
                             padding=ft.padding.only(left=10, top=5),
@@ -3296,7 +3285,7 @@ class ParticipantWorkflowScreen:
             controls.extend(
                 [
                     ft.Divider(),
-                    ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Coregistration", size=st.BODY, weight=ft.FontWeight.W_500),
                     self._create_step_button(
                         "coregistration",
                         "Coregister to Reference",
@@ -3324,7 +3313,7 @@ class ParticipantWorkflowScreen:
             ),
             content=ft.Column(
                 controls,
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
             expanded=self._get_section_for_next_step() == "mask_extraction",
         )
@@ -3344,14 +3333,14 @@ class ParticipantWorkflowScreen:
         if config.get("reference", {}).get("realtime_enabled", True):
             controls.extend(
                 [
-                    ft.Text("Real-time Reference", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Real-time Reference", size=st.BODY, weight=ft.FontWeight.W_500),
                     self._create_step_button(
                         "reference_realtime",
                         "Collect",
                         lambda e: self._on_step_clicked("reference_realtime"),
                     ),
                     ft.Divider(),
-                    ft.Text("Coregistration", size=14, weight=ft.FontWeight.W_500),
+                    ft.Text("Coregistration", size=st.BODY, weight=ft.FontWeight.W_500),
                     self._create_step_button(
                         "coregistration_realtime",
                         "Coregister",
@@ -3377,7 +3366,7 @@ class ParticipantWorkflowScreen:
         controls.extend(
             [
                 ft.Divider(),
-                ft.Text("Feedback Runs", size=14, weight=ft.FontWeight.W_500),
+                ft.Text("Feedback Runs", size=st.BODY, weight=ft.FontWeight.W_500),
             ]
         )
 
@@ -3411,7 +3400,7 @@ class ParticipantWorkflowScreen:
             ),
             content=ft.Column(
                 controls,
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
             expanded=self._get_section_for_next_step() == "feedback",
         )
@@ -3508,11 +3497,11 @@ class ParticipantWorkflowScreen:
         scanner_ip = config.get("scanner", {}).get("ip", "")
         watch_dir = config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM")
 
-        self._scanner_status_icon = ft.Icon(ft.Icons.HELP_OUTLINE, color=ft.Colors.GREY, size=20)
+        self._scanner_status_icon = ft.Icon(ft.Icons.HELP_OUTLINE, color=st.NEUTRAL, size=st.ICON_MD)
         self._scanner_status_text = ft.Text(
             "Not tested yet",
-            size=12,
-            color=ft.Colors.GREY_600,
+            size=st.CAPTION,
+            color=st.MUTED,
             italic=True,
         )
 
@@ -3539,8 +3528,8 @@ class ParticipantWorkflowScreen:
                 [
                     ft.Text(
                         f"IP: {ip_text} | Dir: {watch_dir}",
-                        size=11,
-                        color=ft.Colors.GREY_600,
+                        size=st.CAPTION,
+                        color=st.MUTED,
                     ),
                     ft.Container(
                         content=ft.Row(
@@ -3549,7 +3538,7 @@ class ParticipantWorkflowScreen:
                                 self._scanner_status_icon,
                                 self._scanner_status_text,
                             ],
-                            spacing=10,
+                            spacing=st.GAP_SM,
                         ),
                         padding=ft.padding.only(left=10),
                     ),
@@ -3558,7 +3547,7 @@ class ParticipantWorkflowScreen:
                         padding=ft.padding.only(left=10),
                     ),
                 ],
-                spacing=5,
+                spacing=st.GAP_XS,
             ),
             expanded=True,
         )
@@ -3577,15 +3566,15 @@ class ParticipantWorkflowScreen:
             try:
                 if result.overall_ok:
                     self._scanner_status_icon.name = ft.Icons.CHECK_CIRCLE
-                    self._scanner_status_icon.color = ft.Colors.GREEN
+                    self._scanner_status_icon.color = st.SUCCESS
                     self._scanner_status_text.value = "Connection OK"
-                    self._scanner_status_text.color = ft.Colors.GREEN
+                    self._scanner_status_text.color = st.SUCCESS
                     self._scanner_status_text.italic = False
                 else:
                     self._scanner_status_icon.name = ft.Icons.ERROR
-                    self._scanner_status_icon.color = ft.Colors.RED
+                    self._scanner_status_icon.color = st.ERROR
                     self._scanner_status_text.value = "Issues detected"
-                    self._scanner_status_text.color = ft.Colors.RED
+                    self._scanner_status_text.color = st.ERROR
                     self._scanner_status_text.italic = False
                 self.page.update()
             except Exception:
@@ -3614,10 +3603,10 @@ class ParticipantWorkflowScreen:
         def _make_content(text: str) -> ft.Container:
             return ft.Container(
                 content=ft.Column(
-                    [ft.Text(text, font_family="monospace", selectable=True, size=12)],
+                    [ft.Text(text, font_family="monospace", selectable=True, size=st.CAPTION)],
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                padding=10,
+                padding=st.GAP_MD,
             )
 
         tabs = ft.Tabs(
@@ -3651,15 +3640,15 @@ class ParticipantWorkflowScreen:
             content=ft.Container(
                 content=ft.Column(
                     [
-                        ft.Text("SMB Share Setup", size=14, weight=ft.FontWeight.BOLD),
-                        ft.Container(content=tabs, height=300),
+                        ft.Text("SMB Share Setup", size=st.BODY, weight=ft.FontWeight.BOLD),
+                        ft.Container(content=tabs, height=st.PREVIEW_H_LG),
                         ft.Divider(),
-                        ft.Text("Scanner Console Configuration", size=14, weight=ft.FontWeight.BOLD),
-                        ft.Text(instructions["scanner_notes"], size=12),
+                        ft.Text("Scanner Console Configuration", size=st.BODY, weight=ft.FontWeight.BOLD),
+                        ft.Text(instructions["scanner_notes"], size=st.CAPTION),
                     ],
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                width=700,
+                width=st.DIALOG_LG,
                 height=550,
             ),
             actions=[ft.TextButton("Close", on_click=lambda e: _close())],
@@ -3683,25 +3672,25 @@ class ParticipantWorkflowScreen:
 
         if cleanup_info["total_size"] > 0:
             status_text = f"Available ({self._format_size(cleanup_info['total_size'])})"
-            status_color = ft.Colors.ORANGE
+            status_color = st.WARNING
             icon = ft.Icons.DELETE_SWEEP
         else:
             status_text = "Nothing to clean"
-            status_color = ft.Colors.GREY
+            status_color = st.NEUTRAL
             icon = ft.Icons.CHECK_CIRCLE
 
         cleanup_button = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(icon, color=status_color, size=20),
+                    ft.Icon(icon, color=status_color, size=st.ICON_MD),
                     ft.TextButton(
                         "Cleanup Session",
                         on_click=lambda e: self._on_cleanup_clicked(),
                         disabled=self._is_running,
                     ),
-                    ft.Text(status_text, size=12, color=status_color),
+                    ft.Text(status_text, size=st.CAPTION, color=status_color),
                 ],
-                spacing=5,
+                spacing=st.GAP_XS,
             ),
             padding=ft.padding.only(left=10),
         )
@@ -3712,7 +3701,7 @@ class ParticipantWorkflowScreen:
             ),
             content=ft.Column(
                 [cleanup_button],
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
             expanded=False,
         )
@@ -3730,8 +3719,8 @@ class ParticipantWorkflowScreen:
             content = ft.Container(
                 content=ft.Column(
                     [
-                        ft.Icon(ft.Icons.CHECK_CIRCLE, size=64, color=ft.Colors.GREEN),
-                        ft.Text("Nothing to Clean", size=20, weight=ft.FontWeight.BOLD),
+                        ft.Icon(ft.Icons.CHECK_CIRCLE, size=st.ICON_XXL, color=st.SUCCESS),
+                        ft.Text("Nothing to Clean", size=st.TITLE, weight=ft.FontWeight.BOLD),
                         ft.Text(
                             "No temporary files found.",
                             text_align=ft.TextAlign.CENTER,
@@ -3739,7 +3728,7 @@ class ParticipantWorkflowScreen:
                     ],
                     alignment=ft.MainAxisAlignment.CENTER,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=20,
+                    spacing=st.GAP_LG,
                 ),
                 alignment=ft.Alignment(0, 0),
                 expand=True,
@@ -3754,44 +3743,44 @@ class ParticipantWorkflowScreen:
                             [
                                 ft.Row(
                                     [
-                                        ft.Icon(ft.Icons.FOLDER, color=ft.Colors.AMBER),
+                                        ft.Icon(ft.Icons.FOLDER, color=st.WARNING),
                                         ft.Text("collection/", weight=ft.FontWeight.BOLD),
                                         ft.Text(
                                             f"({self._format_size(cleanup_info['collection_size'])})",
-                                            color=ft.Colors.GREY_600,
+                                            color=st.MUTED,
                                         ),
                                     ],
-                                    spacing=10,
+                                    spacing=st.GAP_SM,
                                 ),
                                 ft.Container(
                                     content=ft.Column(
                                         cast(
                                             list[ft.Control],
                                             [
-                                                ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
+                                                ft.Text(f"  - {subdir}", size=st.CAPTION, color=st.MUTED)
                                                 for subdir in cleanup_info["collection_subdirs"][:6]
                                             ]
                                             + (
                                                 [
                                                     ft.Text(
                                                         f"  ... and {len(cleanup_info['collection_subdirs']) - 6} more",
-                                                        size=12,
-                                                        color=ft.Colors.GREY_500,
+                                                        size=st.CAPTION,
+                                                        color=st.NEUTRAL,
                                                     )
                                                 ]
                                                 if len(cleanup_info["collection_subdirs"]) > 6
                                                 else []
                                             ),
                                         ),
-                                        spacing=2,
+                                        spacing=st.GAP_XS,
                                     ),
                                     padding=ft.padding.only(left=30),
                                 ),
                             ],
-                            spacing=5,
+                            spacing=st.GAP_XS,
                         ),
-                        padding=10,
-                        bgcolor=ft.Colors.GREY_100,
+                        padding=st.GAP_MD,
+                        bgcolor=st.SUBTLE_BG,
                         border_radius=5,
                     )
                 )
@@ -3803,44 +3792,44 @@ class ParticipantWorkflowScreen:
                             [
                                 ft.Row(
                                     [
-                                        ft.Icon(ft.Icons.FOLDER, color=ft.Colors.AMBER),
+                                        ft.Icon(ft.Icons.FOLDER, color=st.WARNING),
                                         ft.Text("tmp/", weight=ft.FontWeight.BOLD),
                                         ft.Text(
                                             f"({self._format_size(cleanup_info['tmp_size'])})",
-                                            color=ft.Colors.GREY_600,
+                                            color=st.MUTED,
                                         ),
                                     ],
-                                    spacing=10,
+                                    spacing=st.GAP_SM,
                                 ),
                                 ft.Container(
                                     content=ft.Column(
                                         cast(
                                             list[ft.Control],
                                             [
-                                                ft.Text(f"  - {subdir}", size=12, color=ft.Colors.GREY_700)
+                                                ft.Text(f"  - {subdir}", size=st.CAPTION, color=st.MUTED)
                                                 for subdir in cleanup_info["tmp_subdirs"][:6]
                                             ]
                                             + (
                                                 [
                                                     ft.Text(
                                                         f"  ... and {len(cleanup_info['tmp_subdirs']) - 6} more",
-                                                        size=12,
-                                                        color=ft.Colors.GREY_500,
+                                                        size=st.CAPTION,
+                                                        color=st.NEUTRAL,
                                                     )
                                                 ]
                                                 if len(cleanup_info["tmp_subdirs"]) > 6
                                                 else []
                                             ),
                                         ),
-                                        spacing=2,
+                                        spacing=st.GAP_XS,
                                     ),
                                     padding=ft.padding.only(left=30),
                                 ),
                             ],
-                            spacing=5,
+                            spacing=st.GAP_XS,
                         ),
-                        padding=10,
-                        bgcolor=ft.Colors.GREY_100,
+                        padding=st.GAP_MD,
+                        bgcolor=st.SUBTLE_BG,
                         border_radius=5,
                     )
                 )
@@ -3848,42 +3837,42 @@ class ParticipantWorkflowScreen:
             content = ft.Container(
                 content=ft.Column(
                     [
-                        ft.Text("Session Cleanup", size=20, weight=ft.FontWeight.BOLD),
+                        ft.Text("Session Cleanup", size=st.TITLE, weight=ft.FontWeight.BOLD),
                         ft.Divider(),
                         ft.Text("The following directories will be permanently deleted:"),
-                        ft.Container(height=10),
+                        ft.Container(height=st.GAP_MD),
                         *dir_items,
-                        ft.Container(height=10),
+                        ft.Container(height=st.GAP_MD),
                         ft.Container(
                             content=ft.Row(
                                 [
                                     ft.Text("Total:", weight=ft.FontWeight.BOLD),
                                     ft.Text(self._format_size(cleanup_info["total_size"])),
                                 ],
-                                spacing=10,
+                                spacing=st.GAP_SM,
                             ),
-                            padding=10,
-                            bgcolor=ft.Colors.BLUE_50,
+                            padding=st.GAP_MD,
+                            bgcolor=st.INFO_BG,
                             border_radius=5,
                         ),
-                        ft.Container(height=20),
+                        ft.Container(height=st.GAP_LG),
                         ft.Container(
                             content=ft.Row(
                                 [
-                                    ft.Icon(ft.Icons.WARNING, color=ft.Colors.ORANGE),
+                                    ft.Icon(ft.Icons.WARNING, color=st.WARNING),
                                     ft.Text(
                                         "Warning: This action cannot be undone.",
-                                        color=ft.Colors.ORANGE_900,
+                                        color=st.WARNING_FG,
                                         weight=ft.FontWeight.W_500,
                                     ),
                                 ],
-                                spacing=10,
+                                spacing=st.GAP_SM,
                             ),
-                            padding=10,
-                            bgcolor=ft.Colors.ORANGE_50,
+                            padding=st.GAP_MD,
+                            bgcolor=st.WARNING_BG,
                             border_radius=5,
                         ),
-                        ft.Container(height=20),
+                        ft.Container(height=st.GAP_LG),
                         ft.Row(
                             [
                                 ft.OutlinedButton(
@@ -3893,18 +3882,18 @@ class ParticipantWorkflowScreen:
                                 ft.FilledButton(
                                     "Run Cleanup",
                                     icon=ft.Icons.DELETE_SWEEP,
-                                    bgcolor=ft.Colors.RED,
+                                    bgcolor=st.ERROR,
                                     on_click=lambda e: self._show_cleanup_confirmation(),
                                     disabled=self._is_running,
                                 ),
                             ],
                             alignment=ft.MainAxisAlignment.END,
-                            spacing=10,
+                            spacing=st.GAP_SM,
                         ),
                     ],
-                    spacing=5,
+                    spacing=st.GAP_XS,
                 ),
-                padding=20,
+                padding=st.PAD,
             )
 
         if self.right_panel_container:
@@ -3941,7 +3930,7 @@ class ParticipantWorkflowScreen:
                 ft.TextButton("Cancel", on_click=on_cancel),
                 ft.FilledButton(
                     "Delete",
-                    bgcolor=ft.Colors.RED,
+                    bgcolor=st.ERROR,
                     on_click=on_confirm,
                 ),
             ],
@@ -3976,9 +3965,7 @@ class ParticipantWorkflowScreen:
             self._add_log("[SUCCESS] Cleanup complete")
 
             # Show success snackbar
-            _snack = ft.SnackBar(
-                ft.Text("Cleanup complete. Temporary files have been deleted."), bgcolor=ft.Colors.GREEN
-            )
+            _snack = ft.SnackBar(ft.Text("Cleanup complete. Temporary files have been deleted."), bgcolor=st.SUCCESS)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -3992,7 +3979,7 @@ class ParticipantWorkflowScreen:
             self._add_log(f"[ERROR] Cleanup failed: {e}")
             logger.error(f"Cleanup failed: {e}")
 
-            _snack = ft.SnackBar(ft.Text(f"Cleanup failed: {e}"), bgcolor=ft.Colors.RED)
+            _snack = ft.SnackBar(ft.Text(f"Cleanup failed: {e}"), bgcolor=st.ERROR)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -4293,14 +4280,14 @@ class ParticipantWorkflowScreen:
         # Create ListView for log entries with auto_scroll
         initial_log = ft.Text(
             "[INFO] Session initialized",
-            size=12,
+            size=st.CAPTION,
             font_family="monospace",
             selectable=True,
-            color=ft.Colors.WHITE,
+            color=st.ON_NEUTRAL,
         )
         self.log_listview = ft.ListView(
             controls=[initial_log],
-            spacing=2,
+            spacing=st.GAP_XS,
             auto_scroll=True,
         )
 
@@ -4310,17 +4297,17 @@ class ParticipantWorkflowScreen:
             height=self.log_console_height,
             bgcolor=ft.Colors.GREY_900,
             border_radius=5,
-            padding=10,
+            padding=st.GAP_MD,
         )
 
         # Create draggable divider using Container with drag events
         drag_divider = ft.Container(
             content=ft.Row(
-                [ft.Icon(ft.Icons.DRAG_HANDLE, size=20, color=ft.Colors.GREY_600)],
+                [ft.Icon(ft.Icons.DRAG_HANDLE, size=st.ICON_MD, color=st.MUTED)],
                 alignment=ft.MainAxisAlignment.CENTER,
             ),
             height=8,
-            bgcolor=ft.Colors.GREY_300,
+            bgcolor=st.PANEL_BORDER,
             on_hover=lambda e: None,  # Enable mouse tracking
         )
 
@@ -4351,10 +4338,10 @@ class ParticipantWorkflowScreen:
                     ),
                     self.log_console_container,
                 ],
-                spacing=5,
+                spacing=st.GAP_XS,
             ),
-            padding=10,
-            bgcolor=ft.Colors.GREY_100,
+            padding=st.GAP_MD,
+            bgcolor=st.SUBTLE_BG,
         )
 
         return ft.Column(
@@ -4421,38 +4408,38 @@ class ParticipantWorkflowScreen:
         banner = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.RESTORE, color=ft.Colors.AMBER_700, size=20),
+                    ft.Icon(ft.Icons.RESTORE, color=st.WARNING, size=st.ICON_MD),
                     ft.Column(
                         [
                             ft.Text(
                                 f"Resuming session — {len(completed)} step(s) already complete{last_modified}",
-                                size=13,
+                                size=st.BODY,
                                 weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.AMBER_900,
+                                color=st.WARNING_FG,
                             ),
                             ft.Text(
                                 step_names,
-                                size=12,
-                                color=ft.Colors.AMBER_800,
+                                size=st.CAPTION,
+                                color=st.WARNING_FG,
                             ),
                         ],
-                        spacing=2,
+                        spacing=st.GAP_XS,
                         expand=True,
                     ),
                     ft.IconButton(
                         ft.Icons.CLOSE,
-                        icon_color=ft.Colors.AMBER_700,
-                        icon_size=18,
+                        icon_color=st.WARNING,
+                        icon_size=st.ICON_MD,
                         tooltip="Dismiss",
                         on_click=lambda e: self._dismiss_resumption_banner(),
                     ),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=ft.padding.symmetric(horizontal=20, vertical=8),
-            bgcolor=ft.Colors.AMBER_50,
-            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.AMBER_200)),
+            bgcolor=st.WARNING_BG,
+            border=ft.border.only(bottom=ft.BorderSide(1, st.WARNING_BORDER)),
         )
         self._resumption_banner = banner
         return banner
@@ -4482,12 +4469,12 @@ class ParticipantWorkflowScreen:
         banner = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=ft.Colors.ORANGE_700, size=20),
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=st.WARNING, size=st.ICON_MD),
                     ft.Text(
                         f"Study configuration has {n} change{'s' if n != 1 else ''} since last run",
-                        size=13,
+                        size=st.BODY,
                         weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.ORANGE_900,
+                        color=st.WARNING_FG,
                         expand=True,
                     ),
                     ft.TextButton(
@@ -4499,12 +4486,12 @@ class ParticipantWorkflowScreen:
                         on_click=lambda e: self._accept_config_changes(),
                     ),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=ft.padding.symmetric(horizontal=20, vertical=8),
-            bgcolor=ft.Colors.ORANGE_50,
-            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.ORANGE_200)),
+            bgcolor=st.WARNING_BG,
+            border=ft.border.only(bottom=ft.BorderSide(1, st.WARNING_BORDER)),
         )
         self._config_change_banner = banner
         return banner
@@ -4522,21 +4509,21 @@ class ParticipantWorkflowScreen:
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.FAST_FORWARD, color=ft.Colors.RED_700, size=20),
+                    ft.Icon(ft.Icons.FAST_FORWARD, color=st.ERROR, size=st.ICON_MD),
                     ft.Text(
                         "Simulator mode — replaying recorded DICOMs (no live scanner)",
-                        size=13,
+                        size=st.BODY,
                         weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.RED_900,
+                        color=st.ERROR_FG,
                         expand=True,
                     ),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=ft.padding.symmetric(horizontal=20, vertical=8),
-            bgcolor=ft.Colors.RED_50,
-            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.RED_200)),
+            bgcolor=st.ERROR_BG,
+            border=ft.border.only(bottom=ft.BorderSide(1, st.ERROR_BORDER)),
         )
 
     def _show_config_change_dialog(self):
@@ -4546,21 +4533,21 @@ class ParticipantWorkflowScreen:
             rows.append(
                 ft.DataRow(
                     cells=[
-                        ft.DataCell(ft.Text(diff.field_path, size=12)),
-                        ft.DataCell(ft.Text(str(diff.saved_value), size=12)),
-                        ft.DataCell(ft.Text(str(diff.current_value), size=12)),
+                        ft.DataCell(ft.Text(diff.field_path, size=st.CAPTION)),
+                        ft.DataCell(ft.Text(str(diff.saved_value), size=st.CAPTION)),
+                        ft.DataCell(ft.Text(str(diff.current_value), size=st.CAPTION)),
                     ]
                 )
             )
 
         table = ft.DataTable(
             columns=[
-                ft.DataColumn(ft.Text("Field", weight=ft.FontWeight.BOLD, size=12)),
-                ft.DataColumn(ft.Text("Previous", weight=ft.FontWeight.BOLD, size=12)),
-                ft.DataColumn(ft.Text("Current", weight=ft.FontWeight.BOLD, size=12)),
+                ft.DataColumn(ft.Text("Field", weight=ft.FontWeight.BOLD, size=st.CAPTION)),
+                ft.DataColumn(ft.Text("Previous", weight=ft.FontWeight.BOLD, size=st.CAPTION)),
+                ft.DataColumn(ft.Text("Current", weight=ft.FontWeight.BOLD, size=st.CAPTION)),
             ],
             rows=rows,
-            column_spacing=20,
+            column_spacing=st.GAP_LG,
         )
 
         def _close(e):
@@ -4581,15 +4568,15 @@ class ParticipantWorkflowScreen:
                         ft.Text(
                             "The following protocol settings differ from the "
                             "snapshot saved when this participant was first run:",
-                            size=13,
+                            size=st.BODY,
                         ),
-                        ft.Container(height=8),
+                        ft.Container(height=st.GAP_SM),
                         table,
                     ],
                     scroll=ft.ScrollMode.AUTO,
                     tight=True,
                 ),
-                width=600,
+                width=st.DIALOG_LG,
                 height=400,
             ),
             actions=[
@@ -4629,20 +4616,20 @@ class ParticipantWorkflowScreen:
                 [
                     ft.Text(
                         "Parameter Preview / Monitoring",
-                        size=16,
+                        size=st.SECTION,
                         weight=ft.FontWeight.BOLD,
                     ),
-                    ft.Container(height=20),
+                    ft.Container(height=st.GAP_LG),
                     ft.Text(
                         "Click a step button to preview parameters",
-                        size=14,
-                        color=ft.Colors.GREY_600,
+                        size=st.BODY,
+                        color=st.MUTED,
                         italic=True,
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=20,
+            padding=st.PAD,
             alignment=ft.alignment.Alignment.CENTER,
             expand=True,
         )
@@ -4682,16 +4669,16 @@ class ParticipantWorkflowScreen:
                         ),
                         ft.Text(
                             f"pineuro: {self.study_config.metadata.name}",
-                            size=20,
+                            size=st.TITLE,
                             weight=ft.FontWeight.BOLD,
                         ),
                         ft.Text(
                             f"| Participant: {self.participant_id}{self._simulator_text}",
-                            size=16,
-                            color=ft.Colors.GREY_700,
+                            size=st.SECTION,
+                            color=st.MUTED,
                         ),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
                 self.run_next_button,
             ],
@@ -4723,10 +4710,10 @@ class ParticipantWorkflowScreen:
             param_rows.append(
                 ft.Row(
                     [
-                        ft.Text(f"{key}:", size=13, weight=ft.FontWeight.W_500, width=150),
-                        ft.Text(str(value), size=13, color=ft.Colors.GREY_700),
+                        ft.Text(f"{key}:", size=st.BODY, weight=ft.FontWeight.W_500, width=150),
+                        ft.Text(str(value), size=st.BODY, color=st.MUTED),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 )
             )
 
@@ -4754,17 +4741,17 @@ class ParticipantWorkflowScreen:
             overwrite_warning = ft.Container(
                 content=ft.Row(
                     [
-                        ft.Icon(warning_icon, color=ft.Colors.ORANGE_700, size=20),
+                        ft.Icon(warning_icon, color=st.WARNING, size=st.ICON_MD),
                         ft.Text(
                             warning_text,
-                            size=12,
-                            color=ft.Colors.ORANGE_700,
+                            size=st.CAPTION,
+                            color=st.WARNING,
                         ),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
-                padding=10,
-                bgcolor=ft.Colors.ORANGE_50,
+                padding=st.GAP_MD,
+                bgcolor=st.WARNING_BG,
                 border_radius=5,
             )
 
@@ -4772,20 +4759,20 @@ class ParticipantWorkflowScreen:
         content_items = [
             ft.Text(
                 step_info["label"],
-                size=18,
+                size=st.SECTION,
                 weight=ft.FontWeight.BOLD,
             ),
             ft.Divider(),
             ft.Text(
                 step_info["description"],
-                size=13,
-                color=ft.Colors.GREY_600,
+                size=st.BODY,
+                color=st.MUTED,
                 italic=True,
             ),
-            ft.Container(height=10),
-            ft.Text("Parameters:", size=14, weight=ft.FontWeight.W_500),
+            ft.Container(height=st.GAP_MD),
+            ft.Text("Parameters:", size=st.BODY, weight=ft.FontWeight.W_500),
             ft.Container(
-                content=ft.Column(param_rows, spacing=5),
+                content=ft.Column(param_rows, spacing=st.GAP_XS),
                 padding=ft.padding.only(left=10),
             ),
         ]
@@ -4793,14 +4780,14 @@ class ParticipantWorkflowScreen:
         if overwrite_warning:
             content_items.extend(
                 [
-                    ft.Container(height=10),
+                    ft.Container(height=st.GAP_MD),
                     overwrite_warning,
                 ]
             )
 
         content_items.extend(
             [
-                ft.Container(height=20),
+                ft.Container(height=st.GAP_LG),
                 ft.Row(
                     [
                         ft.TextButton("Cancel", on_click=lambda e: self._on_preview_cancel()),
@@ -4811,7 +4798,7 @@ class ParticipantWorkflowScreen:
                         ),
                     ],
                     alignment=ft.MainAxisAlignment.END,
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
             ]
         )
@@ -4819,10 +4806,10 @@ class ParticipantWorkflowScreen:
         return ft.Container(
             content=ft.Column(
                 content_items,
-                spacing=10,
+                spacing=st.GAP_SM,
                 scroll=ft.ScrollMode.AUTO,
             ),
-            padding=20,
+            padding=st.PAD,
             expand=True,
         )
 
@@ -5674,21 +5661,21 @@ class ParticipantWorkflowScreen:
             modal=True,
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.SETTINGS_ETHERNET, color=ft.Colors.BLUE),
+                    ft.Icon(ft.Icons.SETTINGS_ETHERNET, color=st.ACCENT),
                     ft.Text("Checking Scanner Connection", weight=ft.FontWeight.BOLD),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
             content=ft.Container(
                 content=ft.Row(
                     [
                         ft.ProgressRing(width=20, height=20, stroke_width=2),
-                        ft.Text("Testing connection to scanner...", size=13),
+                        ft.Text("Testing connection to scanner...", size=st.BODY),
                     ],
-                    spacing=12,
+                    spacing=st.GAP_MD,
                 ),
-                width=400,
-                padding=10,
+                width=st.DIALOG_SM,
+                padding=st.GAP_MD,
             ),
         )
         self.page.overlay.append(progress_dialog)
@@ -5707,14 +5694,14 @@ class ParticipantWorkflowScreen:
                 return
             if ok:
                 icon.name = ft.Icons.CHECK_CIRCLE
-                icon.color = ft.Colors.GREEN
+                icon.color = st.SUCCESS
                 text.value = "Connection OK"
-                text.color = ft.Colors.GREEN
+                text.color = st.SUCCESS
             else:
                 icon.name = ft.Icons.ERROR
-                icon.color = ft.Colors.RED
+                icon.color = st.ERROR
                 text.value = "Issues detected"
-                text.color = ft.Colors.RED
+                text.color = st.ERROR
             text.italic = False
             with contextlib.suppress(Exception):
                 self.page.update()
@@ -5727,28 +5714,28 @@ class ParticipantWorkflowScreen:
 
             def _ping_icon():
                 if result.ping_ok is None:
-                    return ft.Icon(ft.Icons.REMOVE_CIRCLE_OUTLINE, color=ft.Colors.GREY, size=20)
+                    return ft.Icon(ft.Icons.REMOVE_CIRCLE_OUTLINE, color=st.NEUTRAL, size=st.ICON_MD)
                 return ft.Icon(
                     ft.Icons.CHECK_CIRCLE if ping_ok else ft.Icons.ERROR,
-                    color=ft.Colors.GREEN if ping_ok else ft.Colors.RED,
-                    size=20,
+                    color=st.SUCCESS if ping_ok else st.ERROR,
+                    size=st.ICON_MD,
                 )
 
             def _dir_icon():
                 return ft.Icon(
                     ft.Icons.CHECK_CIRCLE if dir_ok else ft.Icons.ERROR,
-                    color=ft.Colors.GREEN if dir_ok else ft.Colors.RED,
-                    size=20,
+                    color=st.SUCCESS if dir_ok else st.ERROR,
+                    size=st.ICON_MD,
                 )
 
             def _row(icon: ft.Control, label: str, detail: str) -> ft.Row:
                 return ft.Row(
                     [
                         icon,
-                        ft.Text(f"{label}: ", weight=ft.FontWeight.W_500, size=13),
-                        ft.Text(detail, size=12, color=ft.Colors.GREY_700, expand=True),
+                        ft.Text(f"{label}: ", weight=ft.FontWeight.W_500, size=st.BODY),
+                        ft.Text(detail, size=st.CAPTION, color=st.MUTED, expand=True),
                     ],
-                    spacing=8,
+                    spacing=st.GAP_SM,
                 )
 
             warning_dialog = ft.AlertDialog(modal=True)
@@ -5767,31 +5754,31 @@ class ParticipantWorkflowScreen:
 
             warning_dialog.title = ft.Row(
                 [
-                    ft.Icon(ft.Icons.WARNING, color=ft.Colors.ORANGE),
+                    ft.Icon(ft.Icons.WARNING, color=st.WARNING),
                     ft.Text("Scanner Connection Issue", weight=ft.FontWeight.BOLD),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
             )
             warning_dialog.content = ft.Container(
                 content=ft.Column(
                     [
                         ft.Text(
                             "The scanner connection check reported problems:",
-                            size=13,
+                            size=st.BODY,
                         ),
                         ft.Container(height=6),
                         _row(_ping_icon(), "Network Ping", ping_detail),
                         _row(_dir_icon(), "Watch Directory", dir_detail),
-                        ft.Container(height=10),
+                        ft.Container(height=st.GAP_MD),
                         ft.Text(
                             "Proceed anyway?",
-                            size=13,
+                            size=st.BODY,
                             weight=ft.FontWeight.BOLD,
                         ),
                     ],
-                    spacing=6,
+                    spacing=st.GAP_SM,
                 ),
-                width=520,
+                width=st.DIALOG_MD,
             )
             warning_dialog.actions = [
                 ft.TextButton("Cancel", on_click=_on_cancel),
@@ -6039,7 +6026,7 @@ class ParticipantWorkflowScreen:
             if success:
                 _snack = ft.SnackBar(
                     ft.Text(result_message if result_message else "Step completed"),
-                    bgcolor=ft.Colors.GREEN,
+                    bgcolor=st.SUCCESS,
                 )
                 _snack.open = True
                 self.page.overlay.append(_snack)
@@ -6123,23 +6110,23 @@ class ParticipantWorkflowScreen:
             f"{kind.capitalize()} stopped at run-{run:02d} attempt-{attempt_num:02d}.\n\n"
             f"Keep the partial files (next attempt will be attempt-{attempt_num + 1:02d}), or "
             f"discard them (next attempt reuses attempt-{attempt_num:02d})?",
-            size=14,
+            size=st.BODY,
         )
         dialog = ft.AlertDialog(
             title=ft.Text("Discard this attempt?"),
-            content=ft.Container(content=body, width=420),
+            content=ft.Container(content=body, width=st.DIALOG_SM),
             actions=[
                 ft.TextButton(
                     "Discard",
                     icon=ft.Icons.DELETE_FOREVER,
-                    style=ft.ButtonStyle(color=ft.Colors.RED_700),
+                    style=ft.ButtonStyle(color=st.ERROR),
                     on_click=on_discard,
                 ),
                 ft.FilledButton(
                     "Keep",
                     icon=ft.Icons.CHECK,
-                    color=ft.Colors.WHITE,
-                    bgcolor=ft.Colors.GREEN_700,
+                    color=st.ON_NEUTRAL,
+                    bgcolor=st.SUCCESS,
                     on_click=on_keep,
                 ),
             ],
@@ -6184,26 +6171,26 @@ class ParticipantWorkflowScreen:
                 [
                     ft.Row(
                         [
-                            ft.Icon(ft.Icons.ERROR_OUTLINE, color=ft.Colors.RED_700, size=24),
+                            ft.Icon(ft.Icons.ERROR_OUTLINE, color=st.ERROR, size=st.ICON_LG),
                             ft.Text(
                                 f"Step failed: {error_type}",
-                                size=15,
+                                size=st.SECTION,
                                 weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.RED_900,
+                                color=st.ERROR_FG,
                             ),
                         ],
-                        spacing=8,
+                        spacing=st.GAP_SM,
                     ),
                     ft.Container(
                         content=ft.Text(
                             error_msg,
-                            size=12,
-                            color=ft.Colors.RED_800,
+                            size=st.CAPTION,
+                            color=st.ERROR_FG,
                             selectable=True,
                         ),
-                        bgcolor=ft.Colors.RED_50,
+                        bgcolor=st.ERROR_BG,
                         border_radius=4,
-                        padding=10,
+                        padding=st.GAP_MD,
                     ),
                     ft.Row(
                         [
@@ -6223,14 +6210,14 @@ class ParticipantWorkflowScreen:
                                 on_click=on_scroll_log,
                             ),
                         ],
-                        spacing=8,
+                        spacing=st.GAP_SM,
                     ),
                 ],
-                spacing=12,
+                spacing=st.GAP_MD,
             ),
-            padding=20,
-            bgcolor=ft.Colors.RED_50,
-            border=ft.border.all(1, ft.Colors.RED_200),
+            padding=st.PAD,
+            bgcolor=st.ERROR_BG,
+            border=ft.border.all(1, st.ERROR_BORDER),
             border_radius=8,
             margin=10,
         )
@@ -6283,7 +6270,7 @@ class ParticipantWorkflowScreen:
                 # Fallback: snackbar only (no step context)
                 _snack = ft.SnackBar(
                     ft.Text(f"Error: {str(error)}"),
-                    bgcolor=ft.Colors.RED,
+                    bgcolor=st.ERROR,
                 )
                 _snack.open = True
                 self.page.overlay.append(_snack)
@@ -6351,10 +6338,10 @@ class ParticipantWorkflowScreen:
         if self.log_listview is not None:
             log_entry = ft.Text(
                 message,
-                size=12,
+                size=st.CAPTION,
                 font_family="monospace",
                 selectable=True,
-                color=ft.Colors.WHITE,
+                color=st.ON_NEUTRAL,
             )
             self.log_listview.controls.append(log_entry)
             # Keep only last 100 entries in ListView too
@@ -6573,7 +6560,7 @@ class ParticipantWorkflowScreen:
             self.activation_plot = ActivationPlot(
                 mask_names=plot_mask_names,
                 n_volumes=n_volumes,
-                height=200,
+                height=st.PREVIEW_H_MD,
                 y_min=plot_y_min,
                 y_max=plot_y_max,
                 display_names=plot_display_names,
@@ -6583,7 +6570,7 @@ class ParticipantWorkflowScreen:
             fd_threshold = self._fb("fd_threshold", 0.5)
             self.fd_plot = FDPlot(
                 n_volumes=n_volumes,
-                height=150,
+                height=st.PREVIEW_H_SM,
                 threshold=fd_threshold,
             )
 
@@ -6591,7 +6578,7 @@ class ParticipantWorkflowScreen:
             dvars_threshold = self._fb("dvars_threshold", 1.5)
             self.dvars_plot = DVARSPlot(
                 n_volumes=n_volumes,
-                height=150,
+                height=st.PREVIEW_H_SM,
                 threshold=dvars_threshold,
             )
 
@@ -6599,7 +6586,7 @@ class ParticipantWorkflowScreen:
             tsnr_threshold = self._fb("tsnr_threshold", 20)
             self.tsnr_plot = TSNRPlot(
                 n_volumes=n_volumes,
-                height=150,
+                height=st.PREVIEW_H_SM,
                 threshold=tsnr_threshold,
             )
 
@@ -6607,13 +6594,13 @@ class ParticipantWorkflowScreen:
             self.task_mirror = TaskMirror(width=None, height=None)
 
             # Create progress and status UI elements (compact for status strip)
-            self._progress_bar = ft.ProgressBar(value=0, width=300)
-            self._progress_text = ft.Text("0 / 0 volumes", size=12)
-            self._status_text = ft.Text("Waiting...", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
-            self._metric_texts: dict[str, ft.Text] = {m.key: ft.Text("", size=12) for m in self._live_metrics}
+            self._progress_bar = ft.ProgressBar(value=0, width=st.PROGRESS_BAR_W)
+            self._progress_text = ft.Text("0 / 0 volumes", size=st.CAPTION)
+            self._status_text = ft.Text("Waiting...", size=st.CAPTION, weight=ft.FontWeight.W_500, color=st.MUTED)
+            self._metric_texts: dict[str, ft.Text] = {m.key: ft.Text("", size=st.CAPTION) for m in self._live_metrics}
             self._metrics_row = ft.Row(
                 list(self._metric_texts.values()),
-                spacing=16,
+                spacing=st.GAP,
                 visible=bool(self._live_metrics),
             )
 
@@ -6628,14 +6615,14 @@ class ParticipantWorkflowScreen:
                             [
                                 ft.Text(
                                     self._get_step_label(step_id),
-                                    size=18,
+                                    size=st.SECTION,
                                     weight=ft.FontWeight.BOLD,
                                 ),
                                 ft.FilledButton(
                                     "Stop",
                                     icon=ft.Icons.STOP,
                                     on_click=lambda e: self._on_stop_clicked(),
-                                    bgcolor=ft.Colors.RED,
+                                    bgcolor=st.ERROR,
                                 ),
                             ],
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -6651,7 +6638,7 @@ class ParticipantWorkflowScreen:
                                             self._status_text,
                                             ft.Row(
                                                 [self._progress_bar, self._progress_text],
-                                                spacing=8,
+                                                spacing=st.GAP_SM,
                                                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                             ),
                                         ],
@@ -6660,9 +6647,9 @@ class ParticipantWorkflowScreen:
                                     ),
                                     self._metrics_row,
                                 ],
-                                spacing=4,
+                                spacing=st.GAP_XS,
                             ),
-                            bgcolor=ft.Colors.GREY_50,
+                            bgcolor=st.SIDEBAR_BG,
                             border_radius=8,
                             padding=ft.padding.symmetric(horizontal=12, vertical=6),
                         ),
@@ -6672,29 +6659,29 @@ class ParticipantWorkflowScreen:
                                 ft.Container(
                                     content=ft.Column(
                                         [
-                                            ft.Text(self._plot_label, size=14, weight=ft.FontWeight.W_500),
+                                            ft.Text(self._plot_label, size=st.BODY, weight=ft.FontWeight.W_500),
                                             self.activation_plot.build(),
                                         ],
-                                        spacing=5,
+                                        spacing=st.GAP_XS,
                                     ),
                                     expand=1,
-                                    height=300,
+                                    height=st.PREVIEW_H_LG,
                                 ),
                                 ft.Container(
                                     content=ft.Column(
                                         [
-                                            ft.Text("Task Display", size=14, weight=ft.FontWeight.W_500),
+                                            ft.Text("Task Display", size=st.BODY, weight=ft.FontWeight.W_500),
                                             self.task_mirror.build(),
                                         ],
-                                        spacing=5,
+                                        spacing=st.GAP_XS,
                                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                         expand=True,
                                     ),
                                     expand=1,
-                                    height=300,
+                                    height=st.PREVIEW_H_LG,
                                 ),
                             ],
-                            spacing=20,
+                            spacing=st.GAP_LG,
                             vertical_alignment=ft.CrossAxisAlignment.START,
                         ),
                         # Row 2: QC plots side by side (secondary)
@@ -6706,48 +6693,48 @@ class ParticipantWorkflowScreen:
                                             [
                                                 ft.Text(
                                                     "Framewise Displacement",
-                                                    size=11,
+                                                    size=st.CAPTION,
                                                     weight=ft.FontWeight.W_500,
                                                 ),
                                                 self.fd_plot.build(),
                                             ],
-                                            spacing=3,
+                                            spacing=st.GAP_XS,
                                         ),
                                         expand=1,
-                                        height=200,
+                                        height=st.PREVIEW_H_MD,
                                     ),
                                     ft.Container(
                                         content=ft.Column(
                                             [
-                                                ft.Text("DVARS", size=11, weight=ft.FontWeight.W_500),
+                                                ft.Text("DVARS", size=st.CAPTION, weight=ft.FontWeight.W_500),
                                                 self.dvars_plot.build(),
                                             ],
-                                            spacing=3,
+                                            spacing=st.GAP_XS,
                                         ),
                                         expand=1,
-                                        height=200,
+                                        height=st.PREVIEW_H_MD,
                                     ),
                                     ft.Container(
                                         content=ft.Column(
                                             [
-                                                ft.Text("tSNR", size=11, weight=ft.FontWeight.W_500),
+                                                ft.Text("tSNR", size=st.CAPTION, weight=ft.FontWeight.W_500),
                                                 self.tsnr_plot.build(),
                                             ],
-                                            spacing=3,
+                                            spacing=st.GAP_XS,
                                         ),
                                         expand=1,
-                                        height=200,
+                                        height=st.PREVIEW_H_MD,
                                     ),
                                 ],
-                                spacing=12,
+                                spacing=st.GAP_MD,
                             ),
                             padding=ft.padding.symmetric(horizontal=20),
                         ),
                     ],
-                    spacing=8,
+                    spacing=st.GAP_SM,
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                padding=20,
+                padding=st.PAD,
                 expand=True,
             )
 
@@ -6782,7 +6769,7 @@ class ParticipantWorkflowScreen:
                         [
                             ft.Text(
                                 self._get_step_label(step_id),
-                                size=18,
+                                size=st.SECTION,
                                 weight=ft.FontWeight.BOLD,
                             ),
                             ft.Divider(),
@@ -6793,16 +6780,16 @@ class ParticipantWorkflowScreen:
                                         "Stop",
                                         icon=ft.Icons.STOP,
                                         on_click=lambda e: self._on_stop_clicked(),
-                                        bgcolor=ft.Colors.RED,
+                                        bgcolor=st.ERROR,
                                     ),
                                 ],
                                 alignment=ft.MainAxisAlignment.END,
                             ),
                         ],
-                        spacing=10,
+                        spacing=st.GAP_SM,
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    padding=20,
+                    padding=st.PAD,
                     expand=True,
                 )
             else:
@@ -6812,7 +6799,7 @@ class ParticipantWorkflowScreen:
                         [
                             ft.Text(
                                 f"Running: {self._get_step_label(step_id)}",
-                                size=18,
+                                size=st.SECTION,
                                 weight=ft.FontWeight.BOLD,
                             ),
                             ft.Divider(),
@@ -6820,10 +6807,10 @@ class ParticipantWorkflowScreen:
                                 content=ft.Column(
                                     [
                                         ft.ProgressRing(),
-                                        ft.Text("Processing...", size=14),
+                                        ft.Text("Processing...", size=st.BODY),
                                     ],
                                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                    spacing=10,
+                                    spacing=st.GAP_SM,
                                 ),
                                 alignment=ft.Alignment(0, 0),  # Center alignment
                                 expand=True,
@@ -6834,15 +6821,15 @@ class ParticipantWorkflowScreen:
                                         "Stop",
                                         icon=ft.Icons.STOP,
                                         on_click=lambda e: self._on_stop_clicked(),
-                                        bgcolor=ft.Colors.RED,
+                                        bgcolor=st.ERROR,
                                     ),
                                 ],
                                 alignment=ft.MainAxisAlignment.END,
                             ),
                         ],
-                        spacing=10,
+                        spacing=st.GAP_SM,
                     ),
-                    padding=20,
+                    padding=st.PAD,
                     expand=True,
                 )
 
@@ -6993,40 +6980,40 @@ class ParticipantWorkflowScreen:
         """
         self._slice_image = ft.Image(
             src="",
-            width=480,
-            height=270,
+            width=st.TASK_MIRROR_W,
+            height=st.TASK_MIRROR_H,
             fit=ft.BoxFit.CONTAIN,
             visible=False,
         )
         self._slice_placeholder = ft.Container(
             content=ft.Column(
                 [
-                    ft.Icon(ft.Icons.IMAGE_OUTLINED, size=48, color=ft.Colors.GREY_400),
-                    ft.Text("Waiting for first volume...", size=12, color=ft.Colors.GREY_500),
+                    ft.Icon(ft.Icons.IMAGE_OUTLINED, size=st.ICON_XL, color=st.NEUTRAL),
+                    ft.Text("Waiting for first volume...", size=st.CAPTION, color=st.NEUTRAL),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=8,
+                spacing=st.GAP_SM,
             ),
-            width=480,
-            height=270,
+            width=st.TASK_MIRROR_W,
+            height=st.TASK_MIRROR_H,
             alignment=ft.Alignment(0, 0),
-            border=ft.border.all(1, ft.Colors.GREY_300),
+            border=ft.border.all(1, st.PANEL_BORDER),
             border_radius=5,
             bgcolor=ft.Colors.BLACK,
         )
 
-        self.task_mirror = TaskMirror(width=480, height=270)
+        self.task_mirror = TaskMirror(width=st.TASK_MIRROR_W, height=st.TASK_MIRROR_H)
 
         fd_threshold = self._fb("fd_threshold", 0.5)
-        self.fd_plot = FDPlot(n_volumes=n_volumes, height=150, threshold=fd_threshold)
+        self.fd_plot = FDPlot(n_volumes=n_volumes, height=st.PREVIEW_H_SM, threshold=fd_threshold)
         dvars_threshold = self._fb("dvars_threshold", 1.5)
-        self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=150, threshold=dvars_threshold)
+        self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=st.PREVIEW_H_SM, threshold=dvars_threshold)
         tsnr_threshold = self._fb("tsnr_threshold", 20)
-        self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=150, threshold=tsnr_threshold)
+        self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=st.PREVIEW_H_SM, threshold=tsnr_threshold)
 
-        self._progress_bar = ft.ProgressBar(value=0, width=300)
-        self._progress_text = ft.Text("0 / 0 volumes", size=12)
-        self._status_text = ft.Text("Waiting...", size=12, weight=ft.FontWeight.W_500, color=ft.Colors.GREY_600)
+        self._progress_bar = ft.ProgressBar(value=0, width=st.PROGRESS_BAR_W)
+        self._progress_text = ft.Text("0 / 0 volumes", size=st.CAPTION)
+        self._status_text = ft.Text("Waiting...", size=st.CAPTION, weight=ft.FontWeight.W_500, color=st.MUTED)
 
         return ft.Container(
             content=ft.Column(
@@ -7035,14 +7022,14 @@ class ParticipantWorkflowScreen:
                         [
                             ft.Text(
                                 self._get_step_label(step_id),
-                                size=18,
+                                size=st.SECTION,
                                 weight=ft.FontWeight.BOLD,
                             ),
                             ft.FilledButton(
                                 "Stop",
                                 icon=ft.Icons.STOP,
                                 on_click=lambda e: self._on_stop_clicked(),
-                                bgcolor=ft.Colors.RED,
+                                bgcolor=st.ERROR,
                             ),
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -7055,14 +7042,14 @@ class ParticipantWorkflowScreen:
                                 self._status_text,
                                 ft.Row(
                                     [self._progress_bar, self._progress_text],
-                                    spacing=8,
+                                    spacing=st.GAP_SM,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                 ),
                             ],
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
-                        bgcolor=ft.Colors.GREY_50,
+                        bgcolor=st.SIDEBAR_BG,
                         border_radius=8,
                         padding=ft.padding.symmetric(horizontal=12, vertical=6),
                     ),
@@ -7072,28 +7059,28 @@ class ParticipantWorkflowScreen:
                             ft.Container(
                                 content=ft.Column(
                                     [
-                                        ft.Text("Brain Slice", size=14, weight=ft.FontWeight.W_500),
+                                        ft.Text("Brain Slice", size=st.BODY, weight=ft.FontWeight.W_500),
                                         ft.Stack([self._slice_placeholder, self._slice_image]),
                                     ],
-                                    spacing=5,
+                                    spacing=st.GAP_XS,
                                 ),
                                 expand=True,
-                                height=300,
+                                height=st.PREVIEW_H_LG,
                             ),
                             ft.Container(
                                 content=ft.Column(
                                     [
-                                        ft.Text("Task Display", size=14, weight=ft.FontWeight.W_500),
+                                        ft.Text("Task Display", size=st.BODY, weight=ft.FontWeight.W_500),
                                         self.task_mirror.build(),
                                     ],
-                                    spacing=5,
+                                    spacing=st.GAP_XS,
                                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                 ),
                                 width=500,
-                                height=300,
+                                height=st.PREVIEW_H_LG,
                             ),
                         ],
-                        spacing=20,
+                        spacing=st.GAP_LG,
                         vertical_alignment=ft.CrossAxisAlignment.START,
                     ),
                     # Row 2: QC plots side by side
@@ -7103,46 +7090,48 @@ class ParticipantWorkflowScreen:
                                 ft.Container(
                                     content=ft.Column(
                                         [
-                                            ft.Text("Framewise Displacement", size=11, weight=ft.FontWeight.W_500),
+                                            ft.Text(
+                                                "Framewise Displacement", size=st.CAPTION, weight=ft.FontWeight.W_500
+                                            ),
                                             self.fd_plot.build(),
                                         ],
-                                        spacing=3,
+                                        spacing=st.GAP_XS,
                                     ),
                                     expand=1,
-                                    height=200,
+                                    height=st.PREVIEW_H_MD,
                                 ),
                                 ft.Container(
                                     content=ft.Column(
                                         [
-                                            ft.Text("DVARS", size=11, weight=ft.FontWeight.W_500),
+                                            ft.Text("DVARS", size=st.CAPTION, weight=ft.FontWeight.W_500),
                                             self.dvars_plot.build(),
                                         ],
-                                        spacing=3,
+                                        spacing=st.GAP_XS,
                                     ),
                                     expand=1,
-                                    height=200,
+                                    height=st.PREVIEW_H_MD,
                                 ),
                                 ft.Container(
                                     content=ft.Column(
                                         [
-                                            ft.Text("tSNR", size=11, weight=ft.FontWeight.W_500),
+                                            ft.Text("tSNR", size=st.CAPTION, weight=ft.FontWeight.W_500),
                                             self.tsnr_plot.build(),
                                         ],
-                                        spacing=3,
+                                        spacing=st.GAP_XS,
                                     ),
                                     expand=1,
-                                    height=200,
+                                    height=st.PREVIEW_H_MD,
                                 ),
                             ],
-                            spacing=12,
+                            spacing=st.GAP_MD,
                         ),
                         padding=ft.padding.symmetric(horizontal=20),
                     ),
                 ],
-                spacing=8,
+                spacing=st.GAP_SM,
                 scroll=ft.ScrollMode.AUTO,
             ),
-            padding=20,
+            padding=st.PAD,
             expand=True,
         )
 
@@ -7388,14 +7377,14 @@ class ParticipantWorkflowScreen:
                     n_baseline = self._fb("n_baseline", 25)
                     if volume < n_baseline:
                         self._status_text.value = f"Baseline ({volume}/{n_baseline})"
-                        self._status_text.color = ft.Colors.ORANGE_600
+                        self._status_text.color = st.WARNING
                     else:
                         step_id = getattr(self, "_current_step_id", "")
                         if "transfer" in step_id:
                             self._status_text.value = "Transfer (no feedback)"
                         else:
                             self._status_text.value = "Task Active"
-                        self._status_text.color = ft.Colors.GREEN_600
+                        self._status_text.color = st.SUCCESS
                     self._status_text.update()
 
                 # Update declarative live metrics (from psychopylog.tsv)
@@ -7462,7 +7451,7 @@ class ParticipantWorkflowScreen:
         content_items: list[ft.Control] = [
             ft.Text(
                 "Are you sure you want to stop the current run?",
-                size=14,
+                size=st.BODY,
             ),
         ]
 
@@ -7473,8 +7462,8 @@ class ParticipantWorkflowScreen:
                     show_questions_checkbox,
                     ft.Text(
                         "If checked, the participant will still see the post-run questionnaire.",
-                        size=12,
-                        color=ft.Colors.GREY_600,
+                        size=st.CAPTION,
+                        color=st.MUTED,
                         italic=True,
                     ),
                 ]
@@ -7483,16 +7472,16 @@ class ParticipantWorkflowScreen:
         dialog = ft.AlertDialog(
             title=ft.Text("Stop Run"),
             content=ft.Container(
-                content=ft.Column(content_items, tight=True, spacing=10),
-                width=400,
+                content=ft.Column(content_items, tight=True, spacing=st.GAP_SM),
+                width=st.DIALOG_SM,
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=cancel_stop),
                 ft.FilledButton(
                     "Stop",
                     icon=ft.Icons.STOP,
-                    color=ft.Colors.WHITE,
-                    bgcolor=ft.Colors.RED_700,
+                    color=st.ON_NEUTRAL,
+                    bgcolor=st.ERROR,
                     on_click=confirm_stop,
                 ),
             ],
@@ -7828,7 +7817,7 @@ class ParticipantWorkflowScreen:
         panels.append(self._build_utilities_section())
 
         self.step_panel_list = ft.ExpansionPanelList(
-            expand_icon_color=ft.Colors.BLUE_500,
+            expand_icon_color=st.ACCENT,
             elevation=2,
             controls=panels,
         )
@@ -7839,7 +7828,7 @@ class ParticipantWorkflowScreen:
                 scroll=ft.ScrollMode.AUTO,
             ),
             width=300,
-            padding=10,
+            padding=st.GAP_MD,
         )
 
         # Right panel: Preview/Monitoring
@@ -7847,7 +7836,7 @@ class ParticipantWorkflowScreen:
             content=self._build_preview_panel(),
             expand=True,
             bgcolor=ft.Colors.WHITE,
-            border=ft.border.all(1, ft.Colors.GREY_300),
+            border=ft.border.all(1, st.PANEL_BORDER),
             border_radius=5,
         )
 

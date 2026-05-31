@@ -833,7 +833,7 @@ class StudyEditorScreen:
                 ft.Text(title, size=st.SUBSECTION, weight=ft.FontWeight.BOLD if selected else ft.FontWeight.W_500)
             ]
             if subtitle:
-                lines.append(ft.Text(subtitle, size=11, color=st.MUTED, italic=True))
+                lines.append(ft.Text(subtitle, size=st.CAPTION, color=st.MUTED, italic=True))
             return ft.Container(
                 content=ft.Column(lines, spacing=1),
                 on_click=on_click,
@@ -845,7 +845,7 @@ class StudyEditorScreen:
             )
 
         items: list[ft.Control] = [
-            ft.Text("STUDY", size=11, weight=ft.FontWeight.BOLD, color=st.MUTED),
+            ft.Text("STUDY", size=st.CAPTION, weight=ft.FontWeight.BOLD, color=st.MUTED),
             _row(
                 "Study-wide settings",
                 "Paths, scanner, reference, display",
@@ -855,9 +855,9 @@ class StudyEditorScreen:
             ft.Container(height=st.GAP_SM),
             ft.Row(
                 [
-                    ft.Text("SESSIONS", size=11, weight=ft.FontWeight.BOLD, color=st.MUTED),
+                    ft.Text("SESSIONS", size=st.CAPTION, weight=ft.FontWeight.BOLD, color=st.MUTED),
                     ft.IconButton(
-                        icon=ft.Icons.ADD, icon_size=18, tooltip="Add session", on_click=self._on_add_session
+                        icon=ft.Icons.ADD, icon_size=st.ICON_MD, tooltip="Add session", on_click=self._on_add_session
                     ),
                 ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -870,7 +870,7 @@ class StudyEditorScreen:
                     f"ses-{i + 1:02d}", self._session_summary(i), active, lambda e, idx=i: self._on_select_session(idx)
                 )
             )
-        return ft.Column(items, spacing=4, scroll=ft.ScrollMode.AUTO, expand=True)
+        return ft.Column(items, spacing=st.GAP_XS, scroll=ft.ScrollMode.AUTO, expand=True)
 
     def _build_session_header(self, index: int) -> ft.Control:
         """Scope banner + session lifecycle actions shown above the inner tabs."""
@@ -879,7 +879,7 @@ class StudyEditorScreen:
         banner = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.INFO_OUTLINE, size=16, color=st.ACCENT),
+                    ft.Icon(ft.Icons.INFO_OUTLINE, size=st.ICON_SM, color=st.ACCENT),
                     ft.Text(
                         f"Editing {ses_id} (Session {index + 1} of {n}) — the localizer & feedback "
                         f"tabs below apply to {ses_id} only.",
@@ -953,7 +953,7 @@ class StudyEditorScreen:
             idx = self._active_session_index
             self._detail_pane.content = ft.Column(
                 [self._build_session_header(idx), self._build_inner_tabs(idx)],
-                spacing=10,
+                spacing=st.GAP_SM,
                 expand=True,
             )
 
@@ -1481,8 +1481,8 @@ class StudyEditorScreen:
             monitors = get_monitors()
             if not monitors:
                 return ft.Container(
-                    content=ft.Text("No monitors detected", size=12, color=ft.Colors.ORANGE_700),
-                    padding=10,
+                    content=ft.Text("No monitors detected", size=st.CAPTION, color=st.WARNING),
+                    padding=st.GAP_MD,
                 )
 
             monitor_texts = []
@@ -1495,7 +1495,7 @@ class StudyEditorScreen:
             return ft.Container(
                 content=ft.Column(
                     [ft.Text("Detected monitors:", size=st.CAPTION, weight=ft.FontWeight.BOLD), *monitor_texts],
-                    spacing=2,
+                    spacing=st.GAP_XS,
                 ),
                 bgcolor=st.SUBTLE_BG,
                 padding=st.GAP_MD,
@@ -1504,8 +1504,8 @@ class StudyEditorScreen:
         except Exception as e:
             logger.warning(f"Failed to detect monitors: {e}")
             return ft.Container(
-                content=ft.Text(f"Monitor detection unavailable: {e}", size=12, color=ft.Colors.ORANGE_700),
-                padding=10,
+                content=ft.Text(f"Monitor detection unavailable: {e}", size=st.CAPTION, color=st.WARNING),
+                padding=st.GAP_MD,
             )
 
     def _show_scanner_setup_guide(self):
@@ -1522,10 +1522,10 @@ class StudyEditorScreen:
         def _make_content(text: str) -> ft.Container:
             return ft.Container(
                 content=ft.Column(
-                    [ft.Text(text, font_family="monospace", selectable=True, size=12)],
+                    [ft.Text(text, font_family="monospace", selectable=True, size=st.CAPTION)],
                     scroll=ft.ScrollMode.AUTO,
                 ),
-                padding=10,
+                padding=st.GAP_MD,
             )
 
         tabs = ft.Tabs(
@@ -1664,7 +1664,7 @@ class StudyEditorScreen:
         config = self.study_config.session_config
         session_error = self._validate_sessions(config.get("sessions", []))
         if session_error:
-            _snack = ft.SnackBar(ft.Text(session_error), bgcolor=ft.Colors.RED_200)
+            _snack = ft.SnackBar(ft.Text(session_error), bgcolor=st.ERROR_BG)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1794,18 +1794,20 @@ class StudyEditorScreen:
             content=ft.Container(
                 content=ft.Column(
                     [
-                        ft.Text(f"Study: {self.study_config.metadata.name}", size=14, weight=ft.FontWeight.BOLD),
+                        ft.Text(
+                            f"Study: {self.study_config.metadata.name}", size=st.SUBSECTION, weight=ft.FontWeight.BOLD
+                        ),
                         ft.Divider(),
                         participant_id_field,
                         ft.Text(
                             "Enter the participant ID to begin the neurofeedback session.",
-                            size=12,
-                            color=ft.Colors.GREY_600,
+                            size=st.CAPTION,
+                            color=st.MUTED,
                             italic=True,
                         ),
                     ],
                     tight=True,
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
                 width=400,
             ),

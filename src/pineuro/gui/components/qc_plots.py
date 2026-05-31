@@ -17,6 +17,8 @@ from typing import Any
 
 import flet as ft
 
+from pineuro.gui import styles as st
+
 from ..utils import build_placeholder
 
 # Import chart types from flet_charts package
@@ -411,11 +413,11 @@ class FDPlot(BaseQCPlot):
         n = sum(1 for v in self.data.values if v > self.threshold)
         pct = (n / len(self.data.values) * 100) if self.data.values else 0.0
         text = f"{n} > {self.threshold}mm ({pct:.1f}%)"
-        color = THRESHOLD_LINE_COLOR if n > 0 else ft.Colors.GREY_600
+        color = THRESHOLD_LINE_COLOR if n > 0 else st.MUTED
         return text, color
 
     def _format_initial_summary(self) -> tuple[str, str]:
-        return f"0 > {self.threshold}mm (0%)", ft.Colors.GREY_600
+        return f"0 > {self.threshold}mm (0%)", st.MUTED
 
 
 # =============================================================================
@@ -486,11 +488,11 @@ class DVARSPlot(BaseQCPlot):
         n = sum(1 for v in std_values if v > self.threshold)
         pct = (n / len(std_values) * 100) if std_values else 0.0
         text = f"{n} > {self.threshold} ({pct:.1f}%)"
-        color = THRESHOLD_LINE_COLOR if n > 0 else ft.Colors.GREY_600
+        color = THRESHOLD_LINE_COLOR if n > 0 else st.MUTED
         return text, color
 
     def _format_initial_summary(self) -> tuple[str, str]:
-        return f"0 > {self.threshold} (0%)", ft.Colors.GREY_600
+        return f"0 > {self.threshold} (0%)", st.MUTED
 
 
 # =============================================================================
@@ -530,4 +532,4 @@ class TSNRPlot(BaseQCPlot):
         return text, color
 
     def _format_initial_summary(self) -> tuple[str, str]:
-        return "tSNR: --", ft.Colors.GREY_600
+        return "tSNR: --", st.MUTED

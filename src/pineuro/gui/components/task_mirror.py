@@ -13,6 +13,8 @@ from typing import Any
 
 import flet as ft
 
+from pineuro.gui import styles as st
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +42,7 @@ class TaskMirror:
     ... })
     """
 
-    def __init__(self, width: float | None = 480, height: float | None = 270):
+    def __init__(self, width: float | None = st.TASK_MIRROR_W, height: float | None = st.TASK_MIRROR_H):
         """Initialize the task mirror.
 
         Parameters
@@ -74,7 +76,7 @@ class TaskMirror:
         self._container = ft.Container(
             content=self._image,
             bgcolor=ft.Colors.BLACK,
-            border=ft.border.all(1, ft.Colors.GREY_400),
+            border=ft.border.all(1, st.PANEL_BORDER),
             border_radius=5,
             width=self.width,
             height=self.height,

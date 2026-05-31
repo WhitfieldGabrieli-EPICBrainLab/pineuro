@@ -51,31 +51,31 @@ class ScannerConnectionDialog:
             modal=True,
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.SETTINGS_ETHERNET, color=ft.Colors.BLUE),
+                    ft.Icon(ft.Icons.SETTINGS_ETHERNET, color=st.ACCENT),
                     ft.Text("Scanner Connection Test", weight=ft.FontWeight.BOLD),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
             content=ft.Container(
                 content=ft.Column(
                     [
                         ft.Text(
                             f"Scanner IP: {ip_display}",
-                            size=12,
-                            color=ft.Colors.GREY_600,
+                            size=st.CAPTION,
+                            color=st.MUTED,
                         ),
                         ft.Text(
                             f"Watch dir: {self.watch_dir}",
-                            size=12,
-                            color=ft.Colors.GREY_600,
+                            size=st.CAPTION,
+                            color=st.MUTED,
                         ),
-                        ft.Container(height=10),
+                        ft.Container(height=st.GAP_MD),
                         self._ping_status,
                         self._dir_status,
-                        ft.Container(height=10),
+                        ft.Container(height=st.GAP_MD),
                         self._overall_status,
                     ],
-                    spacing=8,
+                    spacing=st.GAP_SM,
                 ),
                 width=st.DIALOG_MD,
             ),
@@ -117,34 +117,34 @@ class ScannerConnectionDialog:
                 "Network Ping",
                 "Skipped (no IP configured)",
                 ft.Icons.REMOVE_CIRCLE_OUTLINE,
-                ft.Colors.GREY,
+                st.NEUTRAL,
             )
         elif result.ping_ok:
             self._ping_status.content = self._build_result_row(
                 "Network Ping",
                 result.ping_detail,
                 ft.Icons.CHECK_CIRCLE,
-                ft.Colors.GREEN,
+                st.SUCCESS,
             )
         else:
             self._ping_status.content = self._build_result_row(
                 "Network Ping",
                 result.ping_detail,
                 ft.Icons.ERROR,
-                ft.Colors.RED,
+                st.ERROR,
             )
 
         # Directory result
         if result.dir_exists and result.dir_writable:
             if result.dir_empty:
                 icon = ft.Icons.CHECK_CIRCLE
-                color = ft.Colors.GREEN
+                color = st.SUCCESS
             else:
                 icon = ft.Icons.WARNING
-                color = ft.Colors.ORANGE
+                color = st.WARNING
         else:
             icon = ft.Icons.ERROR
-            color = ft.Colors.RED
+            color = st.ERROR
 
         self._dir_status.content = self._build_result_row("Watch Directory", result.dir_detail, icon, color)
 
@@ -153,36 +153,36 @@ class ScannerConnectionDialog:
             self._overall_status.content = ft.Container(
                 content=ft.Row(
                     [
-                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=24),
+                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=st.SUCCESS, size=st.ICON_LG),
                         ft.Text(
                             "Scanner connection ready",
-                            size=14,
+                            size=st.SUBSECTION,
                             weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.GREEN,
+                            color=st.SUCCESS,
                         ),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
-                padding=10,
-                bgcolor=ft.Colors.GREEN_50,
+                padding=st.GAP_MD,
+                bgcolor=st.SUCCESS_BG,
                 border_radius=5,
             )
         else:
             self._overall_status.content = ft.Container(
                 content=ft.Row(
                     [
-                        ft.Icon(ft.Icons.ERROR, color=ft.Colors.RED, size=24),
+                        ft.Icon(ft.Icons.ERROR, color=st.ERROR, size=st.ICON_LG),
                         ft.Text(
                             "Connection issues detected",
-                            size=14,
+                            size=st.SUBSECTION,
                             weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.RED,
+                            color=st.ERROR,
                         ),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
-                padding=10,
-                bgcolor=ft.Colors.RED_50,
+                padding=st.GAP_MD,
+                bgcolor=st.ERROR_BG,
                 border_radius=5,
             )
 
@@ -191,21 +191,21 @@ class ScannerConnectionDialog:
         return ft.Row(
             [
                 ft.ProgressRing(width=16, height=16, stroke_width=2),
-                ft.Text(f"{label}: ", weight=ft.FontWeight.W_500, size=13),
-                ft.Text("Testing...", size=13, color=ft.Colors.GREY_600),
+                st.subsection(f"{label}: "),
+                ft.Text("Testing...", size=st.BODY, color=st.MUTED),
             ],
-            spacing=8,
+            spacing=st.GAP_SM,
         )
 
     def _build_result_row(self, label: str, detail: str, icon: ft.IconData, color: str) -> ft.Row:
         """Build a result row with status icon."""
         return ft.Row(
             [
-                ft.Icon(icon, color=color, size=20),
-                ft.Text(f"{label}: ", weight=ft.FontWeight.W_500, size=13),
-                ft.Text(detail, size=12, color=ft.Colors.GREY_700, expand=True),
+                ft.Icon(icon, color=color, size=st.ICON_MD),
+                st.subsection(f"{label}: "),
+                ft.Text(detail, size=st.CAPTION, color=st.MUTED, expand=True),
             ],
-            spacing=8,
+            spacing=st.GAP_SM,
         )
 
     def _close(self):

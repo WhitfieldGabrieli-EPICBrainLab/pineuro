@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 
 import flet as ft
 
+from pineuro.gui import styles as st
+
 if TYPE_CHECKING:
     from pineuro.gui.models import StudyConfig
     from pineuro.session import SessionMetadata
@@ -145,10 +147,10 @@ class SessionSelectionDialog:
         errors = validate_session_start(self.study_config, self.participant_id, 0, self.base_dir)
 
         body: list[ft.Control] = [
-            ft.Text(f"Participant: {self.participant_id}", size=14, weight=ft.FontWeight.BOLD),
+            ft.Text(f"Participant: {self.participant_id}", size=st.SUBSECTION, weight=ft.FontWeight.BOLD),
             ft.Divider(),
-            ft.Text("No existing data found for this participant.", size=12, color=ft.Colors.GREY_600),
-            ft.Text(f"A new session ({default_session_id}) will be created.", size=12),
+            ft.Text("No existing data found for this participant.", size=st.CAPTION, color=st.MUTED),
+            ft.Text(f"A new session ({default_session_id}) will be created.", size=st.CAPTION),
         ]
         body.extend(self._error_controls(errors))
 
@@ -161,7 +163,7 @@ class SessionSelectionDialog:
 
         self.dialog = ft.AlertDialog(
             title=ft.Text("Start New Session"),
-            content=ft.Container(content=ft.Column(body, tight=True, spacing=10), width=400),
+            content=ft.Container(content=ft.Column(body, tight=True, spacing=st.GAP_SM), width=st.DIALOG_SM),
             actions=[
                 ft.TextButton("Cancel", on_click=cancel),
                 ft.FilledButton(
@@ -191,7 +193,7 @@ class SessionSelectionDialog:
                 ft.ListTile(
                     leading=ft.Icon(ft.Icons.FOLDER_OPEN),
                     title=ft.Text(session_id),
-                    subtitle=ft.Text(status_text, size=11),
+                    subtitle=ft.Text(status_text, size=st.CAPTION),
                     on_click=lambda e, vid=session_id: self._select_existing_session(vid),
                 )
             )
@@ -206,25 +208,25 @@ class SessionSelectionDialog:
         can_create_new = count is None or new_session_number <= count
 
         body: list[ft.Control] = [
-            ft.Text(f"Participant: {self.participant_id}", size=14, weight=ft.FontWeight.BOLD),
+            ft.Text(f"Participant: {self.participant_id}", size=st.SUBSECTION, weight=ft.FontWeight.BOLD),
             ft.Divider(),
-            ft.Text("Existing sessions:", size=12, weight=ft.FontWeight.W_500),
+            ft.Text("Existing sessions:", size=st.CAPTION, weight=ft.FontWeight.W_500),
             ft.Container(
                 content=ft.Column(session_tiles, spacing=0),
-                border=ft.border.all(1, ft.Colors.GREY_300),
+                border=ft.border.all(1, st.PANEL_BORDER),
                 border_radius=8,
                 padding=0,
             ),
-            ft.Container(height=10),
+            ft.Container(height=st.GAP_MD),
         ]
         if can_create_new:
-            body.append(ft.Text("Or create the next session:", size=12, weight=ft.FontWeight.W_500))
+            body.append(ft.Text("Or create the next session:", size=st.CAPTION, weight=ft.FontWeight.W_500))
         else:
             body.append(
                 ft.Text(
                     f"All {count} session(s) declared by this study have been created.",
-                    size=12,
-                    color=ft.Colors.GREY_600,
+                    size=st.CAPTION,
+                    color=st.MUTED,
                 )
             )
 
@@ -247,7 +249,9 @@ class SessionSelectionDialog:
 
         self.dialog = ft.AlertDialog(
             title=ft.Text("Select Session"),
-            content=ft.Container(content=ft.Column(body, tight=True, spacing=8), width=450, height=350),
+            content=ft.Container(
+                content=ft.Column(body, tight=True, spacing=st.GAP_SM), width=st.DIALOG_MD, height=350
+            ),
             actions=actions,
         )
         self.page.show_dialog(self.dialog)
@@ -264,16 +268,16 @@ class SessionSelectionDialog:
         notes_field = ft.TextField(label="Notes (optional)", multiline=True, max_lines=3, width=350)
 
         body: list[ft.Control] = [
-            ft.Text(f"Creating session: {new_session_id}", size=14, weight=ft.FontWeight.BOLD),
+            ft.Text(f"Creating session: {new_session_id}", size=st.SUBSECTION, weight=ft.FontWeight.BOLD),
             ft.Divider(),
             ft.Text(
                 "This session's tasks and mask sources are defined by the study protocol.",
-                size=11,
-                color=ft.Colors.GREY_600,
+                size=st.CAPTION,
+                color=st.MUTED,
             ),
         ]
         body.extend(self._error_controls(errors))
-        body.extend([ft.Container(height=10), notes_field])
+        body.extend([ft.Container(height=st.GAP_MD), notes_field])
 
         def create_session(e):
             self.page.pop_dialog()
@@ -289,7 +293,7 @@ class SessionSelectionDialog:
 
         self.dialog = ft.AlertDialog(
             title=ft.Text("New Session Options"),
-            content=ft.Container(content=ft.Column(body, tight=True, spacing=8), width=400),
+            content=ft.Container(content=ft.Column(body, tight=True, spacing=st.GAP_SM), width=st.DIALOG_SM),
             actions=[
                 ft.TextButton("Back", on_click=back),
                 ft.FilledButton("Create", icon=ft.Icons.CHECK, on_click=create_session, disabled=bool(errors)),
@@ -305,10 +309,10 @@ class SessionSelectionDialog:
             controls.append(
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.WARNING_AMBER, color=ft.Colors.RED_400, size=16),
-                        ft.Text(msg, size=11, color=ft.Colors.RED_400, expand=True),
+                        ft.Icon(ft.Icons.WARNING_AMBER, color=st.ERROR, size=st.ICON_SM),
+                        ft.Text(msg, size=st.CAPTION, color=st.ERROR, expand=True),
                     ],
-                    spacing=6,
+                    spacing=st.GAP_SM,
                 )
             )
         return controls

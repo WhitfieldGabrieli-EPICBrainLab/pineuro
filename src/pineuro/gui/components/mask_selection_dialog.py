@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 import flet as ft
 
+from pineuro.gui import styles as st
+
 if TYPE_CHECKING:
     from pineuro.mask_extraction import MaskSelection
 
@@ -182,7 +184,7 @@ class MaskSelectionDialog:
                     selection_reason="auto",
                 )
 
-    def _create_image(self, path: Path, height: int = 150, width: int | None = None) -> ft.Image:
+    def _create_image(self, path: Path, height: int = st.PREVIEW_H_SM, width: int | None = None) -> ft.Image:
         """Create an Image widget from a local file path."""
         return ft.Image(
             src=str(path),
@@ -202,10 +204,10 @@ class MaskSelectionDialog:
             modal=True,
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.BIOTECH, color=ft.Colors.BLUE),
+                    ft.Icon(ft.Icons.BIOTECH, color=st.ACCENT),
                     ft.Text("Review Network Masks", weight=ft.FontWeight.BOLD),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
             content=self._build_stage1_content(),
             actions=self._build_stage1_actions(),
@@ -227,13 +229,13 @@ class MaskSelectionDialog:
             # Determine correlation quality color (use selection's correlation if available)
             corr = selection.correlation if selection else info.current_correlation
             if corr >= self.CORR_GOOD:
-                quality_color = ft.Colors.GREEN
+                quality_color = st.SUCCESS
                 quality_icon = ft.Icons.CHECK_CIRCLE
             elif corr >= self.CORR_MODERATE:
-                quality_color = ft.Colors.ORANGE
+                quality_color = st.WARNING
                 quality_icon = ft.Icons.WARNING_AMBER
             else:
-                quality_color = ft.Colors.RED
+                quality_color = st.ERROR
                 quality_icon = ft.Icons.ERROR
 
             # Source label and overlay path based on current selection
@@ -267,13 +269,13 @@ class MaskSelectionDialog:
             # Build overlay image if available
             overlay_content: ft.Control
             if overlay_path and overlay_path.exists():
-                overlay_content = self._create_image(overlay_path, height=150)
+                overlay_content = self._create_image(overlay_path, height=st.PREVIEW_H_SM)
             else:
                 overlay_content = ft.Container(
-                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
-                    height=150,
+                    content=ft.Text("No preview available", color=st.NEUTRAL),
+                    height=st.PREVIEW_H_SM,
                     alignment=ft.Alignment(0, 0),
-                    bgcolor=ft.Colors.GREY_200,
+                    bgcolor=st.NEUTRAL_BG,
                 )
 
             # Build card for this mask
@@ -283,20 +285,20 @@ class MaskSelectionDialog:
                         # Header row
                         ft.Row(
                             [
-                                ft.Text(name, size=16, weight=ft.FontWeight.W_500),
+                                ft.Text(name, size=st.SECTION, weight=ft.FontWeight.W_500),
                                 ft.Container(expand=True),
-                                ft.Icon(quality_icon, color=quality_color, size=20),
+                                ft.Icon(quality_icon, color=quality_color, size=st.ICON_MD),
                                 ft.Text(
                                     f"{source_label} {component_label} (r = {corr:.2f})",
                                     color=quality_color,
-                                    size=13,
+                                    size=st.BODY,
                                 ),
                             ],
                         ),
                         # Overlay image
                         ft.Container(
                             content=overlay_content,
-                            border=ft.border.all(1, ft.Colors.GREY_300),
+                            border=ft.border.all(1, st.PANEL_BORDER),
                             border_radius=5,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
@@ -313,18 +315,18 @@ class MaskSelectionDialog:
                                     "Accept",
                                     icon=ft.Icons.CHECK,
                                     on_click=lambda e, n=name: self._on_accept_clicked(n),
-                                    bgcolor=ft.Colors.GREEN if is_accepted else None,
+                                    bgcolor=st.SUCCESS if is_accepted else None,
                                 ),
                             ],
-                            spacing=10,
+                            spacing=st.GAP_SM,
                         ),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
-                padding=15,
-                bgcolor=ft.Colors.GREEN_50 if is_accepted else ft.Colors.GREY_100,
+                padding=st.GAP,
+                bgcolor=st.SUCCESS_BG if is_accepted else st.SUBTLE_BG,
                 border_radius=8,
-                border=ft.border.all(2, ft.Colors.GREEN_400 if is_accepted else ft.Colors.GREY_300),
+                border=ft.border.all(2, st.SUCCESS_BORDER if is_accepted else st.PANEL_BORDER),
             )
             mask_cards.append(card)
 
@@ -332,22 +334,22 @@ class MaskSelectionDialog:
         if self.hemisphere_network and self.hemisphere_overlays:
             hemisphere_cards = self._build_hemisphere_info_cards()
             if hemisphere_cards:
-                mask_cards.append(ft.Divider(height=2, color=ft.Colors.BLUE_200))
+                mask_cards.append(ft.Divider(height=2, color=st.INFO_BORDER))
                 mask_cards.append(
                     ft.Container(
                         content=ft.Row(
                             [
-                                ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.BLUE, size=16),
+                                ft.Icon(ft.Icons.INFO_OUTLINE, color=st.INFO, size=st.ICON_SM),
                                 ft.Text(
                                     "Sham Hemisphere Masks (verification only)",
-                                    size=12,
-                                    color=ft.Colors.BLUE_700,
+                                    size=st.CAPTION,
+                                    color=st.INFO,
                                     weight=ft.FontWeight.W_500,
                                 ),
                             ],
-                            spacing=8,
+                            spacing=st.GAP_SM,
                         ),
-                        padding=ft.padding.only(left=5, bottom=5),
+                        padding=ft.padding.only(left=st.GAP_XS, bottom=st.GAP_XS),
                     )
                 )
                 mask_cards.extend(hemisphere_cards)
@@ -356,22 +358,22 @@ class MaskSelectionDialog:
         if self.tissue_mask_overlays:
             tissue_cards = self._build_tissue_info_cards()
             if tissue_cards:
-                mask_cards.append(ft.Divider(height=2, color=ft.Colors.PURPLE_200))
+                mask_cards.append(ft.Divider(height=2, color=st.MASK_TISSUE_BORDER))
                 mask_cards.append(
                     ft.Container(
                         content=ft.Row(
                             [
-                                ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.PURPLE, size=16),
+                                ft.Icon(ft.Icons.INFO_OUTLINE, color=st.MASK_TISSUE, size=st.ICON_SM),
                                 ft.Text(
                                     "Tissue Masks (nuisance regression, view only)",
-                                    size=12,
-                                    color=ft.Colors.PURPLE_700,
+                                    size=st.CAPTION,
+                                    color=st.MASK_TISSUE_FG,
                                     weight=ft.FontWeight.W_500,
                                 ),
                             ],
-                            spacing=8,
+                            spacing=st.GAP_SM,
                         ),
-                        padding=ft.padding.only(left=5, bottom=5),
+                        padding=ft.padding.only(left=st.GAP_XS, bottom=st.GAP_XS),
                     )
                 )
                 mask_cards.extend(tissue_cards)
@@ -379,12 +381,12 @@ class MaskSelectionDialog:
         return ft.Container(
             content=ft.Column(
                 mask_cards,
-                spacing=15,
+                spacing=st.GAP,
                 scroll=ft.ScrollMode.AUTO,
             ),
-            width=500,
+            width=st.DIALOG_MD,
             height=500,  # Increased to accommodate hemisphere cards
-            padding=10,
+            padding=st.GAP_MD,
         )
 
     def _build_hemisphere_info_cards(self) -> list[ft.Control]:
@@ -404,22 +406,22 @@ class MaskSelectionDialog:
             # Build overlay image
             overlay_content: ft.Control
             if overlay_path and overlay_path.exists():
-                overlay_content = self._create_image(overlay_path, height=120)
+                overlay_content = self._create_image(overlay_path, height=st.PREVIEW_H_XS)
             else:
                 overlay_content = ft.Container(
-                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
-                    height=120,
+                    content=ft.Text("No preview available", color=st.NEUTRAL),
+                    height=st.PREVIEW_H_XS,
                     alignment=ft.Alignment(0, 0),
-                    bgcolor=ft.Colors.GREY_200,
+                    bgcolor=st.NEUTRAL_BG,
                 )
 
             # Determine which is target vs non-target based on config
             if hemisphere == self.target_hemisphere:
                 role_label = "TARGET"
-                role_color = ft.Colors.GREEN
+                role_color = st.SUCCESS
             else:
                 role_label = "NON-TARGET"
-                role_color = ft.Colors.ORANGE
+                role_color = st.WARNING
 
             card = ft.Container(
                 content=ft.Column(
@@ -427,16 +429,12 @@ class MaskSelectionDialog:
                         # Header row
                         ft.Row(
                             [
-                                ft.Text(
-                                    f"{self.hemisphere_network} {hemisphere.upper()}",
-                                    size=14,
-                                    weight=ft.FontWeight.W_500,
-                                ),
+                                st.subsection(f"{self.hemisphere_network} {hemisphere.upper()}"),
                                 ft.Container(expand=True),
                                 ft.Container(
-                                    content=ft.Text(role_label, size=11, color=ft.Colors.WHITE),
+                                    content=ft.Text(role_label, size=st.CAPTION, color=st.ON_NEUTRAL),
                                     bgcolor=role_color,
-                                    padding=ft.padding.symmetric(horizontal=8, vertical=2),
+                                    padding=ft.padding.symmetric(horizontal=st.GAP_SM, vertical=st.GAP_XS),
                                     border_radius=10,
                                 ),
                             ],
@@ -444,17 +442,17 @@ class MaskSelectionDialog:
                         # Overlay image
                         ft.Container(
                             content=overlay_content,
-                            border=ft.border.all(1, ft.Colors.GREY_300),
+                            border=ft.border.all(1, st.PANEL_BORDER),
                             border_radius=5,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
                     ],
-                    spacing=8,
+                    spacing=st.GAP_SM,
                 ),
-                padding=12,
-                bgcolor=ft.Colors.BLUE_50,
+                padding=st.GAP_MD,
+                bgcolor=st.INFO_BG,
                 border_radius=6,
-                border=ft.border.all(1, ft.Colors.BLUE_200),
+                border=ft.border.all(1, st.INFO_BORDER),
             )
             cards.append(card)
 
@@ -477,13 +475,13 @@ class MaskSelectionDialog:
 
             overlay_content: ft.Control
             if overlay_path and overlay_path.exists():
-                overlay_content = self._create_image(overlay_path, height=120)
+                overlay_content = self._create_image(overlay_path, height=st.PREVIEW_H_XS)
             else:
                 overlay_content = ft.Container(
-                    content=ft.Text("No preview available", color=ft.Colors.GREY_500),
-                    height=120,
+                    content=ft.Text("No preview available", color=st.NEUTRAL),
+                    height=st.PREVIEW_H_XS,
                     alignment=ft.Alignment(0, 0),
-                    bgcolor=ft.Colors.GREY_200,
+                    bgcolor=st.NEUTRAL_BG,
                 )
 
             card = ft.Container(
@@ -491,32 +489,28 @@ class MaskSelectionDialog:
                     [
                         ft.Row(
                             [
-                                ft.Text(
-                                    labels.get(tissue_type, tissue_type.upper()),
-                                    size=14,
-                                    weight=ft.FontWeight.W_500,
-                                ),
+                                st.subsection(labels.get(tissue_type, tissue_type.upper())),
                                 ft.Container(expand=True),
                                 ft.Text(
                                     "MNI template prior",
-                                    size=11,
-                                    color=ft.Colors.PURPLE_400,
+                                    size=st.CAPTION,
+                                    color=st.MASK_TISSUE_LABEL,
                                 ),
                             ],
                         ),
                         ft.Container(
                             content=overlay_content,
-                            border=ft.border.all(1, ft.Colors.GREY_300),
+                            border=ft.border.all(1, st.PANEL_BORDER),
                             border_radius=5,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
                     ],
-                    spacing=8,
+                    spacing=st.GAP_SM,
                 ),
-                padding=12,
-                bgcolor=ft.Colors.PURPLE_50,
+                padding=st.GAP_MD,
+                bgcolor=st.MASK_TISSUE_BG,
                 border_radius=6,
-                border=ft.border.all(1, ft.Colors.PURPLE_200),
+                border=ft.border.all(1, st.MASK_TISSUE_BORDER),
             )
             cards.append(card)
 
@@ -716,10 +710,10 @@ class MaskSelectionDialog:
             modal=True,
             title=ft.Row(
                 [
-                    ft.Icon(ft.Icons.SWAP_HORIZ, color=ft.Colors.BLUE),
+                    ft.Icon(ft.Icons.SWAP_HORIZ, color=st.ACCENT),
                     ft.Text(f"Select Alternative for {network_name}", weight=ft.FontWeight.BOLD),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
             content=self._build_stage2_content(network_name),
             actions=self._build_stage2_actions(),
@@ -747,7 +741,7 @@ class MaskSelectionDialog:
 
         # Radio group for single-select mode
         self._alternative_selection = ft.RadioGroup(
-            content=ft.Column([], spacing=10),
+            content=ft.Column([], spacing=st.GAP_SM),
         )
 
         alternative_items: list[ft.Control] = []
@@ -763,31 +757,31 @@ class MaskSelectionDialog:
             if comp_idx in info.alternative_overlay_paths:
                 overlay_path = info.alternative_overlay_paths[comp_idx]
                 if overlay_path.exists():
-                    overlay = self._create_image(overlay_path, height=180, width=500)
+                    overlay = self._create_image(overlay_path, height=st.OVERLAY_H, width=st.MASK_OVERLAY_W)
                 else:
                     overlay = ft.Container(
-                        width=500,
-                        height=180,
-                        bgcolor=ft.Colors.GREY_200,
+                        width=st.MASK_OVERLAY_W,
+                        height=st.OVERLAY_H,
+                        bgcolor=st.NEUTRAL_BG,
                         alignment=ft.Alignment(0, 0),
-                        content=ft.Text("No preview", size=12, color=ft.Colors.GREY_500),
+                        content=ft.Text("No preview", size=st.CAPTION, color=st.NEUTRAL),
                     )
             else:
                 overlay = ft.Container(
-                    width=500,
-                    height=180,
-                    bgcolor=ft.Colors.GREY_200,
+                    width=st.MASK_OVERLAY_W,
+                    height=st.OVERLAY_H,
+                    bgcolor=st.NEUTRAL_BG,
                     alignment=ft.Alignment(0, 0),
-                    content=ft.Text("No preview", size=12, color=ft.Colors.GREY_500),
+                    content=ft.Text("No preview", size=st.CAPTION, color=st.NEUTRAL),
                 )
 
             # Correlation quality indicator
             if corr >= self.CORR_GOOD:
-                corr_color = ft.Colors.GREEN
+                corr_color = st.SUCCESS
             elif corr >= self.CORR_MODERATE:
-                corr_color = ft.Colors.ORANGE
+                corr_color = st.WARNING
             else:
-                corr_color = ft.Colors.RED
+                corr_color = st.ERROR
 
             # Create both radio and checkbox for this component
             radio = ft.Radio(value=f"ica_{comp_idx}")
@@ -807,18 +801,18 @@ class MaskSelectionDialog:
                         ft.Column(
                             [
                                 ft.Text(f"IC {comp_idx}", weight=ft.FontWeight.W_500),
-                                ft.Text(f"r = {corr:.3f}", size=12, color=corr_color),
+                                ft.Text(f"r = {corr:.3f}", size=st.CAPTION, color=corr_color),
                             ],
-                            spacing=2,
+                            spacing=st.GAP_XS,
                             width=80,
                         ),
                         overlay,
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                padding=10,
-                border=ft.border.all(1, ft.Colors.GREY_300),
+                padding=st.GAP_MD,
+                border=ft.border.all(1, st.PANEL_BORDER),
                 border_radius=5,
             )
             alternative_items.append(item)
@@ -830,31 +824,31 @@ class MaskSelectionDialog:
         radio_items = alternative_items
         if yeo_item:
             radio_items = alternative_items + [yeo_item]
-        self._alternative_selection.content = ft.Column(radio_items, spacing=5)
+        self._alternative_selection.content = ft.Column(radio_items, spacing=st.GAP_XS)
 
         # Combined preview container (shown only in combine mode)
         self._combine_preview_container = ft.Container(
             content=ft.Column(
                 [
                     ft.Divider(),
-                    ft.Text("Combined Mask Preview:", size=12, weight=ft.FontWeight.W_500),
+                    ft.Text("Combined Mask Preview:", size=st.CAPTION, weight=ft.FontWeight.W_500),
                     ft.Container(
                         content=ft.Text(
                             "Select exactly 2 components above, then click 'Preview Combined'",
-                            color=ft.Colors.GREY_500,
-                            size=12,
+                            color=st.NEUTRAL,
+                            size=st.CAPTION,
                         ),
-                        height=180,
+                        height=st.OVERLAY_H,
                         alignment=ft.Alignment(0, 0),
-                        bgcolor=ft.Colors.GREY_100,
-                        border=ft.border.all(1, ft.Colors.GREY_300),
+                        bgcolor=st.SUBTLE_BG,
+                        border=ft.border.all(1, st.PANEL_BORDER),
                         border_radius=5,
                     ),
                 ],
-                spacing=8,
+                spacing=st.GAP_SM,
             ),
             visible=self._combine_mode,
-            padding=ft.padding.only(top=10),
+            padding=ft.padding.only(top=st.GAP_MD),
         )
 
         # Build the content column
@@ -864,23 +858,18 @@ class MaskSelectionDialog:
                     [
                         combine_toggle,
                         ft.Container(expand=True),
-                        ft.Text(
-                            "Combine two ICA components when a network is split",
-                            size=11,
-                            color=ft.Colors.GREY_600,
-                            italic=True,
-                        ),
+                        st.caption("Combine two ICA components when a network is split"),
                     ],
                 ),
-                padding=ft.padding.only(bottom=10),
-                border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.GREY_300)),
+                padding=ft.padding.only(bottom=st.GAP_MD),
+                border=ft.border.only(bottom=ft.BorderSide(1, st.PANEL_BORDER)),
             ),
             # Combined preview at the top (visible only in combine mode)
             self._combine_preview_container,
             ft.Text(
                 "Select two components to combine:" if self._combine_mode else "Select an alternative mask:",
-                size=13,
-                color=ft.Colors.GREY_700,
+                size=st.BODY,
+                color=st.MUTED,
             ),
             self._alternative_selection,
         ]
@@ -888,33 +877,33 @@ class MaskSelectionDialog:
         return ft.Container(
             content=ft.Column(
                 content_items,
-                spacing=10,
+                spacing=st.GAP_SM,
                 scroll=ft.ScrollMode.AUTO,
             ),
-            width=700,
+            width=st.DIALOG_LG,
             height=650,
-            padding=10,
+            padding=st.GAP_MD,
         )
 
     def _build_yeo_atlas_option(self, info: MaskReviewInfo) -> ft.Control:
         """Build the Yeo atlas fallback option for Stage 2."""
         yeo_overlay: ft.Control
         if info.yeo_overlay_path and info.yeo_overlay_path.exists():
-            yeo_overlay = self._create_image(info.yeo_overlay_path, height=180, width=500)
+            yeo_overlay = self._create_image(info.yeo_overlay_path, height=st.OVERLAY_H, width=st.MASK_OVERLAY_W)
         else:
             yeo_overlay = ft.Container(
-                width=500,
-                height=180,
-                bgcolor=ft.Colors.GREY_200,
+                width=st.MASK_OVERLAY_W,
+                height=st.OVERLAY_H,
+                bgcolor=st.NEUTRAL_BG,
                 alignment=ft.Alignment(0, 0),
-                content=ft.Text("No preview", size=12, color=ft.Colors.GREY_500),
+                content=ft.Text("No preview", size=st.CAPTION, color=st.NEUTRAL),
             )
 
         return ft.Container(
             content=ft.Column(
                 [
                     ft.Divider(),
-                    ft.Text("OR use atlas mask:", size=12, color=ft.Colors.GREY_600),
+                    ft.Text("OR use atlas mask:", size=st.CAPTION, color=st.MUTED),
                     ft.Row(
                         [
                             ft.Radio(value="yeo_atlas"),
@@ -923,22 +912,22 @@ class MaskSelectionDialog:
                                     ft.Text("Yeo Atlas", weight=ft.FontWeight.W_500),
                                     ft.Text(
                                         "Less individualized",
-                                        size=11,
-                                        color=ft.Colors.ORANGE,
+                                        size=st.CAPTION,
+                                        color=st.WARNING,
                                     ),
                                 ],
-                                spacing=2,
+                                spacing=st.GAP_XS,
                                 width=80,
                             ),
                             yeo_overlay,
                         ],
-                        spacing=10,
+                        spacing=st.GAP_SM,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                 ],
-                spacing=5,
+                spacing=st.GAP_XS,
             ),
-            padding=10,
+            padding=st.GAP_MD,
         )
 
     def _on_combine_mode_toggled(self, e, network_name: str):
@@ -962,7 +951,7 @@ class MaskSelectionDialog:
         if len(selected) > 2:
             # Uncheck the one that was just checked
             self._combine_checkboxes[comp_idx].value = False
-            _snack = ft.SnackBar(ft.Text("Select exactly 2 components to combine."), bgcolor=ft.Colors.ORANGE)
+            _snack = ft.SnackBar(ft.Text("Select exactly 2 components to combine."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1007,7 +996,7 @@ class MaskSelectionDialog:
 
         selected = self._get_selected_combine_components()
         if len(selected) != 2:
-            _snack = ft.SnackBar(ft.Text("Select exactly 2 components to preview."), bgcolor=ft.Colors.ORANGE)
+            _snack = ft.SnackBar(ft.Text("Select exactly 2 components to preview."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1019,7 +1008,7 @@ class MaskSelectionDialog:
             logger.error(error_msg)
             if self.on_log:
                 self.on_log(f"[ERROR] {error_msg}")
-            _snack = ft.SnackBar(ft.Text("Cannot preview: BOLD reference file not found"), bgcolor=ft.Colors.RED)
+            _snack = ft.SnackBar(ft.Text("Cannot preview: BOLD reference file not found"), bgcolor=st.ERROR)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1085,11 +1074,11 @@ class MaskSelectionDialog:
 
             # Determine correlation quality color
             if combined_corr >= self.CORR_GOOD:
-                corr_color = ft.Colors.GREEN
+                corr_color = st.SUCCESS
             elif combined_corr >= self.CORR_MODERATE:
-                corr_color = ft.Colors.ORANGE
+                corr_color = st.WARNING
             else:
-                corr_color = ft.Colors.RED
+                corr_color = st.ERROR
 
             # Update the preview container
             if overlay_path and overlay_path.exists():
@@ -1102,33 +1091,33 @@ class MaskSelectionDialog:
                             ft.Divider(),
                             ft.Row(
                                 [
-                                    ft.Text("Combined:", size=12, weight=ft.FontWeight.W_500),
+                                    ft.Text("Combined:", size=st.CAPTION, weight=ft.FontWeight.W_500),
                                     ft.Text(
                                         f"IC {comp_idx_1} + IC {comp_idx_2}",
-                                        size=12,
-                                        color=ft.Colors.BLUE,
+                                        size=st.CAPTION,
+                                        color=st.INFO,
                                     ),
                                     ft.Text(
                                         f"r={combined_corr:.3f}",
-                                        size=12,
+                                        size=st.CAPTION,
                                         weight=ft.FontWeight.BOLD,
                                         color=corr_color,
                                     ),
                                     ft.Text(
                                         f"(IC{comp_idx_1}={corr_1:.2f}, IC{comp_idx_2}={corr_2:.2f})",
-                                        size=11,
-                                        color=ft.Colors.GREY_600,
+                                        size=st.CAPTION,
+                                        color=st.MUTED,
                                     ),
                                 ],
-                                spacing=8,
+                                spacing=st.GAP_SM,
                             ),
                             ft.Container(
-                                content=self._create_image(overlay_path, height=180, width=500),
-                                border=ft.border.all(1, ft.Colors.BLUE_300),
+                                content=self._create_image(overlay_path, height=st.OVERLAY_H, width=st.MASK_OVERLAY_W),
+                                border=ft.border.all(1, st.INFO_BORDER),
                                 border_radius=5,
                             ),
                         ],
-                        spacing=5,
+                        spacing=st.GAP_XS,
                     )
                     self._combine_preview_container.content = new_content
                     self._combine_preview_container.update()
@@ -1146,7 +1135,7 @@ class MaskSelectionDialog:
 
         except Exception as ex:
             logger.error(f"Failed to generate combined preview: {ex}")
-            _snack = ft.SnackBar(ft.Text(f"Failed to generate preview: {ex}"), bgcolor=ft.Colors.RED)
+            _snack = ft.SnackBar(ft.Text(f"Failed to generate preview: {ex}"), bgcolor=st.ERROR)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1205,7 +1194,7 @@ class MaskSelectionDialog:
         if self._combine_mode:
             selected = self._get_selected_combine_components()
             if len(selected) != 2:
-                _snack = ft.SnackBar(ft.Text("Select exactly 2 components to combine."), bgcolor=ft.Colors.ORANGE)
+                _snack = ft.SnackBar(ft.Text("Select exactly 2 components to combine."), bgcolor=st.WARNING)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1284,7 +1273,7 @@ class MaskSelectionDialog:
         else:
             # Single-select mode (original logic)
             if not self._alternative_selection.value:
-                _snack = ft.SnackBar(ft.Text("Please select an alternative."), bgcolor=ft.Colors.ORANGE)
+                _snack = ft.SnackBar(ft.Text("Please select an alternative."), bgcolor=st.WARNING)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()
@@ -1517,18 +1506,18 @@ class MaskSelectionDialog:
             # Show confirmation with appropriate message
             if approval_removed:
                 snack_message = "Reloaded - masks need re-approval"
-                snack_color = ft.Colors.ORANGE
+                snack_color = st.WARNING
             else:
                 snack_message = "Reloaded selections and images from disk"
-                snack_color = ft.Colors.BLUE
+                snack_color = st.INFO
 
             _snack = ft.SnackBar(
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.REFRESH, color=ft.Colors.WHITE),
+                        ft.Icon(ft.Icons.REFRESH, color=st.ON_NEUTRAL),
                         ft.Text(snack_message),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
                 bgcolor=snack_color,
                 duration=3000,
@@ -1539,7 +1528,7 @@ class MaskSelectionDialog:
 
         except Exception as ex:
             logger.error(f"Failed to reload from disk: {ex}")
-            _snack = ft.SnackBar(ft.Text(f"Failed to reload: {ex}"), bgcolor=ft.Colors.RED)
+            _snack = ft.SnackBar(ft.Text(f"Failed to reload: {ex}"), bgcolor=st.ERROR)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1550,7 +1539,7 @@ class MaskSelectionDialog:
 
         # Check if we have enough context for script generation
         if not self.input_file or not self.brain_mask_file or not self.ref_file:
-            _snack = ft.SnackBar(ft.Text("Cannot generate script: missing input file paths."), bgcolor=ft.Colors.ORANGE)
+            _snack = ft.SnackBar(ft.Text("Cannot generate script: missing input file paths."), bgcolor=st.WARNING)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1592,12 +1581,12 @@ class MaskSelectionDialog:
             _snack = ft.SnackBar(
                 ft.Row(
                     [
-                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.WHITE),
+                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=st.ON_NEUTRAL),
                         ft.Text(f"Script saved to: {script_path.name}"),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
-                bgcolor=ft.Colors.GREEN,
+                bgcolor=st.SUCCESS,
                 duration=4000,
             )
             _snack.open = True
@@ -1606,7 +1595,7 @@ class MaskSelectionDialog:
 
         except Exception as ex:
             logger.error(f"Failed to generate script: {ex}")
-            _snack = ft.SnackBar(ft.Text(f"Failed to generate script: {ex}"), bgcolor=ft.Colors.RED)
+            _snack = ft.SnackBar(ft.Text(f"Failed to generate script: {ex}"), bgcolor=st.ERROR)
             _snack.open = True
             self.page.overlay.append(_snack)
             self.page.update()
@@ -1662,7 +1651,7 @@ class MaskSelectionDialog:
                 )
             except Exception as ex:
                 logger.error(f"Failed to regenerate mask for {name}: {ex}")
-                _snack = ft.SnackBar(ft.Text(f"Failed to regenerate {name}: {ex}"), bgcolor=ft.Colors.RED)
+                _snack = ft.SnackBar(ft.Text(f"Failed to regenerate {name}: {ex}"), bgcolor=st.ERROR)
                 _snack.open = True
                 self.page.overlay.append(_snack)
                 self.page.update()

@@ -959,7 +959,7 @@ class FeedbackTabBuilder:
                         seed_field,
                     ],
                     tight=True,
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
                 width=300,
             ),
@@ -1059,7 +1059,7 @@ class FeedbackTabBuilder:
 
         self.sham_target_hemisphere_container = ft.Column(
             [
-                ft.Text("Target Hemisphere:", size=12),
+                ft.Text("Target Hemisphere:", size=st.CAPTION),
                 self.sham_target_hemisphere_radio,
             ],
             visible=not is_conn,
@@ -1248,7 +1248,7 @@ class FeedbackTabBuilder:
         try:
             meta = get_task_metadata(task_type)
         except ValueError:
-            return [ft.Text(f"Unknown task type: {task_type}", size=st.SUBSECTION, color=ft.Colors.ORANGE_700)]
+            return [ft.Text(f"Unknown task type: {task_type}", size=st.SUBSECTION, color=st.WARNING)]
 
         controls: list[ft.Control] = [
             st.section(f"{meta.display_name} Parameters"),

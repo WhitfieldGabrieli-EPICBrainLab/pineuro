@@ -14,6 +14,8 @@ from pathlib import Path
 import flet as ft
 import numpy as np
 
+from pineuro.gui import styles as st
+
 logger = logging.getLogger(__name__)
 
 # Optional imports for DICOM display
@@ -132,8 +134,8 @@ class CollectionProgressPanel:
         # Placeholder for DICOM preview
         self._image = ft.Image(
             src="",
-            width=256,
-            height=256,
+            width=st.DICOM_PREVIEW,
+            height=st.DICOM_PREVIEW,
             fit=ft.BoxFit.CONTAIN,
             visible=False,  # Hidden until first image
         )
@@ -142,40 +144,40 @@ class CollectionProgressPanel:
         self._placeholder = ft.Container(
             content=ft.Column(
                 [
-                    ft.Icon(ft.Icons.IMAGE_OUTLINED, size=64, color=ft.Colors.GREY_400),
+                    ft.Icon(ft.Icons.IMAGE_OUTLINED, size=st.ICON_XXL, color=st.NEUTRAL),
                     ft.Text(
                         "Waiting for first volume...",
-                        size=14,
-                        color=ft.Colors.GREY_500,
+                        size=st.BODY,
+                        color=st.MUTED,
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
-            width=256,
-            height=256,
+            width=st.DICOM_PREVIEW,
+            height=st.DICOM_PREVIEW,
             alignment=ft.Alignment(0, 0),
-            border=ft.border.all(1, ft.Colors.GREY_300),
+            border=ft.border.all(1, st.PANEL_BORDER),
             border_radius=8,
         )
 
         self._volume_text = ft.Text(
             f"0 / {self.n_volumes} volumes",
-            size=16,
+            size=st.SECTION,
             weight=ft.FontWeight.W_500,
         )
 
         self._progress_bar = ft.ProgressBar(
             value=0,
-            width=300,
-            color=ft.Colors.BLUE_500,
-            bgcolor=ft.Colors.BLUE_100,
+            width=st.PROGRESS_BAR_W,
+            color=st.ACCENT,
+            bgcolor=st.SELECTED_BG,
         )
 
         self._time_text = ft.Text(
             "",
-            size=14,
-            color=ft.Colors.GREY_600,
+            size=st.BODY,
+            color=st.MUTED,
         )
 
         return ft.Container(
@@ -189,20 +191,20 @@ class CollectionProgressPanel:
                         ],
                     ),
                     # Spacing
-                    ft.Container(height=15),
+                    ft.Container(height=st.GAP),
                     # Volume count
                     self._volume_text,
                     # Progress bar
-                    ft.Container(height=5),
+                    ft.Container(height=st.GAP_XS),
                     self._progress_bar,
                     # Time estimate
-                    ft.Container(height=5),
+                    ft.Container(height=st.GAP_XS),
                     self._time_text,
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=0,
             ),
-            padding=20,
+            padding=st.PAD,
             alignment=ft.Alignment(0, 0),
         )
 

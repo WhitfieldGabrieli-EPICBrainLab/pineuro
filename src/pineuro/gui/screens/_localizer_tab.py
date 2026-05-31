@@ -96,7 +96,7 @@ class LocalizerTabBuilder:
                 type_label = loc_type
         self.type_display_text = ft.Text(
             type_label,
-            size=14,
+            size=st.SUBSECTION,
             weight=ft.FontWeight.W_500,
             color=st.ACCENT,
         )
@@ -104,7 +104,7 @@ class LocalizerTabBuilder:
         # Contrast info text
         self.contrast_info_text = ft.Text(
             value=self._get_contrast_info_text(loc_type),
-            size=12,
+            size=st.CAPTION,
             color=st.ACCENT,
             italic=True,
         )
@@ -131,7 +131,7 @@ class LocalizerTabBuilder:
         # Visibility is set in _configure_computed_n_volumes() below.
         self.n_volumes_info_text = ft.Text(
             "",
-            size=12,
+            size=st.CAPTION,
             color=st.ACCENT,
             italic=True,
             visible=False,

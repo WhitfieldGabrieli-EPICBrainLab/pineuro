@@ -11,6 +11,8 @@ from pathlib import Path
 
 import flet as ft
 
+from pineuro.gui import styles as st
+
 from .qc_viewer import open_qc_report
 
 logger = logging.getLogger(__name__)
@@ -62,7 +64,7 @@ class QCPlotViewer:
             # Show a message if no plots available
             _snack = ft.SnackBar(
                 ft.Text(f"No QC plots available for {self.title}"),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=st.WARNING,
             )
             _snack.open = True
             self.page.overlay.append(_snack)
@@ -71,9 +73,9 @@ class QCPlotViewer:
 
         # Use different styling for approval mode
         if self.require_approval:
-            title_icon = ft.Icon(ft.Icons.APPROVAL, color=ft.Colors.ORANGE)
+            title_icon = ft.Icon(ft.Icons.APPROVAL, color=st.WARNING)
         else:
-            title_icon = ft.Icon(ft.Icons.ASSESSMENT, color=ft.Colors.BLUE)
+            title_icon = ft.Icon(ft.Icons.ASSESSMENT, color=st.ACCENT)
 
         self._dialog = ft.AlertDialog(
             title=ft.Row(
@@ -81,7 +83,7 @@ class QCPlotViewer:
                     title_icon,
                     ft.Text(self.title, weight=ft.FontWeight.BOLD),
                 ],
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
             content=self._build_content(),
             actions=self._build_actions(),
@@ -109,24 +111,24 @@ class QCPlotViewer:
                         [
                             ft.Text(
                                 label,
-                                size=14,
+                                size=st.SUBSECTION,
                                 weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.BLUE_800,
+                                color=st.ACCENT,
                             ),
                             ft.Container(
                                 content=ft.Image(
                                     src=str(path),
                                     fit=ft.BoxFit.CONTAIN,
                                 ),
-                                border=ft.border.all(1, ft.Colors.GREY_300),
+                                border=ft.border.all(1, st.PANEL_BORDER),
                                 border_radius=5,
-                                padding=5,
+                                padding=st.GAP_XS,
                             ),
                         ],
-                        spacing=5,
+                        spacing=st.GAP_XS,
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    padding=10,
+                    padding=st.GAP_MD,
                 )
             )
 
@@ -134,10 +136,10 @@ class QCPlotViewer:
         return ft.Container(
             content=ft.Column(
                 plot_controls,
-                spacing=15,
+                spacing=st.GAP,
                 scroll=ft.ScrollMode.AUTO,
             ),
-            width=800,
+            width=st.DIALOG_XL,
             height=600,
         )
 
@@ -169,7 +171,7 @@ class QCPlotViewer:
                     "Reject",
                     icon=ft.Icons.CANCEL,
                     on_click=self._on_reject_clicked,
-                    style=ft.ButtonStyle(color=ft.Colors.RED),
+                    style=ft.ButtonStyle(color=st.ERROR),
                 )
             )
             actions.append(
@@ -177,7 +179,7 @@ class QCPlotViewer:
                     "Approve",
                     icon=ft.Icons.CHECK_CIRCLE,
                     on_click=self._on_approve_clicked,
-                    bgcolor=ft.Colors.GREEN,
+                    bgcolor=st.SUCCESS,
                 )
             )
         else:

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import flet as ft
 
+from pineuro.gui import styles as st
+
 from .base_dialog import BaseDialog
 
 logger = logging.getLogger(__name__)
@@ -116,13 +118,13 @@ class UnifiedAttemptDialog(BaseDialog):
                 modal=True,
                 title=ft.Row(
                     [
-                        ft.Icon(ft.Icons.PLAYLIST_ADD_CHECK, color=ft.Colors.BLUE),
+                        ft.Icon(ft.Icons.PLAYLIST_ADD_CHECK, color=st.ACCENT),
                         ft.Text(
                             "Select Attempts for Preprocessing",
                             weight=ft.FontWeight.BOLD,
                         ),
                     ],
-                    spacing=10,
+                    spacing=st.GAP_SM,
                 ),
                 content=self._build_content(),
                 actions=self._build_actions(),
@@ -153,17 +155,17 @@ class UnifiedAttemptDialog(BaseDialog):
             for attempt in run_group.attempts:
                 if attempt.n_volumes == 0:
                     status_icon = ft.Icons.BLOCK
-                    status_color = ft.Colors.GREY_400
+                    status_color = st.NEUTRAL
                     status_text = "No data"
                     can_select = False
                 elif attempt.is_complete:
                     status_icon = ft.Icons.CHECK_CIRCLE
-                    status_color = ft.Colors.GREEN
+                    status_color = st.SUCCESS
                     status_text = "Complete"
                     can_select = True
                 else:
                     status_icon = ft.Icons.WARNING_AMBER
-                    status_color = ft.Colors.ORANGE
+                    status_color = st.WARNING
                     status_text = "Incomplete"
                     can_select = True
 
@@ -182,14 +184,10 @@ class UnifiedAttemptDialog(BaseDialog):
                             ft.Row(
                                 [
                                     checkbox,
-                                    ft.Text(
-                                        f"attempt-{attempt.attempt_num:02d}",
-                                        size=14,
-                                        weight=ft.FontWeight.W_500,
-                                    ),
+                                    st.subsection(f"attempt-{attempt.attempt_num:02d}"),
                                     ft.Container(expand=True),
-                                    ft.Icon(status_icon, color=status_color, size=18),
-                                    ft.Text(status_text, color=status_color, size=12),
+                                    ft.Icon(status_icon, color=status_color, size=st.ICON_MD),
+                                    ft.Text(status_text, color=status_color, size=st.CAPTION),
                                 ],
                                 alignment=ft.MainAxisAlignment.START,
                             ),
@@ -200,33 +198,33 @@ class UnifiedAttemptDialog(BaseDialog):
                                             [
                                                 ft.Text(
                                                     "Volumes:",
-                                                    size=12,
-                                                    color=ft.Colors.GREY_700,
+                                                    size=st.CAPTION,
+                                                    color=st.MUTED,
                                                 ),
                                                 ft.Text(
                                                     f"{attempt.n_volumes} / {attempt.expected_volumes}",
-                                                    size=12,
+                                                    size=st.CAPTION,
                                                     weight=ft.FontWeight.W_500,
                                                     color=status_color,
                                                 ),
                                             ],
-                                            spacing=10,
+                                            spacing=st.GAP_SM,
                                         ),
                                         ft.ProgressBar(
                                             value=progress_value,
                                             color=status_color,
-                                            bgcolor=ft.Colors.GREY_200,
+                                            bgcolor=st.NEUTRAL_BG,
                                             height=6,
                                         ),
                                     ],
-                                    spacing=3,
+                                    spacing=st.GAP_XS,
                                 ),
                                 padding=ft.padding.only(left=40),
                             ),
                         ],
-                        spacing=3,
+                        spacing=st.GAP_XS,
                     ),
-                    padding=ft.padding.only(top=2, bottom=2),
+                    padding=ft.padding.symmetric(vertical=st.GAP_XS),
                 )
                 attempt_rows.append(attempt_row)
 
@@ -235,39 +233,39 @@ class UnifiedAttemptDialog(BaseDialog):
                     [
                         ft.Text(
                             run_group.run_name,
-                            size=16,
+                            size=st.SECTION,
                             weight=ft.FontWeight.W_500,
                         ),
                         *attempt_rows,
                     ],
-                    spacing=5,
+                    spacing=st.GAP_XS,
                 ),
-                padding=15,
-                bgcolor=ft.Colors.GREY_100,
+                padding=st.GAP,
+                bgcolor=st.SUBTLE_BG,
                 border_radius=8,
-                border=ft.border.all(1, ft.Colors.GREY_300),
+                border=ft.border.all(1, st.PANEL_BORDER),
             )
             run_controls.append(run_card)
 
         # Info text
         has_incomplete = any(not a.is_complete and a.n_volumes > 0 for rg in self.run_groups for a in rg.attempts)
         if has_incomplete:
-            run_controls.append(ft.Container(height=5))
+            run_controls.append(ft.Container(height=st.GAP_XS))
             run_controls.append(
                 ft.Container(
                     content=ft.Row(
                         [
-                            ft.Icon(ft.Icons.INFO_OUTLINE, color=ft.Colors.BLUE_700, size=18),
+                            ft.Icon(ft.Icons.INFO_OUTLINE, color=st.INFO, size=st.ICON_MD),
                             ft.Text(
                                 "Incomplete attempts may still be usable but could affect quality.",
-                                size=12,
-                                color=ft.Colors.BLUE_700,
+                                size=st.CAPTION,
+                                color=st.INFO,
                             ),
                         ],
-                        spacing=10,
+                        spacing=st.GAP_SM,
                     ),
-                    padding=10,
-                    bgcolor=ft.Colors.BLUE_50,
+                    padding=st.GAP_MD,
+                    bgcolor=st.INFO_BG,
                     border_radius=5,
                 )
             )
@@ -275,10 +273,10 @@ class UnifiedAttemptDialog(BaseDialog):
         return ft.Container(
             content=ft.Column(
                 run_controls,
-                spacing=10,
+                spacing=st.GAP_SM,
             ),
-            width=480,
-            padding=10,
+            width=st.DIALOG_MD,
+            padding=st.GAP_MD,
         )
 
     def _build_actions(self) -> list[ft.Control]:
@@ -306,7 +304,7 @@ class UnifiedAttemptDialog(BaseDialog):
         if not selected:
             _snack = ft.SnackBar(
                 ft.Text("Please select at least one attempt."),
-                bgcolor=ft.Colors.ORANGE,
+                bgcolor=st.WARNING,
             )
             _snack.open = True
             self.page.overlay.append(_snack)
