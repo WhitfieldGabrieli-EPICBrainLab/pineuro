@@ -299,3 +299,84 @@ def caption(text: str, **kwargs: object) -> ft.Text:
     kwargs.setdefault("color", MUTED)
     kwargs.setdefault("italic", True)
     return ft.Text(text, size=CAPTION, **kwargs)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Summary-card factories
+# ---------------------------------------------------------------------------
+
+
+def stat_row(
+    label: str,
+    value: str,
+    *,
+    value_color: str | None = None,
+    value_weight: ft.FontWeight = ft.FontWeight.W_500,
+    label_weight: ft.FontWeight | None = None,
+    label_color: str | None = MUTED,
+) -> ft.Row:
+    """A label/value stat line: muted label left, weighted value right, space-between.
+
+    The default (muted label, ``W_500`` value, no value color) covers the common
+    ``Mean: 0.12 mm`` stat rows. Override per row:
+
+    - ``value_color`` — colored values (the ">threshold" count, quality verdict).
+    - ``value_weight=ft.FontWeight.BOLD`` — emphasized values (tSNR "Final", the
+      quality verdict, the metric "Total").
+    - ``label_weight=ft.FontWeight.W_500`` + ``label_color=None`` — the
+      "Quality:" / "Total:" rows whose label is weighted, not muted.
+
+    Indentation (e.g. the ``"  Hits:"`` per-item rows) lives in *label*: pass the
+    leading spaces in the string, because it is content, not style.
+    """
+    label_kwargs: dict[str, object] = {"size": BODY, "color": label_color}
+    if label_weight is not None:
+        label_kwargs["weight"] = label_weight
+    value_kwargs: dict[str, object] = {"size": BODY, "weight": value_weight}
+    if value_color is not None:
+        value_kwargs["color"] = value_color
+    return ft.Row(
+        [
+            ft.Text(label, **label_kwargs),  # type: ignore[arg-type]
+            ft.Text(value, **value_kwargs),  # type: ignore[arg-type]
+        ],
+        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+    )
+
+
+def card_shell(
+    icon: ft.IconData,
+    title: str,
+    *body: ft.Control,
+    icon_color: str = ACCENT,
+    width: float = 170,
+) -> ft.Container:
+    """Standard summary-card chrome: a bordered ``SUBTLE_BG`` panel with an
+    icon+title header, a small spacer, then *body* controls in a tight column.
+
+    ``width`` defaults to the QC-card width (170); pass ``width=200`` for the
+    wider task-metrics card. ``icon_color`` defaults to ``ACCENT`` (the metric
+    card); the QC cards pass their quality color so the icon tints with the
+    verdict.
+    """
+    return ft.Container(
+        content=ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Icon(icon, color=icon_color, size=ICON_MD),
+                        ft.Text(title, size=SUBSECTION, weight=ft.FontWeight.BOLD),
+                    ],
+                    spacing=GAP_SM,
+                ),
+                ft.Container(height=GAP_SM),
+                *body,
+            ],
+            spacing=GAP_XS,
+        ),
+        padding=GAP,
+        bgcolor=SUBTLE_BG,
+        border_radius=8,
+        border=ft.border.all(1, PANEL_BORDER),
+        width=width,
+    )

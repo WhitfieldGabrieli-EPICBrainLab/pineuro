@@ -319,27 +319,7 @@ class FeedbackSummaryDialog(BaseDialog):
                 rows.append(ft.Divider(height=1))
             rows.extend(block)
 
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.TRACK_CHANGES, color=st.ACCENT, size=st.ICON_MD),
-                            ft.Text("Task Metrics", size=st.SUBSECTION, weight=ft.FontWeight.BOLD),
-                        ],
-                        spacing=st.GAP_SM,
-                    ),
-                    ft.Container(height=st.GAP_SM),
-                    *rows,
-                ],
-                spacing=st.GAP_XS,
-            ),
-            padding=st.GAP,
-            bgcolor=st.SUBTLE_BG,
-            border_radius=8,
-            border=ft.border.all(1, st.PANEL_BORDER),
-            width=200,
-        )
+        return st.card_shell(ft.Icons.TRACK_CHANGES, "Task Metrics", *rows, width=200)
 
     def _render_metric_block(self, metric: LiveMetric, cells: dict[str, str]) -> list[ft.Control]:
         """Render a single metric's rows for inclusion in the combined card."""
@@ -348,15 +328,7 @@ class FeedbackSummaryDialog(BaseDialog):
 
         if is_literal_single:
             value = next(iter(cells.values()))
-            block.append(
-                ft.Row(
-                    [
-                        ft.Text(f"{metric.label}:", size=st.BODY, color=st.MUTED),
-                        ft.Text(value, size=st.BODY, weight=ft.FontWeight.W_500),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                )
-            )
+            block.append(st.stat_row(f"{metric.label}:", value))
             return block
 
         # Multi-cell: label header, indented per-item rows, optional total.
@@ -365,15 +337,7 @@ class FeedbackSummaryDialog(BaseDialog):
         all_int = True
         for name, value in cells.items():
             disp = self.display_names.get(name, name) if metric.remap_blind_names else name
-            block.append(
-                ft.Row(
-                    [
-                        ft.Text(f"  {disp}:", size=st.BODY, color=st.MUTED),
-                        ft.Text(value, size=st.BODY, weight=ft.FontWeight.W_500),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                )
-            )
+            block.append(st.stat_row(f"  {disp}:", value))
             try:
                 int_total += int(value)
             except ValueError:
@@ -381,17 +345,13 @@ class FeedbackSummaryDialog(BaseDialog):
 
         if all_int and len(cells) > 1:
             block.append(
-                ft.Row(
-                    [
-                        ft.Text("  Total:", size=st.BODY, weight=ft.FontWeight.W_500),
-                        ft.Text(
-                            str(int_total),
-                            size=st.BODY,
-                            weight=ft.FontWeight.BOLD,
-                            color=st.ACCENT,
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                st.stat_row(
+                    "  Total:",
+                    str(int_total),
+                    value_color=st.ACCENT,
+                    value_weight=ft.FontWeight.BOLD,
+                    label_weight=ft.FontWeight.W_500,
+                    label_color=None,
                 )
             )
 
@@ -403,68 +363,32 @@ class FeedbackSummaryDialog(BaseDialog):
 
         # Determine quality color
         if data.fd_pct_above_threshold < 5:
-            quality_color = st.SUCCESS
-            quality_text = "Good"
+            color, verdict = st.SUCCESS, "Good"
         elif data.fd_pct_above_threshold < 15:
-            quality_color = st.WARNING
-            quality_text = "Moderate"
+            color, verdict = st.WARNING, "Moderate"
         else:
-            quality_color = st.ERROR
-            quality_text = "High motion"
+            color, verdict = st.ERROR, "High motion"
 
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.SPEED, color=quality_color, size=st.ICON_MD),
-                            ft.Text("FD", size=st.SUBSECTION, weight=ft.FontWeight.BOLD),
-                        ],
-                        spacing=st.GAP_SM,
-                    ),
-                    ft.Container(height=st.GAP_SM),
-                    ft.Row(
-                        [
-                            ft.Text("Mean:", size=st.BODY, color=st.MUTED),
-                            ft.Text(f"{data.fd_mean:.2f} mm", size=st.BODY, weight=ft.FontWeight.W_500),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Text("Max:", size=st.BODY, color=st.MUTED),
-                            ft.Text(f"{data.fd_max:.2f} mm", size=st.BODY, weight=ft.FontWeight.W_500),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Text(f">{data.fd_threshold}mm:", size=st.BODY, color=st.MUTED),
-                            ft.Text(
-                                f"{data.fd_above_threshold} ({data.fd_pct_above_threshold:.1f}%)",
-                                size=st.BODY,
-                                weight=ft.FontWeight.W_500,
-                                color=quality_color,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Divider(height=1),
-                    ft.Row(
-                        [
-                            ft.Text("Quality:", size=st.BODY, weight=ft.FontWeight.W_500),
-                            ft.Text(quality_text, size=st.BODY, weight=ft.FontWeight.BOLD, color=quality_color),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                ],
-                spacing=st.GAP_XS,
+        return st.card_shell(
+            ft.Icons.SPEED,
+            "FD",
+            st.stat_row("Mean:", f"{data.fd_mean:.2f} mm"),
+            st.stat_row("Max:", f"{data.fd_max:.2f} mm"),
+            st.stat_row(
+                f">{data.fd_threshold}mm:",
+                f"{data.fd_above_threshold} ({data.fd_pct_above_threshold:.1f}%)",
+                value_color=color,
             ),
-            padding=st.GAP,
-            bgcolor=st.SUBTLE_BG,
-            border_radius=8,
-            border=ft.border.all(1, st.PANEL_BORDER),
-            width=170,
+            ft.Divider(height=1),
+            st.stat_row(
+                "Quality:",
+                verdict,
+                value_color=color,
+                value_weight=ft.FontWeight.BOLD,
+                label_weight=ft.FontWeight.W_500,
+                label_color=None,
+            ),
+            icon_color=color,
         )
 
     def _build_dvars_card(self) -> ft.Control:
@@ -473,68 +397,32 @@ class FeedbackSummaryDialog(BaseDialog):
 
         # Determine quality color (same thresholds as FD: <5% good, <15% moderate)
         if data.dvars_pct_above_threshold < 5:
-            quality_color = st.SUCCESS
-            quality_text = "Good"
+            color, verdict = st.SUCCESS, "Good"
         elif data.dvars_pct_above_threshold < 15:
-            quality_color = st.WARNING
-            quality_text = "Moderate"
+            color, verdict = st.WARNING, "Moderate"
         else:
-            quality_color = st.ERROR
-            quality_text = "High variability"
+            color, verdict = st.ERROR, "High variability"
 
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.SHOW_CHART, color=quality_color, size=st.ICON_MD),
-                            ft.Text("DVARS", size=st.SUBSECTION, weight=ft.FontWeight.BOLD),
-                        ],
-                        spacing=st.GAP_SM,
-                    ),
-                    ft.Container(height=st.GAP_SM),
-                    ft.Row(
-                        [
-                            ft.Text("Mean:", size=st.BODY, color=st.MUTED),
-                            ft.Text(f"{data.dvars_mean:.1f}", size=st.BODY, weight=ft.FontWeight.W_500),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Text("Max:", size=st.BODY, color=st.MUTED),
-                            ft.Text(f"{data.dvars_max:.1f}", size=st.BODY, weight=ft.FontWeight.W_500),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Text(f">{data.dvars_threshold}:", size=st.BODY, color=st.MUTED),
-                            ft.Text(
-                                f"{data.dvars_above_threshold} ({data.dvars_pct_above_threshold:.1f}%)",
-                                size=st.BODY,
-                                weight=ft.FontWeight.W_500,
-                                color=quality_color,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Divider(height=1),
-                    ft.Row(
-                        [
-                            ft.Text("Quality:", size=st.BODY, weight=ft.FontWeight.W_500),
-                            ft.Text(quality_text, size=st.BODY, weight=ft.FontWeight.BOLD, color=quality_color),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                ],
-                spacing=st.GAP_XS,
+        return st.card_shell(
+            ft.Icons.SHOW_CHART,
+            "DVARS",
+            st.stat_row("Mean:", f"{data.dvars_mean:.1f}"),
+            st.stat_row("Max:", f"{data.dvars_max:.1f}"),
+            st.stat_row(
+                f">{data.dvars_threshold}:",
+                f"{data.dvars_above_threshold} ({data.dvars_pct_above_threshold:.1f}%)",
+                value_color=color,
             ),
-            padding=st.GAP,
-            bgcolor=st.SUBTLE_BG,
-            border_radius=8,
-            border=ft.border.all(1, st.PANEL_BORDER),
-            width=170,
+            ft.Divider(height=1),
+            st.stat_row(
+                "Quality:",
+                verdict,
+                value_color=color,
+                value_weight=ft.FontWeight.BOLD,
+                label_weight=ft.FontWeight.W_500,
+                label_color=None,
+            ),
+            icon_color=color,
         )
 
     def _build_tsnr_card(self) -> ft.Control:
@@ -543,56 +431,32 @@ class FeedbackSummaryDialog(BaseDialog):
 
         # Determine tSNR quality color
         if data.tsnr_final >= 40:
-            tsnr_color = st.SUCCESS
-            tsnr_text = "Good"
+            color, verdict = st.SUCCESS, "Good"
         elif data.tsnr_final >= 20:
-            tsnr_color = st.WARNING
-            tsnr_text = "Moderate"
+            color, verdict = st.WARNING, "Moderate"
         elif data.tsnr_final > 0:
-            tsnr_color = st.ERROR
-            tsnr_text = "Low"
+            color, verdict = st.ERROR, "Low"
         else:
-            tsnr_color = st.NEUTRAL
-            tsnr_text = "N/A"
+            color, verdict = st.NEUTRAL, "N/A"
 
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Icon(ft.Icons.INSIGHTS, color=tsnr_color, size=st.ICON_MD),
-                            ft.Text("tSNR", size=st.SUBSECTION, weight=ft.FontWeight.BOLD),
-                        ],
-                        spacing=st.GAP_SM,
-                    ),
-                    ft.Container(height=st.GAP_SM),
-                    ft.Row(
-                        [
-                            ft.Text("Final:", size=st.BODY, color=st.MUTED),
-                            ft.Text(
-                                f"{data.tsnr_final:.1f}" if data.tsnr_final > 0 else "N/A",
-                                size=st.BODY,
-                                weight=ft.FontWeight.BOLD,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Divider(height=1),
-                    ft.Row(
-                        [
-                            ft.Text("Quality:", size=st.BODY, weight=ft.FontWeight.W_500),
-                            ft.Text(tsnr_text, size=st.BODY, weight=ft.FontWeight.BOLD, color=tsnr_color),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                ],
-                spacing=st.GAP_XS,
+        return st.card_shell(
+            ft.Icons.INSIGHTS,
+            "tSNR",
+            st.stat_row(
+                "Final:",
+                f"{data.tsnr_final:.1f}" if data.tsnr_final > 0 else "N/A",
+                value_weight=ft.FontWeight.BOLD,
             ),
-            padding=st.GAP,
-            bgcolor=st.SUBTLE_BG,
-            border_radius=8,
-            border=ft.border.all(1, st.PANEL_BORDER),
-            width=170,
+            ft.Divider(height=1),
+            st.stat_row(
+                "Quality:",
+                verdict,
+                value_color=color,
+                value_weight=ft.FontWeight.BOLD,
+                label_weight=ft.FontWeight.W_500,
+                label_color=None,
+            ),
+            icon_color=color,
         )
 
     def _build_actions(self) -> list[ft.Control]:
