@@ -367,13 +367,11 @@ class FeedbackTabBuilder:
         diff_pos_val = self._mask_value_for(network_assignment.get(diff_pos_key)) if diff_pos_key else None
         diff_neg_val = self._mask_value_for(network_assignment.get(diff_neg_key)) if diff_neg_key else None
         self.differential_positive_dropdown = ft.Dropdown(
-            width=250,
             label="Positive mask",
             options=mask_options,
             value=diff_pos_val or (mask_options[0].key if mask_options else None),
         )
         self.differential_negative_dropdown = ft.Dropdown(
-            width=250,
             label="Negative mask",
             options=mask_options,
             value=diff_neg_val or (mask_options[1].key if has_multi_mask else None),
@@ -383,9 +381,9 @@ class FeedbackTabBuilder:
                 st.subsection("Differential Signal"),
                 ft.Row(
                     [
-                        self.differential_positive_dropdown,
+                        st.fill_dropdown(self.differential_positive_dropdown),
                         ft.Text("minus", size=st.BODY),
-                        self.differential_negative_dropdown,
+                        st.fill_dropdown(self.differential_negative_dropdown),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=st.GAP_SM,
@@ -406,13 +404,11 @@ class FeedbackTabBuilder:
             conn_pair_a = mask_options[0].key if mask_options else None
             conn_pair_b = mask_options[1].key if has_multi_mask else None
         self.connectivity_pair_a_dropdown = ft.Dropdown(
-            width=250,
             label="ROI A",
             options=mask_options,
             value=conn_pair_a,
         )
         self.connectivity_pair_b_dropdown = ft.Dropdown(
-            width=250,
             label="ROI B",
             options=mask_options,
             value=conn_pair_b,
@@ -436,9 +432,9 @@ class FeedbackTabBuilder:
                 st.subsection("Connectivity Pair"),
                 ft.Row(
                     [
-                        self.connectivity_pair_a_dropdown,
+                        st.fill_dropdown(self.connectivity_pair_a_dropdown),
                         ft.Text("corr", size=st.BODY),
-                        self.connectivity_pair_b_dropdown,
+                        st.fill_dropdown(self.connectivity_pair_b_dropdown),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=st.GAP_SM,

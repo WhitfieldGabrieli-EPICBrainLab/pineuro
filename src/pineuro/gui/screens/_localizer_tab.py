@@ -201,7 +201,6 @@ class LocalizerTabBuilder:
         for i in range(MAX_NETWORKS):
             val = networks[i] if i < len(networks) else None
             dd = ft.Dropdown(
-                width=290,
                 label=f"Network {i + 1}",
                 options=[ft.dropdown.Option(key=o.key, text=o.text) for o in net_options],
                 value=val,
@@ -279,7 +278,6 @@ class LocalizerTabBuilder:
         )
 
         self.cluster_start_threshold_field = ft.TextField(
-            width=290,
             label="Start threshold",
             value=str(_ex("cluster_start_threshold", 2.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -287,7 +285,6 @@ class LocalizerTabBuilder:
         )
 
         self.cluster_step_field = ft.TextField(
-            width=290,
             label="Step size",
             value=str(_ex("cluster_step", 0.1)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -312,7 +309,6 @@ class LocalizerTabBuilder:
 
         # Cluster-extent settings
         self.extent_stat_threshold_field = ft.TextField(
-            width=290,
             label="Stat threshold",
             value=str(_ex("cluster_start_threshold", 2.0)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -320,7 +316,6 @@ class LocalizerTabBuilder:
         )
 
         self.min_cluster_size_field = ft.TextField(
-            width=290,
             label="Min cluster size (voxels)",
             value=str(_ex("min_cluster_size", 50)),
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -329,7 +324,6 @@ class LocalizerTabBuilder:
 
         max_total = _ex("max_total_voxels")
         self.max_total_voxels_field = ft.TextField(
-            width=290,
             label="Max total voxels (optional)",
             value=str(max_total) if max_total else "",
             keyboard_type=ft.KeyboardType.NUMBER,
@@ -371,9 +365,11 @@ class LocalizerTabBuilder:
         is_rest = self._loc_type == "rest"
         is_manual = self._loc_type == "manual"
 
-        # Network dropdowns row (shows only visible ones)
-        visible_dropdowns: list[ft.Control] = [dd for dd in self._network_dropdowns if dd.visible]
-        self.network_dropdowns_row = ft.Row(visible_dropdowns, wrap=True, spacing=st.GAP_SM, run_spacing=st.GAP_SM)
+        # Network dropdowns (shows only visible ones) — one per row, full width.
+        visible_dropdowns: list[ft.Control] = [st.colspan(dd) for dd in self._network_dropdowns if dd.visible]
+        self.network_dropdowns_row = ft.ResponsiveRow(
+            controls=visible_dropdowns, run_spacing=st.GAP_MD, spacing=st.GAP_SM
+        )
 
         # Target Networks section (rest-only for ICA)
         self.target_networks_section = ft.Container(
@@ -687,10 +683,10 @@ class LocalizerTabBuilder:
         for i, dd in enumerate(self._network_dropdowns):
             dd.visible = i < n
 
-        # Rebuild the row
+        # Rebuild the row (one per row, full width)
         if hasattr(self, "network_dropdowns_row"):
             self.network_dropdowns_row.controls.clear()
-            self.network_dropdowns_row.controls.extend(dd for dd in self._network_dropdowns if dd.visible)
+            self.network_dropdowns_row.controls.extend(st.colspan(dd) for dd in self._network_dropdowns if dd.visible)
 
         if self._on_change:
             self._on_change()

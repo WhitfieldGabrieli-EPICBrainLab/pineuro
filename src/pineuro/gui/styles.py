@@ -203,11 +203,39 @@ COL_HALF: dict[str, int] = {"xs": 12, "sm": 6}  # two per row >=576px, else stac
 COMPACT_W = 120
 
 
+def _fill_if_dropdown(control: ft.Control) -> None:
+    """Make a Dropdown fill the width its parent gives it.
+
+    A ``ft.TextField`` (and ``ft.Container``) stretches to fill its parent column
+    on its own, but a ``ft.Dropdown`` (Flutter ``DropdownMenu``) sizes to its
+    content unless told to expand. ``expand=True`` makes it fill — inside a
+    ``ResponsiveRow`` column (full or half width) and inside a plain ``Row`` alike
+    — so it lines up edge-to-edge with the text fields around it. No-op otherwise.
+    """
+    if isinstance(control, ft.Dropdown):
+        control.expand = True
+
+
+def fill_dropdown(control: ft.Control) -> ft.Control:
+    """Tag *control* to fill the flex slot it sits in (e.g. inside a plain ``Row``).
+
+    Clears any fixed width and sets ``expand`` so the control shares the row, plus
+    the dropdown fill-fix. Use for dropdowns laid out by hand in an ``ft.Row``
+    (the ``field_row``/``field_pair`` helpers handle their own children).
+    """
+    with contextlib.suppress(AttributeError):
+        control.width = None  # type: ignore[attr-defined]
+    control.expand = True
+    _fill_if_dropdown(control)
+    return control
+
+
 def colspan(control: ft.Control, col: dict[str, int] | None = None) -> ft.Control:
     """Tag *control* with a responsive ``col`` span and drop any fixed width."""
     control.col = col or COL_FULL  # type: ignore[assignment]
     with contextlib.suppress(AttributeError):
         control.width = None  # type: ignore[attr-defined]  # let the column decide
+    _fill_if_dropdown(control)
     return control
 
 
@@ -235,10 +263,8 @@ def field_pair(left: ft.Control, right: ft.Control) -> ft.ResponsiveRow:
 
 
 def browse_row(field_control: ft.Control, *trailing: ft.Control) -> ft.Row:
-    """A text field that fills the row, followed by trailing icon button(s)."""
-    with contextlib.suppress(AttributeError):
-        field_control.width = None  # type: ignore[attr-defined]
-    field_control.expand = True
+    """A text field (or dropdown) that fills the row, followed by trailing button(s)."""
+    fill_dropdown(field_control)
     return ft.Row(
         [field_control, *trailing],
         vertical_alignment=ft.CrossAxisAlignment.CENTER,

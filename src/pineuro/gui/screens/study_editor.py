@@ -1104,7 +1104,7 @@ class StudyEditorScreen:
                     ft.Divider(),
                     st.section("Display Settings"),
                     st.field_pair(self.control_monitor_dropdown, self.presenter_monitor_dropdown),
-                    self._build_monitor_preview(),
+                    st.field_row(self._build_monitor_preview()),
                     st.caption("Configure which monitor shows the control GUI vs the participant task display."),
                     ft.Divider(),
                     st.section("Sham / Control Condition"),
