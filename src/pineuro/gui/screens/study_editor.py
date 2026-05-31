@@ -312,19 +312,37 @@ class StudyEditorScreen:
         # randomization, and operator blinding — the per-task mask construction lives in
         # each feedback run's tab).
         sham_cfg = config.get("sham", {})
+        sham_enabled = sham_cfg.get("enabled", False)
         self.sham_enabled_checkbox = ft.Checkbox(
             label="Enable Sham/Control Conditions",
-            value=sham_cfg.get("enabled", False),
+            value=sham_enabled,
+            on_change=self._on_study_sham_enabled_changed,
         )
+        # Blind Mode and the randomization file only apply when sham is enabled; their
+        # visibility is gated on the checkbox above (initialized here, toggled live).
         self.sham_blind_mode_checkbox = ft.Checkbox(
             label="Blind Mode (hide condition from operator)",
             value=sham_cfg.get("blind_mode", False),
+            visible=sham_enabled,
         )
         self.sham_randomization_file_field = ft.TextField(
             label="Randomization File",
             value=sham_cfg.get("randomization_file", ""),
             hint_text="TSV: subject_id, condition (real/sham), matched_participant, matched_session",
         )
+        self.sham_randomization_row = st.browse_row(
+            self.sham_randomization_file_field,
+            self._create_file_browse_button(
+                self.sham_randomization_file_field,
+                filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")],
+            ),
+            ft.IconButton(
+                icon=ft.Icons.SHUFFLE,
+                tooltip="Generate randomization file",
+                on_click=self._on_generate_randomization,
+            ),
+        )
+        self.sham_randomization_row.visible = sham_enabled
 
         # Type dropdown options (lazily computed — avoid triggering heavy task module imports)
         self._localizer_type_options_cache: list[ft.dropdown.Option] | None = None
@@ -418,6 +436,7 @@ class StudyEditorScreen:
                 available_mask_options=all_masks,
                 create_browse_button=self._create_browse_button,
                 create_file_browse_button=self._create_file_browse_button,
+                sham_enabled=lambda: bool(self.sham_enabled_checkbox.value),
             )
             self._feedback_builders.append(builder)
 
@@ -1114,18 +1133,7 @@ class StudyEditorScreen:
                     ),
                     self.sham_enabled_checkbox,
                     self.sham_blind_mode_checkbox,
-                    st.browse_row(
-                        self.sham_randomization_file_field,
-                        self._create_file_browse_button(
-                            self.sham_randomization_file_field,
-                            filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")],
-                        ),
-                        ft.IconButton(
-                            icon=ft.Icons.SHUFFLE,
-                            tooltip="Generate randomization file",
-                            on_click=self._on_generate_randomization,
-                        ),
-                    ),
+                    self.sham_randomization_row,
                 ],
                 scroll=ft.ScrollMode.AUTO,
                 spacing=st.GAP_MD,
@@ -1506,6 +1514,18 @@ class StudyEditorScreen:
     # ------------------------------------------------------------------
     # Sham randomization
     # ------------------------------------------------------------------
+
+    def _on_study_sham_enabled_changed(self, e):
+        """Toggle Blind Mode + randomization controls with the study-wide sham switch."""
+        self._update_study_sham_visibility()
+
+    def _update_study_sham_visibility(self):
+        """Show Blind Mode and the randomization file only when sham is enabled."""
+        enabled = bool(self.sham_enabled_checkbox.value)
+        self.sham_blind_mode_checkbox.visible = enabled
+        self.sham_randomization_row.visible = enabled
+        with contextlib.suppress(Exception):
+            self.page.update()
 
     def _on_generate_randomization(self, e):
         """Open a dialog to generate a study-wide randomization file."""

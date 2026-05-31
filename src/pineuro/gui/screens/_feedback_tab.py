@@ -64,6 +64,7 @@ class FeedbackTabBuilder:
         available_mask_options: list[tuple[str, str, str]] | None = None,
         create_browse_button: Callable[[ft.TextField], ft.IconButton] | None = None,
         create_file_browse_button: Callable[..., ft.IconButton] | None = None,
+        sham_enabled: Callable[[], bool] | None = None,
     ):
         """Initialize the feedback tab builder.
 
@@ -87,6 +88,11 @@ class FeedbackTabBuilder:
             Factory for directory browse buttons
         create_file_browse_button : callable, optional
             Factory for file browse buttons
+        sham_enabled : callable, optional
+            Returns the study-wide sham-enabled state (read live). When sham is
+            disabled the Sham Mask Construction section is hidden and no per-run
+            ``sham`` block is persisted. ``None`` (the default) treats sham as
+            enabled, preserving the section and the persisted block.
         """
         self.index = index
         # Deep copy so editing this tab cannot mutate the caller's config
@@ -97,6 +103,7 @@ class FeedbackTabBuilder:
         self._available_mask_options: list[tuple[str, str, str]] = list(available_mask_options or [])
         self._create_browse_button = create_browse_button
         self._create_file_browse_button = create_file_browse_button
+        self._sham_enabled = sham_enabled
 
         self.validation_errors: dict[str, str] = {}
         self.task_param_fields: dict[str, Any] = {}
@@ -126,6 +133,12 @@ class FeedbackTabBuilder:
         if not name:
             return None
         return _mask_key(self._mask_sources.get(name, ""), name)
+
+    def _sham_enabled_value(self) -> bool:
+        """Whether sham is enabled study-wide (read live). Defaults to True when no
+        provider was supplied so the section stays visible/persisted by default."""
+        fn = getattr(self, "_sham_enabled", None)
+        return True if fn is None else bool(fn())
 
     # ------------------------------------------------------------------
     # Field creation
@@ -740,21 +753,24 @@ class FeedbackTabBuilder:
         # Copy use_transfer_runs to top level (keep in task_params for round-trip)
         cfg["use_transfer_runs"] = task_params.get("use_transfer_runs", False)
 
-        # Per-run sham mask construction (study-wide gating/randomization lives in the Study tab).
-        cfg["sham"] = {
-            "delivery_method": self.sham_delivery_method_radio.value,
-            "sham_mask_mode": self.sham_mask_mode_radio.value,
-            "hemisphere_network": self.sham_hemisphere_network_dropdown.value or "SomMotA",
-            "target_hemisphere": self.sham_target_hemisphere_radio.value or "right",
-            "alternative_mask_targets": [
-                v
-                for v in [
-                    self.sham_first_network_dropdown.value,
-                    self.sham_second_network_dropdown.value,
-                ]
-                if v
-            ],
-        }
+        # Per-run sham mask construction (study-wide gating/randomization lives in the Study
+        # tab). Only persisted when sham is enabled study-wide — a non-sham study saves no
+        # per-run sham block.
+        if self._sham_enabled_value():
+            cfg["sham"] = {
+                "delivery_method": self.sham_delivery_method_radio.value,
+                "sham_mask_mode": self.sham_mask_mode_radio.value,
+                "hemisphere_network": self.sham_hemisphere_network_dropdown.value or "SomMotA",
+                "target_hemisphere": self.sham_target_hemisphere_radio.value or "right",
+                "alternative_mask_targets": [
+                    v
+                    for v in [
+                        self.sham_first_network_dropdown.value,
+                        self.sham_second_network_dropdown.value,
+                    ]
+                    if v
+                ],
+            }
 
         # Preserve existing simulator source paths (managed by Paths tab)
         for key in ("source_dicoms", "transfer_source_dicoms"):
@@ -965,7 +981,8 @@ class FeedbackTabBuilder:
             visible=method == "replay",
         )
 
-        return ft.Container(
+        # The whole section is hidden when sham is disabled study-wide (Study tab).
+        self.sham_section = ft.Container(
             content=ft.Column(
                 [
                     st.section("Sham Mask Construction"),
@@ -980,7 +997,9 @@ class FeedbackTabBuilder:
                 ],
                 spacing=st.GAP_MD,
             ),
+            visible=self._sham_enabled_value(),
         )
+        return self.sham_section
 
     # ------------------------------------------------------------------
     # Task-specific params
