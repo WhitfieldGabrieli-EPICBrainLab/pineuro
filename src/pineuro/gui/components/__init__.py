@@ -73,18 +73,43 @@ and added to the page controls. Example:
 >>> container = plot.build()  # Returns Flet Container
 """
 
-from .activation_plot import ActivationData, ActivationPlot
-from .base_dialog import BaseDialog
-from .collection_progress import CollectionProgressPanel
-from .csv_poller import FeedbackLogPoller, FeedbackMonitor
-from .feedback_summary import FeedbackSummaryData, FeedbackSummaryDialog, compute_feedback_summary
-from .mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
-from .pipeline_runner import PipelineRunner
-from .qc_plots import FDPlot
-from .qc_viewer import QCReportManager, open_qc_report
-from .session_selection_dialog import SessionSelectionDialog
-from .task_mirror import TaskMirror
-from .unified_attempt_dialog import RunGroup, UnifiedAttemptDialog
+import importlib
+
+# Components are resolved on demand (PEP 562) so that importing one component
+# submodule does not eagerly import its siblings -- several of which pull numpy,
+# pandas, pydicom, or the flet_charts/matplotlib stack at import time.  Mirrors
+# the lazy-import pattern in ``pineuro/__init__.py``.
+_LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    "ActivationData": (".activation_plot", "ActivationData"),
+    "ActivationPlot": (".activation_plot", "ActivationPlot"),
+    "BaseDialog": (".base_dialog", "BaseDialog"),
+    "CollectionProgressPanel": (".collection_progress", "CollectionProgressPanel"),
+    "FeedbackLogPoller": (".csv_poller", "FeedbackLogPoller"),
+    "FeedbackMonitor": (".csv_poller", "FeedbackMonitor"),
+    "FeedbackSummaryData": (".feedback_summary", "FeedbackSummaryData"),
+    "FeedbackSummaryDialog": (".feedback_summary", "FeedbackSummaryDialog"),
+    "compute_feedback_summary": (".feedback_summary", "compute_feedback_summary"),
+    "MaskReviewInfo": (".mask_selection_dialog", "MaskReviewInfo"),
+    "MaskSelectionDialog": (".mask_selection_dialog", "MaskSelectionDialog"),
+    "PipelineRunner": (".pipeline_runner", "PipelineRunner"),
+    "FDPlot": (".qc_plots", "FDPlot"),
+    "QCReportManager": (".qc_viewer", "QCReportManager"),
+    "open_qc_report": (".qc_viewer", "open_qc_report"),
+    "SessionSelectionDialog": (".session_selection_dialog", "SessionSelectionDialog"),
+    "TaskMirror": (".task_mirror", "TaskMirror"),
+    "RunGroup": (".unified_attempt_dialog", "RunGroup"),
+    "UnifiedAttemptDialog": (".unified_attempt_dialog", "UnifiedAttemptDialog"),
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_IMPORTS:
+        module_path, attr = _LAZY_IMPORTS[name]
+        val = getattr(importlib.import_module(module_path, __name__), attr)
+        globals()[name] = val  # cache; subsequent access skips __getattr__
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "BaseDialog",

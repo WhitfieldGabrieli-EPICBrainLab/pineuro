@@ -12,26 +12,10 @@ import logging
 from pathlib import Path
 
 import flet as ft
-import numpy as np
 
 from pineuro.gui import styles as st
 
 logger = logging.getLogger(__name__)
-
-# Optional imports for DICOM display
-try:
-    import pydicom
-
-    PYDICOM_AVAILABLE = True
-except ImportError:
-    PYDICOM_AVAILABLE = False
-
-try:
-    from PIL import Image
-
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
 
 
 def dicom_to_base64_png(dicom_path: Path) -> str | None:
@@ -47,7 +31,11 @@ def dicom_to_base64_png(dicom_path: Path) -> str | None:
     str or None
         Base64 data URI for the PNG image, or None if conversion fails.
     """
-    if not PYDICOM_AVAILABLE or not PIL_AVAILABLE:
+    try:
+        import numpy as np
+        import pydicom
+        from PIL import Image
+    except ImportError:
         return None
 
     try:

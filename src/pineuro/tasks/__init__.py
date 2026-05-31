@@ -51,12 +51,6 @@ from pathlib import Path
 from typing import Optional
 
 from .base import BaseTask
-from .designs import (
-    BlockDesign,
-    EventRelatedDesign,
-    NuisanceOnlyDesign,
-    TaskDesign,
-)
 from .factory import (
     create_localizer_task,
     create_task,
@@ -86,7 +80,6 @@ from .ui_helpers import (
     update_progress_bar,
     wait_with_escape,
 )
-from .utils import ActivationNormalizer, ActivationSmoother
 
 logger = logging.getLogger(__name__)
 
@@ -205,8 +198,26 @@ _LAZY_TASK_CLASS_NAMES = {
     "RITTriggeredBallTask",
 }
 
+# Design and activation-scaling classes live in submodules that import numpy.
+# Resolve them on demand (PEP 562) so that importing the tasks package -- or any
+# tasks submodule, e.g. ``from pineuro.tasks.task_registry import ...`` from GUI
+# code -- does not pull numpy in at package-init time.
+_LAZY_SUBMODULE_NAMES: dict[str, tuple[str, str]] = {
+    "TaskDesign": (".designs", "TaskDesign"),
+    "BlockDesign": (".designs", "BlockDesign"),
+    "NuisanceOnlyDesign": (".designs", "NuisanceOnlyDesign"),
+    "EventRelatedDesign": (".designs", "EventRelatedDesign"),
+    "ActivationNormalizer": (".utils", "ActivationNormalizer"),
+    "ActivationSmoother": (".utils", "ActivationSmoother"),
+}
+
 
 def __getattr__(name: str):
+    if name in _LAZY_SUBMODULE_NAMES:
+        module_path, attr = _LAZY_SUBMODULE_NAMES[name]
+        val = getattr(importlib.import_module(module_path, __name__), attr)
+        globals()[name] = val  # cache; subsequent access skips __getattr__
+        return val
     if name in _LAZY_TASK_CLASS_NAMES:
         _load_builtin_tasks()
         # After loading, the name should be importable from the submodules

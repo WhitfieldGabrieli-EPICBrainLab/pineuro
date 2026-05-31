@@ -14,8 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import flet as ft
-import numpy as np
-import pandas as pd  # type: ignore[import-untyped]
 
 from pineuro.gui import styles as st
 from pineuro.tasks.task_registry import LiveMetric, read_live_metrics
@@ -73,6 +71,9 @@ def compute_feedback_summary(
     Returns:
         FeedbackSummaryData with computed statistics
     """
+    import numpy as np
+    import pandas as pd  # type: ignore[import-untyped]
+
     # Load feedback log
     df = pd.read_csv(feedbacklog_path, sep="\t")
     df["fd"] = pd.to_numeric(df["fd"], errors="coerce")

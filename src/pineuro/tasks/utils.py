@@ -34,11 +34,13 @@ in per-frame update loops.
 import logging
 from collections import deque
 
-# Third-party imports
-import numpy as np
-
 # Configure module-level logger
 logger = logging.getLogger(__name__)
+
+# numpy is imported lazily inside the two functions that use it
+# (is_activation_outlier, ActivationNormalizer.update) so that importing this
+# module -- and therefore the tasks package, via localizer_base -- stays
+# numpy-free. See the GUI Lazy Import Rule in .claude/rules/architecture.md.
 
 
 def make_bids_subject_prefix(subject: str, session: str) -> str:
@@ -110,6 +112,8 @@ def is_activation_outlier(acts: list[float] | float, threshold: float) -> bool:
     """
     if isinstance(acts, (int, float)):
         return abs(acts) > threshold
+    import numpy as np
+
     return bool(np.max(np.abs(acts)) > threshold)
 
 
@@ -201,6 +205,8 @@ class ActivationNormalizer:
         float
             Normalized value in [0, 1] range
         """
+        import numpy as np
+
         self.window.append(value)
 
         # Ignore non-finite samples (NaN/Inf) so they cannot poison the
