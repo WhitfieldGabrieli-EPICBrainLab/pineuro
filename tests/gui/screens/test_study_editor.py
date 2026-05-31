@@ -94,10 +94,11 @@ def test_loc_type_short():
 # ----------------------------------------------------------------------
 
 
-def test_existing_study_opens_on_first_session():
-    # _make_editor passes a study_config, so is_new is False -> open on the session.
+def test_existing_study_opens_on_study_wide():
+    # Every study — new or existing — opens on study-wide settings; the active
+    # session still defaults to the first session for when the user drills in.
     editor = _make_editor([_session([_rest_loc()], [_ball_fb()])])
-    assert editor._active_scope == "session"
+    assert editor._active_scope == "study"
     assert editor._active_session_index == 0
 
 
@@ -139,6 +140,7 @@ def test_inner_tab_index_is_clamped_to_tab_count():
     # 1 localizer + 0 feedback -> inner tabs = [Protocol, Localizer] = 2.
     editor = _make_editor([_session([_rest_loc()], [])])
     editor.build()
+    editor._on_select_session(0)  # editor opens on study-wide; switch into the session scope
     editor._last_inner_index = 99
     editor._render_detail()
     assert editor._inner_tabs.selected_index == 1  # min(99, 2 - 1)

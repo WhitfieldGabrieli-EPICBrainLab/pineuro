@@ -66,11 +66,11 @@ class StudyEditorScreen:
 
         # Master-detail navigation state. The left sidebar selects a *scope*:
         # "study" (study-wide config) or "session" (the active session's protocol).
-        # A new study opens on study-wide so the name/paths are set first; an existing
-        # study opens on its first session's protocol. ``_last_inner_index`` remembers
-        # which session sub-tab (Protocol / Localizer N / Feedback N) was selected so
-        # switching sessions lands on the same sub-tab (compare-across-sessions).
-        self._active_scope = "study" if self.is_new else "session"
+        # Every study — new or existing — opens on study-wide so the user reviews
+        # name/paths/scanner before drilling into a session. ``_last_inner_index``
+        # remembers which session sub-tab (Protocol / Localizer N / Feedback N) was
+        # selected so switching sessions lands on the same sub-tab (compare-across-sessions).
+        self._active_scope = "study"
         self._last_inner_index = 0
 
         # Initialize localizer and feedback configs from the active session
