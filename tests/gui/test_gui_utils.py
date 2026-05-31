@@ -19,9 +19,13 @@ from pineuro.gui.utils import (
     pick_directory,
     pick_file,
     pick_save_file,
+    resolve_use_transfer_runs,
     reused_localizer_indices,
     ses_num,
     session_reuse_sources,
+    sham_hemisphere_network_for_localizer,
+    sham_networks_for_localizer,
+    study_sham_construction,
     synthesize_reused_localizers,
     tissue_required_in_session,
     validate_participant_id,
@@ -496,6 +500,91 @@ class TestValidateSessionConfig:
         ok, err = validate_session_config(config)
         assert isinstance(err, str)
         assert len(err) > 0
+
+
+# =============================================================================
+# resolve_use_transfer_runs
+# =============================================================================
+
+
+class TestResolveUseTransferRuns:
+    def test_explicit_value_wins(self):
+        # An explicitly-set value is honored regardless of the task's metadata default.
+        assert resolve_use_transfer_runs({"task": "gauge", "use_transfer_runs": True}) is True
+        assert resolve_use_transfer_runs({"task": "ball", "use_transfer_runs": False}) is False
+
+    def test_ball_defaults_true(self):
+        # ball declares a use_transfer_runs TaskParameter default of True.
+        assert resolve_use_transfer_runs({"task": "ball"}) is True
+
+    def test_gauge_and_thermometer_default_false(self):
+        assert resolve_use_transfer_runs({"task": "gauge"}) is False
+        assert resolve_use_transfer_runs({"task": "thermometer"}) is False
+
+    def test_unknown_or_undeclared_task_defaults_false(self):
+        assert resolve_use_transfer_runs({"task": "not-a-real-task"}) is False
+        assert resolve_use_transfer_runs({}) is False
+
+
+# =============================================================================
+# Sham construction helpers
+# =============================================================================
+
+
+class TestShamNetworksForLocalizer:
+    def _loc(self):
+        return {"id": "rest", "type": "rest", "networks": ["DefaultA", "ContA"]}
+
+    def test_disabled_returns_empty(self):
+        config = {"sham": {"enabled": False}, "feedback_runs": [{"mask_source": "rest", "sham": {}}]}
+        assert sham_networks_for_localizer(config, self._loc()) == []
+
+    def test_hemisphere_split_adds_network(self):
+        config = {
+            "sham": {"enabled": True},
+            "feedback_runs": [
+                {"mask_source": "rest", "sham": {"sham_mask_mode": "hemisphere_split", "hemisphere_network": "SomMotA"}}
+            ],
+        }
+        assert sham_networks_for_localizer(config, self._loc()) == ["SomMotA"]
+        assert sham_hemisphere_network_for_localizer(config, self._loc()) == "SomMotA"
+
+    def test_two_networks_unions_targets(self):
+        config = {
+            "sham": {"enabled": True},
+            "feedback_runs": [
+                {
+                    "mask_source": "rest",
+                    "sham": {"sham_mask_mode": "two_networks", "alternative_mask_targets": ["VisA", "VisB"]},
+                }
+            ],
+        }
+        assert sham_networks_for_localizer(config, self._loc()) == ["VisA", "VisB"]
+        # two_networks mode splits no single network into hemispheres.
+        assert sham_hemisphere_network_for_localizer(config, self._loc()) is None
+
+    def test_only_matches_referencing_runs(self):
+        config = {
+            "sham": {"enabled": True},
+            "feedback_runs": [
+                {"mask_source": "other", "sham": {"sham_mask_mode": "hemisphere_split", "hemisphere_network": "X"}}
+            ],
+        }
+        assert sham_networks_for_localizer(config, self._loc()) == []
+
+
+class TestStudyShamConstruction:
+    def test_empty_when_no_runs(self):
+        assert study_sham_construction({"feedback_runs": []}) == {}
+
+    def test_returns_first_alternative_mask_run(self):
+        config = {
+            "feedback_runs": [
+                {"sham": {"delivery_method": "replay"}},
+                {"sham": {"delivery_method": "alternative_masks", "hemisphere_network": "SomMotA"}},
+            ]
+        }
+        assert study_sham_construction(config)["hemisphere_network"] == "SomMotA"
 
 
 # =============================================================================

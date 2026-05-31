@@ -465,17 +465,10 @@ class FeedbackTabBuilder:
             visible=interval_val is not None,
         )
 
-        # Sham config
+        # Per-run sham mask construction. Whether sham runs at all, the randomization
+        # assignment, and blind mode are study-wide (set in the Study tab); these settings
+        # only define HOW this task's sham masks are built.
         sham_config = c.get("sham", {})
-        self.sham_enabled_checkbox = ft.Checkbox(
-            label="Enable Sham/Control Conditions",
-            value=sham_config.get("enabled", False),
-            on_change=self._on_sham_enabled_changed,
-        )
-        self.blind_mode_checkbox = ft.Checkbox(
-            label="Enable Blind Mode",
-            value=sham_config.get("blind_mode", False),
-        )
         self.sham_delivery_method_radio = ft.RadioGroup(
             content=ft.Column(
                 [
@@ -517,7 +510,7 @@ class FeedbackTabBuilder:
             value=sham_config.get("target_hemisphere", "right"),
         )
 
-        sham_targets = sham_config.get("alternative_mask_targets", ["SomMotA", "DefaultA"])
+        sham_targets = sham_config.get("alternative_mask_targets", ["SomMotA", "SomMotB"])
         self.sham_first_network_dropdown = ft.Dropdown(
             label="First Sham Network",
             options=yeo_options,
@@ -527,11 +520,6 @@ class FeedbackTabBuilder:
             label="Second Sham Network",
             options=yeo_options,
             value=sham_targets[1] if len(sham_targets) > 1 else None,
-        )
-        self.sham_randomization_file_field = ft.TextField(
-            label="Randomization File",
-            value=sham_config.get("randomization_file", ""),
-            hint_text="TSV file with subject_id, condition, matched_participant columns",
         )
 
         # Create task parameter fields
@@ -756,10 +744,8 @@ class FeedbackTabBuilder:
         # Copy use_transfer_runs to top level (keep in task_params for round-trip)
         cfg["use_transfer_runs"] = task_params.get("use_transfer_runs", False)
 
-        # Sham config
+        # Per-run sham mask construction (study-wide gating/randomization lives in the Study tab).
         cfg["sham"] = {
-            "enabled": self.sham_enabled_checkbox.value,
-            "blind_mode": self.blind_mode_checkbox.value,
             "delivery_method": self.sham_delivery_method_radio.value,
             "sham_mask_mode": self.sham_mask_mode_radio.value,
             "hemisphere_network": self.sham_hemisphere_network_dropdown.value or "SomMotA",
@@ -772,7 +758,6 @@ class FeedbackTabBuilder:
                 ]
                 if v
             ],
-            "randomization_file": self.sham_randomization_file_field.value.strip(),
         }
 
         # Preserve existing simulator source paths (managed by Paths tab)
@@ -861,9 +846,6 @@ class FeedbackTabBuilder:
         with contextlib.suppress(Exception):
             self.page.update()
 
-    def _on_sham_enabled_changed(self, e):
-        self._update_sham_visibility()
-
     def _on_sham_method_changed(self, e):
         self._update_sham_visibility()
 
@@ -871,28 +853,25 @@ class FeedbackTabBuilder:
         self._update_sham_visibility()
 
     def _update_sham_visibility(self):
-        """Update sham section visibility."""
-        is_enabled = self.sham_enabled_checkbox.value
+        """Update sham construction sub-section visibility (keyed off delivery/mask mode).
+
+        Whether sham runs is study-wide, so the construction controls are always shown;
+        only the delivery-method- and mask-mode-specific sub-sections toggle.
+        """
         method = self.sham_delivery_method_radio.value
         mask_mode = self.sham_mask_mode_radio.value
         is_conn = (self.feedback_mode_dropdown.value or "activation") == "connectivity"
 
-        if hasattr(self, "sham_config_container"):
-            self.sham_config_container.visible = is_enabled
         if hasattr(self, "sham_alternative_section"):
-            self.sham_alternative_section.visible = is_enabled and method == "alternative_masks"
+            self.sham_alternative_section.visible = method == "alternative_masks"
         if hasattr(self, "sham_hemisphere_split_section"):
             self.sham_hemisphere_split_section.visible = (
-                is_enabled and method == "alternative_masks" and mask_mode == "hemisphere_split"
+                method == "alternative_masks" and mask_mode == "hemisphere_split"
             )
         if hasattr(self, "sham_two_networks_section"):
-            self.sham_two_networks_section.visible = (
-                is_enabled and method == "alternative_masks" and mask_mode == "two_networks"
-            )
+            self.sham_two_networks_section.visible = method == "alternative_masks" and mask_mode == "two_networks"
         if hasattr(self, "sham_replay_section"):
-            self.sham_replay_section.visible = is_enabled and method == "replay"
-        if hasattr(self, "sham_randomization_section"):
-            self.sham_randomization_section.visible = is_enabled
+            self.sham_replay_section.visible = method == "replay"
         if hasattr(self, "sham_target_hemisphere_container"):
             self.sham_target_hemisphere_container.visible = not is_conn
         if hasattr(self, "sham_hemisphere_description"):
@@ -911,148 +890,15 @@ class FeedbackTabBuilder:
             self.page.update()
 
     # ------------------------------------------------------------------
-    # Generate randomization dialog
-    # ------------------------------------------------------------------
-
-    def _on_generate_randomization(self, e):
-        """Open dialog to generate a randomization file."""
-        prefix_field = ft.TextField(
-            label="Participant ID prefix",
-            value="sub-",
-            width=200,
-            hint_text="e.g. sub- → sub-01, sub-rtchr0 → sub-rtchr001",
-        )
-        n_participants_field = ft.TextField(
-            label="Number of participants",
-            width=200,
-            keyboard_type=ft.KeyboardType.NUMBER,
-        )
-        n_sham_field = ft.TextField(
-            label="Number of sham",
-            width=200,
-            keyboard_type=ft.KeyboardType.NUMBER,
-        )
-        method_dropdown = ft.Dropdown(
-            label="Method",
-            width=200,
-            options=[
-                ft.dropdown.Option(key="simple", text="Simple"),
-                ft.dropdown.Option(key="replay", text="Replay"),
-            ],
-            value="simple",
-        )
-        seed_field = ft.TextField(
-            label="Seed (optional)",
-            width=200,
-            keyboard_type=ft.KeyboardType.NUMBER,
-        )
-
-        dialog = ft.AlertDialog(
-            title=ft.Text("Generate Randomization File"),
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        prefix_field,
-                        n_participants_field,
-                        n_sham_field,
-                        method_dropdown,
-                        seed_field,
-                    ],
-                    tight=True,
-                    spacing=st.GAP_SM,
-                ),
-                width=300,
-            ),
-        )
-
-        def generate(e):
-            prefix = prefix_field.value.strip()
-            if not prefix:
-                prefix_field.error_text = "Required"
-                prefix_field.update()
-                return
-
-            try:
-                n_total = int(n_participants_field.value)
-                if n_total < 2:
-                    raise ValueError
-            except (TypeError, ValueError):
-                n_participants_field.error_text = "Must be an integer >= 2"
-                n_participants_field.update()
-                return
-            n_participants_field.error_text = None
-
-            try:
-                n_sham = int(n_sham_field.value)
-                if n_sham < 1 or n_sham >= n_total:
-                    raise ValueError
-            except (TypeError, ValueError):
-                n_sham_field.error_text = (
-                    f"Must be between 1 and {n_total - 1}" if "n_total" in dir() else "Must be a positive integer"
-                )
-                n_sham_field.update()
-                return
-            n_sham_field.error_text = None
-
-            seed_val = None
-            if seed_field.value and seed_field.value.strip():
-                try:
-                    seed_val = int(seed_field.value)
-                except ValueError:
-                    seed_field.error_text = "Must be an integer"
-                    seed_field.update()
-                    return
-
-            from pineuro.gui.utils import pick_save_file
-
-            save_path = pick_save_file(
-                title="Save randomization file",
-                default_extension=".tsv",
-                filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv")],
-            )
-
-            if not save_path:
-                return
-
-            from pineuro.sham import generate_randomization
-
-            participant_ids = [f"{prefix}{i:02d}" for i in range(1, n_total + 1)]
-            method = method_dropdown.value
-
-            generate_randomization(
-                participant_ids=participant_ids,
-                n_sham=n_sham,
-                method=method,
-                output_path=save_path,
-                seed=seed_val,
-            )
-
-            self.sham_randomization_file_field.value = save_path
-            self.sham_randomization_file_field.update()
-            self.page.pop_dialog()
-
-            self.page.snack_bar = ft.SnackBar(
-                ft.Text(f"Randomization file saved: {save_path}"),
-                open=True,
-            )
-            self.page.update()
-
-        def cancel(e):
-            self.page.pop_dialog()
-
-        dialog.actions = [
-            ft.TextButton("Cancel", on_click=cancel),
-            ft.ElevatedButton("Generate", on_click=generate),
-        ]
-        self.page.show_dialog(dialog)
-
-    # ------------------------------------------------------------------
     # Sham section builder
     # ------------------------------------------------------------------
 
     def _build_sham_section(self) -> ft.Container:
-        """Build the sham/control condition section."""
-        is_enabled = self.sham_enabled_checkbox.value
+        """Build the per-run sham mask-construction section.
+
+        Whether sham runs, the participant randomization, and blind mode are study-wide
+        (Study tab); these controls only define HOW this task's sham masks are built.
+        """
         method = self.sham_delivery_method_radio.value
         mask_mode = self.sham_mask_mode_radio.value
         is_conn = (self.feedback_mode_dropdown.value or "activation") == "connectivity"
@@ -1084,7 +930,7 @@ class FeedbackTabBuilder:
                 ],
                 spacing=st.GAP_MD,
             ),
-            visible=is_enabled and method == "alternative_masks" and mask_mode == "hemisphere_split",
+            visible=method == "alternative_masks" and mask_mode == "hemisphere_split",
         )
 
         self.sham_two_networks_section = ft.Container(
@@ -1096,7 +942,7 @@ class FeedbackTabBuilder:
                 ],
                 spacing=st.GAP_MD,
             ),
-            visible=is_enabled and method == "alternative_masks" and mask_mode == "two_networks",
+            visible=method == "alternative_masks" and mask_mode == "two_networks",
         )
 
         self.sham_alternative_section = ft.Container(
@@ -1109,74 +955,32 @@ class FeedbackTabBuilder:
                 ],
                 spacing=st.GAP_MD,
             ),
-            visible=is_enabled and method == "alternative_masks",
+            visible=method == "alternative_masks",
         )
 
         self.sham_replay_section = ft.Container(
             content=ft.Column(
                 [
                     st.subsection("Replay Configuration"),
-                    st.caption("Replay mode uses the matched_participant column from the randomization file."),
+                    st.caption("Replay mode uses the matched_participant column from the study randomization file."),
                 ],
                 spacing=st.GAP_MD,
             ),
-            visible=is_enabled and method == "replay",
-        )
-
-        self.sham_config_container = ft.Column(
-            [
-                ft.Divider(),
-                st.subsection("Delivery Method"),
-                self.sham_delivery_method_radio,
-                ft.Divider(),
-            ],
-            visible=is_enabled,
-            spacing=st.GAP_MD,
-        )
-
-        # Randomization file row: field fills, with browse + shuffle buttons.
-        rand_buttons: list[ft.Control] = []
-        if self._create_file_browse_button:
-            rand_buttons.append(
-                self._create_file_browse_button(
-                    self.sham_randomization_file_field,
-                    filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")],
-                )
-            )
-        rand_buttons.append(
-            ft.IconButton(
-                icon=ft.Icons.SHUFFLE,
-                tooltip="Generate randomization file",
-                on_click=self._on_generate_randomization,
-            ),
-        )
-
-        self.sham_randomization_section = ft.Column(
-            [
-                ft.Divider(),
-                st.subsection("Randomization"),
-                st.browse_row(self.sham_randomization_file_field, *rand_buttons),
-                st.caption(
-                    "TSV file with columns: subject_id, condition (real/sham), "
-                    "matched_participant (for replay), matched_session",
-                ),
-            ],
-            visible=is_enabled,
-            spacing=st.GAP_MD,
+            visible=method == "replay",
         )
 
         return ft.Container(
             content=ft.Column(
                 [
-                    st.section("Sham/Control Conditions"),
-                    st.caption("Configure real/sham neurofeedback for controlled studies."),
-                    self.sham_enabled_checkbox,
-                    self.blind_mode_checkbox,
-                    st.caption("Shows Target/Non-Target instead of network names in the task display."),
-                    self.sham_config_container,
+                    st.section("Sham Mask Construction"),
+                    st.caption(
+                        "How this task builds sham masks. Whether sham runs, the participant "
+                        "randomization, and blind mode are set study-wide in the Study tab."
+                    ),
+                    st.subsection("Delivery Method"),
+                    self.sham_delivery_method_radio,
                     self.sham_alternative_section,
                     self.sham_replay_section,
-                    self.sham_randomization_section,
                 ],
                 spacing=st.GAP_MD,
             ),

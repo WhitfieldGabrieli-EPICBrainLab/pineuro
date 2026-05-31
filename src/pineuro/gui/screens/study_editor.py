@@ -16,7 +16,7 @@ from pineuro.tasks.task_registry import get_task_metadata, list_available_tasks
 from .. import styles as st
 from ..config_manager import ConfigManager
 from ..models import StudyConfig, StudyMetadata
-from ..utils import frc_referenced_masks, localizer_is_reused, localizer_mask_names
+from ..utils import frc_referenced_masks, localizer_is_reused, localizer_mask_names, resolve_use_transfer_runs
 from ._feedback_tab import FeedbackTabBuilder
 from ._localizer_tab import LocalizerTabBuilder
 
@@ -171,11 +171,6 @@ class StudyEditorScreen:
             "sham": {
                 "enabled": False,
                 "blind_mode": False,
-                "delivery_method": "alternative_masks",
-                "sham_mask_mode": "hemisphere_split",
-                "hemisphere_network": "SomMotA",
-                "target_hemisphere": "right",
-                "alternative_mask_targets": ["SomMotA", "DefaultA"],
                 "randomization_file": "",
             },
             "display": {
@@ -311,6 +306,24 @@ class StudyEditorScreen:
                 ft.dropdown.Option(key="right", text="Right"),
             ],
             value=display_config.get("presenter_monitor", "right"),
+        )
+
+        # Sham / control condition (study-wide: whether sham runs, the participant
+        # randomization, and operator blinding — the per-task mask construction lives in
+        # each feedback run's tab).
+        sham_cfg = config.get("sham", {})
+        self.sham_enabled_checkbox = ft.Checkbox(
+            label="Enable Sham/Control Conditions",
+            value=sham_cfg.get("enabled", False),
+        )
+        self.sham_blind_mode_checkbox = ft.Checkbox(
+            label="Blind Mode (hide condition from operator)",
+            value=sham_cfg.get("blind_mode", False),
+        )
+        self.sham_randomization_file_field = ft.TextField(
+            label="Randomization File",
+            value=sham_cfg.get("randomization_file", ""),
+            hint_text="TSV: subject_id, condition (real/sham), matched_participant, matched_session",
         )
 
         # Type dropdown options (lazily computed — avoid triggering heavy task module imports)
@@ -536,7 +549,7 @@ class StudyEditorScreen:
             cfg.setdefault("networks", ["DefaultA", "ContA"])
             extraction = cfg.setdefault("extraction", {})
             extraction.setdefault("network_atlas", "yeo_17")
-            extraction.setdefault("n_components", 20)
+            extraction.setdefault("n_components", 30)
             extraction.setdefault("smooth_fwhm", 5.0)
             extraction.setdefault("highpass", 0.01)
         elif new_type == "manual":
@@ -1093,6 +1106,26 @@ class StudyEditorScreen:
                     st.field_pair(self.control_monitor_dropdown, self.presenter_monitor_dropdown),
                     self._build_monitor_preview(),
                     st.caption("Configure which monitor shows the control GUI vs the participant task display."),
+                    ft.Divider(),
+                    st.section("Sham / Control Condition"),
+                    st.caption(
+                        "Study-wide control settings. Each feedback task's sham mask construction "
+                        "(delivery method, networks) is configured in that task's tab."
+                    ),
+                    self.sham_enabled_checkbox,
+                    self.sham_blind_mode_checkbox,
+                    st.browse_row(
+                        self.sham_randomization_file_field,
+                        self._create_file_browse_button(
+                            self.sham_randomization_file_field,
+                            filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("All files", "*.*")],
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.SHUFFLE,
+                            tooltip="Generate randomization file",
+                            on_click=self._on_generate_randomization,
+                        ),
+                    ),
                 ],
                 scroll=ft.ScrollMode.AUTO,
                 spacing=st.GAP_MD,
@@ -1264,7 +1297,7 @@ class StudyEditorScreen:
             controls.append(st.browse_row(fb_field, self._create_browse_button(fb_field)))
 
             # Transfer run source (only if transfers enabled)
-            use_transfers = cfg.get("use_transfer_runs", False)
+            use_transfers = resolve_use_transfer_runs(cfg)
             tf_field = ft.TextField(
                 label="Transfer run source DICOMs",
                 value=cfg.get("transfer_source_dicoms", ""),
@@ -1469,6 +1502,126 @@ class StudyEditorScreen:
             tooltip="Browse for file",
             on_click=on_click,
         )
+
+    # ------------------------------------------------------------------
+    # Sham randomization
+    # ------------------------------------------------------------------
+
+    def _on_generate_randomization(self, e):
+        """Open a dialog to generate a study-wide randomization file."""
+        prefix_field = ft.TextField(
+            label="Participant ID prefix",
+            value="sub-",
+            width=200,
+            hint_text="e.g. sub- → sub-01, sub-rtchr0 → sub-rtchr001",
+        )
+        n_participants_field = ft.TextField(
+            label="Number of participants",
+            width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        n_sham_field = ft.TextField(
+            label="Number of sham",
+            width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+        method_dropdown = ft.Dropdown(
+            label="Method",
+            width=200,
+            options=[
+                ft.dropdown.Option(key="simple", text="Simple"),
+                ft.dropdown.Option(key="replay", text="Replay"),
+            ],
+            value="simple",
+        )
+        seed_field = ft.TextField(
+            label="Seed (optional)",
+            width=200,
+            keyboard_type=ft.KeyboardType.NUMBER,
+        )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Generate Randomization File"),
+            content=ft.Container(
+                content=ft.Column(
+                    [prefix_field, n_participants_field, n_sham_field, method_dropdown, seed_field],
+                    tight=True,
+                    spacing=st.GAP_SM,
+                ),
+                width=300,
+            ),
+        )
+
+        def generate(e):
+            prefix = prefix_field.value.strip()
+            if not prefix:
+                prefix_field.error_text = "Required"
+                prefix_field.update()
+                return
+
+            try:
+                n_total = int(n_participants_field.value)
+                if n_total < 2:
+                    raise ValueError
+            except (TypeError, ValueError):
+                n_participants_field.error_text = "Must be an integer >= 2"
+                n_participants_field.update()
+                return
+            n_participants_field.error_text = None
+
+            try:
+                n_sham = int(n_sham_field.value)
+                if n_sham < 1 or n_sham >= n_total:
+                    raise ValueError
+            except (TypeError, ValueError):
+                n_sham_field.error_text = f"Must be between 1 and {n_total - 1}"
+                n_sham_field.update()
+                return
+            n_sham_field.error_text = None
+
+            seed_val = None
+            if seed_field.value and seed_field.value.strip():
+                try:
+                    seed_val = int(seed_field.value)
+                except ValueError:
+                    seed_field.error_text = "Must be an integer"
+                    seed_field.update()
+                    return
+
+            from pineuro.gui.utils import pick_save_file
+
+            save_path = pick_save_file(
+                title="Save randomization file",
+                default_extension=".tsv",
+                filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv")],
+            )
+            if not save_path:
+                return
+
+            from pineuro.sham import generate_randomization
+
+            participant_ids = [f"{prefix}{i:02d}" for i in range(1, n_total + 1)]
+            generate_randomization(
+                participant_ids=participant_ids,
+                n_sham=n_sham,
+                method=method_dropdown.value,
+                output_path=save_path,
+                seed=seed_val,
+            )
+
+            self.sham_randomization_file_field.value = save_path
+            self.sham_randomization_file_field.update()
+            self.page.pop_dialog()
+            _snack = ft.SnackBar(ft.Text(f"Randomization file saved: {save_path}"))
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+
+        dialog.actions = [
+            ft.TextButton("Cancel", on_click=lambda e: self.page.pop_dialog()),
+            ft.ElevatedButton("Generate", on_click=generate),
+        ]
+        self.page.show_dialog(dialog)
 
     # ------------------------------------------------------------------
     # Monitor preview
@@ -1908,6 +2061,13 @@ class StudyEditorScreen:
             config["display"] = {}
         config["display"]["control_monitor"] = self.control_monitor_dropdown.value or "left"
         config["display"]["presenter_monitor"] = self.presenter_monitor_dropdown.value or "right"
+
+        # Sham (study-wide gating/randomization; per-task construction is collected per feedback run)
+        config["sham"] = {
+            "enabled": self.sham_enabled_checkbox.value,
+            "blind_mode": self.sham_blind_mode_checkbox.value,
+            "randomization_file": self.sham_randomization_file_field.value.strip(),
+        }
 
         # --- Collect protocol from tab builders into the active session ---
         self._localizer_configs = [b.collect_config() for b in self._localizer_builders]

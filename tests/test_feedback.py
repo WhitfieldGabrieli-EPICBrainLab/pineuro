@@ -595,3 +595,45 @@ class TestMocoMismatchDetection:
         c._check_moco_mismatch()
 
         assert c._error is None
+
+
+# =============================================================================
+# Connectivity feedback validation (fail loud, not silent activation fallback)
+# =============================================================================
+
+
+class TestConnectivityValidation:
+    """Connectivity feedback must fail loudly when no pair references a real mask."""
+
+    def _coordinator(self, sample_mask, tmp_path, connectivity_pairs):
+        mask1 = sample_mask(shape=(8, 8, 8), fraction=0.3, name="mask1.nii.gz")
+        mask2 = sample_mask(shape=(8, 8, 8), fraction=0.2, name="mask2.nii.gz")
+        watch_dir = tmp_path / "watch"
+        watch_dir.mkdir()
+        return NeurofeedbackCoordinator(
+            watch_dir=watch_dir,
+            output_dir=tmp_path / "out",
+            dicom_collection_dir=tmp_path / "dicom",
+            mask_paths=[mask1, mask2],
+            mask_names=["DMN", "Motor"],
+            subject="sub-01",
+            session="ses-01",
+            task="ball",
+            run=1,
+            attempt=1,
+            n_baseline=5,
+            n_volumes=20,
+            tr=2.0,
+            motion_correction="none",
+            connectivity_pairs=connectivity_pairs,
+        )
+
+    def test_all_invalid_pairs_raises(self, sample_mask, tmp_path):
+        # Connectivity requested but no pair references an available mask -> fail loud
+        # rather than silently reverting to activation-only feedback.
+        with pytest.raises(ValueError, match="[Cc]onnectivity"):
+            self._coordinator(sample_mask, tmp_path, connectivity_pairs=[["nope", "nada"]])
+
+    def test_valid_pair_succeeds(self, sample_mask, tmp_path):
+        coordinator = self._coordinator(sample_mask, tmp_path, connectivity_pairs=[["DMN", "Motor"]])
+        assert coordinator._connectivity_estimator is not None

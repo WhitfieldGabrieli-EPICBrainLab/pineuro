@@ -212,7 +212,7 @@ class LocalizerTabBuilder:
         # ICA settings (rest only) — read from extraction sub-block
         self.n_components_field = ft.TextField(
             label="ICA components",
-            value=str(extraction_cfg.get("n_components", 20)),
+            value=str(extraction_cfg.get("n_components", 30)),
             hint_text="Number of ICA components for decomposition",
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda _: self._validate_field("n_components", self.n_components_field, validate_positive_int),

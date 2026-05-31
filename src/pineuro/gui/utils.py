@@ -311,6 +311,26 @@ class FeedbackStep(NamedTuple):
     is_last_feedback: bool = False
 
 
+def resolve_use_transfer_runs(frc: dict[str, Any]) -> bool:
+    """Whether a feedback run uses transfer runs, defaulting to its task's declaration.
+
+    If the run explicitly sets ``use_transfer_runs`` (the GUI always writes it from a
+    checkbox seeded with the task default), that value wins. Otherwise fall back to the
+    task metadata's ``use_transfer_runs`` parameter default so a sparse/CLI config
+    respects per-task declarations (e.g. only ``ball`` declares ``True``); tasks that
+    don't declare the parameter default to no transfer runs.
+    """
+    if "use_transfer_runs" in frc:
+        return bool(frc["use_transfer_runs"])
+    from ..tasks.task_registry import get_task_metadata
+
+    try:
+        metadata = get_task_metadata(frc.get("task", ""))
+    except (KeyError, ValueError, ImportError):
+        return False
+    return next((bool(p.default) for p in metadata.parameters if p.key == "use_transfer_runs"), False)
+
+
 def _task_entity(task_id: str, kind: str) -> str:
     """BIDS ``task-`` entity for a feedback step: real task name, ``transfer`` suffix."""
     return task_id if kind == "feedback" else f"{task_id}transfer"
@@ -352,7 +372,7 @@ def build_feedback_steps(config: dict[str, Any]) -> list[FeedbackStep]:
             label_suffix = get_task_metadata(task_id).display_name
         except (ValueError, ImportError):
             label_suffix = task_id.replace("_", " ").title()
-        use_transfers = frc.get("use_transfer_runs", False)
+        use_transfers = resolve_use_transfer_runs(frc)
         max_runs = frc.get("max_runs", 1)
 
         if use_transfers:
@@ -469,6 +489,81 @@ def localizer_producing(session: dict[str, Any], name: str) -> dict[str, Any] | 
         if name in localizer_mask_names(loc):
             return cast("dict[str, Any]", loc)
     return None
+
+
+def sham_networks_for_localizer(config: dict[str, Any], loc: dict[str, Any]) -> list[str]:
+    """Extra sham-construction networks a localizer must also extract.
+
+    Sham masks are built from extra networks (a hemisphere network, or two alternative
+    networks) that must be extracted alongside the real targets for ALL participants
+    (blinding requirement). Sham *gating* is study-wide (``config["sham"].enabled``); the
+    *construction* params are per feedback run (``feedback_runs[*].sham``). Returns the
+    union of sham networks needed by the feedback runs whose masks come from this localizer
+    (matched via ``mask_source``, as set by ``build_session_config``). Empty when sham is
+    disabled study-wide or no referencing run uses alternative-mask sham.
+    """
+    if not config.get("sham", {}).get("enabled", False):
+        return []
+    localizer_id = loc.get("id") or loc.get("type") or ""
+    networks: list[str] = []
+
+    def _add(name: str) -> None:
+        if name and name not in networks:
+            networks.append(name)
+
+    for frc in config.get("feedback_runs", []):
+        if frc.get("mask_source") != localizer_id:
+            continue
+        frc_sham = frc.get("sham", {})
+        if frc_sham.get("delivery_method", "alternative_masks") != "alternative_masks":
+            continue
+        if frc_sham.get("sham_mask_mode", "hemisphere_split") == "hemisphere_split":
+            _add(frc_sham.get("hemisphere_network", "SomMotA"))
+        else:
+            for name in frc_sham.get("alternative_mask_targets", []):
+                _add(name)
+    return networks
+
+
+def sham_hemisphere_network_for_localizer(config: dict[str, Any], loc: dict[str, Any]) -> str | None:
+    """The network to also split into left/right hemispheres for this localizer's sham, or None.
+
+    Mask extraction splits a single network, so this returns the first hemisphere-split
+    network among the feedback runs sourcing masks from this localizer (matched via
+    ``mask_source``). None when sham is disabled study-wide or no referencing run uses
+    hemisphere-split sham.
+    """
+    if not config.get("sham", {}).get("enabled", False):
+        return None
+    localizer_id = loc.get("id") or loc.get("type") or ""
+    for frc in config.get("feedback_runs", []):
+        if frc.get("mask_source") != localizer_id:
+            continue
+        frc_sham = frc.get("sham", {})
+        if frc_sham.get("delivery_method", "alternative_masks") != "alternative_masks":
+            continue
+        if frc_sham.get("sham_mask_mode", "hemisphere_split") == "hemisphere_split":
+            net = frc_sham.get("hemisphere_network", "SomMotA")
+            if net:
+                return cast("str", net)
+    return None
+
+
+def study_sham_construction(config: dict[str, Any]) -> dict[str, Any]:
+    """A representative per-run sham construction for study-wide display/QC.
+
+    Sham construction params (delivery_method/sham_mask_mode/networks) live per feedback
+    run; study-wide displays (reference QC overlays, ICA selection) need one representative
+    view. Returns the sham dict of the first feedback run using alternative-mask sham, else
+    the first feedback run's sham, else ``{}``. Callers gate on the study-wide
+    ``config["sham"].enabled`` separately and apply ShamRunConfig defaults via ``.get``.
+    """
+    runs = config.get("feedback_runs", []) or []
+    for frc in runs:
+        sham = frc.get("sham") or {}
+        if sham.get("delivery_method", "alternative_masks") == "alternative_masks":
+            return cast("dict[str, Any]", sham)
+    return cast("dict[str, Any]", (runs[0].get("sham") or {}) if runs else {})
 
 
 def synthesize_reused_localizers(

@@ -290,15 +290,13 @@ class SessionMetadata:
 
 @dataclass
 class ShamConfig:
-    """Configuration for sham/control neurofeedback conditions.
+    """Study-wide sham/control settings (the YAML top-level ``sham:`` block).
 
-    Supports two delivery methods for sham feedback:
-    1. 'alternative_masks': Use different network masks (e.g., motor instead of DMN)
-    2. 'replay': Replay activation values from another participant's feedbacklog.tsv
-
-    For 'alternative_masks', two modes are available:
-    1. 'hemisphere_split': Split a single network into left/right hemispheres (default)
-    2. 'two_networks': Use two distinct Yeo networks
+    Sham is assigned per participant for the whole study: ``enabled`` gates sham,
+    ``randomization_file`` maps each participant to "real"/"sham" (and, for replay
+    delivery, to a matched participant), and ``blind_mode`` hides the assignment from
+    the operator. *How* a sham signal is built for a given feedback task lives per
+    feedback run in :class:`ShamRunConfig`.
 
     Critical blinding requirements:
     - All masks (target + alternative) are extracted for ALL participants
@@ -310,14 +308,50 @@ class ShamConfig:
     ----------
     enabled : bool
         Whether sham functionality is enabled for this study.
+    blind_mode : bool
+        Hide the condition assignment from the operator (double-blind).
+    randomization_file : Path, optional
+        Path to TSV file containing subject -> condition assignments.
+        Columns: subject_id, condition, matched_participant, matched_session, notes
+        For 'replay' delivery: matched_participant specifies which participant's
+        feedbacklog to replay from (looked up in the study's base_dir).
+    """
+
+    enabled: bool = False
+    blind_mode: bool = False  # Hide condition assignment from operator (double-blind)
+    randomization_file: Path | None = None
+
+    def __post_init__(self) -> None:
+        """Convert the randomization-file path."""
+        if self.randomization_file is not None:
+            self.randomization_file = Path(self.randomization_file)
+
+
+@dataclass
+class ShamRunConfig:
+    """Per-feedback-run sham mask construction (the ``feedback_runs[*].sham:`` block).
+
+    Defines *how* a sham signal is built for one feedback task — these settings are
+    specific to the task (e.g. the ball task). Whether sham runs at all, and which
+    participants are sham, is decided study-wide by :class:`ShamConfig`.
+
+    Supports two delivery methods:
+    1. 'alternative_masks': Use different network masks (e.g., motor instead of DMN)
+    2. 'replay': Replay activation values from another participant's feedbacklog.tsv
+
+    For 'alternative_masks', two modes are available:
+    1. 'hemisphere_split': Split a single network into left/right hemispheres (default)
+    2. 'two_networks': Use two distinct Yeo networks
+
+    Parameters
+    ----------
     delivery_method : str
-        How sham feedback is delivered:
-        - 'alternative_masks': Use different network masks
-        - 'replay': Replay activation values from another participant's feedbacklog
+        'alternative_masks' (different network masks) or 'replay' (replay another
+        participant's feedbacklog; the matched participant comes from the study-wide
+        randomization file).
     sham_mask_mode : str
-        For 'alternative_masks' method, how masks are selected:
-        - 'hemisphere_split': Split a single network into left/right hemispheres
-        - 'two_networks': Use two distinct Yeo networks
+        For 'alternative_masks': 'hemisphere_split' (split one network into left/right
+        hemispheres) or 'two_networks' (two distinct Yeo networks).
     hemisphere_network : str
         For 'hemisphere_split' mode: the network to split (e.g., "SomMotA").
         Can be any network from the current Yeo parcellation (7 or 17).
@@ -326,44 +360,26 @@ class ShamConfig:
         The other hemisphere becomes the non-target/sham mask.
     alternative_mask_targets : list[str]
         For 'two_networks' mode: network names to use for sham participants
-        (e.g., ["SomMotA", "SomMotB"] instead of ["DefaultA", "ContA"])
-    randomization_file : Path, optional
-        Path to TSV file containing subject -> condition assignments.
-        Columns: subject_id, condition, matched_participant, matched_session, notes
-        For 'replay' method: matched_participant specifies which participant's
-        feedbacklog to replay from (looked up in the study's base_dir).
+        (e.g., ["SomMotA", "SomMotB"] instead of ["DefaultA", "ContA"]).
     """
 
-    enabled: bool = False
-    blind_mode: bool = False  # Hide condition assignment from operator (double-blind)
     delivery_method: str = "alternative_masks"  # "alternative_masks" or "replay"
     sham_mask_mode: str = "hemisphere_split"  # "hemisphere_split" or "two_networks"
     hemisphere_network: str = "SomMotA"  # Network to split for hemisphere_split mode
     target_hemisphere: str = "right"  # "right" or "left"
     alternative_mask_targets: list[str] = field(default_factory=lambda: ["SomMotA", "SomMotB"])
-    randomization_file: Path | None = None
 
     def __post_init__(self) -> None:
-        """Validate configuration and convert paths."""
-        if self.enabled:
-            if self.delivery_method not in ("alternative_masks", "replay"):
+        """Validate the construction parameters (format only; gating is study-wide)."""
+        if self.delivery_method not in ("alternative_masks", "replay"):
+            raise ValueError(f"delivery_method must be 'alternative_masks' or 'replay', got '{self.delivery_method}'")
+        if self.delivery_method == "alternative_masks":
+            if self.sham_mask_mode not in ("hemisphere_split", "two_networks"):
                 raise ValueError(
-                    f"delivery_method must be 'alternative_masks' or 'replay', got '{self.delivery_method}'"
+                    f"sham_mask_mode must be 'hemisphere_split' or 'two_networks', got '{self.sham_mask_mode}'"
                 )
-            if self.delivery_method == "replay" and self.randomization_file is None:
-                raise ValueError(
-                    "randomization_file is required when delivery_method='replay' "
-                    "(must contain matched_participant column)"
-                )
-            if self.delivery_method == "alternative_masks":
-                if self.sham_mask_mode not in ("hemisphere_split", "two_networks"):
-                    raise ValueError(
-                        f"sham_mask_mode must be 'hemisphere_split' or 'two_networks', got '{self.sham_mask_mode}'"
-                    )
-                if self.sham_mask_mode == "hemisphere_split" and self.target_hemisphere not in ("right", "left"):
-                    raise ValueError(f"target_hemisphere must be 'right' or 'left', got '{self.target_hemisphere}'")
-        if self.randomization_file is not None:
-            self.randomization_file = Path(self.randomization_file)
+            if self.sham_mask_mode == "hemisphere_split" and self.target_hemisphere not in ("right", "left"):
+                raise ValueError(f"target_hemisphere must be 'right' or 'left', got '{self.target_hemisphere}'")
 
 
 @dataclass
@@ -474,7 +490,7 @@ class SimulatorConfig:
 
     enabled: bool = True
     collection_speed: float = 1.0
-    feedback_speed: float = 10.0
+    feedback_speed: float = 1.0
     trigger_mode: str = "manual"
     source_mapping: str = ""
 
@@ -637,9 +653,10 @@ class FeedbackRunConfig:
         roles and connectivity pair names. Consumed when flattening the study config
         (:meth:`pineuro.gui.models.StudyConfig.build_session_config` synthesizes a
         reused localizer per source); the runtime never reads it.
-    sham : dict
-        Optional per-run sham override. Empty dict means use the top-level
-        ``SessionConfig.sham`` block.
+    sham : ShamRunConfig
+        Per-run sham mask construction (delivery method + mask mode/networks). Whether
+        sham runs and which participants are sham is decided study-wide by the top-level
+        ``SessionConfig.sham`` (:class:`ShamConfig`).
     source_dicoms : str
         Simulator DICOM source for feedback runs.
     transfer_source_dicoms : str
@@ -665,8 +682,11 @@ class FeedbackRunConfig:
     connectivity: ConnectivityConfig = field(default_factory=ConnectivityConfig)
     intermittent: IntermittentConfig = field(default_factory=IntermittentConfig)
 
-    # Transfer runs
-    use_transfer_runs: bool = True
+    # Transfer runs. The GUI always writes this from a checkbox seeded with the task's
+    # metadata default; this dataclass default applies only to the CLI/SessionConfig path
+    # for a run that omits it. False (no transfer runs) is the safe per-task baseline —
+    # only tasks that declare a `use_transfer_runs` TaskParameter default (e.g. ball) opt in.
+    use_transfer_runs: bool = False
 
     # Task-specific
     task_params: dict[str, Any] = field(default_factory=dict)
@@ -676,8 +696,8 @@ class FeedbackRunConfig:
     # Absent name => produced fresh this session. Consumed by build_session_config.
     mask_sources: dict[str, str] = field(default_factory=dict)
 
-    # Sham (per-run override; if empty, the top-level SessionConfig.sham applies)
-    sham: dict[str, Any] = field(default_factory=dict)
+    # Per-run sham mask construction. Study-wide gating/assignment lives in SessionConfig.sham.
+    sham: ShamRunConfig = field(default_factory=ShamRunConfig)
 
     # Simulator sources
     source_dicoms: str = ""
@@ -1027,6 +1047,17 @@ class SessionConfig:
                     f"localizer.id (available: {sorted(localizer_ids)})"
                 )
 
+        # Cross-block sham validation: replay delivery needs the study randomization file
+        # (to look up each participant's matched_participant). enabled/randomization_file are
+        # study-wide (ShamConfig); delivery_method is per-run (ShamRunConfig).
+        if sham is not None and sham.enabled and sham.randomization_file is None:
+            for i, frc in enumerate(feedback_runs):
+                if frc.sham.delivery_method == "replay":
+                    raise ValueError(
+                        f"feedback_runs[{i}] uses sham delivery_method='replay' but the study sham "
+                        f"block has no randomization_file (required to match participants for replay)"
+                    )
+
         return cls(
             paths=paths,
             simulator=simulator,
@@ -1057,6 +1088,7 @@ class SessionConfig:
             ("glm", GLMConfig),
             ("connectivity", ConnectivityConfig),
             ("intermittent", IntermittentConfig),
+            ("sham", ShamRunConfig),
         ):
             block = frc_data.pop(key, None)
             if block:

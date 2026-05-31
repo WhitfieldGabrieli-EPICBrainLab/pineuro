@@ -133,11 +133,13 @@ class PipelineRunner:
         if not feedback_runs:
             return None
 
+        from ..utils import resolve_use_transfer_runs
+
         step_to_frc: dict[str, dict[str, Any]] = {}
         fb_counter = 0
         tf_counter = 0
         for frc in feedback_runs:
-            use_transfers = frc.get("use_transfer_runs", False)
+            use_transfers = resolve_use_transfer_runs(frc)
             if use_transfers:
                 tf_counter += 1
                 step_to_frc[f"transfer_{tf_counter}"] = frc
@@ -1214,35 +1216,24 @@ class PipelineRunner:
             networks = list(loc0.get("networks", []))  # Copy to avoid modifying original
             n_components = extraction.get("n_components", 30)
             threshold = extraction.get("threshold", 2000)
-            smooth_fwhm = extraction["smooth_fwhm"]
-            highpass = extraction["highpass"]
+            smooth_fwhm = extraction.get("smooth_fwhm", 5.0)
+            highpass = extraction.get("highpass", 0.01)
             lowpass = extraction.get("lowpass")
 
-            # If sham is enabled with alternative masks, include those networks too
-            sham_config = config.get("sham", {})
-            sham_hemisphere_network = None
-            if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-                mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
-                if mask_mode == "hemisphere_split":
-                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                    if hemisphere_network and hemisphere_network not in networks:
-                        networks.append(hemisphere_network)
-                        if self._is_blind_mode():
-                            self._emit_progress_file_only(f"Including sham hemisphere network: {hemisphere_network}")
-                            self._emit_progress("Including additional network for mask extraction")
-                        else:
-                            self._emit_progress(f"Including sham hemisphere network: {hemisphere_network}")
-                    sham_hemisphere_network = hemisphere_network
-                else:
-                    alternative_targets = sham_config.get("alternative_mask_targets", [])
-                    for target in alternative_targets:
-                        if target and target not in networks:
-                            networks.append(target)
-                            if self._is_blind_mode():
-                                self._emit_progress_file_only(f"Including sham alternative network: {target}")
-                                self._emit_progress("Including additional network for mask extraction")
-                            else:
-                                self._emit_progress(f"Including sham alternative network: {target}")
+            # Sham gating is study-wide; the construction networks come from the per-run
+            # sham config of whichever feedback runs source masks from this localizer. All
+            # sham networks are extracted for ALL participants (blinding requirement).
+            from ..utils import sham_hemisphere_network_for_localizer, sham_networks_for_localizer
+
+            sham_hemisphere_network = sham_hemisphere_network_for_localizer(config, loc0)
+            for net in sham_networks_for_localizer(config, loc0):
+                if net not in networks:
+                    networks.append(net)
+                    if self._is_blind_mode():
+                        self._emit_progress_file_only(f"Including sham network: {net}")
+                        self._emit_progress("Including additional network for mask extraction")
+                    else:
+                        self._emit_progress(f"Including sham network: {net}")
 
             params = {
                 "participant_id": self.participant_id,
@@ -1489,24 +1480,18 @@ class PipelineRunner:
             network_atlas = extraction.get("network_atlas", "yeo_17")
             networks = list(loc.get("networks", []))
             threshold = extraction.get("threshold", 2000)
-            smooth_fwhm = extraction["smooth_fwhm"]
-            highpass = extraction["highpass"]
+            smooth_fwhm = extraction.get("smooth_fwhm", 5.0)
+            highpass = extraction.get("highpass", 0.01)
             lowpass = extraction.get("lowpass")
 
-            # Include sham networks for rest localizers
-            sham_config = config.get("sham", {})
-            sham_hemisphere_network = None
-            if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-                mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
-                if mask_mode == "hemisphere_split":
-                    hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                    if hemisphere_network and hemisphere_network not in networks:
-                        networks.append(hemisphere_network)
-                    sham_hemisphere_network = hemisphere_network
-                else:
-                    for target in sham_config.get("alternative_mask_targets", []):
-                        if target and target not in networks:
-                            networks.append(target)
+            # Include sham construction networks (per-run sham config of the feedback runs
+            # sourcing masks from this localizer; gated study-wide by config["sham"].enabled).
+            from ..utils import sham_hemisphere_network_for_localizer, sham_networks_for_localizer
+
+            sham_hemisphere_network = sham_hemisphere_network_for_localizer(config, loc)
+            for net in sham_networks_for_localizer(config, loc):
+                if net not in networks:
+                    networks.append(net)
 
             params = {
                 "participant_id": self.participant_id,
@@ -1706,31 +1691,18 @@ class PipelineRunner:
         networks = list(loc0.get("networks", ["DefaultA", "ContA"]))
         threshold = extraction.get("threshold", 2000)
 
-        # Handle sham networks (same logic as _run_mask_extraction)
-        sham_config = config.get("sham", {})
-        sham_hemisphere_network = None
-        if sham_config.get("enabled", False) and sham_config.get("delivery_method") == "alternative_masks":
-            mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
-            if mask_mode == "hemisphere_split":
-                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                if hemisphere_network and hemisphere_network not in networks:
-                    networks.append(hemisphere_network)
-                    if self._is_blind_mode():
-                        self._emit_progress_file_only(f"Including sham hemisphere network: {hemisphere_network}")
-                        self._emit_progress("Including additional network for mask extraction")
-                    else:
-                        self._emit_progress(f"Including sham hemisphere network: {hemisphere_network}")
-                sham_hemisphere_network = hemisphere_network
-            else:
-                alternative_targets = sham_config.get("alternative_mask_targets", [])
-                for target in alternative_targets:
-                    if target and target not in networks:
-                        networks.append(target)
-                        if self._is_blind_mode():
-                            self._emit_progress_file_only(f"Including sham alternative network: {target}")
-                            self._emit_progress("Including additional network for mask extraction")
-                        else:
-                            self._emit_progress(f"Including sham alternative network: {target}")
+        # Handle sham construction networks (same per-run resolution as _run_mask_extraction)
+        from ..utils import sham_hemisphere_network_for_localizer, sham_networks_for_localizer
+
+        sham_hemisphere_network = sham_hemisphere_network_for_localizer(config, loc0)
+        for net in sham_networks_for_localizer(config, loc0):
+            if net not in networks:
+                networks.append(net)
+                if self._is_blind_mode():
+                    self._emit_progress_file_only(f"Including sham network: {net}")
+                    self._emit_progress("Including additional network for mask extraction")
+                else:
+                    self._emit_progress(f"Including sham network: {net}")
 
         def progress_callback(step: str, detail: str = ""):
             if detail:
@@ -1852,16 +1824,10 @@ class PipelineRunner:
             root_dir = feedback_dir
             output_subdir = "01_reference"
 
-        # Sham hemisphere-split: drop the combined network mask (its left/right
-        # split masks are used instead).
-        sham_config = config.get("sham", {})
-        sham_combined_name: str | None = None
-        if (
-            sham_config.get("enabled", False)
-            and sham_config.get("delivery_method", "alternative_masks") == "alternative_masks"
-            and sham_config.get("sham_mask_mode", "hemisphere_split") == "hemisphere_split"
-        ):
-            sham_combined_name = sham_config.get("hemisphere_network", "SomMotA")
+        # Sham hemisphere-split: the combined network mask is dropped per localizer below
+        # (its left/right split masks are used instead); the network is resolved from the
+        # per-run sham config of the feedback runs sourcing masks from each localizer.
+        from ..utils import sham_hemisphere_network_for_localizer
 
         # Tissue masks (WM/CSF). A fresh-localizer session created them locally and
         # coregisters them with its first fresh localizer group (same space). A
@@ -1928,6 +1894,7 @@ class PipelineRunner:
             # This localizer's thresholded masks from its source dir: exact name
             # matches plus derived variants (e.g. hemisphere "{name}_left"), minus the
             # combined network mask when hemisphere-split sham is active.
+            sham_combined_name = sham_hemisphere_network_for_localizer(config, loc)
             group_files: list[Path] = []
             for f in sorted(src_masks_dir.glob(f"{src_prefix}_*_thr.nii.gz")):
                 mask_name = f.name[len(src_prefix) + 1 : -len("_thr.nii.gz")]
@@ -2392,7 +2359,8 @@ class PipelineRunner:
         sham_mask_names = []
         sham_mask_files = []
         sham_provider = None  # ReplayActivationProvider for replay mode
-        sham_config = config.get("sham", {})
+        sham_config = config.get("sham", {})  # study-wide gating: enabled + randomization_file
+        frc_sham = (frc.get("sham", {}) if frc else {}) or {}  # per-run mask construction params
 
         if sham_config.get("enabled", False):
             randomization_file = sham_config.get("randomization_file")
@@ -2408,16 +2376,16 @@ class PipelineRunner:
                         else:
                             self._emit_progress(f"Participant condition: {condition}")
 
-                        delivery_method = sham_config.get("delivery_method", "alternative_masks")
+                        delivery_method = frc_sham.get("delivery_method", "alternative_masks")
 
                         if delivery_method == "alternative_masks":
-                            mask_mode = sham_config.get("sham_mask_mode", "hemisphere_split")
+                            mask_mode = frc_sham.get("sham_mask_mode", "hemisphere_split")
                             if mask_mode == "hemisphere_split":
                                 # Hemisphere split: use left/right halves of a single network.
                                 # Sham target = {network}_{target_hemisphere},
                                 # sham non-target = contralateral hemisphere.
-                                hemisphere_network = sham_config.get("hemisphere_network", "SomMotA")
-                                target_hemisphere = sham_config.get("target_hemisphere", "right")
+                                hemisphere_network = frc_sham.get("hemisphere_network", "SomMotA")
+                                target_hemisphere = frc_sham.get("target_hemisphere", "right")
                                 non_target_hemisphere = "left" if target_hemisphere == "right" else "right"
 
                                 for hemi in [target_hemisphere, non_target_hemisphere]:
@@ -2429,7 +2397,7 @@ class PipelineRunner:
                                         logger.warning(f"Sham hemisphere mask not found: {e}")
                             else:
                                 # Two networks mode: use two distinct networks
-                                alternative_targets = sham_config.get("alternative_mask_targets", [])
+                                alternative_targets = frc_sham.get("alternative_mask_targets", [])
                                 for alt_name in alternative_targets:
                                     try:
                                         sham_mask_files.append(find_mask_file(alt_name))
@@ -2541,7 +2509,7 @@ class PipelineRunner:
             and connectivity_pairs
             and sham_mask_names
             and len(sham_mask_names) >= 2
-            and sham_config.get("delivery_method") == "alternative_masks"
+            and frc_sham.get("delivery_method") == "alternative_masks"
         ):
             sham_pair = [sham_mask_names[0], sham_mask_names[1]]
             if sham_pair not in connectivity_pairs:

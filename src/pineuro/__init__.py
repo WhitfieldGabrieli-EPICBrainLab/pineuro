@@ -128,6 +128,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ReferenceConfig": (".session", "ReferenceConfig"),
     "SessionMetadata": (".session", "SessionMetadata"),
     "ShamConfig": (".session", "ShamConfig"),
+    "ShamRunConfig": (".session", "ShamRunConfig"),
     "SimulatorSourceMapping": (".session", "SimulatorSourceMapping"),
     "setup_session": (".session", "setup_session"),
     "run_single_task": (".session", "run_single_task"),
@@ -234,6 +235,7 @@ __all__ = [
     "ReferenceConfig",
     "SessionMetadata",
     "ShamConfig",
+    "ShamRunConfig",
     "SimulatorSourceMapping",
     # Sham functionality
     "ShamActivationProvider",

@@ -2575,6 +2575,15 @@ class NeurofeedbackCoordinator:
                     f"Connectivity feedback: {len(validated_pairs)} pair(s), "
                     f"window={connectivity_window} volumes, target={connectivity_target}"
                 )
+            else:
+                # Connectivity feedback was requested but none of the configured pairs
+                # reference available masks. Fail loudly rather than silently falling back
+                # to activation-only feedback (which would deliver the wrong signal).
+                raise ValueError(
+                    f"Connectivity feedback was requested but none of the configured pairs "
+                    f"{connectivity_pairs} reference available masks (available: {self.mask_names}). "
+                    f"Check the connectivity mask selections against the extracted masks."
+                )
 
         # Sham mode configuration
         self._sham_provider = sham_provider

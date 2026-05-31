@@ -16,6 +16,7 @@ from pineuro.session import (
     SessionConfig,
     SessionMetadata,
     ShamConfig,
+    ShamRunConfig,
     SimulatorConfig,
     detect_existing_sessions,
     next_session_id,
@@ -191,6 +192,12 @@ class TestNewTopLevelBlocks:
         assert cfg.feedback_speed == 5.0
         assert cfg.collection_speed == 1.0  # default unchanged
 
+    def test_simulator_speed_defaults_are_realtime(self):
+        # Both simulator speeds default to 1.0× (real-time); no 10× feedback default.
+        cfg = SimulatorConfig()
+        assert cfg.collection_speed == 1.0
+        assert cfg.feedback_speed == 1.0
+
     def test_scanner(self):
         cfg = ScannerConfig(ip="192.168.2.1")
         assert cfg.ip == "192.168.2.1"
@@ -342,20 +349,77 @@ class TestResolveMaskNamesForRun:
 
 
 class TestShamConfig:
+    """Study-wide sham gating (enabled / blind_mode / randomization_file)."""
+
     def test_defaults(self):
         config = ShamConfig()
         assert config.enabled is False
-        assert config.delivery_method == "alternative_masks"
+        assert config.blind_mode is False
+        assert config.randomization_file is None
 
-    def test_enabled_replay_requires_randomization_file(self, tmp_path):
-        """ShamConfig with replay method requires a randomization_file."""
-        with pytest.raises(ValueError, match="randomization_file is required"):
-            ShamConfig(enabled=True, delivery_method="replay")
-
-    def test_enabled_alternative_masks(self):
-        config = ShamConfig(enabled=True, delivery_method="alternative_masks")
+    def test_enabled_global(self, tmp_path):
+        rand = tmp_path / "rand.tsv"
+        rand.write_text("subject_id\tcondition\n")
+        config = ShamConfig(enabled=True, blind_mode=True, randomization_file=rand)
         assert config.enabled is True
+        assert config.blind_mode is True
+        assert config.randomization_file == rand
+
+
+class TestShamRunConfig:
+    """Per-feedback-run sham mask construction."""
+
+    def test_defaults(self):
+        config = ShamRunConfig()
         assert config.delivery_method == "alternative_masks"
+        assert config.sham_mask_mode == "hemisphere_split"
+        assert config.hemisphere_network == "SomMotA"
+        assert config.target_hemisphere == "right"
+        assert config.alternative_mask_targets == ["SomMotA", "SomMotB"]
+
+    def test_invalid_delivery_method(self):
+        with pytest.raises(ValueError, match="delivery_method"):
+            ShamRunConfig(delivery_method="bogus")
+
+    def test_invalid_mask_mode(self):
+        with pytest.raises(ValueError, match="sham_mask_mode"):
+            ShamRunConfig(sham_mask_mode="bogus")
+
+    def test_invalid_target_hemisphere(self):
+        with pytest.raises(ValueError, match="target_hemisphere"):
+            ShamRunConfig(target_hemisphere="up")
+
+
+class TestShamReplayValidation:
+    """Cross-block validation: replay delivery needs the study randomization file."""
+
+    def _data(self, tmp_path, sham_global, run_sham):
+        return {
+            "paths": {"base_dir": str(tmp_path), "participant_id": "sub-01", "session_id": "ses-01"},
+            "sham": sham_global,
+            "localizers": [{"id": "rest", "type": "rest", "networks": ["DefaultA", "ContA"]}],
+            "feedback_runs": [{"task": "ball", "mask_source": "rest", "sham": run_sham}],
+        }
+
+    def test_replay_requires_randomization_file(self, tmp_path):
+        with pytest.raises(ValueError, match="randomization_file"):
+            SessionConfig._from_dict(self._data(tmp_path, {"enabled": True}, {"delivery_method": "replay"}))
+
+    def test_replay_with_randomization_file_ok(self, tmp_path):
+        rand = tmp_path / "rand.tsv"
+        rand.write_text("subject_id\tcondition\n")
+        cfg = SessionConfig._from_dict(
+            self._data(tmp_path, {"enabled": True, "randomization_file": str(rand)}, {"delivery_method": "replay"})
+        )
+        assert cfg.feedback_runs[0].sham.delivery_method == "replay"
+
+    def test_per_run_sham_round_trips(self, tmp_path):
+        cfg = SessionConfig._from_dict(self._data(tmp_path, {"enabled": True}, {"sham_mask_mode": "two_networks"}))
+        assert isinstance(cfg.feedback_runs[0].sham, ShamRunConfig)
+        assert cfg.feedback_runs[0].sham.sham_mask_mode == "two_networks"
+        # asdict-based round-trip keeps the per-run sham block.
+        cfg2 = SessionConfig._from_dict(cfg._to_dict())
+        assert cfg2.feedback_runs[0].sham.sham_mask_mode == "two_networks"
 
 
 # =============================================================================
