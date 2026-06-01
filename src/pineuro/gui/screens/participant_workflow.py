@@ -4229,8 +4229,12 @@ class ParticipantWorkflowScreen:
         qc_dir = output_dir / "qc"
         qc_dir.mkdir(parents=True, exist_ok=True)
 
-        activation_plot_path = qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_activation.png"
-        connectivity_plot_path = qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_connectivity.png"
+        activation_plot_path = (
+            qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_activation.png"
+        )
+        connectivity_plot_path = (
+            qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_connectivity.png"
+        )
 
         # Triggered-episode spans to overlay on the activation plot — only for tasks
         # that declare a TriggeredEventReport (RIT Experience Sampling / Triggered Ball).
@@ -4244,26 +4248,24 @@ class ParticipantWorkflowScreen:
             triggered_episodes = qc._summarize_triggered_events(events_file, report_spec.non_episode_types)
 
         try:
-            # In blind mode, always regenerate plots to ensure display names are applied;
-            # for triggered tasks, always re-render so the episode overlay is included.
-            needs_regen = display_names_dict is not None or bool(triggered_episodes)
-            if needs_regen or not activation_plot_path.exists():
-                qc.plot_activation_timeseries(
-                    feedback_log_path=feedbacklog_path,
-                    out_path=activation_plot_path,
-                    n_baseline=n_baseline,
-                    title=f"Activation - {self.participant_id} ({task} run {run})",
-                    display_names=display_names_dict,
-                    episodes=triggered_episodes,
-                )
-            if needs_regen or not connectivity_plot_path.exists():
-                qc.plot_connectivity_timeseries(
-                    feedback_log_path=feedbacklog_path,
-                    out_path=connectivity_plot_path,
-                    n_baseline=n_baseline,
-                    title=f"Connectivity - {self.participant_id} ({task} run {run})",
-                    display_names=display_names_dict,
-                )
+            # Always regenerate from the resolved (latest) feedbacklog so the plot reflects
+            # this attempt's columns -- e.g. sham targets logged only on the latest attempt.
+            # display_names_dict applies blind-mode relabeling when enabled (else None).
+            qc.plot_activation_timeseries(
+                feedback_log_path=feedbacklog_path,
+                out_path=activation_plot_path,
+                n_baseline=n_baseline,
+                title=f"Activation - {self.participant_id} ({task} run {run})",
+                display_names=display_names_dict,
+                episodes=triggered_episodes,
+            )
+            qc.plot_connectivity_timeseries(
+                feedback_log_path=feedbacklog_path,
+                out_path=connectivity_plot_path,
+                n_baseline=n_baseline,
+                title=f"Connectivity - {self.participant_id} ({task} run {run})",
+                display_names=display_names_dict,
+            )
         except Exception as e:
             logger.warning(f"Failed to generate summary plots: {e}")
 
