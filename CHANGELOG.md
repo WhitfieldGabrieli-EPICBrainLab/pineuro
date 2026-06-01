@@ -5,6 +5,18 @@ All notable changes to pineuro will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-06-01
+
+### Changed
+
+- **RIT Triggered Ball instructions rewritten with mental noting and dynamic durations.** The static `INSTRUCTION_*` constants are replaced by per-run-type slide builders that compute each run's duration (and the first-transfer baseline duration) at display time from the coordinator and expand each run type into its full multi-slide sequence. The practice is renamed to "mental noting" throughout, including the post-run questions. Later feedback/transfer runs now correctly show the brief reminder slides instead of always showing the first-run slides — `is_first_of_type` is threaded through both the headless-session and live-GUI task-creation paths and recognized as a runtime parameter by the task factory — and the baseline period is excluded from the stated run duration so the slides report active practice time.
+- **Rest task instructions now state the scan duration in minutes.**
+- **RIT trigger `trend_method` defaults to `slope` instead of `strict`.** The least-squares slope-sign method is more tolerant of single-volume blips than strict monotonic change; it is now the default for both RIT Experience Sampling and RIT Triggered Ball in the `__init__` signatures and `TaskParameter` metadata, with updated hint text.
+
+### Fixed
+
+- **`siemens_moco` source against `software`/`none` motion correction silently dropped every volume.** A simulated feedback run pointed at a Siemens MoCoSeries source while motion correction was set to `software`/`none` had the coordinator keep only originals, processed zero volumes, and sat frozen — only the opposite (`siemens_moco`-vs-original) direction had a fail-fast guard. The symmetric mismatch is now detected and trips `_check_moco_mismatch` with an actionable error. Stopping such a frozen run also raced the coordinator's `watch_dir` rmtree against the still-copying simulator thread (`FileNotFoundError`); the simulator gains `request_stop()`/`_finished`, the coordinator stops and waits for it before removing `watch_dir`, and `FileNotFoundError` is swallowed only while stopping.
+
 ## [0.11.0] - 2026-06-01
 
 ### Breaking
