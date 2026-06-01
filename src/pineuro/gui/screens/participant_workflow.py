@@ -75,6 +75,31 @@ def _loc(config: dict, idx: int = 0) -> dict:
     return locs[idx] if idx < len(locs) else {}
 
 
+def _format_threshold_summary(extraction: dict) -> str:
+    """Human-readable threshold description that reflects ``threshold_method``.
+
+    The ``threshold`` ("voxels per mask") field only drives ``top_n`` and ``cluster``
+    sizing; ``cluster_extent`` is stat/extent-driven and ignores it, so each method is
+    summarized with the parameters it actually uses (see ``mask_extraction_task``).
+    """
+    method = extraction.get("threshold_method", "top_n")
+    if method == "cluster_extent":
+        parts = [
+            f"stat ≥ {extraction.get('cluster_start_threshold', 2.0)}",
+            f"min {extraction.get('min_cluster_size', 50)} vox",
+        ]
+        cap = extraction.get("max_total_voxels")
+        if cap:
+            parts.append(f"cap {cap}")
+        return "Cluster extent: " + ", ".join(parts)
+    if method == "cluster":
+        return (
+            f"Atlas-guided, target {extraction.get('threshold', 2000)} vox, "
+            f"stat ≥ {extraction.get('cluster_start_threshold', 2.0)}"
+        )
+    return f"Top {extraction.get('threshold', 2000)} voxels"
+
+
 def _frc(config: dict, idx: int = 0) -> dict:
     """Return ``config["feedback_runs"][idx]`` as a dict, or ``{}`` if missing."""
     frcs = config.get("feedback_runs") or []
@@ -4955,7 +4980,7 @@ class ParticipantWorkflowScreen:
                 "description": f"GLM contrast-based extraction of {len(contrasts)} masks from task localizer.",
                 "parameters": {
                     "Contrasts": ", ".join(f"{k}: {v}" for k, v in contrasts.items()),
-                    "Threshold": f"{extraction.get('threshold', 2000)} voxels",
+                    "Threshold": _format_threshold_summary(extraction),
                     "Smoothing": f"{extraction.get('smooth_fwhm', 5.0)} mm FWHM",
                     "Output": base_dir / "mask_extraction",
                 },
@@ -5447,12 +5472,13 @@ class ParticipantWorkflowScreen:
                     loc_display = loc_type.replace("_", " ").title()
                 method = "GLM"
                 contrasts = loc.get("contrasts", {})
+                extraction = loc.get("extraction", {})
                 params = {
                     "Method": "GLM (General Linear Model)",
                     "Contrasts": ", ".join(f"{k}: {v}" for k, v in contrasts.items()) if contrasts else "(none)",
                     "Stat Type": loc.get("stat_type", "t"),
                     "HRF Model": loc.get("hrf_model", "spm"),
-                    "Threshold": f"{loc.get('threshold', 2000)} ({loc.get('threshold_method', 'cluster')})",
+                    "Threshold": _format_threshold_summary(extraction),
                 }
 
             loc_dir_name = f"loc_{loc_idx}_{loc_task_name}"
