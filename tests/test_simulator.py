@@ -270,6 +270,64 @@ class TestCleanup:
 
 
 # =============================================================================
+# Teardown coordination (request_stop / _finished / guarded copy)
+# =============================================================================
+
+
+class TestSimulatorTeardown:
+    """request_stop() halts promptly and _finished lets a consumer wait before it
+    removes the target directory, so an early stop never crashes the simulator."""
+
+    def _make_nifti_source(self, tmp_path, n_volumes=10):
+        source = tmp_path / "source"
+        source.mkdir()
+        for i in range(n_volumes):
+            vol = source / f"vol_{i:03d}.nii.gz"
+            nib.save(nib.Nifti1Image(np.ones((4, 4, 4), dtype=np.float32), np.eye(4)), vol)
+        return source
+
+    def test_request_stop_halts_iteration_and_sets_finished(self, tmp_path):
+        source = self._make_nifti_source(tmp_path, n_volumes=10)
+        sim = VolumeSimulator(source, tmp_path / "target", tr=0.5, speed=1.0)
+
+        def stop_later():
+            time.sleep(0.3)
+            sim.request_stop()
+
+        threading.Thread(target=stop_later).start()
+        # No stop_event passed: the generator must fall back to the instance event
+        # that request_stop() sets.
+        copied = list(sim.copy_volumes_iter())
+        assert len(copied) < 10
+        assert sim._finished.is_set()
+
+    def test_finished_set_on_normal_completion(self, tmp_path):
+        source = self._make_nifti_source(tmp_path, n_volumes=3)
+        sim = VolumeSimulator(source, tmp_path / "target", tr=0.05, speed=100.0)
+        copied = list(sim.copy_volumes_iter())
+        assert copied == [1, 2, 3]
+        assert sim._finished.is_set()
+
+    def test_copy_swallows_missing_target_when_stopping(self, tmp_path):
+        source = self._make_nifti_source(tmp_path, n_volumes=1)
+        target = tmp_path / "target"  # deliberately never created
+        sim = VolumeSimulator(source, target, tr=0.05, speed=100.0)
+
+        # Mimic the coordinator having rmtree'd watch_dir during teardown: a stop is
+        # in progress and the destination directory is gone.
+        sim.request_stop()
+        assert sim._copy_volume_file(sim.volume_files[0]) is None
+
+    def test_copy_raises_missing_target_when_not_stopping(self, tmp_path):
+        source = self._make_nifti_source(tmp_path, n_volumes=1)
+        target = tmp_path / "target"  # missing, but no stop in progress
+        sim = VolumeSimulator(source, target, tr=0.05, speed=100.0)
+
+        with pytest.raises(FileNotFoundError):
+            sim._copy_volume_file(sim.volume_files[0])
+
+
+# =============================================================================
 # Win32 SendInput struct layout (regression for os_key trigger mode)
 # =============================================================================
 

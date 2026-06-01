@@ -2604,11 +2604,14 @@ class NeurofeedbackCoordinator:
         self._retry_counts: dict[str, int] = {}  # Track validation retries per file
         self._MAX_RETRIES = 5
         self._next_expected_filename: str | None = None  # Filename we're waiting for
-        # MoCo-mismatch detection: in siemens_moco mode the scanner emits BOTH the
-        # original and a corrected "MoCoSeries"; we keep only MoCoSeries. If we keep
-        # skipping originals but never see a single MoCoSeries, the data is not MoCo.
+        # MoCo-mismatch detection (both directions): in siemens_moco mode the scanner
+        # emits BOTH the original and a corrected "MoCoSeries"; we keep only MoCoSeries.
+        # If we keep skipping originals but never see a single MoCoSeries, the data is
+        # not MoCo. The reverse also bites: in software/none mode we drop MoCoSeries
+        # volumes, so a MoCoSeries-only source processes nothing.
         self._skipped_originals_no_moco: int = 0  # originals skipped while 0 MoCo processed
-        self._MOCO_MISMATCH_THRESHOLD: int = 10  # skipped originals w/ 0 MoCo -> fail
+        self._skipped_moco_no_original: int = 0  # MoCoSeries skipped (software/none) while 0 processed
+        self._MOCO_MISMATCH_THRESHOLD: int = 10  # skipped w/ 0 processed -> fail
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()  # Signal when coordinator is ready
@@ -2634,6 +2637,10 @@ class NeurofeedbackCoordinator:
         # Cleanup options
         self._cleanup_incoming: bool = False
         self._cleanup_nifti: bool = False
+        # Optional VolumeSimulator feeding watch_dir (simulation mode). When set,
+        # _cleanup_directories stops and waits for it before removing watch_dir so
+        # we never rmtree the directory out from under an in-flight copy.
+        self._simulator: Any | None = None
 
         # Shared state for PsychoPy task communication (thread-safe)
         self._latest_activations: dict[str, float] = {name: 0.0 for name in mask_names}
@@ -3009,6 +3016,16 @@ class NeurofeedbackCoordinator:
                         if not self._keep_moco and moco:
                             heapq.heappop(self._pending_heap)
                             self._processed_files.add(key)
+                            if self.n_processed == 0:
+                                self._skipped_moco_no_original += 1
+                            # Surface the skipping at INFO (first + every 10th) so a
+                            # MoCo data/config mismatch is observable before it trips.
+                            if self._skipped_moco_no_original == 1 or self._skipped_moco_no_original % 10 == 0:
+                                logger.info(
+                                    f"Skipping MoCoSeries volume in {self._motion_correction} mode; "
+                                    f"waiting for original (non-MoCo) data: {file_path.name} "
+                                    f"(skipped {self._skipped_moco_no_original} so far)"
+                                )
                             continue
 
                     heapq.heappop(self._pending_heap)
@@ -3027,13 +3044,14 @@ class NeurofeedbackCoordinator:
             return None
 
     def _check_moco_mismatch(self) -> None:
-        """Fail fast if siemens_moco is selected but no MoCoSeries ever arrives.
+        """Fail fast if the motion-correction mode and the incoming data disagree.
 
-        In siemens_moco mode the scanner emits both the original and a corrected
-        "MoCoSeries"; we keep only MoCoSeries. Skipping some originals is normal
-        (the original is often reconstructed first). But if we have skipped many
-        originals and processed zero MoCo volumes, the incoming data is not MoCo
-        and the run can never produce feedback, so we stop with a clear error.
+        The scanner can emit both an original and a corrected "MoCoSeries". We keep
+        only MoCoSeries in siemens_moco mode, and only originals otherwise. Skipping
+        some of the unwanted series is normal (the two reconstructions interleave),
+        but if we have skipped many and processed zero, the source is entirely the
+        wrong type and the run can never produce feedback, so we stop with a clear
+        error covering whichever direction tripped.
         """
         if self._error is not None or self._stop_event.is_set():
             return
@@ -3049,6 +3067,21 @@ class NeurofeedbackCoordinator:
                 "single MoCoSeries, so no feedback can be produced. Either set motion "
                 "correction to 'software' or 'none', or supply Siemens MoCoSeries data / "
                 "enable MoCo (Motion Correction) on the scanner."
+            )
+            logger.error(msg)
+            self._error = RuntimeError(msg)
+            self._stop_event.set()
+        elif (
+            not self._keep_moco
+            and self.n_processed == 0
+            and self._skipped_moco_no_original >= self._MOCO_MISMATCH_THRESHOLD
+        ):
+            msg = (
+                f"Motion correction is set to '{self._motion_correction}', but the incoming "
+                "volumes are Siemens MoCoSeries (SeriesDescription == 'MoCoSeries'). "
+                f"Skipped {self._skipped_moco_no_original} MoCoSeries volumes without seeing a "
+                "single original, so no feedback can be produced. Either set motion correction "
+                "to 'siemens_moco', or supply original (non-MoCo) data."
             )
             logger.error(msg)
             self._error = RuntimeError(msg)
@@ -3602,6 +3635,16 @@ class NeurofeedbackCoordinator:
         """Clean up temporary directories after session completes."""
         import shutil
 
+        # In simulation mode the simulator copies DICOMs into watch_dir from a
+        # separate thread. Stop it and wait for it to finish before removing the
+        # directory, otherwise an in-flight copy hits FileNotFoundError when the
+        # run ends/stops before the simulator drained its source.
+        if self._simulator is not None:
+            self._simulator.request_stop()
+            wait_s = max(5.0, (self._tr or 1.2) * 3)
+            if not self._simulator._finished.wait(timeout=wait_s):
+                logger.warning("Simulator did not stop within timeout before directory cleanup")
+
         if self._cleanup_incoming and self.watch_dir.exists():
             try:
                 shutil.rmtree(self.watch_dir)
@@ -4069,6 +4112,9 @@ def run_feedback_task(
     if mode == "simulated":
         coordinator._cleanup_incoming = simulator_cleanup
         coordinator._cleanup_nifti = simulator_cleanup
+        # Hand the coordinator the simulator so directory cleanup can stop and wait
+        # for it before rmtree-ing watch_dir (avoids a teardown race on early stop).
+        coordinator._simulator = simulator
 
     # Start coordinator in background thread (always)
     coordinator_thread = threading.Thread(target=coordinator.run, daemon=False, name="FeedbackCoordinator")

@@ -211,6 +211,14 @@ class VolumeSimulator:
         self.start_time: float | None = None
         self.volume_copied_callback: Callable[[int, float, float], None] | None = None
 
+        # Teardown coordination: request_stop() halts copy_volumes_iter promptly
+        # (it interrupts the deadline sleep and the per-volume checks), and
+        # _finished is set when the generator exits so a consumer (the feedback
+        # coordinator) can wait for the simulator to stop before removing the
+        # target directory out from under an in-flight copy.
+        self._stop_event = threading.Event()
+        self._finished = threading.Event()
+
         if not self.source_dir.exists():
             raise FileNotFoundError(f"Source directory not found: {self.source_dir}")
         if not self.source_dir.is_dir():
@@ -467,7 +475,16 @@ class VolumeSimulator:
             logger.warning(f"Quartz CGEventPost failed: {e}")
             return False
 
-    def _copy_volume_file(self, src_file: Path) -> Path:
+    def request_stop(self) -> None:
+        """Signal copy_volumes_iter to stop copying as soon as possible.
+
+        Interrupts the deadline sleep and trips the per-volume stop checks so the
+        simulator halts within (at most) one volume instead of running to the end
+        of the source. Idempotent.
+        """
+        self._stop_event.set()
+
+    def _copy_volume_file(self, src_file: Path) -> Path | None:
         """
         Copy a volume file (and its JSON sidecar for NIfTI) to target directory.
 
@@ -482,11 +499,20 @@ class VolumeSimulator:
 
         Returns
         -------
-        Path
-            Path to copied volume file in target directory
+        Path or None
+            Path to copied volume file in target directory, or None if a stop was
+            requested and the target directory was removed mid-teardown.
         """
         dst_file = self.target_dir / src_file.name
-        shutil.copyfile(src_file, dst_file)
+        try:
+            shutil.copyfile(src_file, dst_file)
+        except FileNotFoundError:
+            # The consumer (feedback coordinator) may remove target_dir during a
+            # stop/teardown. If we're stopping, that's expected — swallow it rather
+            # than crash the simulator thread; otherwise it's a real error.
+            if self._stop_event.is_set():
+                return None
+            raise
 
         # For NIfTI files, also copy the JSON sidecar if it exists
         if is_nifti_file(src_file):
@@ -529,6 +555,21 @@ class VolumeSimulator:
         >>> for vol_num in sim.copy_volumes_iter(n_volumes=10):
         ...     print(f"Copied volume {vol_num}")
         """
+        # Default to the instance stop event so request_stop() works even when the
+        # caller (task_base) drives the generator without passing one explicitly.
+        stop_event = stop_event or self._stop_event
+        self._finished.clear()
+        try:
+            yield from self._copy_volumes_iter_impl(n_volumes, stop_event)
+        finally:
+            # Mark the simulator as no longer copying so a consumer (the feedback
+            # coordinator) can safely remove the target directory. Covers normal
+            # completion, early stop, exceptions, and GeneratorExit (the consumer
+            # stopped iterating).
+            self._finished.set()
+
+    def _copy_volumes_iter_impl(self, n_volumes, stop_event):
+        """Core copy loop for :meth:`copy_volumes_iter` (see it for details)."""
         self.target_dir.mkdir(parents=True, exist_ok=True)
 
         if self.clear_target:

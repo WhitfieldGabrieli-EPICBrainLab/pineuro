@@ -500,8 +500,10 @@ def _bare_coordinator(keep_moco: bool) -> NeurofeedbackCoordinator:
     c._retry_counts = {}
     c._MAX_RETRIES = 5
     c._keep_moco = keep_moco
+    c._motion_correction = "siemens_moco" if keep_moco else "software"
     c.n_processed = 0
     c._skipped_originals_no_moco = 0
+    c._skipped_moco_no_original = 0
     c._MOCO_MISMATCH_THRESHOLD = 10
     c._error = None
     c._stop_event = threading.Event()
@@ -509,7 +511,8 @@ def _bare_coordinator(keep_moco: bool) -> NeurofeedbackCoordinator:
 
 
 class TestMocoMismatchDetection:
-    """siemens_moco mode fed non-MoCo data must fail clearly, not silently."""
+    """A motion-correction mode fed the wrong data type (either direction) must
+    fail clearly, not silently process zero volumes."""
 
     def test_non_moco_data_in_siemens_moco_mode_sets_error(self):
         import heapq
@@ -565,17 +568,18 @@ class TestMocoMismatchDetection:
         assert c._error is None
         assert not c._stop_event.is_set()
 
-    def test_software_mode_skips_moco_no_false_positive(self):
+    def test_moco_only_data_in_software_mode_sets_error(self):
         import heapq
         from pathlib import Path
         from unittest.mock import patch
 
         c = _bare_coordinator(keep_moco=False)
-        for i in range(c._MOCO_MISMATCH_THRESHOLD + 5):
+        for i in range(c._MOCO_MISMATCH_THRESHOLD):
             heapq.heappush(c._pending_heap, (f"{i:03d}", Path(f"/fake/moco_{i}.dcm")))
 
-        # software/none mode keeps originals and skips MoCo-derived volumes; the
-        # mismatch counter is siemens_moco-specific and must stay untouched here.
+        # Every incoming volume is a valid DICOM but a Siemens MoCoSeries, which
+        # software/none mode skips — so nothing can ever be processed. This is the
+        # reverse of the siemens_moco mismatch and must also fail fast.
         with (
             patch("pineuro.feedback.is_valid_volume", return_value=True),
             patch("pineuro.feedback.is_moco_series", return_value=True),
@@ -583,7 +587,38 @@ class TestMocoMismatchDetection:
             assert c._get_next_file_to_process() is None
             c._check_moco_mismatch()
 
-        assert c._skipped_originals_no_moco == 0
+        assert c._skipped_moco_no_original >= c._MOCO_MISMATCH_THRESHOLD
+        assert isinstance(c._error, RuntimeError)
+        assert c._stop_event.is_set()
+        # Message names the mismatch and the actionable remedy.
+        msg = str(c._error)
+        assert "MoCoSeries" in msg
+        assert "siemens_moco" in msg
+        with pytest.raises(RuntimeError, match="software"):
+            c.check_error()
+
+    def test_software_mode_with_originals_present_no_false_positive(self):
+        import heapq
+        from pathlib import Path
+        from unittest.mock import patch
+
+        c = _bare_coordinator(keep_moco=False)
+        # Scanner emits both originals and a MoCoSeries; software mode keeps the
+        # originals and skips MoCo between them — normal, must not trip the mismatch.
+        for i in range(20):
+            kind = "orig" if i % 2 == 0 else "moco"
+            heapq.heappush(c._pending_heap, (f"{i:03d}", Path(f"/fake/{kind}_{i}.dcm")))
+
+        with (
+            patch("pineuro.feedback.is_valid_volume", return_value=True),
+            patch("pineuro.feedback.is_moco_series", side_effect=lambda p: "moco" in str(p)),
+        ):
+            while (path := c._get_next_file_to_process()) is not None:
+                assert "orig" in str(path)
+                c.n_processed += 1  # mirrors _process_volume incrementing the count
+            c._check_moco_mismatch()
+
+        assert c.n_processed > 0
         assert c._error is None
         assert not c._stop_event.is_set()
 
