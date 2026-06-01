@@ -2513,6 +2513,7 @@ def run_single_task(
         "mask_names": task_mask_names,
         "feedback_mode": feedback_mode,
         "trigger_keys": config.scanner.trigger_keys,
+        "is_first_of_type": _is_first_of_type,
     }
 
     # Create task via factory

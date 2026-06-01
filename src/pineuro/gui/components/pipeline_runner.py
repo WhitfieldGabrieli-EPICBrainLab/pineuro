@@ -2650,6 +2650,11 @@ class PipelineRunner:
 
             connectivity_target = _fb("connectivity_target", "increase")
 
+            # First run of its type (transfer/feedback) gets the detailed
+            # instruction slides; later runs get the brief reminder.
+            run_type = "feedback" if feedback_mode else "transfer"
+            is_first_of_type = not any(r.run_type == run_type for r in task_state.completed_runs)
+
             factory_config = {
                 **task_specific_config,
                 "mask_names": task_mask_names,
@@ -2657,6 +2662,7 @@ class PipelineRunner:
                 "signal_mode": signal_mode,
                 "connectivity_target": connectivity_target,
                 "presenter_monitor": presenter_monitor,
+                "is_first_of_type": is_first_of_type,
             }
 
             # Create task via factory (validates config against task metadata)

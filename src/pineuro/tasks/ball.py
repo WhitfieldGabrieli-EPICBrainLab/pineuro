@@ -82,9 +82,13 @@ __all__ = ["BallTask", "SignalMode"]
 # share `_ready_slide()`.
 
 
-def _format_minutes(n_volumes: int, tr: float) -> str:
-    """Total run duration in minutes, e.g. '2.5' (trailing zeros stripped)."""
-    minutes = n_volumes * tr / 60.0
+def _format_minutes(n_volumes: int, n_baseline: int, tr: float) -> str:
+    """Active (non-baseline) run duration in minutes, e.g. '2.5'.
+
+    The initial baseline/fixation period is excluded since that is the time the
+    participant is asked to relax rather than practice.
+    """
+    minutes = (n_volumes - n_baseline) * tr / 60.0
     return f"{minutes:.1f}".rstrip("0").rstrip(".")
 
 
@@ -103,7 +107,7 @@ def _ready_slide(minutes: str) -> str:
 
 
 def _first_transfer_slides(n_volumes: int, n_baseline: int, tr: float) -> list[str]:
-    minutes = _format_minutes(n_volumes, tr)
+    minutes = _format_minutes(n_volumes, n_baseline, tr)
     seconds = _format_seconds(n_baseline, tr)
     return [
         (
@@ -121,8 +125,8 @@ def _first_transfer_slides(n_volumes: int, n_baseline: int, tr: float) -> list[s
     ]
 
 
-def _later_transfer_slides(n_volumes: int, tr: float) -> list[str]:
-    minutes = _format_minutes(n_volumes, tr)
+def _later_transfer_slides(n_volumes: int, n_baseline: int, tr: float) -> list[str]:
+    minutes = _format_minutes(n_volumes, n_baseline, tr)
     return [
         (
             f"Great job! Next, you'll get to practice mental noting for another {minutes} min.\n\n"
@@ -133,8 +137,8 @@ def _later_transfer_slides(n_volumes: int, tr: float) -> list[str]:
     ]
 
 
-def _first_feedback_slides(n_volumes: int, tr: float) -> list[str]:
-    minutes = _format_minutes(n_volumes, tr)
+def _first_feedback_slides(n_volumes: int, n_baseline: int, tr: float) -> list[str]:
+    minutes = _format_minutes(n_volumes, n_baseline, tr)
     return [
         "Great job! Now, you'll get to try moving the ball with your mental noting practice!",
         (
@@ -147,8 +151,8 @@ def _first_feedback_slides(n_volumes: int, tr: float) -> list[str]:
     ]
 
 
-def _later_feedback_slides(n_volumes: int, tr: float) -> list[str]:
-    minutes = _format_minutes(n_volumes, tr)
+def _later_feedback_slides(n_volumes: int, n_baseline: int, tr: float) -> list[str]:
+    minutes = _format_minutes(n_volumes, n_baseline, tr)
     return [
         (
             f"Great job! Now, you're going to practice mental noting for another {minutes} min "
@@ -440,8 +444,8 @@ class BallTask(BaseTask):
             win=self.win,
             text=(
                 "You'll see a few slider questions next\n"
-                "Press the left and right buttons to move the slider\n"
-                "And the top button to enter your response\n"
+                "Use your index finger to move the slider left and your middle finger to move it right\n"
+                "Use your thumb to enter your response\n"
                 "Press any button to continue"
             ),
             pos=(0, 0),
@@ -484,12 +488,12 @@ class BallTask(BaseTask):
             if self.is_first_of_type:
                 slides = _first_transfer_slides(n_volumes, n_baseline, tr)
             else:
-                slides = _later_transfer_slides(n_volumes, tr)
+                slides = _later_transfer_slides(n_volumes, n_baseline, tr)
         else:  # feedback_mode
             if self.is_first_of_type:
-                slides = _first_feedback_slides(n_volumes, tr)
+                slides = _first_feedback_slides(n_volumes, n_baseline, tr)
             else:
-                slides = _later_feedback_slides(n_volumes, tr)
+                slides = _later_feedback_slides(n_volumes, n_baseline, tr)
 
         # Use base class method
         super().show_instructions(

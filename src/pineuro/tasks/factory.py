@@ -41,6 +41,7 @@ RUNTIME_PARAMETERS = {
     "connectivity_target",  # "increase" or "decrease" (ball direction for connectivity)
     "presenter_monitor",  # Which monitor to use for display
     "trigger_keys",  # Scanner trigger keys (study-level, applies to all tasks)
+    "is_first_of_type",  # Whether this is the first run of its type (controls instruction text)
 }
 
 
