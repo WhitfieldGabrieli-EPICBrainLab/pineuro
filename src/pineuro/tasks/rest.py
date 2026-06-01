@@ -105,12 +105,12 @@ class RestTask(BaseLocalizerTask):
         from psychopy import core
 
         # Instructions
+        duration_minutes = round(self.duration / 60)
         self.show_instructions(
             [
-                "You will see a fixation cross (+) on the screen.\n\n"
-                "Please relax and keep your eyes on the cross.\n\n"
-                "Try to keep your head still and avoid moving.\n\n"
-                "Press any button to begin."
+                "Please look at the plus (+) in the middle of the screen. "
+                "Blink when you need to, and try to stay awake. "
+                f"The scan will run for about {duration_minutes} minutes"
             ]
         )
 
