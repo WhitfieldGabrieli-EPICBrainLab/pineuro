@@ -31,6 +31,11 @@ localized fresh this session, another on a network reused from `ses-01`. A sessi
 feedback runs all reuse earlier masks runs no localizer at all — it only collects a reference
 scan and coregisters the reused masks.
 
+> **Requires the real-time reference.** Cross-session reuse depends on the real-time-reference
+> coregistration to bring the source session's masks into the current session's space, so it
+> needs `reference.realtime_enabled = true`. The study editor and the runtime both reject a
+> feedback run that reuses an earlier session's mask while the real-time reference is disabled.
+
 ## Session Workflow
 
 ### A session with fresh localizers

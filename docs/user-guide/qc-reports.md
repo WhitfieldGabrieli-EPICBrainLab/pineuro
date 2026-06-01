@@ -29,6 +29,7 @@ The Participant Workflow GUI also shows overlay thumbnails for quick visual veri
 
 Contains:
 - **Activation timeseries** — Per-volume activation for each network mask, with baseline period shaded
+- **Triggered episodes** — For trigger-based RIT tasks (RIT Experience Sampling, RIT Triggered Ball), the windows in which triggers fired are overlaid on the activation timeseries, with each episode's duration surfaced. The same overlay appears on the post-run Feedback Summary dialog.
 - **FD timeseries** — Framewise displacement during the feedback task
 - **DVARS timeseries** — Standardized signal intensity changes
 - **Design matrix heatmap** — The GLM design matrix used for real-time estimation

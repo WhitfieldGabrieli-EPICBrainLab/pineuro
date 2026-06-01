@@ -58,6 +58,8 @@ sub-04	sham	sub-03
 
 The randomization file is configured in the Study Editor sham section.
 
+When sham is enabled, membership in this file is enforced: the session start is hard-blocked if the randomization file is missing/unconfigured, or if the participant's ID is not listed in it. This prevents an unlisted participant from silently defaulting the whole study to real feedback. (A runtime guard backs up the dialog-time check.)
+
 ## How Logging Works
 
 Regardless of condition, pineuro always computes and logs both:

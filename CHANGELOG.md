@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Triggered-episode overlay on the post-run Feedback Summary plot.** For RIT Experience Sampling and RIT Triggered Ball, the Feedback Summary dialog now overlays the windows in which triggers fired on the activation timeseries (computed from the task's `TriggeredEventReport` spec and the run's events TSV), matching the full QC report instead of drawing only baseline shading and per-mask traces.
+
+### Changed
+
+- **Cross-session mask reuse now requires the real-time reference.** A feedback run that sources a mask from an earlier session (`mask_sources`) needs the real-time-reference coregistration to bring those masks into the current session's space, which is gated on `reference.realtime_enabled`. The incoherent combination (reuse on, real-time reference off) is now rejected up front in both the study editor and the runtime, instead of failing cryptically with a missing-mask-file error against the empty current-session mask dir.
+- **Reference-scan simulator DICOM paths are now per-session and content-gated.** Each session replays its own recorded initial / real-time reference acquisition, so those source-DICOM fields live on the session's Protocol tab rather than study-wide, and each is shown only when the active session actually performs the matching acquisition (initial reference for fresh localizer masks, real-time reference before feedback).
+- **Localizer thresholding UI tidied.** "Thresholding method" now sits above "Voxels per mask", and the voxel-count field is hidden for `cluster_extent` (which is driven by stat threshold + min cluster size + optional max-total-voxels, not a voxel count).
+
+### Fixed
+
+- **Sham silently delivered real feedback (rtCHR).** `_run_coregistration` filtered masks down to a localizer's real networks, so the sham hemisphere-split construction masks (e.g. `SomMotA_left`/`_right`) never reached `01_reference/masks/`; the runtime sham-mask lookup then failed silently and fell back to the real masks. Coregistration now includes the sham construction networks.
+- **Stale Feedback Summary plot hid sham targets.** Summary plot artifacts were cached per-run (no `attempt` entity) and regenerated only in blind mode, so a non-blind sham study reused an earlier attempt's image and kept showing a stale network set. Plot artifacts are now keyed by attempt and always regenerated from the resolved latest feedbacklog.
+- **`cluster_extent` `max_total_voxels` cap could empty the mask.** A single surviving cluster larger than the cap broke whole-cluster accumulation and kept nothing, returning an all-zero mask still labeled `capped`. Over-cap results now keep the highest-stat voxels (exact top-N), never emptying a strong map.
+- **`cluster_extent` extraction crashed in task mode.** `mask_extraction_task` rejected `threshold_method='cluster_extent'` via a stale guard despite full config/UI/implementation support; all three methods are now accepted.
+- **`'? voxels'` in Review & Approve Masks for MNI/ICA masks.** Those masks persist a `MaskSelection` without `n_voxels_thresholded`; the dialog now computes the count on demand from the thresholded mask file.
+- **Early-stopping localizers (RIT) wrongly shown "incomplete".** Variable-duration localizers stop collection early when the paradigm finishes, so the volume count is always below the worst-case ceiling that was reused as the completion threshold. Completion is now driven by a `.collection_complete` marker the collector writes only when it stops on the task's done signal.
+- **Session-selection dialog mislabeled session status.** It reported "Not started" for collection-only sessions and never recognized milestones past mask extraction (and checked the wrong path for feedback). A config-independent status now reports the furthest on-disk pipeline milestone.
+- **Missing `session_id` when regenerating a mask from the dialog.** `_apply_and_close()` omitted the required `session_id`, so applying a manual/combined mask selection raised a `TypeError`.
+- **Stale config when starting a participant from the study editor.** The editor edits its own deep copy, but Save/Start launched from the app's disk-loaded copy, so unsaved edits (e.g. simulator speed) were ignored. The editor's live config is now passed through to the workflow.
+
 ### Removed
 
 - **Dead and legacy code swept out** (pre-rollout, no backwards-compat surface to preserve). This is a no-behavior-change cleanup of symbols with no live callers, defensive branches that could never run, and superseded compatibility shims:
