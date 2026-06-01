@@ -2019,7 +2019,7 @@ class StudyEditorScreen:
 
             def on_session_selected(session_id, session_metadata):
                 if self.on_start_session_callback:
-                    self.on_start_session_callback(participant_id, session_id, session_metadata)
+                    self.on_start_session_callback(self.study_config, participant_id, session_id, session_metadata)
 
             session_dialog = SessionSelectionDialog(
                 page=self.page,

@@ -589,10 +589,8 @@ class PyrtnfApp:
             study_config=self.current_study,
             on_cancel=lambda: self.show_study_manager(),
             on_save=lambda: self.show_study_manager(),
-            on_start_session=lambda participant_id, session_id, session_metadata: (
-                self.show_participant_workflow(self.current_study, participant_id, session_id, session_metadata)
-                if self.current_study is not None
-                else None
+            on_start_session=lambda study_config, participant_id, session_id, session_metadata: (
+                self.show_participant_workflow(study_config, participant_id, session_id, session_metadata)
             ),
         )
 
