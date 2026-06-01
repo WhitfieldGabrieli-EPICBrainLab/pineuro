@@ -1516,6 +1516,7 @@ class ParticipantWorkflowScreen:
         import base64
 
         from pineuro.gui.components.qc_viewer import open_qc_report
+        from pineuro.qc import summarize_mask
 
         _step_hint = "mask import" if source_label == "Manual import" else "MNI mask extraction"
 
@@ -1580,7 +1581,16 @@ class ParticipantWorkflowScreen:
 
             # Get stats from selections
             sel = selections_data.get(mask_name, {})
-            n_voxels = sel.get("n_voxels_thresholded", "?")
+            # MNI/ICA masks don't persist a voxel count (only task and manual-import
+            # selections do), so fall back to counting voxels from the mask file.
+            n_voxels = sel.get("n_voxels_thresholded")
+            if n_voxels is None and mask_file.exists():
+                try:
+                    n_voxels = summarize_mask(mask_file, name=mask_name).voxels
+                except Exception as ex:
+                    logger.warning(f"Could not compute voxel count for {mask_name}: {ex}")
+            if n_voxels is None:
+                n_voxels = "?"
             if source_label == "Manual import":
                 space = sel.get("mask_space", selections_data.get("mask_space", "native"))
                 stat_text = f"{n_voxels} voxels  |  imported ({space} space)"
