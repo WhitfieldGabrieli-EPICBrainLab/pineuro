@@ -1987,9 +1987,12 @@ class StudyEditorScreen:
         )
 
         def start_session(e):
+            from ..utils import validate_participant_id
+
             participant_id = participant_id_field.value.strip()
-            if not participant_id:
-                participant_id_field.error_text = "Participant ID is required"
+            ok, msg = validate_participant_id(participant_id)
+            if not ok:
+                participant_id_field.error_text = msg
                 participant_id_field.update()
                 return
 

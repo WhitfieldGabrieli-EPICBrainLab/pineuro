@@ -60,9 +60,41 @@ def validate_session_start(
     from ..utils import localizer_mask_names
 
     errors: list[str] = []
+
+    # Sham gate: when sham is enabled study-wide, the participant must appear in the
+    # randomization file. Otherwise no condition can be assigned and the run would
+    # silently default to "real" (the original bug). This mirrors the runtime guard in
+    # pipeline_runner so the operator gets the error before the session starts.
+    sham_cfg = study_config.session_config.get("sham", {}) or {}
+    if sham_cfg.get("enabled", False):
+        rand_file = sham_cfg.get("randomization_file")
+        if not rand_file:
+            errors.append("Sham is enabled for this study but no randomization file is configured.")
+        else:
+            rand_path = Path(rand_file)
+            if not rand_path.exists():
+                errors.append(f"Sham is enabled but the randomization file was not found: {rand_path}.")
+            else:
+                from pineuro.sham import load_randomization
+
+                try:
+                    randomization = load_randomization(rand_path)
+                except Exception as exc:
+                    errors.append(f"Sham is enabled but the randomization file could not be read: {exc}")
+                else:
+                    if participant_id not in randomization:
+                        errors.append(
+                            f"Participant '{participant_id}' is not listed in the randomization file "
+                            f"({rand_path.name}). Sham is enabled study-wide, so an unlisted participant "
+                            f"cannot be assigned a condition — check for a typo or add them to the file."
+                        )
+
     sessions = study_config.session_config.get("sessions") or []
     if not 0 <= session_index < len(sessions):
-        return [f"Session {session_index + 1} is not defined in this study (it declares {len(sessions)} session(s))."]
+        errors.append(
+            f"Session {session_index + 1} is not defined in this study (it declares {len(sessions)} session(s))."
+        )
+        return errors
 
     proto = sessions[session_index]
     for loc in proto.get("localizers", []):

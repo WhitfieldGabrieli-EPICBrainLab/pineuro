@@ -47,6 +47,40 @@ def _select_sham_task_mask_names(
     return [sham_mask_names[0], real_mask_names[1]]
 
 
+def _require_sham_mask(condition: str, mask_name: str, error: Exception) -> None:
+    """Handle a sham alternative mask that could not be found.
+
+    For a sham participant a missing mask means the task would silently fall back to
+    the real target masks (the original bug), so this raises. The operator-facing
+    message is generic — the network name goes only to the log — so the condition is
+    not leaked in blind mode. For a real participant the sham masks exist only for
+    blinding/logging and never drive the task, so a missing one is merely logged.
+    """
+    if condition == "sham":
+        logger.error(f"Sham mask '{mask_name}' missing: {error}")
+        raise ValueError(
+            "Sham masks were not coregistered to reference space; re-run reference "
+            "coregistration before this feedback run (see log for details)."
+        ) from error
+    logger.warning(f"Sham mask not found (real participant, ignored): {error}")
+
+
+def _coreg_localizer_networks(config: dict[str, Any], loc: dict[str, Any]) -> set[str]:
+    """Network names whose ``03_masks`` thresholded masks a localizer must coregister.
+
+    The localizer's own networks/contrasts UNION the sham construction networks
+    (hemisphere-split network or alternative targets). Mask extraction adds these same
+    sham networks via ``sham_networks_for_localizer``; coregistration MUST mirror that or
+    the sham masks (e.g. ``SomMotA_left``/``SomMotA_right``) never reach reference space
+    and a sham participant silently receives the real feedback. The combined
+    hemisphere-split network itself is dropped separately by the caller (replaced by its
+    left/right splits).
+    """
+    from ..utils import localizer_mask_names, sham_networks_for_localizer
+
+    return set(localizer_mask_names(loc)) | set(sham_networks_for_localizer(config, loc))
+
+
 class _DispatchedTask:
     """Thin wrapper around a :class:`~concurrent.futures.Future`.
 
@@ -1777,7 +1811,7 @@ class PipelineRunner:
         mask_extraction_dir = base_dir / "mask_extraction"
         feedback_dir = base_dir / "feedback"
 
-        from ..utils import has_fresh_localizer, localizer_mask_names
+        from ..utils import has_fresh_localizer
 
         localizers = config.get("localizers", [])
         study_base_dir = base_dir.parent.parent  # study root (holds reuse source sessions)
@@ -1821,6 +1855,8 @@ class PipelineRunner:
         # Sham hemisphere-split: the combined network mask is dropped per localizer below
         # (its left/right split masks are used instead); the network is resolved from the
         # per-run sham config of the feedback runs sourcing masks from each localizer.
+        # The sham construction networks are folded into the coregistration name set via
+        # _coreg_localizer_networks (so the split/alternative masks reach reference space).
         from ..utils import sham_hemisphere_network_for_localizer
 
         # Tissue masks (WM/CSF). A fresh-localizer session created them locally and
@@ -1867,7 +1903,9 @@ class PipelineRunner:
             loc_type = loc.get("type", "rest")
             loc_task_name = "rest" if loc_type == "rest" else loc_type
             reuse_from = loc.get("reuse_from_session")
-            names = set(localizer_mask_names(loc))
+            # Real networks + sham construction networks (so the sham hemisphere/alternative
+            # masks are coregistered too — mirrors mask extraction; see _coreg_localizer_networks).
+            names = _coreg_localizer_networks(config, loc)
 
             if reuse_from:
                 src_session_dir = study_base_dir / self.participant_id / reuse_from
@@ -1887,7 +1925,8 @@ class PipelineRunner:
 
             # This localizer's thresholded masks from its source dir: exact name
             # matches plus derived variants (e.g. hemisphere "{name}_left"), minus the
-            # combined network mask when hemisphere-split sham is active.
+            # combined network mask when hemisphere-split sham is active (its left/right
+            # splits are coregistered instead).
             sham_combined_name = sham_hemisphere_network_for_localizer(config, loc)
             group_files: list[Path] = []
             for f in sorted(src_masks_dir.glob(f"{src_prefix}_*_thr.nii.gz")):
@@ -2363,6 +2402,15 @@ class PipelineRunner:
                 if randomization_path.exists():
                     try:
                         randomization = load_randomization(randomization_path)
+                        # Sham is enabled, so an unlisted participant cannot be assigned a
+                        # condition. Fail loud instead of silently defaulting to "real"
+                        # (get_condition_for_participant's permissive default is wrong here).
+                        if self.participant_id not in randomization:
+                            raise ValueError(
+                                f"Participant {self.participant_id} is not in the randomization file "
+                                f"{randomization_path}. Sham is enabled, so a condition cannot be "
+                                f"assigned; check for a typo in the participant ID or add them to the file."
+                            )
                         condition_info = get_condition_for_participant(randomization, self.participant_id)
                         condition = condition_info["condition"]
                         if self._is_blind_mode():
@@ -2388,7 +2436,7 @@ class PipelineRunner:
                                         sham_mask_files.append(find_mask_file(alt_name))
                                         sham_mask_names.append(alt_name)
                                     except ValueError as e:
-                                        logger.warning(f"Sham hemisphere mask not found: {e}")
+                                        _require_sham_mask(condition, alt_name, e)
                             else:
                                 # Two networks mode: use two distinct networks
                                 alternative_targets = frc_sham.get("alternative_mask_targets", [])
@@ -2397,7 +2445,7 @@ class PipelineRunner:
                                         sham_mask_files.append(find_mask_file(alt_name))
                                         sham_mask_names.append(alt_name)
                                     except ValueError as e:
-                                        logger.warning(f"Sham mask not found: {e}")
+                                        _require_sham_mask(condition, alt_name, e)
 
                         elif delivery_method == "replay" and condition == "sham":
                             # Replay mode: find feedbacklog from matched participant
@@ -2459,12 +2507,29 @@ class PipelineRunner:
                                 self._emit_progress(f"ERROR: {e}")
                                 raise
 
+                        # A sham participant must end up with sham masks (alternative_masks
+                        # modes) — otherwise task_mask_names falls back to the real masks
+                        # below and sham silently delivers real. This catches an empty
+                        # alternative_mask_targets config (the per-mask check above covers
+                        # masks that exist in config but not on disk).
+                        if condition == "sham" and delivery_method == "alternative_masks" and not sham_mask_names:
+                            raise ValueError(
+                                "Sham condition resolved to no sham masks; check the feedback "
+                                "run's sham configuration (see log for details)."
+                            )
+
                     except Exception as e:
-                        logger.error(f"Error loading randomization: {e}")
-                        self._emit_progress(f"Warning: Could not load randomization file: {e}")
+                        logger.error(f"Sham setup failed: {e}")
+                        self._emit_progress(f"ERROR: Sham setup failed: {e}")
                         raise
                 else:
-                    logger.warning(f"Randomization file not found: {randomization_path}")
+                    raise FileNotFoundError(
+                        f"Sham is enabled but the randomization file was not found: "
+                        f"{randomization_path}. A sham study cannot run without it "
+                        f"(every participant would default to real)."
+                    )
+            else:
+                raise ValueError("Sham is enabled for this study but no randomization_file is configured.")
 
         # Combine all masks: real masks + any additional sham masks.
         # Dedupe by mask name so a mask present in both lists (e.g. the real
