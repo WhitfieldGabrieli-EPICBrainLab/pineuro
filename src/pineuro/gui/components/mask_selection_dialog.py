@@ -1642,6 +1642,7 @@ class MaskSelectionDialog:
             try:
                 regenerate_mask_from_selection(
                     participant_id=self.participant_id,
+                    session_id=self.session_id,
                     masks_dir=self.masks_dir,
                     selection=selection,
                     components_file=self.components_file,
