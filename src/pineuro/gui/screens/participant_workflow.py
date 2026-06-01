@@ -4232,9 +4232,21 @@ class ParticipantWorkflowScreen:
         activation_plot_path = qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_activation.png"
         connectivity_plot_path = qc_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_connectivity.png"
 
+        # Triggered-episode spans to overlay on the activation plot — only for tasks
+        # that declare a TriggeredEventReport (RIT Experience Sampling / Triggered Ball).
+        triggered_episodes: list[dict[str, Any]] = []
         try:
-            # In blind mode, always regenerate plots to ensure display names are applied
-            needs_regen = display_names_dict is not None
+            report_spec = get_task_metadata(task).triggered_event_report
+        except (KeyError, ValueError):
+            report_spec = None
+        if report_spec is not None:
+            events_file = output_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_events.tsv"
+            triggered_episodes = qc._summarize_triggered_events(events_file, report_spec.non_episode_types)
+
+        try:
+            # In blind mode, always regenerate plots to ensure display names are applied;
+            # for triggered tasks, always re-render so the episode overlay is included.
+            needs_regen = display_names_dict is not None or bool(triggered_episodes)
             if needs_regen or not activation_plot_path.exists():
                 qc.plot_activation_timeseries(
                     feedback_log_path=feedbacklog_path,
@@ -4242,6 +4254,7 @@ class ParticipantWorkflowScreen:
                     n_baseline=n_baseline,
                     title=f"Activation - {self.participant_id} ({task} run {run})",
                     display_names=display_names_dict,
+                    episodes=triggered_episodes,
                 )
             if needs_regen or not connectivity_plot_path.exists():
                 qc.plot_connectivity_timeseries(
