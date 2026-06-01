@@ -9,6 +9,9 @@ This guide covers installing pineuro and its dependencies.
 - macOS (11.0+)
 - Windows (10+)
 
+### Software
+- **Python 3.10 or 3.11** (`>=3.10,<3.12`) — Python 3.12+ is not supported.
+
 ### Hardware
 - **RAM**: 8GB minimum, 16GB recommended
 - **Storage**: 10GB for dependencies + space for data
@@ -22,8 +25,10 @@ python -m venv pineuro_env
 source pineuro_env/bin/activate  # Linux/macOS
 # pineuro_env\Scripts\activate   # Windows
 
-# Install pineuro (all dependencies included)
-pip install -e /path/to/pineuro
+# Clone and install pineuro (all dependencies included)
+git clone https://github.com/marlvan/pineuro.git
+cd pineuro
+pip install -e .
 ```
 
 All dependencies — including dcm2niix, ANTsPy, PsychoPy, and nilearn — are installed automatically via pip. No external tools are required.
@@ -37,7 +42,7 @@ All Python dependencies are installed automatically:
 - **nilearn** — Neuroimaging analysis (ICA, atlas fetching)
 - **psychopy** — Visual stimulus display
 - **flet** — GUI framework
-- numpy, scipy, pandas, matplotlib, pydicom, pyyaml, screeninfo
+- numpy, scipy, pandas, matplotlib, pydicom, pyyaml, screeninfo, pygame, templateflow, watchdog
 
 ## Development Installation
 

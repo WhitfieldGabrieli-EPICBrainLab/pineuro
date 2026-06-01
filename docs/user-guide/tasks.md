@@ -1,6 +1,6 @@
-# Feedback Tasks
+# Tasks
 
-Tasks are the visual displays shown to participants during neurofeedback. pineuro includes three built-in feedback tasks, three RIT (Rumination Induction Task) task variants, and two localizer tasks, with a plugin system for custom tasks.
+Tasks are the visual displays shown to participants. pineuro includes three built-in feedback tasks, three RIT (Rumination Induction Task) variants, and two localizer tasks, with a plugin system for custom tasks. (For how feedback values are *computed* — activation, differential, connectivity, intermittent — see [Feedback Tasks](feedback-tasks.md).)
 
 ## Built-In Feedback Tasks
 
@@ -136,9 +136,9 @@ A 3-network feedback task combining rumination detection with the ball game. Whe
 
 ## Built-In Localizer Tasks
 
-### Fixation Task
+### Rest Localizer
 
-Simple fixation cross for resting-state data collection. Non-interactive.
+Fixation-cross display for resting-state data collection (`task_id: rest`, BIDS `task-rest`). Non-interactive — acquires the resting-state scan used for ICA-based mask extraction.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -175,7 +175,7 @@ During transfer runs, the task displays modified instructions informing the part
 
 All tasks support scanner trigger keys for synchronization. The scanner sends a trigger pulse at the start of each TR, which pineuro uses to time-lock the task display.
 
-Default trigger keys: `t`, `+`, `5`, `=` (covers most scanner button boxes). Enter keys as the symbols they produce — use `=`, not the word `equal`. (Studies created before this change may still show `equal`; it continues to work and is equivalent to `=`.)
+Default trigger keys: `t`, `+`, `5`, `=` (covers most scanner button boxes). Enter keys as the symbols they produce — use `=`, not the word `equal`.
 
 Configure trigger keys in the Study Editor's Scanner settings; they apply to every task in the study.
 
@@ -197,4 +197,4 @@ pineuro uses a plugin system for task registration. To create a custom task:
 2. Define `TaskMetadata` with parameters, network requirements, and descriptions
 3. Register with `@pineuro_task` decorator or `register_task()` function
 
-Custom tasks automatically appear in the Study Editor Task tab dropdown and receive real-time activations via the coordinator callback system. See `CONTRIBUTING.md` for details.
+Custom tasks automatically appear in the Study Editor's Feedback tab dropdown and receive real-time activations via the coordinator callback system. See `CONTRIBUTING.md` for details.

@@ -4,7 +4,7 @@ pineuro supports sham/control conditions and operator blinding for controlled ne
 
 ## Enabling Sham
 
-In the Study Editor, enable sham in the Task tab's sham section. This adds sham-related controls and integrates with the randomization system.
+In the Study Editor's **Sham** tab, toggle sham on; blind mode and the randomization file are set there too. *How* a sham signal is built for a given task — the delivery method and alternative-mask mode below — is configured per feedback run on the **Feedback** tab.
 
 ## Delivery Methods
 
@@ -16,10 +16,10 @@ Sham participants receive feedback derived from a different brain network than t
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `sham_mask_mode` | `hemisphere_split` | `hemisphere_split` or `random_network` |
+| `sham_mask_mode` | `hemisphere_split` | `hemisphere_split` or `two_networks` |
 | `hemisphere_network` | `SomMotA` | Which network to use for hemisphere split |
 | `target_hemisphere` | `right` | Which hemisphere (`left` or `right`) |
-| `alternative_mask_targets` | — | Alternative network names for random_network mode |
+| `alternative_mask_targets` | — | Network names to use for `two_networks` mode |
 
 ### Replay
 
@@ -42,10 +42,10 @@ A TSV file that assigns participants to conditions. Generate one using the Study
 
 ```
 subject_id	condition	matched_participant	matched_session	notes
-sub-001	real
-sub-002	sham	sub-001		Matched for age/sex
-sub-003	real
-sub-004	sham	sub-003
+sub-01	real
+sub-02	sham	sub-01		Matched for age/sex
+sub-03	real
+sub-04	sham	sub-03
 ```
 
 | Column | Required | Description |
@@ -70,10 +70,10 @@ The feedbacklog TSV contains separate columns for real and delivered values, ena
 
 | Parameter | GUI Location | Default |
 |-----------|-------------|---------|
-| Enable sham | Task tab → Sham | Off |
-| Blind mode | Task tab → Sham | Off |
-| Delivery method | Task tab → Sham | `alternative_masks` |
-| Sham mask mode | Task tab → Sham | `hemisphere_split` |
-| Hemisphere network | Task tab → Sham | `SomMotA` |
-| Target hemisphere | Task tab → Sham | `right` |
-| Randomization file | Task tab → Sham | — |
+| Enable sham | Sham tab | Off |
+| Blind mode | Sham tab | Off |
+| Delivery method | Feedback tab (per run) | `alternative_masks` |
+| Sham mask mode | Feedback tab (per run) | `hemisphere_split` |
+| Hemisphere network | Feedback tab (per run) | `SomMotA` |
+| Target hemisphere | Feedback tab (per run) | `right` |
+| Randomization file | Sham tab | — |

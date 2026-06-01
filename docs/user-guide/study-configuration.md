@@ -8,95 +8,69 @@ Launch the GUI (`pineuro-gui`) and click **"+ New Study"** to open the Study Edi
 
 ## Study Editor Tabs
 
-### General
+The editor has study-wide tabs (**Study**, **Display**, **Sham**) and a per-session
+**Experiment Design** area where you add localizers and feedback runs — each opens its own
+**Localizer** and **Feedback** editor tab.
 
-- **Name** — Display name for the study card
-- **Description** — Brief description of the study protocol
+### Study (study-wide)
 
-### Paths
+- **Name / Description** — shown on the study card.
+- **Base data directory** — root for participant data. Each participant/session is written
+  to `base_dir/sub-XX/ses-XX/`.
+- **Example Participant ID** — previews the directory structure.
+- **Simulator** — enable offline replay; set the localizer/collection and feedback speeds,
+  the trigger mode, and a source mapping file (see [Simulation Mode](simulation-mode.md)).
+- **Scanner** — watch (DICOM) directory, scanner IP, and trigger keys (apply to every task).
+- **Reference scans** — enable the **initial reference** (before localizers) and/or the
+  **real-time reference** (before feedback), each with a volume count.
 
-- **Base Directory** — Root directory where participant data will be stored. Each participant gets a subdirectory: `base_dir/sub-001/`, `base_dir/sub-002/`, etc.
-- **Example Participant ID** — Used for previewing the directory structure
+### Experiment Design (per session)
 
-### Scan Parameters
+A study declares an ordered list of **sessions** (the Sessions strip — add, duplicate,
+select, remove). For the selected session you define:
 
-Configure acquisition parameters for each scan type:
+- **Localizer tasks** — add one or more; each opens a **Localizer** editor tab.
+- **Feedback tasks** — add one or more; each opens a **Feedback** editor tab.
+- **Session notes** and, in per-subject simulator mode, the session's source DICOMs.
 
-**Localizer (resting-state or task)**
-- **TR** — Repetition time in seconds
-- **Volumes** — Number of volumes per localizer run
-- **Runs** — Number of localizer runs (typically 1-2)
-- **Task Type** — `rest` (resting-state), or a task-based localizer (e.g., `selfother`, `rit`)
-- **Masks** — *Compute fresh* this session, or *Reuse ses-NN* to pull this localizer's masks from an earlier session (per-localizer; see [Multi-Session](multi-session.md))
+### Localizer (per localizer)
 
-**Feedback**
-- **TR** — Repetition time for feedback runs
-- **Volumes** — Expected volumes per feedback run
+- **Type** — `rest` (resting-state → ICA), a task localizer (e.g. `selfother`, `rit` → GLM),
+  or `manual` (import pre-built ROIs).
+- **TR**, **Volumes**, **Runs**, **Motion correction**.
+- **Extraction** (the `extraction` block): **Network atlas** (`yeo_17` default; also Yeo 7,
+  Schaefer, Harvard-Oxford, AAL, gray-matter — see [Mask Extraction](mask-extraction.md)),
+  **Target networks**, **ICA components** (default 30), **Threshold** (default 2000 voxels),
+  **Threshold method** (`top_n` / `cluster`), **Smoothing FWHM** (default 5.0),
+  **High-pass** (default 0.01 Hz).
 
-**Reference Scans**
-- **Initial Reference** — Collected before the localizer (preprocessing reference). Enable if your protocol acquires a reference scan at session start.
-- **Real-time Reference** — Collected before feedback runs (coregistration reference). Enable to align masks to current head position.
+### Feedback (per feedback run)
 
-### Simulator
+- **Task** — any registered task (`gauge`, `ball`, `thermometer`, `rittriggeredball`, … —
+  see [Tasks](tasks.md)). Task-specific parameters appear below the selection.
+- **Mask source** — which localizer (this session) or **earlier session's masks** drive this
+  run. Selecting an earlier session's masks is how cross-session reuse is configured (see
+  [Multi-Session](multi-session.md)).
+- **TR**, **Volumes**, **Baseline volumes** (default 25).
+- **Feedback mode** — `activation` (single/differential) or `connectivity` (sliding-window
+  correlation). **Differential pair** for dual-network activation (e.g. `Cont − Default`).
+- **Motion correction** — `siemens_moco` (default), `software` (ANTsPy), or `none`.
+- **Nuisance regressors** — drift, motion (6 DOF), white matter, CSF (toggled independently).
+- **ROI combine** — `inverse_sd` (default) or `mean`. **QC thresholds** — FD, DVARS, tSNR.
+- **Transfer runs** — practice runs without active feedback.
 
-When testing offline (no scanner), the simulator replays pre-collected DICOMs:
-
-- **Enable Simulator** — Toggle simulation mode
-- **Source Mapping** — Path to a TSV/CSV file mapping participant IDs to DICOM directories (see [Simulation Mode](simulation-mode.md))
-- **Collection Speed** — Speed multiplier for localizer/preprocessing (e.g., `10.0` = 10x real-time)
-- **Feedback Simulator Speed** — Speed multiplier for feedback runs (e.g., `1.0` = real-time, `10.0` = fast)
-- **Per-Run DICOM Sources** — Alternatively, specify DICOM directories directly per run (localizer, feedback, transfer)
-
-### Mask Extraction
-
-- **Network Atlas** — `Yeo 7` or `Yeo 17` for ICA-based extraction. See [Mask Extraction](mask-extraction.md) for other atlas options.
-- **Target Networks** — Which networks to extract (e.g., `Cont`, `Default` for Yeo 7; `ContA`, `DefaultA` for Yeo 17)
-- **ICA Components** — Number of independent components to extract (default: 20)
-- **Smoothing FWHM** — Spatial smoothing in mm before ICA (default: 5.0)
-- **High-Pass Filter** — Cutoff in Hz (default: 0.01)
-- **Threshold** — Number of voxels per mask (default: 2000)
-- **Threshold Method** — `top_n` (select top N voxels by weight) or `cluster` (atlas-guided iterative clustering)
-
-### Feedback
-
-See [Feedback Tasks](feedback-tasks.md) for full details.
-
-- **Baseline Volumes** — Volumes for baseline statistics (typically 15-25)
-- **Motion Correction** — `software` (ANTsPy), `siemens_moco` (parse from DICOM sidecar), or `none`
-- **Nuisance Regressors** — Toggle drift, motion (6 DOF), white matter, and CSF regressors independently
-- **Feedback Mode** — `activation` (single/differential network activation) or `connectivity` (sliding-window correlation)
-- **Differential Pair** — Which two networks to contrast (e.g., Cont - Default)
-- **QC Thresholds** — FD (mm), DVARS (standardized), tSNR cutoffs for outlier detection
-
-### Task
-
-- **Task Type** — Any registered task (`gauge`, `ball`, `thermometer`, `rittriggeredball`, etc. — see [Tasks](tasks.md))
-- **Max Feedback Runs** — Number of feedback runs per session
-- **Transfer Runs** — Enable/disable practice runs without real feedback
-- **Task-Specific Parameters** — Dynamically populated based on selected task type
-
-### Sham
-
-See [Sham & Blinding](sham-and-blinding.md) for full details.
-
-- **Enable Sham** — Toggle sham/control condition
-- **Blind Mode** — Hide network names in operator GUI (show "Target"/"Non-Target")
-- **Delivery Method** — `alternative_masks` or `replay`
-- **Randomization File** — TSV assigning participants to real/sham conditions
+See [Feedback Tasks](feedback-tasks.md) for the feedback computation details.
 
 ### Display
 
-See [Display Setup](display-setup.md).
+- **Control Monitor** — `left` or `right` (operator GUI).
+- **Presenter Monitor** — `left` or `right` (participant PsychoPy display).
 
-- **Control Monitor** — `left` or `right` (operator GUI)
-- **Presenter Monitor** — `left` or `right` (participant PsychoPy display)
+### Sham
 
-### Sessions
-
-A study declares an ordered list of sessions; each has its own localizer and feedback
-tasks. Use the **Sessions** strip on the Study tab to add, duplicate, select, and remove
-sessions — the Experiment Design, Localizer, and Feedback editors apply to the selected
-session. Localizers can reuse masks from earlier sessions (see [Multi-Session](multi-session.md)).
+- **Enable Sham**, **Blind Mode** (hide the condition from the operator), **Delivery method**
+  (`alternative_masks` / `replay`), **Randomization file**. See
+  [Sham & Blinding](sham-and-blinding.md).
 
 ## Study File Format
 

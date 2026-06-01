@@ -39,47 +39,42 @@ Launch the GUI:
 pineuro-gui
 ```
 
-Click **"+ New Study"** to open the Study Editor. Configure each tab:
+Click **"+ New Study"** to open the Study Editor. It has study-wide tabs (**Study**,
+**Display**, **Sham**) and a per-session **Experiment Design** area where you add
+localizers and feedback runs — each with its own editor.
 
-### General Tab
+### Study tab (study-wide)
 
 - **Name**: `NFB Demo`
-- **Description**: A brief description of your study
+- **Simulator**: enable it, point the source mapping at your `subject_mapping.tsv`, set the
+  localizer/collection speed to `10.0` (10× real-time) and the feedback speed to `1.0`
+  (real-time) — or `10.0` to finish quickly.
+- **Reference scans**: enable the **real-time reference** (leave the initial reference off —
+  this dataset has only one reference scan).
+- **Base data directory**: where participant data is written.
 
-### Scan Tab
+### Localizer (Experiment Design)
 
-Configure the scan parameters to match the dataset:
+Add one localizer and set:
 
-- **Localizer**: TR = `1.4`, Volumes = `404`, Runs = `1`, Task Type = `rest`
-- **Feedback**: TR = `2.0`, Volumes = `412`
-- **Reference Scans**: Enable "Real-time Reference" (disable "Initial Reference" — this dataset only has one reference scan)
-- **Simulator**: Check "Enable Simulator", set source mapping to your `subject_mapping.tsv`, Collection Speed = `10.0` (10x real-time)
-- **Feedback Simulator Speed**: `1.0` (real-time) for a realistic test, or `10.0` to run quickly
+- **Type**: `rest` (resting-state → ICA)
+- **TR**: `1.4`, **Volumes**: `404`, **Runs**: `1`
+- **Network atlas**: Yeo 7-network; **Target networks**: `Cont`, `Default` (Control and
+  Default Mode networks)
+- **ICA components**: `30`; **Threshold**: `2000` voxels per mask
 
-### Mask Tab
+### Feedback run (Experiment Design)
 
-- **Network Atlas**: Yeo 7-network
-- **Target Networks**: `Cont`, `Default` (Control and Default Mode networks)
-- **ICA Components**: `20`
-- **Threshold**: `2000` voxels per mask
+Add one feedback run and set:
 
-### Feedback Tab
-
-- **Baseline Volumes**: `15` (30 seconds at TR=2.0)
-- **Motion Correction**: `software` (ANTsPy-based, works with any scanner)
-- **Nuisance Regressors**: Enable drift, motion, WM, and CSF regressors
-- **Differential Pair**: `Cont` - `Default` (feedback = CEN activation minus DMN activation)
-
-### Task Tab
-
-- **Task Type**: `gauge`
-- **Max Feedback Runs**: `1`
-- Configure the gauge task parameters:
-  - **Block Durations**: `30,90,60,30,90,60,60,90,30,60,90,30`
-  - **Conditions**: `wander,focus`
-  - **Swap Labels**: Enabled, every `3` blocks
-  - **Baseline Duration**: `30.0` seconds
-  - **Transfer Runs**: Disable (not needed for this tutorial)
+- **Task**: `gauge`
+- **TR**: `2.0`, **Volumes**: `412`, **Baseline volumes**: `15` (30 s at TR=2.0)
+- **Motion correction**: `software` (ANTsPy-based — works with any scanner)
+- **Nuisance regressors**: drift, motion, WM, and CSF
+- **Feedback mode**: `activation` with differential pair `Cont − Default` (feedback =
+  Control minus Default-mode activation)
+- **Gauge parameters**: block durations `30,90,60,30,90,60,60,90,30,60,90,30`; conditions
+  `wander,focus`; swap labels every `3` blocks; transfer runs off
 
 Click **Save**.
 
@@ -134,65 +129,68 @@ At TR=2.0 and 412 volumes, a real-time run takes about 14 minutes. Set the feedb
 
 ## Step 4: Inspect Outputs
 
-After the session completes, the output directory for `sub-01` contains:
+After the session completes, the output for `sub-01` (under `ses-01/`) contains:
 
 ```
 data/sub-01/
-├── collection/                          # Raw collected DICOMs
-│   ├── task-rest_acq-01_run-01/         # Resting-state DICOMs
-│   ├── task-reference_acq-01_run-02/     # Reference scan DICOMs
-│   └── feedback_acq-01_run-01/          # Feedback run DICOMs
-│
-├── preprocessing/
-│   ├── 01_nifti/                        # Converted NIfTI files
-│   ├── 02_motion_correction/            # Motion-corrected data
-│   ├── 03_brain_extraction/             # Brain mask + mean image
-│   ├── sub-01_task-rest_preproc.nii.gz       # Final preprocessed 4D
-│   ├── sub-01_task-rest_preproc_mask.nii.gz  # Brain mask
-│   ├── sub-01_task-rest_boldref.nii.gz       # BOLD reference
-│   └── qc/
-│       └── sub-01_task-rest_preprocessing_qc.html
-│
-├── mask_extraction/
-│   ├── 01_ica/                          # ICA components
-│   ├── 02_mnireg/                       # MNI registration transforms + Yeo atlas in subject space
-│   ├── 03_masks/                        # Network masks
-│   │   ├── sub-01_Cont.nii.gz         # Control network (full)
-│   │   ├── sub-01_Cont_thr.nii.gz     # Control network (thresholded)
-│   │   ├── sub-01_Default.nii.gz      # DMN (full)
-│   │   ├── sub-01_Default_thr.nii.gz  # DMN (thresholded)
-│   │   └── mask_selections.json               # ICA component → network mapping
-│   └── 05_tissue/                       # WM and CSF masks for nuisance regression
-│
-├── feedback/
-│   ├── 01_reference/                    # Reference scan + coregistered masks
-│   │   ├── masks/                       # Network masks aligned to feedback task
-│   │   └── xfm/                         # Registration transforms
-│   └── 02_feedback_output/
-│       ├── sub-01_ses-01_task-ball_run-01_attempt-01_feedbacklog.tsv   # Per-volume activations
-│       ├── sub-01_ses-01_task-ball_run-01_attempt-01_design.tsv        # GLM design matrix
-│       ├── sub-01_ses-01_task-ball_run-01_attempt-01_psychopylog.tsv   # Task display state
-│       ├── sub-01_ses-01_task-ball_run-01_attempt-01_events.tsv        # Block events
-│       ├── task_state.json                                                   # Task state
-│       └── qc/
-│           └── sub-01_ses-01_task-ball_run-01_attempt-01_feedback_qc.html
-│
-├── qc/                                  # Master QC directory
-│   ├── sub-01_mask_extraction_qc.html  # Mask QC with overlay images
-│   └── overlays/                        # Mask overlay PNGs (subject, reference, alternatives)
-│
-└── logs/                                # Session logs
+└── ses-01/
+    ├── collection/                              # Raw collected DICOMs
+    │   ├── task-rest_run-01_attempt-01/         # Resting-state DICOMs
+    │   ├── task-reference_run-01_attempt-01/    # Reference scan DICOMs
+    │   └── task-gauge_run-01_attempt-01/        # Feedback run DICOMs
+    │
+    ├── preprocessing/
+    │   ├── 01_nifti/                            # Converted NIfTI files
+    │   ├── 02_motion_correction/                # Motion-corrected data
+    │   ├── 03_brain_extraction/                 # Brain mask + mean image
+    │   ├── sub-01_ses-01_task-rest_preproc.nii.gz       # Final preprocessed 4D
+    │   ├── sub-01_ses-01_task-rest_preproc_mask.nii.gz  # Brain mask
+    │   ├── sub-01_ses-01_task-rest_boldref.nii.gz       # BOLD reference
+    │   └── qc/
+    │       └── sub-01_ses-01_task-rest_preprocessing_qc.html
+    │
+    ├── mask_extraction/
+    │   ├── 01_ica/                              # ICA components
+    │   ├── 02_mnireg/                           # MNI registration transforms + Yeo atlas in subject space
+    │   ├── 03_masks/                            # Network masks
+    │   │   ├── sub-01_Cont.nii.gz             # Control network (full)
+    │   │   ├── sub-01_Cont_thr.nii.gz         # Control network (thresholded)
+    │   │   ├── sub-01_Default.nii.gz          # DMN (full)
+    │   │   ├── sub-01_Default_thr.nii.gz      # DMN (thresholded)
+    │   │   └── mask_selections.json           # ICA component → network mapping
+    │   └── 05_tissue/                           # WM and CSF masks for nuisance regression
+    │
+    ├── feedback/
+    │   ├── 01_reference/                        # Reference scan + coregistered masks
+    │   │   ├── masks/                           # Network masks aligned to feedback task
+    │   │   └── xfm/                             # Registration transforms
+    │   └── 02_feedback_output/
+    │       ├── sub-01_ses-01_task-gauge_run-01_attempt-01_feedbacklog.tsv   # Per-volume activations
+    │       ├── sub-01_ses-01_task-gauge_run-01_attempt-01_design.tsv        # GLM design matrix
+    │       ├── sub-01_ses-01_task-gauge_run-01_attempt-01_psychopylog.tsv   # Task display state
+    │       ├── sub-01_ses-01_task-gauge_run-01_attempt-01_events.tsv        # Block events
+    │       ├── task_state.json                                              # Task state
+    │       └── qc/
+    │           └── sub-01_ses-01_task-gauge_run-01_attempt-01_feedback_qc.html
+    │
+    ├── qc/                                      # Master QC directory
+    │   ├── sub-01_mask_extraction_qc.html      # Mask QC with overlay images
+    │   └── overlays/                            # Mask overlay PNGs (subject, reference, alternatives)
+    │
+    └── logs/                                    # Session logs
 ```
 
 ### Key Output Files
 
-**Feedbacklog** (`feedbacklog.tsv`) — One row per volume with columns:
-- `time` — Seconds since session start
+**Feedbacklog** (`feedbacklog.tsv`) — One row per volume. Key columns:
+- `volume`, `time` — Volume number and seconds since session start
 - `is_baseline`, `is_outlier` — Volume classification
 - `fd`, `dvars`, `tsnr` — Quality metrics
 - `condition` — Current block condition (real/baseline)
 - `{network}_activation` — Activation value per network
-- `differential` — CEN minus DMN activation (the feedback signal)
+- `differential` — Control minus Default-mode activation (the feedback signal)
+
+See [QC Reports & Output Files](../user-guide/qc-reports.md) for the full column list.
 
 **Psychopylog** (`psychopylog.tsv`) — One row per display frame (~60 Hz) with:
 - Task condition (wander/focus/rest)
@@ -206,7 +204,7 @@ data/sub-01/
 
 - **Run more participants** — Enter a different participant ID (e.g., `sub-02`) and run the same pipeline. The source mapping automatically selects the correct DICOMs.
 - **Adjust parameters** — Edit the study to change ICA components, threshold values, or task settings. Re-run with `overwrite=False` to skip completed steps.
-- **Multi-session studies** — Enable multi-session mode in the study editor to reuse masks across sessions with reference scan coregistration.
+- **Multi-session studies** — A study declares an ordered list of sessions; a later session can reuse an earlier session's masks (selected per feedback run) with reference-scan coregistration. See [Multi-Session Studies](../user-guide/multi-session.md).
 - **Sham conditions** — Enable sham mode to deliver alternative mask feedback or replay data for control participants.
 
 See the [Pipeline Overview](../user-guide/pipeline-overview.md) for details on each processing stage.

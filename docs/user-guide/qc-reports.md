@@ -4,7 +4,7 @@ pineuro generates HTML quality control reports at each pipeline stage and logs p
 
 ## Preprocessing QC
 
-**File:** `preprocessing/qc/sub-001_task-rest_preprocessing_qc.html`
+**File:** `preprocessing/qc/sub-01_ses-01_task-rest_preprocessing_qc.html`
 
 Contains:
 - **Motion parameter timeseries** — 6 DOF (3 translations, 3 rotations) across all volumes
@@ -13,7 +13,7 @@ Contains:
 
 ## Mask Extraction QC
 
-**File:** `qc/sub-001_mask_extraction_qc.html`
+**File:** `qc/sub-01_mask_extraction_qc.html`
 
 Contains:
 - **Correlation heatmap** — Spatial correlation between each ICA component and each atlas network. Shows which component was selected for each target.
@@ -25,7 +25,7 @@ The Participant Workflow GUI also shows overlay thumbnails for quick visual veri
 
 ## Feedback Tasks QC
 
-**File:** `feedback/02_feedback_output/qc/sub-001_ses-01_task-ball_run-01_attempt-01_feedback_qc.html`
+**File:** `feedback/02_feedback_output/qc/sub-01_ses-01_task-ball_run-01_attempt-01_feedback_qc.html`
 
 Contains:
 - **Activation timeseries** — Per-volume activation for each network mask, with baseline period shaded
@@ -42,6 +42,7 @@ One row per volume. The primary data file for post-hoc analysis.
 
 | Column | Description |
 |--------|-------------|
+| `volume` | Volume number |
 | `time` | Seconds since session start |
 | `is_baseline` | Whether this volume is in the baseline period |
 | `is_outlier` | Whether FD or DVARS exceeded threshold |
@@ -49,12 +50,11 @@ One row per volume. The primary data file for post-hoc analysis.
 | `dvars` | Raw DVARS value |
 | `tsnr` | Temporal signal-to-noise ratio |
 | `condition` | Block condition label (e.g., `real`, `baseline`) |
-| `{network}_activation` | Activation z-score for each network mask |
-| `differential` | Difference between differential pair networks (if configured) |
+| `{network}_activation` | Delivered activation for each network mask (and the differential pair, if configured) |
+| `wm_mean`, `csf_mean` | Tissue nuisance signals (only when WM/CSF regressors are enabled) |
+| `task_regressor` | Task regressor value for the volume |
 
-When sham is enabled, additional columns appear:
-- `{network}_activation_real` — True activation (always computed)
-- `{network}_activation_delivered` — What was shown to the participant
+When sham is enabled, the `{network}_activation` columns hold the **delivered** (sham) values, and additional `{network}_real` columns are added with the participant's **true** computed activation (always logged for post-hoc analysis).
 
 ### Design Matrix (`*_design.tsv`)
 
@@ -95,15 +95,16 @@ Persistent state that carries across runs within a session. Includes:
 All outputs follow a consistent directory structure:
 
 ```
-base_dir/sub-001/
+base_dir/sub-01/ses-01/
 ├── preprocessing/qc/          # Preprocessing QC
+├── mask_extraction/           # ICA components + network masks
 ├── qc/                        # Mask extraction QC + overlays
 ├── feedback/02_feedback_output/
 │   ├── *_feedbacklog.tsv      # Per-volume data
 │   ├── *_design.tsv           # GLM design matrix
 │   ├── *_psychopylog.tsv      # Task display log
 │   ├── *_events.tsv           # Block events
-│   ├── task_state.json     # Task state persistence
+│   ├── task_state.json        # Task state persistence
 │   └── qc/                    # Feedback QC report
 └── logs/                      # Session logs (timestamped)
 ```

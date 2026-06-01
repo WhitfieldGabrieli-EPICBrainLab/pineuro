@@ -17,7 +17,7 @@ The default approach for resting-state localizers. Uses Independent Component An
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `n_components` | 20 | Number of ICA components to extract |
+| `n_components` | 30 | Number of ICA components to extract |
 | `smooth_fwhm` | 5.0 | Spatial smoothing (mm) before ICA |
 | `highpass` | 0.01 | High-pass filter cutoff (Hz) |
 | `lowpass` | None | Low-pass filter cutoff (Hz, disabled by default) |
@@ -29,19 +29,19 @@ The default approach for resting-state localizers. Uses Independent Component An
 ```
 mask_extraction/
 ├── 01_ica/
-│   └── sub-001_task-rest_preproc_components.nii.gz   # 4D ICA components
+│   └── sub-01_task-rest_preproc_components.nii.gz   # 4D ICA components
 ├── 02_mnireg/
-│   ├── sub-001_task-rest_boldref_to_MNI_boldref.nii.gz   # Forward transform
-│   └── Yeo_to_sub-001_task-rest_boldref.nii.gz            # Atlas in subject space
+│   ├── sub-01_task-rest_boldref_to_MNI_boldref.nii.gz   # Forward transform
+│   └── Yeo_to_sub-01_task-rest_boldref.nii.gz            # Atlas in subject space
 ├── 03_masks/
-│   ├── sub-001_Cont.nii.gz         # Full component map
-│   ├── sub-001_Cont_thr.nii.gz     # Thresholded binary mask
-│   ├── sub-001_Default.nii.gz
-│   ├── sub-001_Default_thr.nii.gz
+│   ├── sub-01_Cont.nii.gz         # Full component map
+│   ├── sub-01_Cont_thr.nii.gz     # Thresholded binary mask
+│   ├── sub-01_Default.nii.gz
+│   ├── sub-01_Default_thr.nii.gz
 │   └── mask_selections.json         # Component → network mapping metadata
 └── 05_tissue/                        # WM and CSF masks (for nuisance regression)
-    ├── sub-001_tissue_wm_mask.nii.gz
-    └── sub-001_tissue_csf_mask.nii.gz
+    ├── sub-01_tissue_wm_mask.nii.gz
+    └── sub-01_tissue_csf_mask.nii.gz
 ```
 
 ## GLM-Based Extraction (Task Localizer)
@@ -109,7 +109,7 @@ Atlas labels are fetched on demand and cached locally.
 
 ## QC Review
 
-After mask extraction, review the QC report (`qc/sub-001_mask_extraction_qc.html`) which shows:
+After mask extraction, review the QC report (`qc/sub-01_mask_extraction_qc.html`) which shows:
 - ICA component spatial maps
 - Correlation heatmap (components x atlas networks)
 - Mask overlays on the participant's anatomy

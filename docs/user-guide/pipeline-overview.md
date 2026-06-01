@@ -28,6 +28,9 @@ A typical neurofeedback study follows this workflow:
 
 ## Pipeline Components
 
+Each stage below is exposed as a public function; for runnable end-to-end code see the
+[Quick Start scripting example](../getting-started/quickstart.md#scripting-optional).
+
 ### 1. Resting-State Collection
 
 **Purpose:** Acquire fMRI data for extracting participant-specific network masks.
@@ -36,17 +39,6 @@ A typical neurofeedback study follows this workflow:
 - Scanner exports DICOM files to a watch directory
 - pineuro collects DICOMs as they arrive
 - Typically 200-300 volumes (5-10 minutes)
-
-**Code:**
-```python
-from pineuro import collect_volumes
-
-dicom_folder = collect_volumes(
-    watch_dir='/scanner/incoming',
-    output_dir='/data/sub-01/raw/rest',
-    n_volumes=200,
-)
-```
 
 ### 2. Preprocessing
 
@@ -58,30 +50,20 @@ dicom_folder = collect_volumes(
 3. **Brain Extraction**: Create mask excluding non-brain tissue (ANTsPy)
 4. **Coregistration**: Align multiple runs if present
 
-**Code:**
-```python
-from pineuro import preprocessing
-
-preproc_file, mask_file, ref_file = preprocessing(
-    participant_id='sub-01',
-    task='rest',
-    root_dir='/data/sub-01/preproc',
-    input_dicoms=dicom_folder,
-)
-```
-
 **Outputs:**
 ```
-preproc/
+preprocessing/
 ├── 01_nifti/               # Converted NIfTI files
 ├── 02_motion_correction/   # Motion-corrected data + .par files
 ├── 03_brain_extraction/    # Temporal means + brain mask
 ├── 04_coregistered/        # Multi-run alignment (if >1 run)
-├── sub-01_task-rest_preproc.nii.gz      # Final masked output
-├── sub-01_task-rest_preproc_mask.nii.gz # Brain mask
-├── sub-01_task-rest_boldref.nii.gz      # BOLD reference
+├── sub-01_ses-01_task-rest_preproc.nii.gz      # Final masked output
+├── sub-01_ses-01_task-rest_preproc_mask.nii.gz # Brain mask
+├── sub-01_ses-01_task-rest_boldref.nii.gz      # BOLD reference
 └── qc/                     # QC report
 ```
+
+See [Preprocessing](preprocessing.md) for the full step-by-step breakdown.
 
 ### 3. Mask Extraction
 
@@ -98,31 +80,22 @@ preproc/
 - Individual brains vary in network topography
 - ICA captures participant's actual network boundaries
 
-**Code:**
-```python
-from pineuro import mask_extraction_rest
-
-mask_files = mask_extraction_rest(
-    participant_id='sub-01',
-    root_dir='/data/sub-01/masks',
-    input_file=preproc_file,
-    mask_file=mask_file,
-    ref_file=ref_file,
-    networks=['DefaultA', 'ContA'],
-)
-```
-
 **Outputs:**
 ```
-masks/
+mask_extraction/
 ├── 01_ica/                 # ICA components + correlations
 ├── 02_mnireg/              # MNI registration + atlas in subject space
 ├── 03_masks/               # Network masks + selection metadata
-│   ├── sub-01_DefaultA_mask.nii.gz
-│   ├── sub-01_ContA_mask.nii.gz
+│   ├── sub-01_DefaultA.nii.gz       # full component map
+│   ├── sub-01_DefaultA_thr.nii.gz   # thresholded binary mask
+│   ├── sub-01_ContA.nii.gz
+│   ├── sub-01_ContA_thr.nii.gz
 │   └── mask_selections.json
-└── qc/                     # QC report with overlays
+└── 04_reference/           # coregistration outputs (populated later)
 ```
+
+ICA is one of three extraction modes — see [Mask Extraction](mask-extraction.md) for the
+GLM-localizer and MNI-atlas options, supported atlases, and manual ROI import.
 
 ### 4. Reference Coregistration
 
@@ -138,19 +111,6 @@ masks/
 2. Average to create registration target
 3. Compute transform from original reference
 4. Apply inverse transform to masks
-
-**Code:**
-```python
-from pineuro import coregister_reference
-
-aligned_masks = coregister_reference(
-    participant_id='sub-01',
-    root_dir='/data/sub-01/feedback',
-    input_dicom='/scanner/reference_dicoms',
-    network_files=list(mask_files.values()),
-    ref_file=ref_file,
-)
-```
 
 ### 5. Real-Time Feedback
 
@@ -173,21 +133,8 @@ BOLD = β₀ + β₁·drift + β₂₋₇·motion + β₈·task + error
 - Nuisance is subtracted from signal
 - Activation = (signal - nuisance) / running_std
 
-**Code:**
-```python
-from pineuro import run_feedback_task
-
-results = run_feedback_task(
-    mask_paths=aligned_masks,
-    subject='sub-01',
-    task='nback',
-    run=1,
-    output_dir='/data/sub-01/feedback',
-    incoming_dir='/scanner/incoming',
-    n_baseline=25,
-    n_volumes=200,
-)
-```
+See [Feedback Tasks](feedback-tasks.md) for feedback modes, the design matrix, and
+nuisance/normalization details.
 
 ### 6. Display Task
 

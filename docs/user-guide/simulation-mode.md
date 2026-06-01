@@ -4,10 +4,10 @@ Simulation mode replays pre-collected DICOMs at configurable speed, allowing you
 
 ## Enabling Simulation
 
-In the Study Editor Scan tab:
+In the Study Editor's **Study** tab:
 1. Check **"Enable Simulator"**
-2. Set **Collection Speed** — Speed multiplier for localizer/preprocessing (e.g., `10.0` = 10x faster)
-3. Set **Feedback Simulator Speed** — Speed multiplier for feedback runs (e.g., `1.0` = real-time)
+2. Set **Localizer speed** — Speed multiplier for localizer/collection (e.g., `10.0` = 10x faster)
+3. Set **Feedback speed** — Speed multiplier for feedback runs (e.g., `1.0` = real-time)
 4. Provide DICOM source paths (see below)
 
 ## Source Mapping File
@@ -16,8 +16,8 @@ The recommended way to specify DICOM sources for multiple participants. Create a
 
 ```
 subject	rest1	rest2	reference_initial	reference_realtime	feedback_run-01	feedback_run-02	transfer_run-01	transfer_run-02
-sub-001	/data/dicoms/sub-001/rest1	/data/dicoms/sub-001/rest2	/data/dicoms/sub-001/reference_init	/data/dicoms/sub-001/reference_rt	/data/dicoms/sub-001/feedback1	/data/dicoms/sub-001/feedback2	/data/dicoms/sub-001/transfer1	/data/dicoms/sub-001/transfer2
-sub-002	/data/dicoms/sub-002/rest1	...
+sub-01	/data/dicoms/sub-01/rest1	/data/dicoms/sub-01/rest2	/data/dicoms/sub-01/reference_init	/data/dicoms/sub-01/reference_rt	/data/dicoms/sub-01/feedback1	/data/dicoms/sub-01/feedback2	/data/dicoms/sub-01/transfer1	/data/dicoms/sub-01/transfer2
+sub-02	/data/dicoms/sub-02/rest1	...
 ```
 
 ### Column Names
@@ -35,10 +35,10 @@ Only include columns for the scans your study uses. For example, if you have 1 l
 
 ```
 subject	rest1	reference_realtime	feedback_run-01
-sub-001	/data/rest	/data/reference	/data/feedback
+sub-01	/data/rest	/data/reference	/data/feedback
 ```
 
-Set the source mapping path in the Study Editor Scan tab → **Source Mapping**.
+Set the source mapping path in the Study Editor's **Study** tab → **Source Mapping**.
 
 ## Per-Run DICOM Sources
 
@@ -82,7 +82,7 @@ Set collection speed high (10x+) for preprocessing and mask extraction where tim
 The simulator can also be used programmatically:
 
 ```python
-from pineuro import VolumeSimulator
+from pineuro.simulator import VolumeSimulator
 
 sim = VolumeSimulator(
     source_dir="/path/to/source_dicoms",

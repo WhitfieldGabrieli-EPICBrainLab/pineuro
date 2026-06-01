@@ -10,36 +10,44 @@ The task framework handles:
 - **Callback notifications** when new volumes are processed
 - **Standard lifecycle** for task setup, update, and cleanup
 
-## Quick Start
+## Running a Task
+
+Feedback tasks are normally run through the GUI or the session-orchestration helpers
+(`pineuro.run_single_task` / `run_full_session`), which build the task, wire it to the
+real-time coordinator, and manage the run lifecycle for you. The underlying pattern those
+helpers follow is:
 
 ```python
-from pineuro import run_feedback_task, BallTask
-# Start feedback in background thread
+from pineuro import run_feedback_task
+from pineuro.tasks import create_task
+
+# 1. Start the real-time feedback loop in a background thread.
+#    Returns {"coordinator": ..., "thread": ...}.
 session_info = run_feedback_task(
-    mask_paths=['/path/to/cen_mask.nii.gz', '/path/to/dmn_mask.nii.gz'],
-    subject='sub-01',
-    task='rest',
-    run=1,
-    output_dir='/path/to/output',
-    mask_names=['CEN', 'DMN'],
-    n_baseline=25,
-    n_volumes=150,
-    run_in_background=True,  # Required for PsychoPy
+    mask_paths=["/path/cen_thr.nii.gz", "/path/dmn_thr.nii.gz"],
+    subject="sub-01", session="ses-01", task="ball", run=1,
+    output_dir="/data/sub-01/ses-01/feedback",
+    collection_dir="/scanner/incoming",
+    n_baseline=25, n_volumes=150, tr=2.0,
+    mask_names=["CEN", "DMN"],
+    # simulator_source_dir=..., simulator_speed=10.0,  # to replay DICOMs offline
 )
+coordinator = session_info["coordinator"]
 
-coordinator = session_info['coordinator']
-coordinator.wait_until_ready(timeout=5)
-coordinator.send_trigger()  # In simulation mode this can be automatic
-
-# Run task in main thread
-task = BallTask(coordinator, mask_names=['CEN', 'DMN'])
+# 2. Build the PsychoPy task from the registry and wire it to the coordinator.
+task = create_task(
+    task_id="ball",
+    coordinator=coordinator,
+    config={"mask_names": ["CEN", "DMN"], "feedback_mode": True},
+)
 coordinator._activation_callback = task._update_data
 
+# 3. Run the task on the main thread (PsychoPy/OpenGL requirement).
 try:
     task.run()
 finally:
     coordinator.stop()
-    session_info['thread'].join(timeout=5)
+    session_info["thread"].join(timeout=5)
 ```
 
 ## Creating Custom Tasks
@@ -169,11 +177,11 @@ normalized = normalizer.update(raw_activation)  # Returns value in [0, 1]
 
 ## Tips
 
-- **Always run coordinator in background**: Set `run_in_background=True`
-- **Register callback**: `coordinator._activation_callback = task._update_data`
-- **Wait for initialization**: Brief `time.sleep(2)` after starting coordinator
-- **Graceful shutdown**: Always call `coordinator.stop()` and join thread
-- **Escape key**: Standard convention to quit task (check in `update()`)
+- **Escape key**: quit the task from `update()` (standard convention).
+- **Smooth animation**: render every frame from the latest activation — new volumes arrive
+  only every TR (~1-2 s), so interpolate/smooth between them.
+- **Persist across runs**: use `TaskState` for values that should survive between runs
+  (e.g. adaptive difficulty, hit counts).
 
 ## Requirements
 

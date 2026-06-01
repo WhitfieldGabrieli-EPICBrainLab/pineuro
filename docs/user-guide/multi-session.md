@@ -2,9 +2,9 @@
 
 Neurofeedback protocols typically span multiple sessions over days or weeks. In
 pineuro a study declares an ordered list of **sessions**, and each session has its
-own localizer and feedback tasks. A session may also **reuse masks** from an earlier
-session — per localizer — and per-session coregistration aligns those masks to each
-session's head position.
+own localizers and feedback runs. A feedback run can **reuse masks** from an earlier
+session, and per-session coregistration aligns those masks to each session's head
+position.
 
 ## Defining Sessions
 
@@ -18,23 +18,18 @@ The study's session **count** is the number of sessions you define. When you sta
 participant, the session-selection dialog only lets you create up to that many
 sessions, and creates them in order (`ses-01`, `ses-02`, …).
 
-## Per-Localizer Mask Reuse
+## Mask Reuse Across Sessions
 
-Each localizer in a session has a **Masks** dropdown:
+Each session computes its own localizers. To reuse an earlier session's masks instead of
+re-localizing, a **feedback run selects them directly**: the feedback editor's mask-source
+dropdown lists every mask produced this session *and in earlier sessions*. Pick an earlier
+session's mask and that run consumes it — no new localizer is needed in the current session
+(the runtime skips re-localizing and simply coregisters the reused masks).
 
-- **Compute fresh** — run this localizer's collection, preprocessing, and mask
-  extraction this session (the default).
-- **Reuse ses-NN** — skip this localizer this session and pull its masks from that
-  earlier session, coregistering them to the current session's reference scan.
-
-Because reuse is per-localizer, a session can **mix** the two: e.g. reuse the
-resting-state network mask from `ses-01` while freshly localizing a new task ROI this
-session. A session in which *every* localizer is reused runs no localizer at all — it
-only collects a reference scan and coregisters the reused masks (the old
-"whole-session reuse" behavior).
-
-Feedback tasks still reference a localizer by its `mask_source` (the localizer's `id`),
-so a feedback run consumes whichever masks that localizer provides — fresh or reused.
+Because reuse is chosen per feedback run, a session can **mix** sources: one run on a network
+localized fresh this session, another on a network reused from `ses-01`. A session whose
+feedback runs all reuse earlier masks runs no localizer at all — it only collects a reference
+scan and coregisters the reused masks.
 
 ## Session Workflow
 
@@ -46,21 +41,21 @@ so a feedback run consumes whichever masks that localizer provides — fresh or 
 4. Real-time reference scan + coregistration
 5. Feedback runs
 
-### A session that reuses an earlier session's masks
+### A session that reuses earlier masks
 
 1. Real-time reference scan collection (new head position)
 2. Coregistration — align the reused (and any fresh) masks to the current reference
 3. Feedback runs
 
-Reused localizers skip their collection/preprocessing/extraction steps; fresh
-localizers in the same session still run theirs.
+Reused masks skip collection/preprocessing/extraction; any localizers defined in the
+session still run theirs.
 
 ## Directory Structure
 
 Multi-session data is organized by session:
 
 ```
-base_dir/sub-001/
+base_dir/sub-01/
 ├── ses-01/
 │   ├── collection/
 │   ├── preprocessing/
@@ -86,10 +81,9 @@ space, so the same functional regions are targeted across sessions.
 
 ## Validation
 
-The Study Editor refuses to save a study where a localizer reuses a session that is not
-*earlier* in the order. The session-selection dialog additionally refuses to start a
-session whose reused-mask source session has not yet been run (its masks must exist on
-disk first).
+A feedback run can only reuse masks from an *earlier* session. The session-selection dialog
+refuses to start a session whose reused-mask source session has not yet been run (its masks
+must exist on disk first).
 
 ## Detecting Existing Sessions
 

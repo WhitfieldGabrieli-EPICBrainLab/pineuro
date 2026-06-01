@@ -50,7 +50,7 @@ The desktop GUI provides study configuration, participant workflows, live activa
 
 **Getting started**
 - [Installation](docs/getting-started/installation.md): Setup and dependencies
-- [Quick Start](docs/getting-started/quickstart.md): Python API quick start
+- [Quick Start](docs/getting-started/quickstart.md): GUI quick start (with an API snippet)
 - [First Session](docs/getting-started/first-session.md): End-to-end GUI walkthrough
 
 **User guide**: [Full index](docs/index.md)

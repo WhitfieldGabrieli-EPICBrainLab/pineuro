@@ -2,18 +2,12 @@
 
 Welcome to the pineuro documentation. pineuro is a Python library for real-time fMRI neurofeedback research.
 
-## Quick Links
-
-- [Installation Guide](getting-started/installation.md) — Set up pineuro and dependencies
-- [Quick Start](getting-started/quickstart.md) — Get running in 5 minutes
-- [First Session Tutorial](getting-started/first-session.md) — Complete end-to-end walkthrough
-
 ## What is pineuro?
 
 pineuro provides a complete pipeline for real-time fMRI neurofeedback experiments:
 
 1. **Preprocessing** — DICOM conversion, motion correction, brain extraction
-2. **Mask Extraction** — ICA-based network identification from resting-state data
+2. **Mask Extraction** — Participant-specific network masks: ICA (resting-state), GLM (task localizer), or MNI atlas
 3. **Feedback Tasks** — Real-time activation estimation and display
 
 The library is designed for:
@@ -24,7 +18,7 @@ The library is designed for:
 ## Getting Started
 
 - [Installation](getting-started/installation.md) — System requirements and setup
-- [Quick Start](getting-started/quickstart.md) — Python API quick start
+- [Quick Start](getting-started/quickstart.md) — Get running in a few minutes (GUI-first)
 - [First Session Tutorial](getting-started/first-session.md) — Step-by-step GUI walkthrough with sample data
 
 ## User Guide
@@ -34,7 +28,7 @@ The library is designed for:
 - [Preprocessing](user-guide/preprocessing.md) — Motion correction, brain extraction, coregistration
 - [Mask Extraction](user-guide/mask-extraction.md) — ICA, GLM, manual ROI import, atlas options
 - [Feedback Tasks](user-guide/feedback-tasks.md) — Activation, connectivity, differential, intermittent feedback
-- [Tasks](user-guide/tasks.md) — Gauge, ball, thermometer, fixation, self/other; transfer runs
+- [Tasks](user-guide/tasks.md) — Gauge, ball, thermometer, RIT variants, rest & self/other localizers; transfer runs
 - [Sham & Blinding](user-guide/sham-and-blinding.md) — Control conditions, blind operator mode, randomization
 - [Multi-Session Studies](user-guide/multi-session.md) — Longitudinal protocols with mask reuse
 - [Display Setup](user-guide/display-setup.md) — Multi-monitor and projector configuration

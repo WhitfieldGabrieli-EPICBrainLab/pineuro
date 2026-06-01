@@ -119,12 +119,14 @@ During a feedback task, the operator GUI displays:
 | Parameter | GUI Location | Default |
 |-----------|-------------|---------|
 | Baseline volumes | Feedback tab | 15-25 |
-| Motion correction | Feedback tab | `software` |
+| Motion correction | Feedback tab | `siemens_moco` |
 | Nuisance regressors | Feedback tab (checkboxes) | drift + motion on |
 | Feedback mode | Feedback tab | `activation` |
 | Differential pair | Feedback tab | None |
 | Smooth FWHM | Feedback tab | None |
 | Feedback interval | Feedback tab | None |
+| Connectivity window | Feedback tab | 15 TRs |
+| Connectivity target | Feedback tab | `increase` |
 | Efficiency weights | Feedback tab | On |
 | FD threshold | Feedback tab | 0.5 |
 | DVARS threshold | Feedback tab | 1.5 |

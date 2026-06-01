@@ -1,125 +1,87 @@
 # Quick Start
 
-Get up and running with pineuro in 5 minutes.
+Get pineuro running in a few minutes using the desktop GUI and the built-in
+simulator — no scanner required.
 
 ## Prerequisites
 
-- Python 3.10 or 3.11
-- pineuro installed (`pip install -e /path/to/pineuro`)
+- **Python 3.10 or 3.11**
+- pineuro installed — see the [Installation Guide](installation.md)
+- Some pre-collected DICOMs to replay (a resting-state run for mask extraction and a
+  feedback run; e.g. a public neurofeedback dataset)
 
-## 1. Preprocess Resting-State Data
+## 1. Launch the GUI
 
-First, preprocess the resting-state data that will be used for mask extraction:
+```bash
+pineuro-gui
+```
+
+## 2. Create a study
+
+Click **"+ New Study"** to open the Study Editor and set the essentials (tabs:
+**Study · Experiment Design · Localizer · Feedback · Display · Sham**):
+
+- **Study** — a name; enable the **Simulator** and point it at your DICOMs (a source
+  mapping file or per-run paths); set the base data directory.
+- **Localizer** — a `rest` localizer (TR, volumes); pick a network atlas (Yeo 7 or 17)
+  and target networks (e.g. `Cont`, `Default`).
+- **Feedback** — baseline volumes, nuisance regressors, and a task to display
+  (e.g. `gauge`, `ball`, `thermometer`).
+
+Click **Save**. See [Study Configuration](../user-guide/study-configuration.md) for every
+setting.
+
+## 3. Run a participant
+
+From the Study Manager, open the study, enter a participant ID (`sub-01`), and click
+**Start**. Step through the pipeline phases — collection → preprocessing → mask
+extraction → reference coregistration → feedback. The simulator replays your DICOMs at
+the configured speed; the operator window shows live activation, motion (FD/DVARS), and
+tSNR plots.
+
+## 4. Inspect outputs
+
+Outputs are written under `base_dir/sub-01/ses-01/`. The key files and QC reports are
+described in [QC Reports & Output Files](../user-guide/qc-reports.md).
+
+## Scripting (optional)
+
+Most users drive pineuro through the GUI, but the pipeline is also a plain Python API.
+A minimal end-to-end run:
 
 ```python
-from pineuro import preprocessing
+from pineuro import preprocessing, mask_extraction_rest, run_feedback_task
 
-# Run preprocessing on DICOM data
+# 1. Preprocess the resting-state localizer
 preproc_file, mask_file, ref_file = preprocessing(
-    participant_id='sub-01',
-    task='rest',
-    root_dir='/data/sub-01/preproc',
-    input_dicoms='/scanner/sub-01/rest_dicoms',
+    participant_id="sub-01", session_id="ses-01", task="rest",
+    root_dir="/data/sub-01/ses-01/preprocessing",
+    input_dicoms="/scanner/sub-01/rest",
 )
 
-print(f"Preprocessed: {preproc_file}")
-print(f"Brain mask: {mask_file}")
-print(f"BOLD reference: {ref_file}")
-```
-
-This will:
-- Convert DICOMs to NIfTI
-- Run motion correction (ANTsPy rigid registration)
-- Extract brain mask (ANTsPy)
-- Generate QC report
-
-## 2. Extract Network Masks
-
-Use ICA to identify participant-specific network masks:
-
-```python
-from pineuro import mask_extraction_rest
-
-# Extract DMN and Control network masks
-mask_files = mask_extraction_rest(
-    participant_id='sub-01',
-    root_dir='/data/sub-01/masks',
-    input_file=preproc_file,
-    mask_file=mask_file,
-    ref_file=ref_file,
-    networks=['DefaultA', 'ContA'],  # Target networks
+# 2. Extract participant-specific network masks (ICA + Yeo atlas) -> list of Paths
+mask_paths = mask_extraction_rest(
+    participant_id="sub-01", session_id="ses-01",
+    root_dir="/data/sub-01/ses-01/mask_extraction",
+    input_file=preproc_file, mask_file=mask_file, ref_file=ref_file,
+    networks=["DefaultA", "ContA"],
 )
 
-for name, path in mask_files.items():
-    print(f"{name}: {path}")
-```
-
-This will:
-- Run ICA (20 components by default)
-- Register to MNI and pull Yeo atlas to participant space
-- Select best ICA component for each target network
-- Threshold and save masks
-
-## 3. Run a Feedback Task (Simulation)
-
-Test the feedback pipeline with simulated data:
-
-```python
-from pineuro import run_feedback_task
-
-# Run simulated feedback session
-results = run_feedback_task(
-    mask_paths=list(mask_files.values()),
-    subject='sub-01',
-    task='nback',
-    run=1,
-    output_dir='/data/sub-01/feedback',
-    n_baseline=25,
-    n_volumes=150,
-    # Enable simulation mode
-    simulator_source_dir='/path/to/source_dicoms',
-    simulator_speed=10.0,  # 10x speed for testing
+# 3. Run a feedback task, replaying DICOMs through the simulator
+run_feedback_task(
+    mask_paths=mask_paths, subject="sub-01", session="ses-01",
+    task="ball", run=1,
+    output_dir="/data/sub-01/ses-01/feedback",
+    collection_dir="/scanner/incoming",
+    n_baseline=15, n_volumes=200, tr=2.0,
+    simulator_source_dir="/data/sub-01/feedback_dicoms", simulator_speed=10.0,
 )
 ```
 
-This will:
-- Simulate scanner acquisition (copying DICOMs at TR intervals)
-- Process each volume in real-time
-- Compute activation for each network
-- Log results to TSV files
-
-## 4. View Results
-
-After the session completes, check the outputs:
-
-```
-/data/sub-01/feedback/
-├── 02_feedback_output/
-│   ├── sub-01_ses-01_task-ball_run-01_attempt-01_feedbacklog.tsv  # Activations
-│   └── sub-01_ses-01_task-ball_run-01_attempt-01_design.tsv       # GLM design
-└── qc/
-    └── sub-01_ses-01_task-ball_run-01_attempt-01_feedback_qc.html # QC report
-```
-
-The `feedbacklog.tsv` contains columns:
-- `volume`: Volume number
-- `time`: Timestamp
-- `is_baseline`: Whether volume is in baseline period
-- `{network}_activation`: Activation value for each network
+See the [Pipeline Overview](../user-guide/pipeline-overview.md) for what each stage does.
 
 ## Next Steps
 
-- [First Session Tutorial](first-session.md) — Complete walkthrough with the GUI
-- [Pipeline Overview](../user-guide/pipeline-overview.md) — Understand the full workflow
-- [Tasks](../user-guide/tasks.md) — Built-in and custom feedback displays
-
-## Common Issues
-
-### "DICOM folder not found"
-Ensure the path to DICOMs is correct and contains .dcm files.
-
-### "No components found with sufficient correlation"
-The ICA may need adjustment. Try:
-- Increasing `n_components` (e.g., 30)
-- Adjusting `smooth_fwhm` (e.g., 6.0)
-- Checking QC report for data quality issues
+- [First Session Tutorial](first-session.md) — full GUI walkthrough with sample data
+- [Study Configuration](../user-guide/study-configuration.md) — every study setting
+- [Tasks](../user-guide/tasks.md) — built-in and custom task displays

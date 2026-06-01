@@ -82,10 +82,9 @@ tests/validation/
 │   Core math (exact / independent-reference)
 ├── test_numeric_core.py              HRF, task designs, smoother/normalizer, IncrementalGLM, inverse-SD combine
 ├── test_feedback_estimator.py        FD/DVARS/tSNR/inverse-SD hand-calculated; SVD reference; multi-mask recovery
-├── test_collection_qc.py             FD/DVARS hand-calculated; Siemens MoCo DICOM parser
 ├── test_connectivity_estimator.py    sliding-window Pearson on hand-calculated signals
 ├── test_qc_helpers.py                summarize_mask (voxels, volume_ml, centroid), _pick_slices
-├── test_task_state_persistence.py TaskState / RunInfo JSON round-trip
+├── test_task_state_persistence.py    TaskState / RunInfo JSON round-trip
 ├── test_sham_randomization.py        randomization generation, load, condition lookup
 ├── test_simulator_roundtrip.py       file copy contract (data + sidecars)
 ├── test_tasks_lifecycle.py           plugin registration, parameter validation, error aggregation
