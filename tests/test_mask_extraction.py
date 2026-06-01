@@ -230,8 +230,61 @@ class TestClusterExtentThreshold:
 
         assert info["outcome"] == "capped"
         assert info["capped"] is True
-        # Should keep only the largest cluster (64 voxels fits in 100)
-        assert mask.sum() <= 100
+        # Top-N by stat: exactly the cap, drawn from the highest-stat voxels —
+        # all 64 at 5.0 plus 36 of the 64 at 4.0; none of the 3.0 cluster.
+        assert mask.sum() == 100
+        assert mask[1:5, 1:5, 1:5].sum() == 64  # whole 5.0 cluster kept
+        assert mask[20:24, 1:5, 1:5].sum() == 0  # weakest cluster dropped
+
+    def test_cap_single_cluster_larger_than_cap(self):
+        """Regression: a single cluster larger than the cap must NOT empty the
+        mask. The buggy greedy logic broke on the first (largest) cluster and
+        returned zero voxels while reporting outcome='capped'."""
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        # One contiguous cluster of 1000 voxels with distinct, graded stat values
+        stat = np.arange(1000, dtype=np.float64).reshape(10, 10, 10) / 100.0 + 3.0
+
+        mask, info = cluster_extent_threshold(
+            stat,
+            stat_threshold=2.0,
+            min_cluster_size=10,
+            max_total_voxels=200,
+        )
+
+        assert info["outcome"] == "capped"
+        assert info["capped"] is True
+        assert mask.sum() == 200  # exactly the cap, NOT empty
+        # The kept voxels are the 200 highest-stat ones
+        kept_min = stat[mask.astype(bool)].min()
+        assert kept_min == np.partition(stat.ravel(), -200)[-200]
+
+    def test_cap_disabled_keeps_all_surviving(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        stat = np.zeros((10, 10, 10), dtype=np.float64)
+        stat[2:6, 2:6, 2:6] = 4.0  # 64 voxels
+
+        # Cap larger than surviving voxels => no capping
+        mask, info = cluster_extent_threshold(
+            stat,
+            stat_threshold=2.0,
+            min_cluster_size=10,
+            max_total_voxels=1000,
+        )
+
+        assert info["outcome"] == "success"
+        assert info["capped"] is False
+        assert mask.sum() == 64
+
+    def test_cap_non_positive_raises(self):
+        from pineuro.mask_extraction import cluster_extent_threshold
+
+        stat = np.zeros((10, 10, 10), dtype=np.float64)
+        stat[2:6, 2:6, 2:6] = 4.0
+
+        with pytest.raises(ValueError, match="max_total_voxels must be a positive integer"):
+            cluster_extent_threshold(stat, max_total_voxels=0)
 
     def test_atlas_intersection(self):
         from pineuro.mask_extraction import cluster_extent_threshold
