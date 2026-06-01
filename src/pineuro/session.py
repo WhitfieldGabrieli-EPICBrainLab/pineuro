@@ -1555,6 +1555,76 @@ def resolve_localizer_masks(config: SessionConfig) -> list[tuple[LocalizerConfig
     return results
 
 
+def _session_status_label(session_dir: Path) -> str:
+    """Return a human-readable label for the furthest pipeline milestone reached.
+
+    Detection is intentionally config-independent: the session-selection dialog
+    cannot load each session's protocol, so "furthest artifact present on disk" is
+    the robust signal for a status line. Milestones are checked in pipeline order
+    (earliest first) and the last one that matches wins. Directory/path conventions
+    mirror those produced by the pipeline and recognised in
+    ``participant_workflow._detect_completed_steps``.
+    """
+    me_dir = session_dir / "mask_extraction"
+    feedback_dir = session_dir / "feedback"
+
+    def _has_nonempty_subdir(parent: Path) -> bool:
+        if not parent.is_dir():
+            return False
+        return any(child.is_dir() and any(child.iterdir()) for child in parent.iterdir())
+
+    def _glob_any(parent: Path, pattern: str) -> bool:
+        return parent.is_dir() and next(parent.glob(pattern), None) is not None
+
+    def _dir_has_files(parent: Path) -> bool:
+        return parent.is_dir() and any(parent.iterdir())
+
+    def _collection_started() -> bool:
+        return _has_nonempty_subdir(session_dir / "collection")
+
+    def _preprocessed() -> bool:
+        return _glob_any(session_dir / "preprocessing", "*_preproc.nii.gz")
+
+    def _masks_extracted() -> bool:
+        if _glob_any(me_dir / "03_masks", "*.nii.gz"):
+            return True
+        return any(_glob_any(loc / "03_masks", "*.nii.gz") for loc in me_dir.glob("loc_*"))
+
+    def _masks_approved() -> bool:
+        if (me_dir / ".masks_approved").exists():
+            return True
+        return any((loc / ".masks_approved").exists() for loc in me_dir.glob("loc_*"))
+
+    def _reference_coregistered() -> bool:
+        return _dir_has_files(me_dir / "04_reference" / "masks")
+
+    def _realtime_reference_ready() -> bool:
+        return _dir_has_files(feedback_dir / "01_reference" / "masks")
+
+    def _feedback_in_progress() -> bool:
+        output_dir = feedback_dir / "02_feedback_output"
+        if (output_dir / "task_state.json").exists():
+            return True
+        return _glob_any(output_dir, "*_feedbacklog.tsv") or _has_nonempty_subdir(output_dir)
+
+    # Ordered earliest -> latest; the last matching rung is the reported status.
+    ladder: list[tuple[str, Callable[[], bool]]] = [
+        ("Collection in progress", _collection_started),
+        ("Preprocessed", _preprocessed),
+        ("Masks extracted", _masks_extracted),
+        ("Masks approved", _masks_approved),
+        ("Reference coregistered", _reference_coregistered),
+        ("Realtime reference ready", _realtime_reference_ready),
+        ("Feedback in progress", _feedback_in_progress),
+    ]
+
+    status = "Not started"
+    for label, predicate in ladder:
+        if predicate():
+            status = label
+    return status
+
+
 def detect_existing_sessions(base_dir: Path, participant_id: str) -> list[dict[str, Any]]:
     """Detect existing session directories for a participant.
 
@@ -1570,6 +1640,8 @@ def detect_existing_sessions(base_dir: Path, participant_id: str) -> list[dict[s
     list[dict]
         List of session info dicts with keys:
         - session_id: str (BIDS ``ses-NN`` directory name)
+        - status: str (furthest pipeline milestone reached; see
+          :func:`_session_status_label`)
         - has_masks: bool
         - has_feedback: bool
         - masks_approved: bool
@@ -1586,8 +1658,9 @@ def detect_existing_sessions(base_dir: Path, participant_id: str) -> list[dict[s
             sessions.append(
                 {
                     "session_id": entry.name,
+                    "status": _session_status_label(entry),
                     "has_masks": (me_dir / "03_masks").exists(),
-                    "has_feedback": (entry / "feedback" / "task_state.json").exists(),
+                    "has_feedback": (entry / "feedback" / "02_feedback_output" / "task_state.json").exists(),
                     "masks_approved": (me_dir / ".masks_approved").exists(),
                 }
             )

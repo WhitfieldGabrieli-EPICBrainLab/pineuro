@@ -517,6 +517,114 @@ class TestSessionDetection:
         sessions = detect_existing_sessions(tmp_path, "sub-nonexistent")
         assert sessions == []
 
+    def _status_for(self, tmp_path, build) -> str:
+        """Build a single ``ses-01`` tree via ``build(ses_dir)`` and return its status."""
+        ses_dir = tmp_path / "sub-01" / "ses-01"
+        ses_dir.mkdir(parents=True)
+        build(ses_dir)
+        sessions = detect_existing_sessions(tmp_path, "sub-01")
+        assert len(sessions) == 1
+        return sessions[0]["status"]
+
+    def test_status_not_started(self, tmp_path):
+        assert self._status_for(tmp_path, lambda d: None) == "Not started"
+
+    def test_status_collection_in_progress(self, tmp_path):
+        # Collection data but no extracted masks (e.g. data/BBRF/sub-999/ses-02).
+        def build(d):
+            attempt = d / "collection" / "rittriggeredball_run-01_attempt-01"
+            attempt.mkdir(parents=True)
+            (attempt / "MR.0001").write_bytes(b"\x00")
+
+        assert self._status_for(tmp_path, build) == "Collection in progress"
+
+    def test_status_preprocessed(self, tmp_path):
+        def build(d):
+            preproc = d / "preprocessing"
+            preproc.mkdir()
+            (preproc / "sub-01_ses-01_task-rest_preproc.nii.gz").write_bytes(b"\x00")
+
+        assert self._status_for(tmp_path, build) == "Preprocessed"
+
+    def test_status_masks_extracted(self, tmp_path):
+        def build(d):
+            masks = d / "mask_extraction" / "03_masks"
+            masks.mkdir(parents=True)
+            (masks / "sub-01_ses-01_DMN_thr.nii.gz").write_bytes(b"\x00")
+
+        assert self._status_for(tmp_path, build) == "Masks extracted"
+
+    def test_status_masks_extracted_multilocalizer(self, tmp_path):
+        def build(d):
+            masks = d / "mask_extraction" / "loc_0_rest" / "03_masks"
+            masks.mkdir(parents=True)
+            (masks / "sub-01_ses-01_DMN_thr.nii.gz").write_bytes(b"\x00")
+
+        assert self._status_for(tmp_path, build) == "Masks extracted"
+
+    def test_status_masks_approved(self, tmp_path):
+        def build(d):
+            me = d / "mask_extraction"
+            (me / "03_masks").mkdir(parents=True)
+            (me / "03_masks" / "sub-01_ses-01_DMN_thr.nii.gz").write_bytes(b"\x00")
+            (me / ".masks_approved").write_text("")
+
+        assert self._status_for(tmp_path, build) == "Masks approved"
+
+    def test_status_reference_coregistered(self, tmp_path):
+        def build(d):
+            masks = d / "mask_extraction" / "04_reference" / "masks"
+            masks.mkdir(parents=True)
+            (masks / "sub-01_ses-01_DMN_to_task-reference_run-01_thr.nii.gz").write_bytes(b"\x00")
+
+        assert self._status_for(tmp_path, build) == "Reference coregistered"
+
+    def test_status_realtime_reference_ready(self, tmp_path):
+        def build(d):
+            masks = d / "feedback" / "01_reference" / "masks"
+            masks.mkdir(parents=True)
+            (masks / "sub-01_ses-01_DMN_to_task-reference_run-02_thr.nii.gz").write_bytes(b"\x00")
+
+        assert self._status_for(tmp_path, build) == "Realtime reference ready"
+
+    def test_status_feedback_in_progress(self, tmp_path):
+        # task_state.json lives under feedback/02_feedback_output (e.g.
+        # data/rtCHR/sub-rtchr01/ses-01), not directly under feedback/.
+        def build(d):
+            output = d / "feedback" / "02_feedback_output"
+            output.mkdir(parents=True)
+            (output / "task_state.json").write_text("{}")
+
+        status = self._status_for(tmp_path, build)
+        assert status == "Feedback in progress"
+
+    def test_has_feedback_uses_feedback_output_path(self, tmp_path):
+        def build(d):
+            output = d / "feedback" / "02_feedback_output"
+            output.mkdir(parents=True)
+            (output / "task_state.json").write_text("{}")
+
+        ses_dir = tmp_path / "sub-01" / "ses-01"
+        ses_dir.mkdir(parents=True)
+        build(ses_dir)
+        sessions = detect_existing_sessions(tmp_path, "sub-01")
+        assert sessions[0]["has_feedback"] is True
+
+    def test_status_reports_furthest_milestone(self, tmp_path):
+        # A session with collection + masks + feedback reports only the furthest step.
+        def build(d):
+            attempt = d / "collection" / "rest_run-01_attempt-01"
+            attempt.mkdir(parents=True)
+            (attempt / "MR.0001").write_bytes(b"\x00")
+            masks = d / "mask_extraction" / "03_masks"
+            masks.mkdir(parents=True)
+            (masks / "sub-01_ses-01_DMN_thr.nii.gz").write_bytes(b"\x00")
+            output = d / "feedback" / "02_feedback_output"
+            output.mkdir(parents=True)
+            (output / "task_state.json").write_text("{}")
+
+        assert self._status_for(tmp_path, build) == "Feedback in progress"
+
     def test_next_session_id_first(self, tmp_path):
         participant_dir = tmp_path / "sub-01"
         participant_dir.mkdir()

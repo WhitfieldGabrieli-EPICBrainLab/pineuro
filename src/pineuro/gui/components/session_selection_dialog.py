@@ -214,12 +214,7 @@ class SessionSelectionDialog:
 
         for session in self.existing_sessions:
             session_id = session["session_id"]
-            status_parts = []
-            if session["has_masks"]:
-                status_parts.append("Masks approved" if session["masks_approved"] else "Masks extracted")
-            if session["has_feedback"]:
-                status_parts.append("Feedback started")
-            status_text = ", ".join(status_parts) if status_parts else "Not started"
+            status_text = session["status"]
 
             session_tiles.append(
                 ft.ListTile(
