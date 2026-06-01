@@ -5,9 +5,7 @@ from unittest.mock import patch
 
 from pineuro.display import (
     MonitorInfo,
-    get_monitor_by_index,
     get_monitor_by_position,
-    get_monitor_count,
     get_monitors,
 )
 
@@ -84,35 +82,3 @@ class TestGetMonitorByPosition:
         b = MonitorInfo(1, 1920, 0, 1920, 1080, "b", False)
         with patch("pineuro.display.get_monitors", return_value=[a, b]):
             assert get_monitor_by_position("centre") is a
-
-
-class TestGetMonitorByIndex:
-    def test_none_when_no_monitors(self):
-        with patch("pineuro.display.get_monitors", return_value=[]):
-            assert get_monitor_by_index(0) is None
-
-    def test_returns_indexed_monitor(self):
-        a = MonitorInfo(0, 0, 0, 1920, 1080, "a", False)
-        b = MonitorInfo(1, 1920, 0, 1920, 1080, "b", False)
-        with patch("pineuro.display.get_monitors", return_value=[a, b]):
-            assert get_monitor_by_index(1) is b
-
-    def test_out_of_range_falls_back_to_first(self):
-        a = MonitorInfo(0, 0, 0, 1920, 1080, "a", False)
-        with patch("pineuro.display.get_monitors", return_value=[a]):
-            assert get_monitor_by_index(5) is a
-            assert get_monitor_by_index(-1) is a
-
-
-class TestGetMonitorCount:
-    def test_count_matches_get_monitors(self):
-        mons = [
-            MonitorInfo(0, 0, 0, 1920, 1080, "a", False),
-            MonitorInfo(1, 1920, 0, 1920, 1080, "b", False),
-        ]
-        with patch("pineuro.display.get_monitors", return_value=mons):
-            assert get_monitor_count() == 2
-
-    def test_zero_when_empty(self):
-        with patch("pineuro.display.get_monitors", return_value=[]):
-            assert get_monitor_count() == 0

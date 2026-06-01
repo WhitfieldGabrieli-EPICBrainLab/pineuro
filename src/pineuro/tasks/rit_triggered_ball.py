@@ -901,7 +901,7 @@ class RITTriggeredBallTask(BaseTask):
     def _update_monitoring(self, data: dict) -> None:
         """Show fixation, check trigger on each new volume."""
         volume = data["volume"]
-        activation = data["activation"]
+        activation = data["activations"].get(self.mask_name, 0.0)
         current_time = self._task_clock.getTime()
 
         if not data["is_baseline"] and volume > self._last_trigger_checked_volume:

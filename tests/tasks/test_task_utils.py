@@ -8,13 +8,7 @@ from pineuro.tasks.utils import (
     ActivationSmoother,
     is_activation_outlier,
     make_bids_run_prefix,
-    make_bids_subject_prefix,
 )
-
-
-class TestMakeBidsSubjectPrefix:
-    def test_combines_subject_and_session(self):
-        assert make_bids_subject_prefix("sub-01", "ses-02") == "sub-01_ses-02"
 
 
 class TestMakeBidsRunPrefix:

@@ -107,7 +107,6 @@ PANEL_BORDER = ft.Colors.OUTLINE_VARIANT  # 1px borders (was GREY_300)
 # ---------------------------------------------------------------------------
 
 SUCCESS = ft.Colors.GREEN_700  # success text / icon (was GREEN / GREEN_500)
-SUCCESS_FG = ft.Colors.GREEN_800  # text on SUCCESS_BG
 SUCCESS_BG = ft.Colors.GREEN_50  # success panel / banner background
 SUCCESS_BORDER = ft.Colors.GREEN_400
 
@@ -122,7 +121,6 @@ ERROR_BG = ft.Colors.ERROR_CONTAINER
 ERROR_BORDER = ft.Colors.ERROR
 
 INFO = ft.Colors.BLUE_700  # informational (non-accent) text / icon
-INFO_FG = ft.Colors.BLUE_800
 INFO_BG = ft.Colors.BLUE_50
 INFO_BORDER = ft.Colors.BLUE_200
 
@@ -270,15 +268,6 @@ def browse_row(field_control: ft.Control, *trailing: ft.Control) -> ft.Row:
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
         spacing=GAP_SM,
     )
-
-
-def wrap(control: ft.Control) -> ft.Row:
-    """Wrap a control in a ``Row`` so a parent ``Column`` won't stretch it.
-
-    Replaces the per-file ``_f`` helpers. Prefer :func:`field_row` for form
-    fields; this remains for non-field controls that should keep intrinsic size.
-    """
-    return ft.Row([control])
 
 
 def cap_form_width(page: ft.Page, container: ft.Container, *, reserved: float = 0.0):

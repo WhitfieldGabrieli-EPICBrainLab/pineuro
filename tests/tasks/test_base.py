@@ -28,12 +28,11 @@ class TestLatestData:
     def test_initial_state(self, base_task):
         data = base_task.get_latest_data()
         assert data["activations"] == {}
-        assert data["activation"] == 0.0
         assert data["volume"] == 0
         assert data["time"] == 0.0
         assert data["is_baseline"] is True
 
-    def test_update_data_stores_primary_mask(self, base_task):
+    def test_update_data_stores_all_activations(self, base_task):
         # Primary mask is the first one from coordinator.mask_names (ContA in fixture)
         base_task._update_data(
             activations={"ContA": 1.5, "DefaultA": -0.5},
@@ -43,8 +42,8 @@ class TestLatestData:
             is_outlier=False,
         )
         data = base_task.get_latest_data()
-        assert data["activation"] == 1.5  # primary = ContA
         assert data["activations"] == {"ContA": 1.5, "DefaultA": -0.5}
+        assert data["activations"][base_task.mask_name] == 1.5  # primary = ContA
         assert data["volume"] == 10
         assert data["time"] == 20.0
         assert data["is_baseline"] is False
@@ -52,14 +51,14 @@ class TestLatestData:
     def test_get_latest_data_returns_copy(self, base_task):
         base_task._update_data({"ContA": 0.5}, volume=1, elapsed=1.0, is_baseline=True, is_outlier=False)
         d1 = base_task.get_latest_data()
-        d1["activation"] = 999.0
+        d1["volume"] = 999
         d2 = base_task.get_latest_data()
-        assert d2["activation"] == 0.5  # mutation didn't leak
+        assert d2["volume"] == 1  # mutation didn't leak
 
     def test_primary_falls_back_to_zero_when_mask_missing(self, base_task):
-        # If the primary mask name isn't in the activations dict, fall back to 0.0.
+        # If the primary mask name isn't in the activations dict, callers fall back to 0.0.
         base_task._update_data({"OtherMask": 9.0}, volume=1, elapsed=1.0, is_baseline=False, is_outlier=False)
-        assert base_task.get_latest_data()["activation"] == 0.0
+        assert base_task.get_latest_data()["activations"].get(base_task.mask_name, 0.0) == 0.0
 
 
 # =============================================================================

@@ -86,8 +86,8 @@ def ping_scanner(ip_address: str, timeout: float = 3.0) -> tuple[bool, float | N
 
 def _parse_ping_latency(output: str) -> float | None:
     """Parse ping latency from platform-specific output."""
-    # Windows: "time=1ms" or "time<1ms"
-    # macOS/Linux: "time=0.5 ms" or "time=1.23 ms"
+    # Windows emits e.g. time=1ms or time<1ms; macOS/Linux emit e.g.
+    # time=0.5 ms or time=1.23 ms.
     match = re.search(r"time[=<](\d+\.?\d*)\s*ms", output, re.IGNORECASE)
     if match:
         return float(match.group(1))

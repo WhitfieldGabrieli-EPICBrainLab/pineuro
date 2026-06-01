@@ -692,9 +692,6 @@ def _check_command_installation(cmd: Union[str, Path] = "fsl") -> None:
 #  DICOM Utilities
 # ==============================================================
 
-# DICOM file extensions to search for
-DICOM_EXTENSIONS = ["*.dcm", "*.DCM", "*.ima", "*.IMA"]
-
 # Basenames that are never volume files (OS metadata). Matched case-insensitively.
 _JUNK_BASENAMES = frozenset({"thumbs.db", "desktop.ini"})
 
@@ -789,37 +786,6 @@ def collection_is_complete(folder: Path, expected_volumes: int) -> bool:
     return count_volume_files(folder) >= expected_volumes
 
 
-def get_dicom_files(directory: Path, validate: bool = True) -> list[Path]:
-    """
-    Get all DICOM files in a directory, sorted by filename.
-
-    By default, filters out non-DICOM files (OS metadata like ``.DS_Store``,
-    text files, JSON sidecars, scanner junk) by reading each file's header, so
-    stray files never enter the pipeline. Validation is header-only and supports
-    extensionless DICOMs (common with some scanner exports).
-
-    Parameters
-    ----------
-    directory : Path
-        Directory to search for DICOM files
-    validate : bool, default=True
-        If True, return only files that validate as DICOM and log a warning
-        naming any non-DICOM files that were ignored. If False, return every
-        file unfiltered (escape hatch for callers that must list raw contents).
-
-    Returns
-    -------
-    List[Path]
-        Sorted list of DICOM file paths
-
-    """
-    if not validate:
-        dicom_files = [f for f in directory.iterdir() if f.is_file()]
-        dicom_files.sort()
-        return dicom_files
-    return _filter_volume_files(directory, is_valid_dicom, kind="DICOM")
-
-
 def is_valid_dicom(file_path: Path, validate_pixels: bool = False) -> bool:
     """
     Check if a file is a valid DICOM by attempting to read its header.
@@ -889,37 +855,6 @@ def get_tr_from_dicom(dicom_path: Path, default: float = 2.0) -> float:
 # ==============================================================
 #  NIfTI Utilities
 # ==============================================================
-
-# NIfTI file extensions to search for
-NIFTI_EXTENSIONS = ["*.nii", "*.nii.gz", "*.NII", "*.NII.GZ"]
-
-# Combined extensions for volume files (DICOM + NIfTI)
-VOLUME_EXTENSIONS = DICOM_EXTENSIONS + NIFTI_EXTENSIONS
-
-
-def get_nifti_files(directory: Path) -> list[Path]:
-    """
-    Get all NIfTI files in a directory, sorted by filename.
-
-    Parameters
-    ----------
-    directory : Path
-        Directory to search for NIfTI files
-
-    Returns
-    -------
-    List[Path]
-        Sorted list of NIfTI file paths
-
-    """
-    nifti_files: list[Path] = []
-    for ext in NIFTI_EXTENSIONS:
-        nifti_files.extend(directory.glob(ext))
-
-    # Filter to only files and sort by name
-    valid_niftis = [f for f in nifti_files if f.is_file()]
-    valid_niftis.sort()
-    return valid_niftis
 
 
 def get_volume_files(directory: Path, validate: bool = True) -> list[Path]:
@@ -1761,7 +1696,7 @@ def _get_mni_epi_template() -> Path:
 def apply_xfm_sform_to_mni(
     input_file: Union[str, Path],
     output_file: Union[str, Path],
-    interp: str = "nearestneighbour",
+    interp: str = "nearest",
     overwrite: bool = False,
 ) -> None:
     """
@@ -1777,10 +1712,8 @@ def apply_xfm_sform_to_mni(
         Path to input NIfTI file (should have sform/qform set to MNI space)
     output_file : str or Path
         Path for output file in MNI space
-    interp : str, default='nearestneighbour'
-        Interpolation method. Accepts FSL-style names for backwards
-        compatibility: 'nearestneighbour'/'nn' -> 'nearest',
-        'trilinear' -> 'linear', 'sinc'/'spline' -> 'linear'.
+    interp : str, default='nearest'
+        nilearn interpolation method ('nearest', 'linear', or 'continuous').
     overwrite : bool, default=False
         If True, always run and overwrite existing outputs.
         If False, skip if output file already exists.
@@ -1793,27 +1726,13 @@ def apply_xfm_sform_to_mni(
         logger.info(f"Skipping sform-to-MNI resampling (output exists): {output_file.name}")
         return
 
-    # Map FSL interpolation names to nilearn equivalents
-    interp_map = {
-        "nearestneighbour": "nearest",
-        "nn": "nearest",
-        "trilinear": "linear",
-        "sinc": "linear",
-        "spline": "linear",
-    }
-    nilearn_interp = interp_map.get(interp)
-    if nilearn_interp is None:
-        raise ValueError(f"Invalid interpolation: {interp}. Valid options are: {', '.join(interp_map.keys())}")
-
     epi_tpl_path = _get_mni_epi_template()
 
     logger.info(f"Resampling to MNI space: {Path(input_file).name}")
     source_img = cast(Nifti1Image, nib.load(str(input_file)))
     target_img = cast(Nifti1Image, nib.load(str(epi_tpl_path)))
 
-    resampled = resample_to_img(
-        source_img, target_img, interpolation=nilearn_interp, force_resample=True, copy_header=True
-    )
+    resampled = resample_to_img(source_img, target_img, interpolation=interp, force_resample=True, copy_header=True)
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     nib.save(resampled, str(output_file))

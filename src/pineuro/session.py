@@ -70,14 +70,13 @@ Task state resets each session (sessions are independent).
 from __future__ import annotations
 
 import csv
-import json
 import logging
 import re
 import shutil
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -118,7 +117,6 @@ class SimulatorSourceMapping:
     --------
     >>> mapping = SimulatorSourceMapping.from_file(Path("sources.tsv"))
     >>> source = mapping.get_source("sub-001", "feedback_run-01")
-    >>> localizer_sources = mapping.get_localizer_sources("sub-001", n_runs=2)
     """
 
     _data: dict[str, dict[str, Path]]
@@ -195,65 +193,6 @@ class SimulatorSourceMapping:
         """
         subject_data = self._data.get(subject, {})
         return subject_data.get(run_type)
-
-    def get_localizer_sources(self, subject: str, n_runs: int) -> list[Path | None]:
-        """Get localizer/resting-state DICOM sources for a subject.
-
-        Parameters
-        ----------
-        subject : str
-            Subject/participant identifier
-        n_runs : int
-            Number of localizer runs to retrieve
-
-        Returns
-        -------
-        list[Path or None]
-            List of DICOM source paths for rest1, rest2, ..., restN
-        """
-        return [self.get_source(subject, f"rest{i + 1}") for i in range(n_runs)]
-
-    def get_feedback_source(self, subject: str, run: int) -> Path | None:
-        """Get feedback run DICOM source for a subject.
-
-        Parameters
-        ----------
-        subject : str
-            Subject/participant identifier
-        run : int
-            Run number (1-indexed)
-
-        Returns
-        -------
-        Path or None
-            DICOM source path for feedback_run-{run:02d}
-        """
-        return self.get_source(subject, f"feedback_run-{run:02d}")
-
-    def get_transfer_source(self, subject: str, run: int) -> Path | None:
-        """Get transfer run DICOM source for a subject.
-
-        Parameters
-        ----------
-        subject : str
-            Subject/participant identifier
-        run : int
-            Run number (1-indexed)
-
-        Returns
-        -------
-        Path or None
-            DICOM source path for transfer_run-{run:02d}
-        """
-        return self.get_source(subject, f"transfer_run-{run:02d}")
-
-    def has_subject(self, subject: str) -> bool:
-        """Check if a subject exists in the mapping."""
-        return subject in self._data
-
-    def subjects(self) -> list[str]:
-        """Return list of all subjects in the mapping."""
-        return list(self._data.keys())
 
 
 # =============================================================================
@@ -457,11 +396,6 @@ class PathConfig:
 
         if self.mask_source_dir is not None:
             self.mask_source_dir = Path(self.mask_source_dir)
-
-    @property
-    def participant_session_dir(self) -> Path:
-        """Return the participant + session directory."""
-        return cast(Path, self._participant_session_dir)
 
 
 # =============================================================================
@@ -792,7 +726,7 @@ class LocalizerConfig:
     # Mask-extraction parameters (grouped)
     extraction: LocalizerExtractionConfig = field(default_factory=LocalizerExtractionConfig)
 
-    # Task-specific (GLM)
+    # Task-specific GLM parameters
     contrasts: dict[str, str] = field(default_factory=dict)
     include_reverse_contrasts: bool = False
     events_file: Path | None = None
@@ -909,28 +843,6 @@ def _path_to_str(obj: Any) -> Any:
 
 
 @dataclass
-class SelectedAttempts:
-    """Store user-selected run/attempt combinations for reproducibility.
-
-    This allows manual selection of which attempt to use for each run when
-    multiple attempts exist (e.g., after interruptions/retries).
-    """
-
-    localizer: dict[int, int] | None = None  # run_num -> attempt_num for localizer runs
-    reference: dict[int, int] | None = None  # run_num -> attempt_num for reference scans
-    feedback: dict[str, dict[str, Any]] | None = None  # step_id -> {run, attempt} for feedback runs
-
-    def __post_init__(self) -> None:
-        """Initialize empty dicts if None."""
-        if self.localizer is None:
-            self.localizer = {}
-        if self.reference is None:
-            self.reference = {}
-        if self.feedback is None:
-            self.feedback = {}
-
-
-@dataclass
 class SessionConfig:
     """Top-level configuration combining all session settings.
 
@@ -989,25 +901,6 @@ class SessionConfig:
     # FeedbackConfig.wm_mask_path / csf_mask_path; moved here so they don't appear in YAML.
     _wm_mask_path: Path | None = field(default=None, repr=False)
     _csf_mask_path: Path | None = field(default=None, repr=False)
-
-    @classmethod
-    def from_yaml(cls, path: Path) -> SessionConfig:
-        """Load configuration from YAML file."""
-        try:
-            import yaml
-        except ImportError as e:
-            raise ImportError("PyYAML is required to load YAML configs: pip install pyyaml") from e
-
-        with open(path) as f:
-            data = yaml.safe_load(f)
-        return cls._from_dict(data)
-
-    @classmethod
-    def from_json(cls, path: Path) -> SessionConfig:
-        """Load configuration from JSON file."""
-        with open(path) as f:
-            data = json.load(f)
-        return cls._from_dict(data)
 
     @classmethod
     def _from_dict(cls, data: dict[str, Any]) -> SessionConfig:
@@ -1094,23 +987,6 @@ class SessionConfig:
             if block:
                 frc_data[key] = klass(**block)
         return FeedbackRunConfig(**frc_data)
-
-    def to_yaml(self, path: Path) -> None:
-        """Save configuration to YAML file."""
-        try:
-            import yaml
-        except ImportError as e:
-            raise ImportError("PyYAML is required to save YAML configs: pip install pyyaml") from e
-
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            yaml.dump(self._to_dict(), f, default_flow_style=False, sort_keys=False)
-
-    def to_json(self, path: Path) -> None:
-        """Save configuration to JSON file."""
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(self._to_dict(), f, indent=2)
 
     def _to_dict(self) -> dict[str, Any]:
         """Convert to dictionary with Path objects as strings."""
@@ -1278,25 +1154,6 @@ def ref_file_path(config: SessionConfig, task: str = "rest", source_session: str
         assert config.paths.preprocessing_dir is not None
         preprocessing_dir = config.paths.preprocessing_dir
     return preprocessing_dir / f"{config.paths.participant_id}_{session_id}_task-{task}_boldref.nii.gz"
-
-
-def get_mask_run_number(mask_files: list[Path]) -> int | None:
-    """Extract run number from mask file paths.
-
-    Parameters
-    ----------
-    mask_files : list[Path]
-        List of mask file paths
-
-    Returns
-    -------
-    int or None
-        Run number extracted from first mask file, or None if not found
-    """
-    if not mask_files:
-        return None
-    match = re.search(r"run-(\d+)", Path(mask_files[0]).name)
-    return int(match.group(1)) if match else None
 
 
 def next_collection_run_number(collection_dir: Path, task_name: str) -> int:

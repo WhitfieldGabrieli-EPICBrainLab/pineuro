@@ -779,36 +779,6 @@ class BallTask(BaseTask):
         for circle in self.circles:
             circle.fillColor = None
 
-    def save_state(self, task_state: Optional["TaskState"] = None) -> None:
-        """Persist current adaptive parameters to the TaskState store for multi-run continuity.
-
-        Parameters
-        ----------
-        task_state : TaskState, optional
-            TaskState to save to. If None, uses the task_state passed
-            to __init__. If neither is available, does nothing.
-        """
-        state = task_state or self._task_state
-        if state is None:
-            return
-
-        run_type = "feedback" if self.feedback_mode else "transfer"
-        state.record_run(
-            run_type=run_type,
-            volumes_processed=self.current_volume,
-            task_state_snapshot={
-                "hit_counters": self.hit_counters,
-                "scale_factor": self.scale_factor,
-                "circle_radii": self.circle_radii,
-                "min_hits_threshold": self._min_hits_threshold,
-                "max_hits_threshold": self._max_hits_threshold,
-                "scale_adjust_factor": self._scale_adjust_factor,
-            },
-            # Slot-based tracking
-            slot_run_number=self._slot_run_number,
-            attempt=self._attempt,
-        )
-
     def get_run_results(self) -> dict:
         """Return BallTask-specific results from the completed run."""
         results = super().get_run_results()

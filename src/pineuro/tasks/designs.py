@@ -283,11 +283,6 @@ class EventRelatedDesign(TaskDesign):
     def n_regressors(self) -> int:
         return len(self._condition_names)
 
-    @property
-    def condition_names(self) -> list[str]:
-        """Names of conditions in order."""
-        return self._condition_names.copy()
-
     def __repr__(self) -> str:
         conditions = ", ".join(self._condition_names)
         return f"EventRelatedDesign(conditions=[{conditions}])"

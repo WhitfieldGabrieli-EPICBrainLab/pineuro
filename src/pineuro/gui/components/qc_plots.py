@@ -17,30 +17,17 @@ from typing import Any
 
 import flet as ft
 
+# flet_charts is a hard dependency (see pyproject.toml [project.dependencies]).
+import flet_charts as fch  # type: ignore[import-untyped]
+
 from pineuro.gui import styles as st
 
-from ..utils import build_placeholder
-
-# Import chart types from flet_charts package
-try:
-    import flet_charts as fch  # type: ignore[import-untyped]
-
-    LineChart = fch.LineChart
-    LineChartData = fch.LineChartData
-    LineChartDataPoint = fch.LineChartDataPoint
-    ChartGridLines = fch.ChartGridLines
-    ChartAxis = fch.ChartAxis
-    ChartCirclePoint = fch.ChartCirclePoint
-    CHARTS_AVAILABLE = True
-except ImportError:
-    # Fallback: charts not available
-    LineChart = None
-    LineChartData = None
-    LineChartDataPoint = None
-    ChartGridLines = None
-    ChartAxis = None
-    ChartCirclePoint = None
-    CHARTS_AVAILABLE = False
+LineChart = fch.LineChart
+LineChartData = fch.LineChartData
+LineChartDataPoint = fch.LineChartDataPoint
+ChartGridLines = fch.ChartGridLines
+ChartAxis = fch.ChartAxis
+ChartCirclePoint = fch.ChartCirclePoint
 
 logger = logging.getLogger(__name__)
 
@@ -122,9 +109,6 @@ class BaseQCPlot:
 
     def build(self) -> ft.Container:
         """Build the chart + legend + summary container."""
-        if LineChart is None:
-            return build_placeholder("Chart not available", height=self.height)
-
         self._data_series = self._create_data_series()
         min_x, max_x, min_y, max_y = self._calculate_axis_range()
 
@@ -220,7 +204,7 @@ class BaseQCPlot:
 
     def _append_latest_point(self) -> None:
         """Append only the newest data point to the existing series (O(1))."""
-        if not self._data_series or LineChartDataPoint is None:
+        if not self._data_series:
             return
 
         i = len(self.data.volumes) - 1
@@ -276,9 +260,6 @@ class BaseQCPlot:
             pass
 
     def _create_data_series(self) -> list:
-        if LineChartData is None:
-            return []
-
         min_x, max_x, _, _ = self._calculate_axis_range()
         plot_values = self._get_plot_values()
         series = []

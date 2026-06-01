@@ -8,7 +8,7 @@ import nibabel as nib
 import numpy as np
 import pytest
 
-from pineuro.preprocessing import collect_volumes, concat, spatial_smoothing, temporal_filtering
+from pineuro.preprocessing import collect_volumes, concat
 
 # =============================================================================
 # concat
@@ -58,80 +58,6 @@ class TestConcat:
 
         concat([f1], output, overwrite=False)
         assert output.stat().st_size == 0  # not overwritten
-
-
-# =============================================================================
-# spatial_smoothing
-# =============================================================================
-
-
-class TestSpatialSmoothing:
-    def test_smoothing_changes_values_and_preserves_shape(self, synthetic_nifti_4d, tmp_path):
-        input_path = synthetic_nifti_4d(shape=(8, 8, 8), n_volumes=5)
-        output_path = tmp_path / "smoothed.nii.gz"
-
-        spatial_smoothing(input_path, output_path, fwhm=5.0)
-
-        assert nib.load(output_path).shape == (8, 8, 8, 5)
-        original = nib.load(input_path).get_fdata()
-        smoothed = nib.load(output_path).get_fdata()
-        # Smoothing should change the values
-        assert not np.allclose(original, smoothed)
-
-    def test_overwrite_false_skips(self, synthetic_nifti_4d, tmp_path):
-        input_path = synthetic_nifti_4d()
-        output_path = tmp_path / "smoothed.nii.gz"
-        output_path.touch()
-
-        spatial_smoothing(input_path, output_path, overwrite=False)
-        assert output_path.stat().st_size == 0
-
-
-# =============================================================================
-# temporal_filtering
-# =============================================================================
-
-
-class TestTemporalFiltering:
-    def test_highpass_removes_low_freq(self, tmp_path):
-        """High-pass filter should attenuate slow drifts."""
-        n_volumes = 100
-        tr = 2.0
-        shape = (3, 3, 3)
-
-        # Create synthetic data: slow drift + fast signal
-        t = np.arange(n_volumes) * tr
-        slow_drift = np.sin(2 * np.pi * t / 200)  # very slow: period=200s
-        fast_signal = np.sin(2 * np.pi * t / 10)  # fast: period=10s
-
-        data = np.zeros((*shape, n_volumes), dtype=np.float32)
-        data[1, 1, 1, :] = slow_drift + fast_signal
-
-        input_path = tmp_path / "input.nii.gz"
-        output_path = tmp_path / "filtered.nii.gz"
-
-        img = nib.Nifti1Image(data, np.eye(4))
-        img.header["pixdim"][4] = tr
-        nib.save(img, input_path)
-
-        temporal_filtering(input_path, output_path, highpass=0.01)  # cutoff=0.01 Hz
-
-        result = nib.load(output_path).get_fdata()
-        filtered_voxel = result[1, 1, 1, :]
-
-        # Filter should have removed most of the drift
-        assert np.var(filtered_voxel) < np.var(slow_drift + fast_signal)
-
-    def test_no_filter_passthrough(self, synthetic_nifti_4d, tmp_path):
-        """No highpass/lowpass should leave the data numerically unchanged."""
-        input_path = synthetic_nifti_4d(shape=(3, 3, 3), n_volumes=20)
-        output_path = tmp_path / "filtered.nii.gz"
-
-        temporal_filtering(input_path, output_path, highpass=None, lowpass=None)
-
-        original = nib.load(input_path).get_fdata()
-        filtered = nib.load(output_path).get_fdata()
-        np.testing.assert_allclose(filtered, original, rtol=0, atol=1e-6)
 
 
 # =============================================================================

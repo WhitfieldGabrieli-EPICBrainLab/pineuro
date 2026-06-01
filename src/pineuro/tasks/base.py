@@ -114,7 +114,7 @@ class BaseTask(TaskBase):
     ...         self.win = visual.Window([800, 600])
     ...
     ...     def update(self, data: dict):
-    ...         # Draw based on data['activation']
+    ...         # Draw based on data['activations'][self.mask_name]
     ...         pass
     ...
     ...     # cleanup() is optional - base handles questions + window close
@@ -160,7 +160,6 @@ class BaseTask(TaskBase):
         self._lock = threading.Lock()
         self._latest_data = {
             "activations": {},  # All mask activations
-            "activation": 0.0,  # Primary mask (backwards compat)
             "volume": 0,
             "time": 0.0,
             "is_baseline": True,
@@ -236,7 +235,6 @@ class BaseTask(TaskBase):
         with self._lock:
             self._latest_data = {
                 "activations": activations,  # All mask activations
-                "activation": activations.get(self.mask_name, 0.0),  # Primary mask (backwards compat)
                 "volume": volume,
                 "time": elapsed,
                 "is_baseline": is_baseline,
@@ -258,7 +256,7 @@ class BaseTask(TaskBase):
         -------
         dict
             Dictionary containing:
-            - 'activation': float - current activation value
+            - 'activations': dict[str, float] - current activation per mask name
             - 'volume': int - current volume number
             - 'time': float - elapsed time in seconds
             - 'is_baseline': bool - whether in baseline period
@@ -589,7 +587,7 @@ class BaseTask(TaskBase):
         ----------
         data : dict
             Dictionary containing:
-            - 'activation': float - current activation value
+            - 'activations': dict[str, float] - current activation per mask name
             - 'volume': int - current volume number
             - 'time': float - elapsed time in seconds
             - 'is_baseline': bool - whether in baseline period

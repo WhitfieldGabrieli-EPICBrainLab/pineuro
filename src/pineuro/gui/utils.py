@@ -8,7 +8,6 @@ Validation Functions
 --------------------
 validate_positive_number : Validate positive float values
 validate_positive_int : Validate positive integer values
-validate_path : Validate file/directory paths
 validate_yeo_networks : Validate Yeo network selection
 
 Constants
@@ -26,11 +25,6 @@ truncate_text : Truncate long text with ellipsis
 Exceptions
 ----------
 ValidationError : Raised when form validation fails
-
-Threading
----------
-BackgroundRunner : Run blocking operations in a thread
-    Prevents GUI freezing during long-running operations.
 
 Notes
 -----
@@ -50,7 +44,6 @@ Valid TR: 1.2
 
 import copy
 import logging
-import threading
 from pathlib import Path
 from typing import Any, NamedTuple, cast
 
@@ -137,34 +130,6 @@ def validate_positive_int(value: Any, name: str) -> int:
         raise ValidationError(f"{name} must be positive, got: {num}")
 
     return num
-
-
-def validate_path(value: Any, name: str, must_exist: bool = False) -> Path:
-    """Validate that a value is a valid path.
-
-    Args:
-        value: Value to validate
-        name: Parameter name (for error messages)
-        must_exist: If True, path must exist
-
-    Returns:
-        Validated Path object
-
-    Raises:
-        ValidationError: If validation fails
-    """
-    if not value:
-        raise ValidationError(f"{name} cannot be empty")
-
-    try:
-        path = Path(value)
-    except (TypeError, ValueError) as e:
-        raise ValidationError(f"{name} is not a valid path: {e}") from e
-
-    if must_exist and not path.exists():
-        raise ValidationError(f"{name} does not exist: {path}")
-
-    return path
 
 
 def validate_yeo_networks(n_networks: int, selected_networks: list) -> tuple[int, list]:
@@ -694,33 +659,6 @@ def tissue_required_in_session(sessions: list[dict[str, Any]], session_index: in
         ):
             return True
     return False
-
-
-class ThreadSafeCallback:
-    """Wrapper for thread-safe GUI callbacks in Flet.
-
-    Flet requires page.update() calls to happen from the main thread.
-    This class helps manage callbacks from background threads.
-    """
-
-    def __init__(self, page):
-        """Initialize with a Flet page object.
-
-        Args:
-            page: Flet Page object
-        """
-        self.page = page
-        self._lock = threading.Lock()
-
-    def update(self, callback):
-        """Execute a callback and update the page thread-safely.
-
-        Args:
-            callback: Function to execute (should modify page controls)
-        """
-        with self._lock:
-            callback()
-            self.page.update()
 
 
 def format_timestamp(iso_timestamp: str) -> str:

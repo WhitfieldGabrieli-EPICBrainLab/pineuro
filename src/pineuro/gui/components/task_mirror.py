@@ -104,10 +104,3 @@ class TaskMirror:
                 # Image update can fail during shutdown; safe to ignore.
                 with contextlib.suppress(Exception):
                     self._image.update()
-
-    def reset(self) -> None:
-        """Reset to empty state."""
-        if self._image is not None:
-            self._image.src = ""
-            with contextlib.suppress(Exception):
-                self._image.update()

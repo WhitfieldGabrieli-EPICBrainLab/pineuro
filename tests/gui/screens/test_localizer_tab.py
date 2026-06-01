@@ -45,7 +45,7 @@ class TestRefreshNVolumesInfoForVariableDurationTask:
         b2._refresh_n_volumes_info()
 
         def _extract(msg):
-            # Message: "Auto-computed: 335 volumes (worst-case run ..."
+            # The message reads like: Auto-computed 335 volumes worst-case run ...
             return int(msg.split(":")[1].strip().split(" ")[0])
 
         v_tr_2 = _extract(b1.n_volumes_info_text.value)

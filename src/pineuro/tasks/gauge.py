@@ -46,10 +46,6 @@ if TYPE_CHECKING:
 # Configure module-level logger
 logger = logging.getLogger(__name__)
 
-# Default block durations from the Rockland paradigm (seconds)
-# Derived from create_stim_cfg.py: [[15,45,30],[15,45,30],[30,45,15],[30,45,15]] trials × 2s ISI
-ROCKLAND_BLOCK_DURATIONS = [30, 90, 60, 30, 90, 60, 60, 90, 30, 60, 90, 30]
-
 # Gauge geometry constants
 N_TICK_MARKS = 19
 GAUGE_RADIUS = 0.30  # In height units
@@ -248,7 +244,7 @@ class GaugeTask(BaseTask):
             ori=0,  # Will be updated per frame
         )
 
-        # Labels: "Focused" and "Wandering"
+        # Labels read Focused and Wandering
         label_y = GAUGE_CENTER_Y - 0.02
         self._left_label = visual.TextStim(
             self.win,

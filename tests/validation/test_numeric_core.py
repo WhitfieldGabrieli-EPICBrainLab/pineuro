@@ -441,13 +441,13 @@ def test_glm_freeze_steady_state_is_stable():
     glm.freeze_steady_state()
     assert glm.is_frozen() is True
     frozen_rss = glm._steady_state_rss.copy()
-    frozen_mse = glm.get_residual_mse()
+    frozen_mse = glm._steady_state_residual_mse.copy()
 
     # Feed high-variance data; the frozen steady-state values must not move.
     for _ in range(25):
         glm.update(rng.standard_normal(2), rng.normal(0.0, 100.0, 3))
     np.testing.assert_array_equal(glm._steady_state_rss, frozen_rss)
-    np.testing.assert_array_equal(glm.get_residual_mse(), frozen_mse)
+    np.testing.assert_array_equal(glm._steady_state_residual_mse, frozen_mse)
 
 
 # =============================================================================

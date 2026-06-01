@@ -1451,7 +1451,7 @@ def _register_atlas_to_subject(
 
         atlas2sub = mnireg_dir / f"Yeo_to_{ref_file.with_suffix('').stem}.nii.gz"
         if not yeo_mni.exists() or overwrite:
-            apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp="nearestneighbour", overwrite=overwrite)
+            apply_xfm_sform_to_mni(input_file=yeo, output_file=yeo_mni, interp="nearest", overwrite=overwrite)
 
         if not atlas2sub.exists() or overwrite:
             apply_xfm(

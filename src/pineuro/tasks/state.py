@@ -201,13 +201,6 @@ class TaskState:
         return count + 1
 
     @property
-    def last_run_type(self) -> str | None:
-        """Type of the last completed run, or None if no runs completed."""
-        if self.completed_runs:
-            return self.completed_runs[-1].run_type
-        return None
-
-    @property
     def feedback_run_count(self) -> int:
         """Number of feedback runs completed so far."""
         return sum(1 for r in self.completed_runs if r.run_type == "feedback")
@@ -241,21 +234,6 @@ class TaskState:
                 logger.info(f"First attempt at slot {slot_run_number}: recorded base state")
                 self.save()
             return self.task_state.copy()
-
-    def has_run_for_slot(self, slot_run_number: int) -> bool:
-        """Check if a run has been recorded for a given slot.
-
-        Parameters
-        ----------
-        slot_run_number : int
-            The run slot number (1 or 2)
-
-        Returns
-        -------
-        bool
-            True if a run has been recorded for this slot
-        """
-        return any(r.slot_run_number == slot_run_number for r in self.completed_runs)
 
     def get_run_for_slot(self, slot_run_number: int) -> RunInfo | None:
         """Get the run info for a given slot, if it exists.

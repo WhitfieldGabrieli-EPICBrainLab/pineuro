@@ -21,7 +21,6 @@ from pineuro.gui.screens.participant_workflow import (
     ParticipantWorkflowScreen,
     StepStatus,
     _build_feedback_step_ids,
-    _frc,
     _loc,
     _session_number_from_id,
 )
@@ -79,7 +78,7 @@ class TestSessionNumberFromId:
         assert _session_number_from_id("ses-baseline") == 1
 
 
-class TestLocAndFrc:
+class TestLoc:
     def test_loc_returns_indexed_localizer(self):
         config = {"localizers": [{"type": "rest"}, {"type": "rit"}]}
         assert _loc(config, 1) == {"type": "rit"}
@@ -93,13 +92,6 @@ class TestLocAndFrc:
     def test_loc_none_localizers_returns_empty(self):
         # config.get("localizers") can be an explicit None.
         assert _loc({"localizers": None}, 0) == {}
-
-    def test_frc_returns_indexed_feedback_run(self):
-        config = {"feedback_runs": [{"task": "ball"}, {"task": "gauge"}]}
-        assert _frc(config, 1) == {"task": "gauge"}
-
-    def test_frc_out_of_range_returns_empty(self):
-        assert _frc({"feedback_runs": [{"task": "ball"}]}, 3) == {}
 
 
 class TestBuildFeedbackStepIds:
@@ -121,53 +113,6 @@ class TestBuildFeedbackStepIds:
 
     def test_no_feedback_runs_yields_no_steps(self):
         assert _build_feedback_step_ids({}) == []
-
-
-# ---------------------------------------------------------------------------
-# _check_collection_status — single-folder DICOM volume counting
-# ---------------------------------------------------------------------------
-class TestCheckCollectionStatus:
-    def _status(self, collection_dir: Path, expected: int) -> StepStatus:
-        # Method ignores self; call unbound against a dummy instance.
-        screen = _make_screen()
-        return screen._check_collection_status(collection_dir, expected)
-
-    def test_missing_directory_is_pending(self, tmp_path):
-        assert self._status(tmp_path / "does_not_exist", 10) == StepStatus.PENDING
-
-    def test_empty_directory_is_pending(self, tmp_path):
-        coll = tmp_path / "collection"
-        coll.mkdir()
-        assert self._status(coll, 10) == StepStatus.PENDING
-
-    def test_partial_collection_is_interrupted(self, tmp_path):
-        coll = tmp_path / "collection"
-        coll.mkdir()
-        for i in range(4):
-            (coll / f"MR.{i}").write_text("x")
-        assert self._status(coll, 10) == StepStatus.INTERRUPTED
-
-    def test_exact_volume_count_is_complete(self, tmp_path):
-        coll = tmp_path / "collection"
-        coll.mkdir()
-        for i in range(10):
-            (coll / f"MR.{i}").write_text("x")
-        assert self._status(coll, 10) == StepStatus.COMPLETE
-
-    def test_overcollection_is_complete(self, tmp_path):
-        coll = tmp_path / "collection"
-        coll.mkdir()
-        for i in range(15):
-            (coll / f"MR.{i}").write_text("x")
-        assert self._status(coll, 10) == StepStatus.COMPLETE
-
-    def test_subdirectories_are_not_counted_as_volumes(self, tmp_path):
-        # Only files count; a nested folder must not inflate the volume count.
-        coll = tmp_path / "collection"
-        coll.mkdir()
-        (coll / "subdir").mkdir()
-        (coll / "MR.0").write_text("x")
-        assert self._status(coll, 10) == StepStatus.INTERRUPTED
 
 
 # ---------------------------------------------------------------------------
@@ -216,34 +161,6 @@ class TestCheckAttemptCollectionStatus:
         coll = tmp_path / "collection"
         _make_collection_attempt(coll, "task-rest", run=1, attempt=1, n_files=200)
         assert self._status(coll, "task-reference", 1, 200) == StepStatus.PENDING
-
-
-# ---------------------------------------------------------------------------
-# _check_feedback_step_status — feedbacklog row counting
-# ---------------------------------------------------------------------------
-class TestCheckFeedbackStepStatus:
-    def _status(self, log_path: Path, expected: int) -> StepStatus:
-        screen = _make_screen()
-        return screen._check_feedback_step_status(log_path, expected)
-
-    def test_missing_log_is_pending(self, tmp_path):
-        assert self._status(tmp_path / "missing_feedbacklog.tsv", 150) == StepStatus.PENDING
-
-    def test_header_only_log_is_pending(self, tmp_path):
-        log = _write_feedbacklog(tmp_path / "feedbacklog.tsv", n_rows=0)
-        assert self._status(log, 150) == StepStatus.PENDING
-
-    def test_partial_log_is_interrupted(self, tmp_path):
-        log = _write_feedbacklog(tmp_path / "feedbacklog.tsv", n_rows=80)
-        assert self._status(log, 150) == StepStatus.INTERRUPTED
-
-    def test_full_log_is_complete(self, tmp_path):
-        log = _write_feedbacklog(tmp_path / "feedbacklog.tsv", n_rows=150)
-        assert self._status(log, 150) == StepStatus.COMPLETE
-
-    def test_extra_rows_still_complete(self, tmp_path):
-        log = _write_feedbacklog(tmp_path / "feedbacklog.tsv", n_rows=160)
-        assert self._status(log, 150) == StepStatus.COMPLETE
 
 
 # ---------------------------------------------------------------------------

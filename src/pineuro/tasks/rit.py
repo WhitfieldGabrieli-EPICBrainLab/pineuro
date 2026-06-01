@@ -348,7 +348,7 @@ class RITTask(BaseLocalizerTask):
         self.n_trials_per_run = n_trials_per_run
         self.total_runs = total_runs
 
-        # Populated in setup()
+        # Populated during setup
         self._memories: list[dict[str, Any]] = []
         self._rumination_prompts: list[str] = []
         self._distraction_prompts: list[str] = []

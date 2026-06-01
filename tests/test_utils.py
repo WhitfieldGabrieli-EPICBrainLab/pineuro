@@ -21,7 +21,6 @@ from pineuro.utils import (
     disable_timing,
     enable_timing,
     erode_mask,
-    get_dicom_files,
     get_json_sidecar_path,
     get_timing_data,
     get_volume_files,
@@ -113,7 +112,7 @@ class TestGetJsonSidecarPath:
 
 
 # =============================================================================
-# get_volume_files / get_dicom_files — directory enumeration with validation
+# get_volume_files — directory enumeration with validation
 # =============================================================================
 
 
@@ -214,30 +213,6 @@ class TestGetVolumeFiles:
         (tmp_path / ".DS_Store").write_bytes(b"\x00")
         result = get_volume_files(tmp_path)
         assert [p.name for p in result] == ["MR000001"]
-
-
-class TestGetDicomFiles:
-    def test_filters_non_dicom(self, tmp_path, caplog):
-        _make_dicom(tmp_path / "img_001.dcm")
-        (tmp_path / ".DS_Store").write_bytes(b"\x00")
-        (tmp_path / "notes.txt").write_text("nope")
-        with caplog.at_level(logging.WARNING):
-            result = get_dicom_files(tmp_path)
-        assert [p.name for p in result] == ["img_001.dcm"]
-        assert ".DS_Store" in caplog.text
-
-    def test_rejects_nifti(self, tmp_path):
-        # get_dicom_files is DICOM-only — a NIfTI is not a DICOM.
-        _make_nifti(tmp_path / "vol_001.nii.gz")
-        _make_dicom(tmp_path / "img_001.dcm")
-        result = get_dicom_files(tmp_path)
-        assert [p.name for p in result] == ["img_001.dcm"]
-
-    def test_validate_false_returns_all(self, tmp_path):
-        (tmp_path / "a.dcm").touch()
-        (tmp_path / ".DS_Store").write_bytes(b"\x00")
-        result = get_dicom_files(tmp_path, validate=False)
-        assert {p.name for p in result} == {"a.dcm", ".DS_Store"}
 
 
 # =============================================================================
@@ -472,7 +447,7 @@ class TestErodeMask:
 
 
 # =============================================================================
-# run_command (mocked)
+# run_command, mocked
 # =============================================================================
 
 

@@ -716,7 +716,7 @@ class FeedbackTabBuilder:
             _record(single_role_key, self.single_mask_dropdown.value)
         cfg["network_assignment"] = assignment
 
-        # Connectivity (sub-block)
+        # Connectivity sub-block
         connectivity_block: dict[str, Any] = {"target": self.connectivity_target_dropdown.value or "increase"}
         if feedback_mode == "connectivity":
             a_src, a = _split_mask_key(self.connectivity_pair_a_dropdown.value or "")

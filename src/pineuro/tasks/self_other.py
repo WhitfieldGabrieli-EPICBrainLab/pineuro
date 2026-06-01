@@ -192,7 +192,7 @@ class SelfOtherTask(BaseLocalizerTask):
         self.block_order = [b.strip() for b in block_order.split(",")]
         self.response_keys = response_keys or ["1", "2"]
 
-        # Populated in _load_stim_file()
+        # Populated during _load_stim_file
         self._voice_blocks: list[list[dict]] = []
         self._voice_block_types: list[str] = []  # "self" or "other" per voice block
         self._questions: list[str] = []

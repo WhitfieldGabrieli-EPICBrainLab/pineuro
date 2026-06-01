@@ -8,8 +8,6 @@ Display Settings
 ----------------
 QC_BROWSER_SCREEN : int
     Screen index for QC report browser windows (0 = primary, 1 = secondary)
-PSYCHOPY_SCREEN : int
-    Screen index for PsychoPy task windows (0 = primary, 1 = secondary)
 
 Platform Detection
 ------------------
@@ -20,7 +18,6 @@ Examples
 --------
 >>> import pineuro.config as config
 >>> # Configure before importing other modules
->>> config.PSYCHOPY_SCREEN = 0  # Use primary monitor for tasks
 >>> config.QC_BROWSER_SCREEN = 0  # Use primary monitor for QC
 >>>
 >>> # Now import and use pineuro
@@ -38,10 +35,6 @@ from typing import Literal
 # Screen index for QC report browser windows
 # 0 = primary monitor, 1 = secondary monitor
 QC_BROWSER_SCREEN: int = 0
-
-# Screen index for PsychoPy task windows
-# 0 = primary monitor, 1 = secondary monitor
-PSYCHOPY_SCREEN: int = 1
 
 
 # =============================================================================
@@ -85,6 +78,5 @@ def get_platform() -> Literal["darwin", "linux", "windows"]:
 # Platform-Specific Defaults
 # =============================================================================
 
-# Note: Default settings (PSYCHOPY_SCREEN=1, QC_BROWSER_SCREEN=0) are kept
-# for all platforms. On Linux/Wayland, the Xlib workaround in task_base.py
-# handles window positioning.
+# Note: The default QC_BROWSER_SCREEN=0 is kept for all platforms. On
+# Linux/Wayland, the Xlib workaround in task_base.py handles window positioning.

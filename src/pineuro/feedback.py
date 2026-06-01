@@ -290,8 +290,8 @@ def _ants_register_volume(
         else np.zeros(3)
     )
 
-    # ANTs Rigid returns Euler3DTransform with 6 parameters:
-    # [angleX, angleY, angleZ, transX, transY, transZ]
+    # ANTs Rigid returns a 6-parameter Euler3DTransform ordered as
+    # angleX, angleY, angleZ, transX, transY, transZ.
     if len(params) == 6:
         euler_rad = params[:3]
         translation = params[3:6]
@@ -362,7 +362,7 @@ class _DicomGeometryCache:
         self.affine = affine
         self.spacing = spacing
         self.ornt_transform = ornt_transform
-        # (n_slices, matrix_rows, matrix_cols, n_grid_cols) or None
+        # mosaic_params holds n_slices, matrix_rows, matrix_cols, n_grid_cols, or is None
         self.mosaic_params = mosaic_params
 
 
@@ -936,22 +936,6 @@ class IncrementalGLM:
         activation = self._compute_normalized_activation(X, y, beta)
 
         return activation
-
-    def get_residual_mse(self) -> NDArray[np.float64]:
-        """Get current residual mean squared error for each output.
-
-        Returns the residual MSE (RSS / n_obs). After steady state is reached,
-        returns the frozen steady-state values for stable normalization.
-
-        Returns
-        -------
-        residual_mse : ndarray, shape (n_outputs,)
-            Current (or frozen steady-state) residual MSE for each output (voxel).
-        """
-        # Return frozen steady-state MSE if available
-        if self._steady_state_residual_mse is not None:
-            return self._steady_state_residual_mse.copy()
-        return self._residual_mse.copy()
 
     def get_rss(self) -> NDArray[np.float64]:
         """Get current RSS (residual sum of squares) for each output.
@@ -3614,20 +3598,6 @@ class NeurofeedbackCoordinator:
         except Exception as e:
             logger.error(f"Failed to generate QC report: {e}", exc_info=True)
 
-    def get_timing_stats(self) -> dict:
-        """Get timing statistics for analysis.
-
-        Returns
-        -------
-        dict
-            Dictionary with timing arrays:
-            - 'dcm2niix_ms': dcm2niix conversion time per volume (ms)
-            - 'glm_ms': GLM update time per volume (ms)
-            - 'total_ms': total processing time per volume (ms)
-            - 'queue_depth': queue depth at each volume
-        """
-        return {k: np.array(v) for k, v in self._timing_stats.items()}
-
     def _cleanup_directories(self) -> None:
         """Clean up temporary directories after session completes."""
         import shutil
@@ -3710,26 +3680,6 @@ class NeurofeedbackCoordinator:
         if not self.was_stopped():
             return True
         return getattr(self, "_show_questions_on_stop", False)
-
-    def get_latest_activations(self) -> dict:
-        """Get latest activation values in thread-safe manner.
-
-        Returns
-        -------
-        dict
-            Dictionary containing:
-            - 'activations': dict[str, float] - Activation per mask
-            - 'volume': int - Current volume number
-            - 'time': float - Elapsed time in seconds
-            - 'is_baseline': bool - Whether in baseline period
-        """
-        with self._lock:
-            return {
-                "activations": self._latest_activations.copy(),
-                "volume": self._latest_volume,
-                "time": self._latest_time,
-                "is_baseline": self._latest_is_baseline,
-            }
 
 
 # =============================================================================

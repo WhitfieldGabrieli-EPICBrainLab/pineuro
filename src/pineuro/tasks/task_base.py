@@ -127,9 +127,9 @@ class TaskBase(ABC):  # noqa: B024
     # waiting loops (trigger, instructions, slider) — never during the main
     # task loop.
     #
-    # Windows: GetAsyncKeyState (ctypes)
-    # Linux:   XQueryKeymap    (python-xlib, already a dependency)
-    # macOS:   CGEventSourceKeyState (pyobjc-framework-Quartz, ships with PsychoPy)
+    # Windows uses GetAsyncKeyState via ctypes; Linux uses XQueryKeymap via
+    # python-xlib (already a dependency); macOS uses CGEventSourceKeyState via
+    # pyobjc-framework-Quartz (ships with PsychoPy).
 
     # Windows virtual-key codes
     _PSYCHOPY_TO_VK: dict[str, int] = {

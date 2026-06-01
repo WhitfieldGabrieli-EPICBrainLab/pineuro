@@ -14,28 +14,15 @@ from typing import Any
 
 import flet as ft
 
-from ..utils import build_placeholder
+# flet_charts is a hard dependency (see pyproject.toml [project.dependencies]).
+import flet_charts as fch  # type: ignore[import-untyped]
 
-# Import chart types from flet_charts package
-try:
-    import flet_charts as fch  # type: ignore[import-untyped]
-
-    LineChart = fch.LineChart
-    LineChartData = fch.LineChartData
-    LineChartDataPoint = fch.LineChartDataPoint
-    ChartGridLines = fch.ChartGridLines
-    ChartAxis = fch.ChartAxis
-    ChartAxisLabel = fch.ChartAxisLabel
-    CHARTS_AVAILABLE = True
-except ImportError:
-    # Fallback: charts not available
-    LineChart = None
-    LineChartData = None
-    LineChartDataPoint = None
-    ChartGridLines = None
-    ChartAxis = None
-    ChartAxisLabel = None
-    CHARTS_AVAILABLE = False
+LineChart = fch.LineChart
+LineChartData = fch.LineChartData
+LineChartDataPoint = fch.LineChartDataPoint
+ChartGridLines = fch.ChartGridLines
+ChartAxis = fch.ChartAxis
+ChartAxisLabel = fch.ChartAxisLabel
 
 logger = logging.getLogger(__name__)
 
@@ -141,10 +128,6 @@ class ActivationPlot:
         Returns:
             List of LineChartData controls
         """
-        if LineChartData is None:
-            logger.warning("LineChart not available in this Flet version")
-            return []
-
         series = []
         for mask_name in self.mask_names:
             data_points = []
@@ -223,9 +206,6 @@ class ActivationPlot:
         Returns:
             List of ChartAxisLabel objects
         """
-        if ChartAxisLabel is None:
-            return []
-
         labels = []
         # Create labels at regular intervals
         y_range = max_y - min_y
@@ -251,9 +231,6 @@ class ActivationPlot:
         Returns:
             List of ChartAxisLabel objects
         """
-        if ChartAxisLabel is None:
-            return []
-
         # Pick a nice interval: 25, 50, or 100 depending on range
         x_range = max_x - min_x
         if x_range <= 150:
@@ -282,11 +259,6 @@ class ActivationPlot:
         Returns:
             Container with chart and legend
         """
-        # Check if LineChart is available
-        if LineChart is None:
-            logger.warning("LineChart not available - showing placeholder")
-            return build_placeholder("Chart not available", height=self.height)
-
         # Create initial data series
         self._data_series = self._create_data_series()
         min_x, max_x, min_y, max_y = self._calculate_axis_range()
@@ -402,15 +374,4 @@ class ActivationPlot:
     def clear(self):
         """Clear all data and reset chart."""
         self.data.clear()
-        self._update_chart()
-
-    def set_y_range(self, y_min: float, y_max: float):
-        """Set Y axis range.
-
-        Args:
-            y_min: Minimum Y value
-            y_max: Maximum Y value
-        """
-        self.y_min = y_min
-        self.y_max = y_max
         self._update_chart()

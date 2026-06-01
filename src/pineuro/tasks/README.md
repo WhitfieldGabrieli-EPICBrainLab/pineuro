@@ -88,13 +88,12 @@ class MyTask(BaseTask):
         """Update the display from the latest activation.
 
         Called every frame (~60 Hz) with:
-        - data['activation']: current activation value
         - data['activations']: all mask activations, keyed by mask name
         - data['volume']: volume number
         - data['time']: elapsed time
         - data['is_baseline']: baseline status
         """
-        self.stim.radius = 0.1 + data["activation"] * 0.05
+        self.stim.radius = 0.1 + data["activations"][self.mask_name] * 0.05
         self.stim.draw()
         self.win.flip()
 

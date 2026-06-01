@@ -208,87 +208,6 @@ class QCReportManager:
 
         return None
 
-    def get_combined_qc(self) -> Path | None:
-        """Get path to combined session QC report.
-
-        Returns:
-            Path to report if exists, None otherwise
-        """
-        qc_dir = self.base_dir / "qc"
-        report_path = qc_dir / f"{self._bids_prefix}_qc.html"
-
-        if report_path.exists():
-            return report_path
-
-        # Try alternative patterns
-        for pattern in ["*session_qc.html", "*combined_qc.html"]:
-            matches = list(qc_dir.glob(pattern))
-            if matches:
-                return matches[0]
-
-        return None
-
-    def list_available_reports(self) -> list[dict]:
-        """List all available QC reports.
-
-        Returns:
-            List of dicts with report info (name, path, exists)
-        """
-        reports = [
-            {
-                "name": "Preprocessing",
-                "type": "preprocessing",
-                "path": self.get_preprocessing_qc(),
-            },
-            {
-                "name": "Mask Extraction",
-                "type": "mask_extraction",
-                "path": self.get_mask_extraction_qc(),
-            },
-            {
-                "name": "Initial Reference Coregistration",
-                "type": "coregistration_initial",
-                "path": self.get_coregistration_qc(run_id=1),
-            },
-            {
-                "name": "Realtime Reference Coregistration",
-                "type": "coregistration_realtime",
-                "path": self.get_coregistration_qc(run_id=2),
-            },
-            {
-                "name": "Combined Session QC",
-                "type": "combined",
-                "path": self.get_combined_qc(),
-            },
-        ]
-
-        # Add feedback/transfer run QC reports. Discover the real task entities from
-        # disk — filenames use the actual task name (e.g. task-ball, task-balltransfer),
-        # not a fixed "feedback"/"transfer" label, and there may be several per session.
-        import re
-
-        qc_dir = self.base_dir / "feedback" / "02_feedback_output" / "qc"
-        if qc_dir.exists():
-            seen: set[tuple[str, int]] = set()
-            for report in sorted(qc_dir.glob("*_feedback_qc.html")):
-                match = re.search(r"task-(.+?)_run-(\d+)", report.name)
-                if not match:
-                    continue
-                entity, run = match.group(1), int(match.group(2))
-                if (entity, run) in seen:
-                    continue
-                seen.add((entity, run))
-                reports.append(
-                    {
-                        "name": f"{entity} Run {run}",
-                        "type": f"{entity}_run_{run}",
-                        "path": self.get_feedback_qc(entity, run),
-                    }
-                )
-
-        # Filter to only existing reports
-        return [r for r in reports if r["path"] is not None]
-
     def open_report(self, report_type: str) -> bool:
         """Open a QC report by type.
 
@@ -303,7 +222,6 @@ class QCReportManager:
             "mask_extraction": lambda: self.get_mask_extraction_qc(),
             "coregistration_initial": lambda: self.get_coregistration_qc(1),
             "coregistration_realtime": lambda: self.get_coregistration_qc(2),
-            "combined": lambda: self.get_combined_qc(),
         }
 
         # Handle feedback/transfer runs: "{task_entity}_run_{run}". Split on the
@@ -331,40 +249,6 @@ class QCReportManager:
     # =========================================================================
     # Plot Discovery Methods (for inline QC viewing)
     # =========================================================================
-
-    def get_preprocessing_plots(self) -> list[tuple[str, Path]]:
-        """Get key preprocessing QC plots.
-
-        Returns:
-            List of (label, path) tuples for available plots
-        """
-        plots: list[tuple[str, Path]] = []
-        qc_dir = self.base_dir / "preprocessing" / "qc"
-
-        if not qc_dir.exists():
-            return plots
-
-        # Brain mask coverage (most important)
-        mask_plot = qc_dir / "brain_mask_coverage.png"
-        if mask_plot.exists():
-            plots.append(("Brain Mask Coverage", mask_plot))
-
-        # Motion timeseries plots (show first run only for brevity in modal)
-        motion_plots = sorted(qc_dir.glob("motion_timeseries_*.png"))
-        if motion_plots:
-            plots.append(("Motion Parameters", motion_plots[0]))
-
-        # Framewise displacement plots (show first run only)
-        fd_plots = sorted(qc_dir.glob("framewise_displacement_*.png"))
-        if fd_plots:
-            plots.append(("Framewise Displacement", fd_plots[0]))
-
-        # Registration overlay (if multi-run)
-        reg_plot = qc_dir / "registration_overlay.png"
-        if reg_plot.exists():
-            plots.append(("Multi-Run Registration", reg_plot))
-
-        return plots
 
     def get_mask_extraction_plots(self) -> list[tuple[str, Path]]:
         """Get key mask extraction QC plots.
@@ -458,38 +342,5 @@ class QCReportManager:
                 plots.append((f"{network} Mask (Reference Space)", overlay))
 
         plots = self._sort_overlays(plots)
-
-        return plots
-
-    def get_feedback_plots(self, task: str, run: int) -> list[tuple[str, Path]]:
-        """Get key feedback QC plots.
-
-        Args:
-            task: Task type ("feedback" or "transfer")
-            run: Run number
-
-        Returns:
-            List of (label, path) tuples for available plots
-        """
-        plots: list[tuple[str, Path]] = []
-        qc_dir = self.base_dir / "feedback" / "qc"
-
-        if not qc_dir.exists():
-            return plots
-
-        # Activation timeseries
-        ts_plot = qc_dir / "activation_timeseries.png"
-        if ts_plot.exists():
-            plots.append(("Activation Timeseries", ts_plot))
-
-        # Baseline distributions
-        baseline_plot = qc_dir / "baseline_distributions.png"
-        if baseline_plot.exists():
-            plots.append(("Baseline Distributions", baseline_plot))
-
-        # Design matrix
-        design_plot = qc_dir / "design_matrix.png"
-        if design_plot.exists():
-            plots.append(("GLM Design Matrix", design_plot))
 
         return plots

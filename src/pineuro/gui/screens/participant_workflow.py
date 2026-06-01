@@ -100,12 +100,6 @@ def _format_threshold_summary(extraction: dict) -> str:
     return f"Top {extraction.get('threshold', 2000)} voxels"
 
 
-def _frc(config: dict, idx: int = 0) -> dict:
-    """Return ``config["feedback_runs"][idx]`` as a dict, or ``{}`` if missing."""
-    frcs = config.get("feedback_runs") or []
-    return frcs[idx] if idx < len(frcs) else {}
-
-
 class StepStatus(Enum):
     """Status of a pipeline step."""
 
@@ -1949,34 +1943,6 @@ class ParticipantWorkflowScreen:
         dialog.open = True
         self.page.update()
 
-    def _check_collection_status(self, collection_dir: Path, expected_volumes: int) -> StepStatus:
-        """Check status of a DICOM collection step.
-
-        Args:
-            collection_dir: Directory containing collected DICOMs
-            expected_volumes: Expected number of volumes
-
-        Returns:
-            StepStatus based on collection completeness
-        """
-        if not collection_dir.exists():
-            return StepStatus.PENDING
-
-        # Lazy import: pineuro.utils pulls numpy/nibabel — keep it out of GUI
-        # module-load time (see architecture.md GUI lazy-import rule).
-        from pineuro.utils import collection_is_complete, count_volume_files
-
-        # DICOM files from scanners often lack a .dcm extension (e.g. Siemens
-        # names them with UIDs); count_volume_files counts them while excluding
-        # the completion marker, JSON sidecars, and the QC log.
-        dicom_count = count_volume_files(collection_dir)
-        if collection_is_complete(collection_dir, expected_volumes):
-            return StepStatus.COMPLETE
-        elif dicom_count > 0:
-            return StepStatus.INTERRUPTED
-        else:
-            return StepStatus.PENDING
-
     def _check_attempt_collection_status(
         self, collection_dir: Path, task: str, run: int, expected_volumes: int
     ) -> StepStatus:
@@ -2098,33 +2064,6 @@ class ParticipantWorkflowScreen:
             on_cancel=on_cancel,
         )
         dialog.show()
-
-    def _check_feedback_step_status(self, log_path: Path, expected_volumes: int) -> StepStatus:
-        """Check status of a feedback/transfer run based on feedbacklog.
-
-        Args:
-            log_path: Path to the feedbacklog.tsv file
-            expected_volumes: Expected number of volumes
-
-        Returns:
-            StepStatus based on run completeness
-        """
-        if not log_path.exists():
-            return StepStatus.PENDING
-
-        # Count data rows (excluding header)
-        try:
-            with open(log_path) as f:
-                row_count = sum(1 for _ in f) - 1  # subtract header
-        except Exception:
-            return StepStatus.PENDING
-
-        if row_count >= expected_volumes:
-            return StepStatus.COMPLETE
-        elif row_count > 0:
-            return StepStatus.INTERRUPTED
-        else:
-            return StepStatus.PENDING
 
     def _check_feedback_slot_status(
         self, step_id: str, output_dir: Path, participant_id: str, session_id: str, expected_volumes: int

@@ -24,12 +24,6 @@ def _loc(config: dict, idx: int = 0) -> dict:
     return locs[idx] if idx < len(locs) else {}
 
 
-def _frc(config: dict, idx: int = 0) -> dict:
-    """Return ``config["feedback_runs"][idx]`` as a dict, or ``{}`` if missing."""
-    frcs = config.get("feedback_runs") or []
-    return frcs[idx] if idx < len(frcs) else {}
-
-
 def _select_sham_task_mask_names(
     sham_mask_names: list[str],
     real_mask_names: list[str],

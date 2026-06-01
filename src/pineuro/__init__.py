@@ -146,7 +146,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "load_randomization": (".sham", "load_randomization"),
     "generate_randomization": (".sham", "generate_randomization"),
     "get_condition_for_participant": (".sham", "get_condition_for_participant"),
-    "resolve_sham_masks": (".sham", "resolve_sham_masks"),
     "find_feedbacklog_for_replay": (".sham", "find_feedbacklog_for_replay"),
     # --- utils.py (heavy: numpy, nibabel, scipy, templateflow) ---
     "enable_timing": (".utils", "enable_timing"),
@@ -247,7 +246,6 @@ __all__ = [
     "load_randomization",
     "generate_randomization",
     "get_condition_for_participant",
-    "resolve_sham_masks",
     "find_feedbacklog_for_replay",
     # Orchestration functions
     "setup_session",

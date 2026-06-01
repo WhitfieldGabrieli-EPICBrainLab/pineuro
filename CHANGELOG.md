@@ -5,6 +5,16 @@ All notable changes to pineuro will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **Dead and legacy code swept out** (pre-rollout, no backwards-compat surface to preserve). This is a no-behavior-change cleanup of symbols with no live callers, defensive branches that could never run, and superseded compatibility shims:
+  - **Public API symbols** with no internal or external consumers: `resolve_sham_masks` (sham "alternative masks" path is reimplemented inline in the pipeline runner), `SessionConfig.from_yaml` / `to_yaml` / `from_json` / `to_json` (config persists via the GUI config manager; the internal `_from_dict` / `_to_dict` remain), the `SimulatorSourceMapping` convenience accessors `get_localizer_sources` / `get_feedback_source` / `get_transfer_source` / `has_subject` / `subjects` (use `get_source`), and the `PathConfig.participant_session_dir` property.
+  - **Test-only production symbols** (removed with their tests): `tasks.utils.make_bids_subject_prefix`, `tasks.protocol.TaskProtocol` (the `CoordinatorProtocol` contract stays), `IncrementalGLM.get_residual_mse`, `preprocessing.spatial_smoothing` / `temporal_filtering`, `utils.get_dicom_files`, and `display.get_monitor_by_index` / `get_monitor_count`.
+  - **The `"activation"` primary-mask alias** in task data dicts — consumers now read `data["activations"][mask_name]` directly.
+  - Numerous internal dead methods/constants and unreachable `ImportError` fallbacks for hard dependencies (`flet-charts`, `nilearn`).
+
 ## [0.10.0] - 2026-05-28
 
 ### Breaking

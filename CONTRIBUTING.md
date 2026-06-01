@@ -166,9 +166,9 @@ class MyTask(BaseTask):
     def update(self, data: dict):
         """Called every frame (~60 Hz). Update the display from activation data.
 
-        data keys: 'activation', 'activations', 'volume', 'time', 'is_baseline'
+        data keys: 'activations', 'volume', 'time', 'is_baseline'
         """
-        activation = data["activation"]
+        activation = data["activations"][self.mask_name]
         self.win.flip()
 ```
 

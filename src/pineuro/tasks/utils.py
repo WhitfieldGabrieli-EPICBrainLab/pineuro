@@ -43,17 +43,6 @@ logger = logging.getLogger(__name__)
 # numpy-free. See the GUI Lazy Import Rule in .claude/rules/architecture.md.
 
 
-def make_bids_subject_prefix(subject: str, session: str) -> str:
-    """Return ``{subject}_{session}`` — the base prefix shared by all output filenames.
-
-    Examples
-    --------
-    >>> make_bids_subject_prefix("sub-01", "ses-01")
-    'sub-01_ses-01'
-    """
-    return f"{subject}_{session}"
-
-
 def make_bids_run_prefix(
     subject: str,
     session: str,

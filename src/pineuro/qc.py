@@ -252,8 +252,8 @@ def _open_html_in_browser(html_path: Path, screen: int | None = None) -> None:
                 result = subprocess.run(["xrandr", "--current"], capture_output=True, text=True, timeout=1.0)
 
                 if result.returncode == 0:
-                    # Parse xrandr output to find screen positions
-                    # Format: "Screen N: connected primary WxH+X+Y"
+                    # Parse xrandr output to find screen positions; each connected
+                    # line carries a geometry token of the form WxH+X+Y
                     import re
 
                     screens = []
@@ -3814,14 +3814,9 @@ def _generate_interactive_viewers(
     -------
     str
         HTML string with ``<div class="viewer-section">`` blocks, one per
-        mask.  Returns empty string if nilearn is unavailable or all masks
-        fail to render.
+        mask.  Returns empty string if all masks fail to render.
     """
-    try:
-        from nilearn.plotting import view_img  # type: ignore[import-untyped]
-    except ImportError:
-        logging.getLogger(__name__).warning("nilearn not available — skipping interactive viewers")
-        return ""
+    from nilearn.plotting import view_img  # type: ignore[import-untyped]
 
     ref_str = str(ref_file)
     parts: list[str] = []

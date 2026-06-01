@@ -7,7 +7,6 @@ Functions
 ---------
 get_monitors() : Get all monitors sorted by x position (left-to-right)
 get_monitor_by_position(position) : Get monitor by "left" or "right" label
-get_monitor_by_index(index) : Get monitor by index with fallback
 
 Examples
 --------
@@ -129,41 +128,3 @@ def get_monitor_by_position(position: str) -> MonitorInfo | None:
     else:
         logger.warning(f"Invalid position '{position}', defaulting to left")
         return monitors[0]
-
-
-def get_monitor_by_index(index: int) -> MonitorInfo | None:
-    """Get monitor by index with fallback.
-
-    Parameters
-    ----------
-    index : int
-        Monitor index (0-based, sorted by x position).
-
-    Returns
-    -------
-    MonitorInfo or None
-        Monitor at given index, or first available monitor if index out of range,
-        or None if no monitors detected.
-    """
-    monitors = get_monitors()
-
-    if not monitors:
-        logger.warning("No monitors detected")
-        return None
-
-    if index < 0 or index >= len(monitors):
-        logger.warning(f"Monitor index {index} out of range (0-{len(monitors) - 1}), using monitor 0")
-        return monitors[0]
-
-    return monitors[index]
-
-
-def get_monitor_count() -> int:
-    """Get the number of detected monitors.
-
-    Returns
-    -------
-    int
-        Number of monitors, or 0 if detection failed.
-    """
-    return len(get_monitors())

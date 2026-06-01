@@ -114,7 +114,6 @@ import nibabel as nib
 import numpy as np
 from nibabel.loadsave import save
 from nibabel.nifti1 import Nifti1Image
-from scipy.signal import butter, filtfilt  # Butterworth temporal filtering
 from watchdog.events import FileSystemEventHandler
 
 # NOTE: nilearn and ANTsPy are imported lazily inside the functions that need
@@ -135,7 +134,7 @@ from pineuro.utils import (
     apply_mask,  # Apply brain mask to volume
     apply_xfm,  # Apply transformation to volume
     compute_mean,  # Compute temporal mean of 4D volume
-    # Registration (ANTs-backed)
+    # Registration, ANTs-backed
     compute_xfm,  # Compute transformation matrix
     # DICOM/NIfTI operations
     dicom_to_nifti,  # dcm2niix wrapper
@@ -297,7 +296,7 @@ def motion_correction(
             params = np.array(tx.parameters)
 
             if len(params) == 6:
-                # Euler3DTransform: [angleX, angleY, angleZ, transX, transY, transZ]
+                # Euler3DTransform params ordered angleX, angleY, angleZ, transX, transY, transZ
                 motion_params[i] = params
             elif len(params) == 12:
                 # MatrixOffsetTransform: [M00..M22, tx, ty, tz]
@@ -399,198 +398,7 @@ def concat(input_files: list[Union[str, Path]], output_file: Union[str, Path], o
 
 
 # =============================================================================
-# SECTION 2: OPTIONAL PREPROCESSING STEPS
-# =============================================================================
-# These functions are not part of the default pipeline but can be applied
-# for specific use cases (e.g., smoothing for group-level analysis).
-
-
-def spatial_smoothing(
-    input_file: Union[str, Path], output_file: Union[str, Path], fwhm: float = 5.0, overwrite: bool = False
-) -> None:
-    """
-    Apply Gaussian spatial smoothing to fMRI data.
-
-    Spatial smoothing increases signal-to-noise ratio (SNR) by averaging
-    neighboring voxels, at the cost of spatial resolution. This is typically
-    used for group-level analysis rather than individual neurofeedback.
-
-    Parameters
-    ----------
-    input_file : str or Path
-        Path to input 3D or 4D NIfTI file.
-    output_file : str or Path
-        Path for output smoothed NIfTI file.
-        Parent directory will be created if it doesn't exist.
-    fwhm : float, default=5.0
-        Full width at half maximum (FWHM) of the Gaussian smoothing kernel
-        in millimeters. Common values:
-        - 5-6 mm : Standard for single-subject analysis
-        - 8 mm : Standard for group analysis
-        - 0 or None : No smoothing
-    overwrite : bool, default=False
-        If True, always smooth and overwrite existing output.
-        If False, skip if output file already exists.
-
-    Returns
-    -------
-    None
-        Writes smoothed volume to disk.
-
-    Notes
-    -----
-    **When to Use:**
-    For real-time neurofeedback, smoothing is typically applied during mask
-    extraction (before ICA) rather than during preprocessing. The default
-    pipeline does NOT apply smoothing.
-
-    **FWHM vs Sigma:**
-    FWHM = sigma * 2.355 (for Gaussian kernels). A 6mm FWHM corresponds to
-    sigma ≈ 2.55mm.
-    """
-    output_path = Path(output_file)
-
-    # --- Check for existing output ---
-    if not overwrite and output_path.exists():
-        logger.info("Output file exists and overwrite=False. Skipping spatial smoothing.")
-        return
-
-    logger.info("Spatial smoothing...")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # --- Apply Gaussian smoothing via nilearn ---
-    # nilearn handles 3D and 4D inputs automatically
-    from nilearn.image import smooth_img
-
-    smoothed = smooth_img(str(input_file), fwhm=fwhm)
-    smoothed.to_filename(str(output_path))
-    logger.info(f"Output: {output_path}")
-
-
-def temporal_filtering(
-    input_file: Union[str, Path],
-    output_file: Union[str, Path],
-    highpass: float | None = None,
-    lowpass: float | None = None,
-    overwrite: bool = False,
-) -> None:
-    """
-    Apply temporal bandpass filtering to fMRI data.
-
-    Temporal filtering removes unwanted frequency components from the BOLD signal.
-    High-pass filtering removes slow drifts (scanner drift, physiological), while
-    low-pass filtering removes high-frequency noise.
-
-    Parameters
-    ----------
-    input_file : str or Path
-        Path to input 4D NIfTI file.
-    output_file : str or Path
-        Path for output filtered NIfTI file.
-        Parent directory will be created if it doesn't exist.
-    highpass : float, optional
-        High-pass filter cutoff in Hz. Removes frequencies below this value.
-        Common value: 0.01 Hz (removes drifts slower than 100s).
-        If None, no high-pass filtering is applied.
-    lowpass : float, optional
-        Low-pass filter cutoff in Hz. Removes frequencies above this value.
-        Common value: 0.1 Hz (removes noise faster than 10s).
-        If None, no low-pass filtering is applied.
-    overwrite : bool, default=False
-        If True, always filter and overwrite existing output.
-        If False, skip if output file already exists.
-
-    Returns
-    -------
-    None
-        Writes filtered volume to disk.
-
-    Notes
-    -----
-    **Filter Design:**
-    Uses a 2nd-order Butterworth filter (same as FSL's default) for smooth
-    frequency response without ringing artifacts.
-
-    **Zero-Phase Filtering:**
-    The filter is applied forward and backward (filtfilt) to eliminate phase
-    distortion. This is important for preserving the timing of neural events.
-
-    **TR Extraction:**
-    The repetition time (TR) is read from the NIfTI header to compute the
-    sampling frequency. Ensure your NIfTI files have correct TR metadata.
-
-    **When to Use:**
-    For resting-state analysis, bandpass filtering (0.01-0.1 Hz) is standard.
-    For task-based neurofeedback, filtering may remove task-related signal
-    and is generally NOT recommended.
-    """
-    output_path = Path(output_file)
-
-    # --- Check for existing output ---
-    if not overwrite and output_path.exists():
-        logger.info("Output file exists and overwrite=False. Skipping temporal filtering.")
-        return
-
-    # --- Load image and extract timing parameters ---
-    img = cast(Nifti1Image, nib.load(str(input_file)))
-    data = img.get_fdata()
-
-    # Extract TR from NIfTI header (4th element of zooms is temporal spacing)
-    zooms = img.header.get_zooms()
-    if len(zooms) < 4:
-        raise ValueError(
-            f"Temporal filtering requires a 4-D NIfTI with a temporal zoom; "
-            f"got {len(zooms)}-D header zooms: {input_file}"
-        )
-    tr = zooms[3]
-    fs = 1.0 / tr  # Sampling frequency in Hz
-    nyquist = fs / 2.0  # Nyquist frequency (max representable frequency)
-
-    logger.info(f"Temporal filtering (TR={tr}s, fs={fs:.3f}Hz)...")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # --- Determine filter type based on provided cutoffs ---
-    if highpass is not None and lowpass is not None:
-        # Bandpass: keep frequencies between highpass and lowpass
-        btype = "bandpass"
-        Wn = [highpass / nyquist, lowpass / nyquist]  # Normalize to Nyquist
-    elif highpass is not None:
-        # High-pass: remove frequencies below highpass (removes slow drifts)
-        btype = "highpass"
-        Wn = highpass / nyquist
-    elif lowpass is not None:
-        # Low-pass: remove frequencies above lowpass (removes high-freq noise)
-        btype = "lowpass"
-        Wn = lowpass / nyquist
-    else:
-        # No filtering requested - save unchanged
-        logger.info("No filter cutoffs specified. Saving unchanged.")
-        save(img, output_path)
-        return
-
-    # --- Design Butterworth filter ---
-    # Order 2 matches FSL's default and provides good balance between
-    # sharpness (frequency selectivity) and smoothness (minimal ringing)
-    b, a = butter(2, Wn, btype=btype)
-
-    # --- Apply filter to each voxel's timeseries ---
-    # Reshape 4D (X, Y, Z, T) to 2D (voxels, timepoints) for efficient filtering
-    original_shape = data.shape
-    data_2d = data.reshape(-1, original_shape[-1])
-
-    # filtfilt applies filter forward then backward to eliminate phase shift
-    # This is critical for task timing - phase distortion would shift events
-    filtered_2d = filtfilt(b, a, data_2d, axis=-1)
-    filtered = filtered_2d.reshape(original_shape)
-
-    # --- Save filtered output ---
-    out_img = Nifti1Image(filtered, img.affine, img.header)
-    save(out_img, output_path)
-    logger.info(f"Output: {output_path}")
-
-
-# =============================================================================
-# SECTION 3: BRAIN EXTRACTION
+# SECTION 2: BRAIN EXTRACTION
 # =============================================================================
 
 
@@ -679,7 +487,7 @@ def brain_extraction(
 
 
 # =============================================================================
-# SECTION 4: MAIN PREPROCESSING PIPELINE
+# SECTION 3: MAIN PREPROCESSING PIPELINE
 # =============================================================================
 
 
@@ -1256,7 +1064,7 @@ def preprocessing(
 
 
 # =============================================================================
-# SECTION 5: VOLUME COLLECTION (REAL-TIME SCANNER INTERFACE)
+# SECTION 4: VOLUME COLLECTION (REAL-TIME SCANNER INTERFACE)
 # =============================================================================
 # These functions handle real-time volume collection from the scanner.
 # During an fMRI acquisition, the scanner exports DICOM or NIfTI files
