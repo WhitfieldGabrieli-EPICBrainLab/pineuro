@@ -169,10 +169,8 @@ class StudyEditorScreen:
             "reference": {
                 "initial_enabled": True,
                 "initial_n_volumes": 2,
-                "initial_dicoms": "",
                 "realtime_enabled": True,
                 "realtime_n_volumes": 2,
-                "realtime_dicoms": "",
             },
             "sham": {
                 "enabled": False,
@@ -633,6 +631,7 @@ class StudyEditorScreen:
             "notes": "",
             "localizers": [],
             "feedback_runs": [],
+            "reference_dicoms": {"initial": "", "realtime": ""},
         }
 
     def _switch_to_session(self, index: int):
@@ -1066,21 +1065,16 @@ class StudyEditorScreen:
             ],
             visible=is_mapping,
         )
-        self._studywide_sources_container = ft.Column(
-            self._build_reference_simulator_paths(),
-            visible=not is_mapping,
-        )
         self.simulator_paths_container = ft.Column(
             [
                 ft.Divider(),
                 st.section("Simulator Source Paths"),
                 st.caption(
-                    "DICOM source directories for offline testing. Per-task sources live on each "
-                    "session's Protocol tab.",
+                    "DICOM source directories for offline testing. Per-session sources "
+                    "(reference scans and per-task runs) live on each session's Protocol tab.",
                 ),
                 self.simulator_source_mode_radio,
                 self.simulator_mapping_container,
-                self._studywide_sources_container,
             ],
             visible=is_simulator,
         )
@@ -1249,13 +1243,20 @@ class StudyEditorScreen:
     # ------------------------------------------------------------------
 
     def _build_session_simulator_paths(self) -> list[ft.Control]:
-        """Per-localizer/feedback simulator source DICOM fields for the active session."""
+        """Per-session simulator source DICOM fields for the active session.
+
+        Includes the session's reference-scan sources (initial/realtime) followed by
+        the per-localizer-run and per-feedback-run sources.
+        """
         controls: list[ft.Control] = []
 
         # Store fields for later collection (per active session).
         self._sim_loc_source_fields: list[list[ft.TextField]] = []
         self._sim_fb_source_fields: list[ft.TextField] = []
         self._sim_fb_transfer_fields: list[ft.TextField] = []
+
+        # --- Reference-scan sources (per session; enabled flags are study-wide) ---
+        controls.extend(self._build_reference_simulator_paths())
 
         # --- Localizer sources ---
         for loc_idx, cfg in enumerate(self._localizer_configs):
@@ -1328,13 +1329,14 @@ class StudyEditorScreen:
         return controls
 
     def _build_reference_simulator_paths(self) -> list[ft.Control]:
-        """Reference-scan simulator source DICOM fields (study-wide).
+        """Reference-scan simulator source DICOM fields for the active session.
 
-        Reference scans live in the top-level ``reference`` block, so their source
-        DICOMs belong with the study-wide config, not a session's protocol.
+        The reference scan transcends individual tasks but its replayed DICOMs differ
+        per session, so the paths live on each session's protocol. The enabled flags and
+        volume counts remain study-wide (in the top-level ``reference`` block).
         """
         controls: list[ft.Control] = []
-        reference_config = self.study_config.session_config.get("reference", {})
+        reference_dicoms = self._active_session().get("reference_dicoms", {})
 
         # Initial reference
         init_enabled = self.reference_initial_enabled_checkbox.value
@@ -1343,7 +1345,7 @@ class StudyEditorScreen:
         controls.append(self._sim_loc_ref_label)
         self._sim_loc_ref_field = ft.TextField(
             label="Initial Reference Scan source DICOMs",
-            value=reference_config.get("initial_dicoms", ""),
+            value=reference_dicoms.get("initial", ""),
             hint_text="Path to DICOM directory",
         )
         self._sim_loc_ref_row = st.browse_row(
@@ -1359,7 +1361,7 @@ class StudyEditorScreen:
         controls.append(self._sim_fb_ref_label)
         self._sim_fb_ref_field = ft.TextField(
             label="Real-Time Reference Scan source DICOMs",
-            value=reference_config.get("realtime_dicoms", ""),
+            value=reference_dicoms.get("realtime", ""),
             hint_text="Path to DICOM directory",
         )
         self._sim_fb_ref_row = st.browse_row(self._sim_fb_ref_field, self._create_browse_button(self._sim_fb_ref_field))
@@ -1368,11 +1370,12 @@ class StudyEditorScreen:
 
         return controls
 
-    def _collect_simulator_paths(self, config: dict | None = None):
-        """Collect simulator source paths from Paths tab fields into configs.
+    def _collect_simulator_paths(self):
+        """Collect this session's simulator source paths from the Protocol tab fields.
 
-        Reference scan DICOM paths are written to config["reference"] (session-level).
-        Per-run source DICOMs are written to localizer/feedback config dicts.
+        Reference scan DICOM paths are written to the active session's ``reference_dicoms``
+        block; per-run source DICOMs are written to localizer/feedback config dicts.
+        Always persists so switching sessions preserves the edits.
         """
         # Localizer sources
         for loc_idx, loc_fields in enumerate(getattr(self, "_sim_loc_source_fields", [])):
@@ -1389,16 +1392,15 @@ class StudyEditorScreen:
             if fb_idx < len(self._feedback_configs):
                 self._feedback_configs[fb_idx]["transfer_source_dicoms"] = tf_field.value.strip()
 
-        # Reference scan DICOM paths (session-level)
-        if config is not None:
-            if "reference" not in config:
-                config["reference"] = {}
-            _loc_ref = getattr(self, "_sim_loc_ref_field", None)
+        # Reference scan DICOM paths (per session)
+        _loc_ref = getattr(self, "_sim_loc_ref_field", None)
+        _fb_ref = getattr(self, "_sim_fb_ref_field", None)
+        if _loc_ref is not None or _fb_ref is not None:
+            ref_dicoms = self._active_session().setdefault("reference_dicoms", {})
             if _loc_ref is not None:
-                config["reference"]["initial_dicoms"] = _loc_ref.value.strip()
-            _fb_ref = getattr(self, "_sim_fb_ref_field", None)
+                ref_dicoms["initial"] = _loc_ref.value.strip()
             if _fb_ref is not None:
-                config["reference"]["realtime_dicoms"] = _fb_ref.value.strip()
+                ref_dicoms["realtime"] = _fb_ref.value.strip()
 
     # ------------------------------------------------------------------
     # Event handlers (Study tab)
@@ -1451,8 +1453,6 @@ class StudyEditorScreen:
         mode = self.simulator_source_mode_radio.value
         if hasattr(self, "simulator_mapping_container"):
             self.simulator_mapping_container.visible = mode == "mapping"
-        if getattr(self, "_studywide_sources_container", None) is not None:
-            self._studywide_sources_container.visible = mode != "mapping"
         if getattr(self, "_session_sim_container", None) is not None:
             self._session_sim_container.visible = mode != "mapping" and self.simulator_enabled_checkbox.value
         self.page.update()
@@ -2050,9 +2050,13 @@ class StudyEditorScreen:
 
         config.pop("study", None)
 
-        # Reference scans
+        # Reference scans (enabled flags + volume counts are study-wide; the DICOM source
+        # paths are per-session and live in each session's ``reference_dicoms``).
         if "reference" not in config:
             config["reference"] = {}
+        # Drop any stale study-wide source paths from older configs.
+        config["reference"].pop("initial_dicoms", None)
+        config["reference"].pop("realtime_dicoms", None)
         config["reference"]["initial_enabled"] = self.reference_initial_enabled_checkbox.value
         try:
             config["reference"]["initial_n_volumes"] = int(self.reference_initial_n_volumes_field.value or 2)
@@ -2109,8 +2113,9 @@ class StudyEditorScreen:
         self._localizer_configs = [b.collect_config() for b in self._localizer_builders]
         self._feedback_configs = [b.collect_config() for b in self._feedback_builders]
 
-        # Inject Paths tab simulator paths into the collected configs
-        self._collect_simulator_paths(config)
+        # Collect this session's simulator paths (per-run sources into the protocol
+        # configs, reference paths into the active session's reference_dicoms).
+        self._collect_simulator_paths()
 
         sess = self._active_session()
         sess["localizers"] = self._localizer_configs

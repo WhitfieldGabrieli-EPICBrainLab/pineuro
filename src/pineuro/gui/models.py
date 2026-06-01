@@ -205,6 +205,14 @@ class StudyConfig:
         result["localizers"] = copy.deepcopy(session_proto.get("localizers", []))
         result["feedback_runs"] = copy.deepcopy(session_proto.get("feedback_runs", []))
 
+        # Reference scan DICOM sources are per-session (each session replays its own
+        # recorded reference acquisition). The enabled flags and volume counts stay
+        # study-wide in the verbatim-copied ``reference`` block; inject just the paths.
+        ref = result.setdefault("reference", {})
+        sess_ref = session_proto.get("reference_dicoms", {})
+        ref["initial_dicoms"] = sess_ref.get("initial", "")
+        ref["realtime_dicoms"] = sess_ref.get("realtime", "")
+
         # Materialize cross-session mask reuse: synthesize a reused localizer for each
         # mask a feedback run sources from an earlier session (its ``mask_sources``
         # map), so the existing per-localizer coregistration loop pulls those masks

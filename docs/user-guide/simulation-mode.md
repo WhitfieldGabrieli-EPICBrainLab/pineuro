@@ -40,15 +40,20 @@ sub-01	/data/rest	/data/reference	/data/feedback
 
 Set the source mapping path in the Study Editor's **Study** tab → **Source Mapping**.
 
-## Per-Run DICOM Sources
+## Per-Session DICOM Sources
 
-Alternatively, specify DICOM directories directly in the Study Editor for each run type:
+Alternatively, specify DICOM directories directly in the Study Editor. These sources are
+**per session** and live on each session's **Protocol tab**, under **Simulator Source
+DICOMs (this session)**:
+- **Initial / Real-Time Reference DICOMs** — One path each (shown when the corresponding
+  reference scan is enabled on the Study tab)
 - **Localizer Source DICOMs** — One path per localizer run
 - **Feedback Source DICOMs** — One path per feedback run
 - **Transfer Source DICOMs** — One path per transfer run
-- **Reference Initial/Realtime DICOMs** — One path each
 
-This approach doesn't support per-participant mapping, so it's best for single-participant testing.
+This approach doesn't support per-participant mapping, so it's best for single-participant
+testing. Because the sources are per session, a multi-session study points each session at
+its own recorded acquisition.
 
 ## Timing Model
 

@@ -178,6 +178,34 @@ class TestBuildSessionConfig:
         # Per-session protocol is not left at the top of the *study* config.
         assert "sessions" not in cfg
 
+    def test_build_injects_per_session_reference_dicoms(self):
+        # Reference DICOM source paths are per-session: each session's reference_dicoms
+        # is injected into the (study-wide) reference block for that session only.
+        study = self._study()
+        study.session_config["sessions"][0]["reference_dicoms"] = {
+            "initial": "/dicoms/ses01/init",
+            "realtime": "/dicoms/ses01/rt",
+        }
+        study.session_config["sessions"][1]["reference_dicoms"] = {
+            "initial": "/dicoms/ses02/init",
+            "realtime": "/dicoms/ses02/rt",
+        }
+        cfg0 = study.build_session_config(0, "sub-07", "ses-01")
+        assert cfg0["reference"]["initial_dicoms"] == "/dicoms/ses01/init"
+        assert cfg0["reference"]["realtime_dicoms"] == "/dicoms/ses01/rt"
+        cfg1 = study.build_session_config(1, "sub-07", "ses-02")
+        assert cfg1["reference"]["initial_dicoms"] == "/dicoms/ses02/init"
+        assert cfg1["reference"]["realtime_dicoms"] == "/dicoms/ses02/rt"
+        # Study-wide enabled flags are preserved alongside the injected paths.
+        assert cfg0["reference"]["realtime_enabled"] is True
+
+    def test_build_defaults_reference_dicoms_to_empty(self):
+        # A session without reference_dicoms gets empty source paths (mapping-file or
+        # real-time fallback handles the rest downstream).
+        cfg = self._study().build_session_config(0, "sub-07", "ses-01")
+        assert cfg["reference"]["initial_dicoms"] == ""
+        assert cfg["reference"]["realtime_dicoms"] == ""
+
     def test_build_rewrites_base_dir_to_participant_session(self):
         cfg = self._study().build_session_config(0, "sub-07", "ses-01")
         assert cfg["paths"]["base_dir"].replace("\\", "/").endswith("study/sub-07/ses-01")
