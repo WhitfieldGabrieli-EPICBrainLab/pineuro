@@ -41,6 +41,28 @@ class TestTaskRegistry:
             get_task_metadata("nonexistent_task_xyz")
 
 
+class TestBuiltinTaskMetadataWellFormed:
+    """Every registered task exposes well-formed metadata.
+
+    Consolidates the former per-task metadata-literal tests (previously duplicated
+    across test_ball/test_gauge/test_thermometer/test_rest); iterating the registry
+    also covers any task added later, including third-party plugins.
+    """
+
+    def test_all_registered_tasks_are_well_formed(self):
+        from pineuro.tasks.task_registry import get_task_metadata, list_available_tasks
+
+        tasks = list_available_tasks()
+        assert tasks, "no tasks registered"
+        for task_id in tasks:
+            meta = get_task_metadata(task_id)
+            assert meta.task_id == task_id
+            assert isinstance(meta.display_name, str) and meta.display_name
+            assert meta.roles, f"{task_id} declares no roles"
+            assert meta.n_networks >= 0
+            assert isinstance(meta.parameters, list)
+
+
 # =============================================================================
 # TaskConfigError and TaskMetadata.validate_config
 # =============================================================================

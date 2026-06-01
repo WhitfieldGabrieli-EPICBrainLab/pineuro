@@ -213,7 +213,7 @@ class SessionSelectionDialog:
             ft.Text("Existing sessions:", size=st.CAPTION, weight=ft.FontWeight.W_500),
             ft.Container(
                 content=ft.Column(session_tiles, spacing=0),
-                border=ft.border.all(1, st.PANEL_BORDER),
+                border=ft.Border.all(1, st.PANEL_BORDER),
                 border_radius=8,
                 padding=0,
             ),

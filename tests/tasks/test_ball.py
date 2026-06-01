@@ -1,24 +1,12 @@
-"""Tests for pineuro.tasks.ball — BallTask metadata, movement math, outlier rejection.
+"""Tests for pineuro.tasks.ball — BallTask movement math and outlier rejection.
 
 PsychoPy-dependent methods (setup, apply_movement, check_hits, run) are not
 unit-tested; the focus is on calculate_ball_movement (pure-ish math + state)
-and check_pause_movement (pure logic).
+and check_pause_movement (pure logic). Registry/metadata well-formedness is
+covered generically in tests/tasks/test_task_registry.py.
 """
 
 import numpy as np
-
-
-class TestBallTaskMetadata:
-    def test_registered(self):
-        from pineuro.tasks.task_registry import list_available_tasks
-
-        assert "ball" in list_available_tasks()
-
-    def test_n_networks(self):
-        from pineuro.tasks.task_registry import get_task_metadata
-
-        meta = get_task_metadata("ball")
-        assert meta.n_networks == 2
 
 
 def _stub_ball(signal_mode="activation", connectivity_target="increase"):

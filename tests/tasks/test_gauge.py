@@ -5,19 +5,9 @@ from types import SimpleNamespace
 
 
 class TestGaugeTaskMetadata:
-    def test_registered_in_registry(self):
-        from pineuro.tasks.task_registry import list_available_tasks
-
-        tasks = list_available_tasks()
-        assert "gauge" in tasks
-
-    def test_metadata_fields(self):
-        from pineuro.tasks.task_registry import get_task_metadata
-
-        meta = get_task_metadata("gauge")
-        assert meta.task_id == "gauge"
-        assert meta.n_networks == 2
-
+    # Registration + n_networks well-formedness is covered generically in
+    # test_task_registry.py; these keep the gauge-specific declared-contract checks
+    # (the role keys and parameters the factory/GUI depend on by name).
     def test_has_network_roles(self):
         from pineuro.tasks.task_registry import get_task_metadata
 

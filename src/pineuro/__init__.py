@@ -39,25 +39,27 @@ Examples
 >>>
 >>> # Step 1: Preprocess resting-state data
 >>> preproc_file, mask_file, ref_file = preprocessing(
-...     participant_id='sub-01', task='rest',
-...     root_dir='/data/preprocessing',
-...     input_dicoms='/data/raw/rest'
+...     participant_id='sub-01', session_id='ses-01', task='rest',
+...     root_dir='/data/sub-01/ses-01/preprocessing',
+...     input_dicoms='/scanner/sub-01/rest',
 ... )
 >>>
->>> # Step 2: Extract network masks
->>> mask_extraction_rest(
-...     root_dir='/data/masks',
-...     preproc_runs=[preproc_file],
-...     yeo_networks=[7],  # Default Mode Network
+>>> # Step 2: Extract participant-specific network masks (ICA + Yeo atlas)
+>>> mask_paths = mask_extraction_rest(
+...     participant_id='sub-01', session_id='ses-01',
+...     root_dir='/data/sub-01/ses-01/mask_extraction',
+...     input_file=preproc_file, mask_file=mask_file, ref_file=ref_file,
+...     networks=['DefaultA', 'ContA'],  # returns a list of mask Paths
 ... )
 >>>
->>> # Step 3: Run feedback task
->>> results = run_feedback_task(
-...     mask_paths=['/data/masks/03_masks/network_7.nii.gz'],
-...     subject='sub-01', task='nback', run=1,
-...     output_dir='/data/feedback',
-...     incoming_dir='/scanner/export/dicoms',
-...     n_baseline=25, n_volumes=200
+>>> # Step 3: Run a real-time feedback task (here, simulated offline)
+>>> result = run_feedback_task(
+...     mask_paths=mask_paths, subject='sub-01', session='ses-01',
+...     task='ball', run=1,
+...     output_dir='/data/sub-01/ses-01/feedback',
+...     collection_dir='/scanner/incoming',
+...     n_baseline=15, n_volumes=200, tr=2.0,
+...     simulator_source_dir='/data/sub-01/feedback_dicoms', simulator_speed=10.0,
 ... )
 """
 

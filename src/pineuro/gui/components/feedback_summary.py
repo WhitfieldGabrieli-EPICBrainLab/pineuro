@@ -273,7 +273,7 @@ class FeedbackSummaryDialog(BaseDialog):
                             src=str(plot_path),
                             width=st.PLOT_IMAGE_W,
                         ),
-                        border=ft.border.all(1, st.PANEL_BORDER),
+                        border=ft.Border.all(1, st.PANEL_BORDER),
                         border_radius=8,
                         padding=st.GAP_XS,
                     )

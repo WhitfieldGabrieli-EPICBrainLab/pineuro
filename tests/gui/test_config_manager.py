@@ -92,11 +92,16 @@ class TestCRUD:
         assert names == {"Study A", "Study B"}
 
     def test_list_studies_sorted_newest_first(self, manager):
-        import time
+        import os
 
         manager.save_study(make_study("Older"))
-        time.sleep(0.02)
         manager.save_study(make_study("Newer"))
+        # Force a deterministic mtime ordering instead of relying on the wall-clock
+        # gap between two rapid saves (flaky on coarse-granularity filesystems): age
+        # everything belonging to "Older" far into the past.
+        for path in manager.studies_dir.rglob("*"):
+            if "older" in str(path).lower():
+                os.utime(path, (1_000_000, 1_000_000))
         names = [m.name for m in manager.list_studies()]
         assert names.index("Newer") < names.index("Older")
 

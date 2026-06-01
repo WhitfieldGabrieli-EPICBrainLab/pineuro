@@ -5,10 +5,42 @@ Provides factory fixtures for creating synthetic neuroimaging data
 """
 
 import json
+import time
 
 import nibabel as nib
 import numpy as np
 import pytest
+
+# =============================================================================
+# Timing helper (de-flakes thread/poller tests)
+# =============================================================================
+
+
+@pytest.fixture
+def assert_eventually():
+    """Return a helper that polls ``predicate`` until truthy or ``timeout`` elapses.
+
+    Replaces the fragile ``time.sleep(<fixed>)`` + assert pattern in thread/poller
+    tests: a fixed sleep can be too short on a loaded CI runner (false failure) and
+    is needlessly slow on a fast one. Polling returns as soon as the condition holds.
+
+    Usage::
+
+        def test_x(assert_eventually):
+            poller.start()
+            assert_eventually(lambda: len(received) >= 1, timeout=3.0)
+    """
+
+    def _wait(predicate, *, timeout=3.0, interval=0.01, message="condition not met in time"):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(interval)
+        assert predicate(), message
+
+    return _wait
+
 
 # =============================================================================
 # NIfTI Fixtures

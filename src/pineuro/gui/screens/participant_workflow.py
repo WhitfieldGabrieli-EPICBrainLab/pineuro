@@ -981,7 +981,7 @@ class ParticipantWorkflowScreen:
                             ],
                             spacing=st.GAP_SM,
                         ),
-                        padding=ft.padding.only(left=5, bottom=5),
+                        padding=ft.Padding.only(left=5, bottom=5),
                     )
                 )
 
@@ -1090,7 +1090,7 @@ class ParticipantWorkflowScreen:
                         heading_row_height=30,
                     ),
                     visible=False,
-                    padding=ft.padding.symmetric(horizontal=5),
+                    padding=ft.Padding.symmetric(horizontal=5),
                     animate_opacity=ft.Animation(200),
                 )
 
@@ -1124,7 +1124,7 @@ class ParticipantWorkflowScreen:
                 ),
                 ft.Container(
                     content=overlay_content,
-                    border=ft.border.all(1, st.PANEL_BORDER),
+                    border=ft.Border.all(1, st.PANEL_BORDER),
                     border_radius=5,
                     clip_behavior=ft.ClipBehavior.HARD_EDGE,
                 ),
@@ -1137,7 +1137,7 @@ class ParticipantWorkflowScreen:
                 padding=st.GAP,
                 bgcolor=st.SUBTLE_BG,
                 border_radius=8,
-                border=ft.border.all(2, st.PANEL_BORDER),
+                border=ft.Border.all(2, st.PANEL_BORDER),
             )
             mask_cards.append(card)
 
@@ -1162,7 +1162,7 @@ class ParticipantWorkflowScreen:
                             ],
                             spacing=st.GAP_SM,
                         ),
-                        padding=ft.padding.only(left=5, bottom=5),
+                        padding=ft.Padding.only(left=5, bottom=5),
                     )
                 )
                 for tissue_file in tissue_files:
@@ -1220,7 +1220,7 @@ class ParticipantWorkflowScreen:
                                 ),
                                 ft.Container(
                                     content=t_overlay_content,
-                                    border=ft.border.all(1, st.PANEL_BORDER),
+                                    border=ft.Border.all(1, st.PANEL_BORDER),
                                     border_radius=5,
                                     clip_behavior=ft.ClipBehavior.HARD_EDGE,
                                 ),
@@ -1230,7 +1230,7 @@ class ParticipantWorkflowScreen:
                         padding=st.GAP_MD,
                         bgcolor=st.MASK_TISSUE_BG,
                         border_radius=6,
-                        border=ft.border.all(1, st.MASK_TISSUE_BORDER),
+                        border=ft.Border.all(1, st.MASK_TISSUE_BORDER),
                     )
                     mask_cards.append(tissue_card)
 
@@ -1369,7 +1369,7 @@ class ParticipantWorkflowScreen:
                                                 fit=ft.BoxFit.CONTAIN,
                                                 height=st.OVERLAY_H,
                                             ),
-                                            border=ft.border.all(1, st.MASK_MANUAL_BORDER),
+                                            border=ft.Border.all(1, st.MASK_MANUAL_BORDER),
                                             border_radius=5,
                                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                                         ),
@@ -1379,7 +1379,7 @@ class ParticipantWorkflowScreen:
                                 padding=st.GAP,
                                 bgcolor=st.MASK_MANUAL_BG,
                                 border_radius=8,
-                                border=ft.border.all(2, st.MASK_MANUAL_BORDER),
+                                border=ft.Border.all(2, st.MASK_MANUAL_BORDER),
                             ),
                         ],
                         spacing=st.GAP,
@@ -1618,7 +1618,7 @@ class ParticipantWorkflowScreen:
                         ),
                         ft.Container(
                             content=overlay_content,
-                            border=ft.border.all(1, st.PANEL_BORDER),
+                            border=ft.Border.all(1, st.PANEL_BORDER),
                             border_radius=5,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
@@ -1628,7 +1628,7 @@ class ParticipantWorkflowScreen:
                 padding=st.GAP,
                 bgcolor=st.SUBTLE_BG,
                 border_radius=8,
-                border=ft.border.all(2, st.PANEL_BORDER),
+                border=ft.Border.all(2, st.PANEL_BORDER),
             )
             mask_cards.append(card)
 
@@ -2941,7 +2941,7 @@ class ParticipantWorkflowScreen:
                             icon=ft.Icons.MAP,
                             on_click=lambda e: self._confirm_mni_fallback("localizer"),
                         ),
-                        padding=ft.padding.only(top=5),
+                        padding=ft.Padding.only(top=5),
                     ),
                 ]
             )
@@ -2979,7 +2979,7 @@ class ParticipantWorkflowScreen:
                             ],
                             spacing=st.GAP_XS,
                         ),
-                        padding=ft.padding.only(left=10),
+                        padding=ft.Padding.only(left=10),
                     )
                 )
                 # Mask review/approval gate
@@ -2997,7 +2997,7 @@ class ParticipantWorkflowScreen:
                                 ],
                                 spacing=st.GAP_XS,
                             ),
-                            padding=ft.padding.only(left=10),
+                            padding=ft.Padding.only(left=10),
                         )
                     )
                 else:
@@ -3009,7 +3009,7 @@ class ParticipantWorkflowScreen:
                                 bgcolor=st.WARNING,
                                 on_click=lambda e: self._show_mask_review_dialog(),
                             ),
-                            padding=ft.padding.only(left=10, top=5),
+                            padding=ft.Padding.only(left=10, top=5),
                         )
                     )
             else:
@@ -3042,7 +3042,7 @@ class ParticipantWorkflowScreen:
                                 icon=ft.Icons.ASSESSMENT,
                                 on_click=lambda e: self._show_coregistration_qc("initial"),
                             ),
-                            padding=ft.padding.only(left=10),
+                            padding=ft.Padding.only(left=10),
                         )
                     )
 
@@ -3056,7 +3056,7 @@ class ParticipantWorkflowScreen:
                             icon=ft.Icons.UNDO,
                             on_click=lambda e: self._revert_from_mni(),
                         ),
-                        padding=ft.padding.only(top=5),
+                        padding=ft.Padding.only(top=5),
                     ),
                 ]
             )
@@ -3124,7 +3124,7 @@ class ParticipantWorkflowScreen:
                                 icon=ft.Icons.FOLDER_OPEN,
                                 on_click=lambda e, idx=loc_idx: self._show_manual_mask_config_dialog(loc_idx=idx),
                             ),
-                            padding=ft.padding.only(left=10),
+                            padding=ft.Padding.only(left=10),
                         )
                     )
 
@@ -3146,7 +3146,7 @@ class ParticipantWorkflowScreen:
                                     ],
                                     spacing=st.GAP_XS,
                                 ),
-                                padding=ft.padding.only(left=10),
+                                padding=ft.Padding.only(left=10),
                             )
                         )
                     else:
@@ -3158,7 +3158,7 @@ class ParticipantWorkflowScreen:
                                     bgcolor=st.WARNING,
                                     on_click=lambda e, idx=loc_idx: self._show_mask_review_dialog(loc_idx=idx),
                                 ),
-                                padding=ft.padding.only(left=10, top=5),
+                                padding=ft.Padding.only(left=10, top=5),
                             )
                         )
         elif config.get("localizers") and config["localizers"][0].get("type") == "manual":
@@ -3177,7 +3177,7 @@ class ParticipantWorkflowScreen:
                             icon=ft.Icons.FOLDER_OPEN,
                             on_click=lambda e: self._show_manual_mask_config_dialog(loc_idx=0),
                         ),
-                        padding=ft.padding.only(left=10),
+                        padding=ft.Padding.only(left=10),
                     ),
                 ]
             )
@@ -3198,7 +3198,7 @@ class ParticipantWorkflowScreen:
                                 ],
                                 spacing=st.GAP_XS,
                             ),
-                            padding=ft.padding.only(left=10),
+                            padding=ft.Padding.only(left=10),
                         )
                     )
                 else:
@@ -3210,7 +3210,7 @@ class ParticipantWorkflowScreen:
                                 bgcolor=st.WARNING,
                                 on_click=lambda e: self._show_mask_review_dialog(),
                             ),
-                            padding=ft.padding.only(left=10, top=5),
+                            padding=ft.Padding.only(left=10, top=5),
                         )
                     )
         else:
@@ -3251,7 +3251,7 @@ class ParticipantWorkflowScreen:
                                 ],
                                 spacing=st.GAP_XS,
                             ),
-                            padding=ft.padding.only(left=10),
+                            padding=ft.Padding.only(left=10),
                         )
                     )
                 else:
@@ -3264,7 +3264,7 @@ class ParticipantWorkflowScreen:
                                 bgcolor=st.WARNING,
                                 on_click=lambda e: self._show_mask_review_dialog(),
                             ),
-                            padding=ft.padding.only(left=10, top=5),
+                            padding=ft.Padding.only(left=10, top=5),
                         )
                     )
 
@@ -3279,7 +3279,7 @@ class ParticipantWorkflowScreen:
                             icon=ft.Icons.MAP,
                             on_click=lambda e: self._confirm_mni_fallback("mask_extraction"),
                         ),
-                        padding=ft.padding.only(top=5),
+                        padding=ft.Padding.only(top=5),
                     ),
                 ]
             )
@@ -3308,7 +3308,7 @@ class ParticipantWorkflowScreen:
                             icon=ft.Icons.ASSESSMENT,
                             on_click=lambda e: self._show_coregistration_qc("initial"),
                         ),
-                        padding=ft.padding.only(left=10),
+                        padding=ft.Padding.only(left=10),
                     )
                 )
 
@@ -3363,7 +3363,7 @@ class ParticipantWorkflowScreen:
                             icon=ft.Icons.ASSESSMENT,
                             on_click=lambda e: self._show_coregistration_qc("realtime"),
                         ),
-                        padding=ft.padding.only(left=10),
+                        padding=ft.Padding.only(left=10),
                     )
                 )
 
@@ -3395,7 +3395,7 @@ class ParticipantWorkflowScreen:
                             icon=ft.Icons.ASSESSMENT,
                             on_click=lambda e, sid=step_id: self._show_feedback_summary(sid),
                         ),
-                        padding=ft.padding.only(left=10),
+                        padding=ft.Padding.only(left=10),
                     )
                 )
 
@@ -3545,11 +3545,11 @@ class ParticipantWorkflowScreen:
                             ],
                             spacing=st.GAP_SM,
                         ),
-                        padding=ft.padding.only(left=10),
+                        padding=ft.Padding.only(left=10),
                     ),
                     ft.Container(
                         content=setup_guide_button,
-                        padding=ft.padding.only(left=10),
+                        padding=ft.Padding.only(left=10),
                     ),
                 ],
                 spacing=st.GAP_XS,
@@ -3697,7 +3697,7 @@ class ParticipantWorkflowScreen:
                 ],
                 spacing=st.GAP_XS,
             ),
-            padding=ft.padding.only(left=10),
+            padding=ft.Padding.only(left=10),
         )
 
         return ft.ExpansionPanel(
@@ -3779,7 +3779,7 @@ class ParticipantWorkflowScreen:
                                         ),
                                         spacing=st.GAP_XS,
                                     ),
-                                    padding=ft.padding.only(left=30),
+                                    padding=ft.Padding.only(left=30),
                                 ),
                             ],
                             spacing=st.GAP_XS,
@@ -3828,7 +3828,7 @@ class ParticipantWorkflowScreen:
                                         ),
                                         spacing=st.GAP_XS,
                                     ),
-                                    padding=ft.padding.only(left=30),
+                                    padding=ft.Padding.only(left=30),
                                 ),
                             ],
                             spacing=st.GAP_XS,
@@ -4450,9 +4450,9 @@ class ParticipantWorkflowScreen:
                 spacing=st.GAP_SM,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=20, vertical=8),
+            padding=ft.Padding.symmetric(horizontal=20, vertical=8),
             bgcolor=st.WARNING_BG,
-            border=ft.border.only(bottom=ft.BorderSide(1, st.WARNING_BORDER)),
+            border=ft.Border.only(bottom=ft.BorderSide(1, st.WARNING_BORDER)),
         )
         self._resumption_banner = banner
         return banner
@@ -4502,9 +4502,9 @@ class ParticipantWorkflowScreen:
                 spacing=st.GAP_SM,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=20, vertical=8),
+            padding=ft.Padding.symmetric(horizontal=20, vertical=8),
             bgcolor=st.WARNING_BG,
-            border=ft.border.only(bottom=ft.BorderSide(1, st.WARNING_BORDER)),
+            border=ft.Border.only(bottom=ft.BorderSide(1, st.WARNING_BORDER)),
         )
         self._config_change_banner = banner
         return banner
@@ -4534,9 +4534,9 @@ class ParticipantWorkflowScreen:
                 spacing=st.GAP_SM,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=20, vertical=8),
+            padding=ft.Padding.symmetric(horizontal=20, vertical=8),
             bgcolor=st.ERROR_BG,
-            border=ft.border.only(bottom=ft.BorderSide(1, st.ERROR_BORDER)),
+            border=ft.Border.only(bottom=ft.BorderSide(1, st.ERROR_BORDER)),
         )
 
     def _show_config_change_dialog(self):
@@ -4786,7 +4786,7 @@ class ParticipantWorkflowScreen:
             ft.Text("Parameters:", size=st.BODY, weight=ft.FontWeight.W_500),
             ft.Container(
                 content=ft.Column(param_rows, spacing=st.GAP_XS),
-                padding=ft.padding.only(left=10),
+                padding=ft.Padding.only(left=10),
             ),
         ]
 
@@ -6232,7 +6232,7 @@ class ParticipantWorkflowScreen:
             ),
             padding=st.PAD,
             bgcolor=st.ERROR_BG,
-            border=ft.border.all(1, st.ERROR_BORDER),
+            border=ft.Border.all(1, st.ERROR_BORDER),
             border_radius=8,
             margin=10,
         )
@@ -6673,7 +6673,7 @@ class ParticipantWorkflowScreen:
                             ),
                             bgcolor=st.SIDEBAR_BG,
                             border_radius=8,
-                            padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                            padding=ft.Padding.symmetric(horizontal=12, vertical=6),
                         ),
                         # Row 1: Activation plot + Task mirror (equal halves)
                         ft.Row(
@@ -6750,7 +6750,7 @@ class ParticipantWorkflowScreen:
                                 ],
                                 spacing=st.GAP_MD,
                             ),
-                            padding=ft.padding.symmetric(horizontal=20),
+                            padding=ft.Padding.symmetric(horizontal=20),
                         ),
                     ],
                     spacing=st.GAP_SM,
@@ -7019,7 +7019,7 @@ class ParticipantWorkflowScreen:
             width=st.TASK_MIRROR_W,
             height=st.TASK_MIRROR_H,
             alignment=ft.Alignment(0, 0),
-            border=ft.border.all(1, st.PANEL_BORDER),
+            border=ft.Border.all(1, st.PANEL_BORDER),
             border_radius=5,
             bgcolor=ft.Colors.BLACK,
         )
@@ -7073,7 +7073,7 @@ class ParticipantWorkflowScreen:
                         ),
                         bgcolor=st.SIDEBAR_BG,
                         border_radius=8,
-                        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                        padding=ft.Padding.symmetric(horizontal=12, vertical=6),
                     ),
                     # Row 1: Brain slice + Task mirror
                     ft.Row(
@@ -7147,7 +7147,7 @@ class ParticipantWorkflowScreen:
                             ],
                             spacing=st.GAP_MD,
                         ),
-                        padding=ft.padding.symmetric(horizontal=20),
+                        padding=ft.Padding.symmetric(horizontal=20),
                     ),
                 ],
                 spacing=st.GAP_SM,
@@ -7858,7 +7858,7 @@ class ParticipantWorkflowScreen:
             content=self._build_preview_panel(),
             expand=True,
             bgcolor=ft.Colors.WHITE,
-            border=ft.border.all(1, st.PANEL_BORDER),
+            border=ft.Border.all(1, st.PANEL_BORDER),
             border_radius=5,
         )
 

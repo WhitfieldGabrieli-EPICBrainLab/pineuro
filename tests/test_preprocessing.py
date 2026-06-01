@@ -66,22 +66,13 @@ class TestConcat:
 
 
 class TestSpatialSmoothing:
-    def test_output_exists(self, synthetic_nifti_4d, tmp_path):
+    def test_smoothing_changes_values_and_preserves_shape(self, synthetic_nifti_4d, tmp_path):
         input_path = synthetic_nifti_4d(shape=(8, 8, 8), n_volumes=5)
         output_path = tmp_path / "smoothed.nii.gz"
 
         spatial_smoothing(input_path, output_path, fwhm=5.0)
 
-        assert output_path.exists()
-        result = nib.load(output_path)
-        assert result.shape == (8, 8, 8, 5)
-
-    def test_smoothing_changes_values(self, synthetic_nifti_4d, tmp_path):
-        input_path = synthetic_nifti_4d(shape=(8, 8, 8), n_volumes=5)
-        output_path = tmp_path / "smoothed.nii.gz"
-
-        spatial_smoothing(input_path, output_path, fwhm=5.0)
-
+        assert nib.load(output_path).shape == (8, 8, 8, 5)
         original = nib.load(input_path).get_fdata()
         smoothed = nib.load(output_path).get_fdata()
         # Smoothing should change the values
@@ -132,12 +123,15 @@ class TestTemporalFiltering:
         assert np.var(filtered_voxel) < np.var(slow_drift + fast_signal)
 
     def test_no_filter_passthrough(self, synthetic_nifti_4d, tmp_path):
-        """No highpass/lowpass should not change data."""
+        """No highpass/lowpass should leave the data numerically unchanged."""
         input_path = synthetic_nifti_4d(shape=(3, 3, 3), n_volumes=20)
         output_path = tmp_path / "filtered.nii.gz"
 
         temporal_filtering(input_path, output_path, highpass=None, lowpass=None)
-        assert output_path.exists()
+
+        original = nib.load(input_path).get_fdata()
+        filtered = nib.load(output_path).get_fdata()
+        np.testing.assert_allclose(filtered, original, rtol=0, atol=1e-6)
 
 
 # =============================================================================

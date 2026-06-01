@@ -1,4 +1,9 @@
-"""Tests for pineuro.tasks.designs — BlockDesign, NuisanceOnlyDesign, EventRelatedDesign."""
+"""Tests for pineuro.tasks.designs — BlockDesign, NuisanceOnlyDesign, EventRelatedDesign.
+
+These are lightweight structural checks (shape, baseline-zero, active-nonzero) that run
+in the default suite. The rigorous HRF / independent-reference correctness checks for the
+same design regressors live in tests/validation/test_numeric_core.py (opt-in `-m validation`).
+"""
 
 import numpy as np
 

@@ -120,7 +120,7 @@ class QCPlotViewer:
                                     src=str(path),
                                     fit=ft.BoxFit.CONTAIN,
                                 ),
-                                border=ft.border.all(1, st.PANEL_BORDER),
+                                border=ft.Border.all(1, st.PANEL_BORDER),
                                 border_radius=5,
                                 padding=st.GAP_XS,
                             ),

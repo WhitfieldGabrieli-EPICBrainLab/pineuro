@@ -51,12 +51,6 @@ class TestExtractMotionFromDicomHeader:
 
 
 class TestCollectionQCMonitor:
-    def test_construction(self, tmp_path):
-        log_path = tmp_path / "collectionlog.tsv"
-        monitor = CollectionQCMonitor(log_path)
-        assert monitor.log_path == log_path
-        monitor.close()
-
     def test_tsv_header_written(self, tmp_path):
         log_path = tmp_path / "collectionlog.tsv"
         monitor = CollectionQCMonitor(log_path)

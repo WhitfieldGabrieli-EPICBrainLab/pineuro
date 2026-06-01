@@ -1,6 +1,10 @@
-"""Tests for pineuro.tasks.protocol — CoordinatorProtocol and TaskProtocol runtime checks."""
+"""Tests for pineuro.tasks.protocol — CoordinatorProtocol and TaskProtocol surface.
 
-from unittest.mock import MagicMock
+Only the protocol *surface* is asserted here (the members consumers rely on). The
+``isinstance(x, Protocol)`` runtime check is not tested: ``@runtime_checkable`` only
+verifies member presence, and a ``MagicMock`` auto-creates every attribute, so the
+check is satisfied by construction and proves nothing.
+"""
 
 
 class TestProtocols:
@@ -20,35 +24,3 @@ class TestProtocols:
         assert hasattr(TaskProtocol, "update")
         assert hasattr(TaskProtocol, "run")
         assert hasattr(TaskProtocol, "cleanup")
-
-    def test_coordinator_protocol_is_runtime_checkable(self):
-        from pineuro.tasks.protocol import CoordinatorProtocol
-
-        mock = MagicMock()
-        mock.subject = "sub-01"
-        mock.task = "ball"
-        mock.run_number = 1
-        mock.attempt = None
-        mock.n_volumes = 100
-        mock.mask_names = ["DMN"]
-        mock.is_complete = MagicMock(return_value=False)
-        mock.check_error = MagicMock()
-        mock.was_stopped = MagicMock(return_value=False)
-        mock.should_show_questions = MagicMock(return_value=True)
-        mock.send_trigger = MagicMock()
-
-        assert isinstance(mock, CoordinatorProtocol)
-
-    def test_task_protocol_is_runtime_checkable(self):
-        from pineuro.tasks.protocol import TaskProtocol
-
-        mock = MagicMock()
-        mock.setup = MagicMock()
-        mock.update = MagicMock()
-        mock.run = MagicMock()
-        mock.cleanup = MagicMock()
-        mock.get_run_results = MagicMock(return_value={})
-        mock.get_mirror_state = MagicMock(return_value={})
-        mock.get_volume_log_suffix = MagicMock(return_value="")
-
-        assert isinstance(mock, TaskProtocol)

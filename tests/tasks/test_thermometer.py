@@ -1,22 +1,12 @@
-"""Tests for pineuro.tasks.thermometer — metadata, condition file resolution, parsing."""
+"""Tests for pineuro.tasks.thermometer — condition file resolution and parsing.
+
+Registry/metadata well-formedness is covered generically in
+tests/tasks/test_task_registry.py.
+"""
 
 from unittest.mock import MagicMock
 
 import pytest
-
-
-class TestThermometerMetadata:
-    def test_registered(self):
-        from pineuro.tasks.task_registry import list_available_tasks
-
-        assert "thermometer" in list_available_tasks()
-
-    def test_metadata_fields(self):
-        from pineuro.tasks.task_registry import get_task_metadata
-
-        meta = get_task_metadata("thermometer")
-        assert meta.task_id == "thermometer"
-        assert meta.n_networks == 1  # single-network feedback
 
 
 def _stub_thermometer(stim_dir, *, participant="sub-01", run=1, session="feedback"):

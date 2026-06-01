@@ -145,7 +145,7 @@ class CollectionProgressPanel:
             width=st.DICOM_PREVIEW,
             height=st.DICOM_PREVIEW,
             alignment=ft.Alignment(0, 0),
-            border=ft.border.all(1, st.PANEL_BORDER),
+            border=ft.Border.all(1, st.PANEL_BORDER),
             border_radius=8,
         )
 

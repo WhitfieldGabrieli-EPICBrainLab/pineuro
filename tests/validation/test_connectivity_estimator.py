@@ -17,6 +17,8 @@ flips at least one of these expected values.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from pineuro.feedback import ConnectivityEstimator
@@ -154,6 +156,37 @@ def test_constant_signal_returns_zero(record):
             description=(
                 "When one region's signal never changes, its correlation is "
                 "undefined. pineuro returns zero rather than an undefined value."
+            ),
+        )
+        == 0.0
+    )
+
+
+def test_both_constant_signals_return_zero_not_nan(record):
+    """When BOTH signals are flat (zero variance), connectivity is exactly 0.0.
+
+    Pearson r is mathematically 0/0 = undefined here, and ``np.corrcoef`` of two
+    constant vectors yields NaN. The estimator must short-circuit on the
+    near-zero-std guard and return the explicit 0.0 fallback rather than letting
+    a NaN (or inf) leak into the feedback signal.
+    """
+    est = ConnectivityEstimator([("a", "b")], window=5)
+    result = est.compute({"a": [7.0, 7.0, 7.0, 7.0, 7.0], "b": [3.0, 3.0, 3.0, 3.0, 3.0]})
+    value = result["corr_a_b"]
+    # Guard the report against a NaN slipping through: NaN compares != to itself,
+    # so a non-finite value would fail this exact-equality record outright.
+    assert math.isfinite(value)
+    assert (
+        record(
+            "connectivity",
+            "both_constant_value",
+            value,
+            threshold=0.0,
+            op="==",
+            description=(
+                "When neither region's signal changes at all, the correlation is "
+                "mathematically undefined (0/0). pineuro must return a clean zero, "
+                "never a NaN or infinity that would corrupt downstream feedback."
             ),
         )
         == 0.0

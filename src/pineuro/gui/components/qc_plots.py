@@ -173,7 +173,7 @@ class BaseQCPlot:
                         ft.Container(
                             width=14,
                             height=0,
-                            border=ft.border.only(top=ft.BorderSide(1.5, THRESHOLD_LINE_COLOR)),
+                            border=ft.Border.only(top=ft.BorderSide(1.5, THRESHOLD_LINE_COLOR)),
                         ),
                         ft.Text(self._format_threshold_label(), size=10),
                     ],

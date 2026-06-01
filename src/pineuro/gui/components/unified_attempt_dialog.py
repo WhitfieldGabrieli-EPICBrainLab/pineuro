@@ -219,12 +219,12 @@ class UnifiedAttemptDialog(BaseDialog):
                                     ],
                                     spacing=st.GAP_XS,
                                 ),
-                                padding=ft.padding.only(left=40),
+                                padding=ft.Padding.only(left=40),
                             ),
                         ],
                         spacing=st.GAP_XS,
                     ),
-                    padding=ft.padding.symmetric(vertical=st.GAP_XS),
+                    padding=ft.Padding.symmetric(vertical=st.GAP_XS),
                 )
                 attempt_rows.append(attempt_row)
 
@@ -243,7 +243,7 @@ class UnifiedAttemptDialog(BaseDialog):
                 padding=st.GAP,
                 bgcolor=st.SUBTLE_BG,
                 border_radius=8,
-                border=ft.border.all(1, st.PANEL_BORDER),
+                border=ft.Border.all(1, st.PANEL_BORDER),
             )
             run_controls.append(run_card)
 

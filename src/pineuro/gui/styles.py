@@ -403,6 +403,6 @@ def card_shell(
         padding=GAP,
         bgcolor=SUBTLE_BG,
         border_radius=8,
-        border=ft.border.all(1, PANEL_BORDER),
+        border=ft.Border.all(1, PANEL_BORDER),
         width=width,
     )

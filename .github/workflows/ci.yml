@@ -137,8 +137,8 @@ jobs:
     timeout-minutes: 40
     env:
       # Single-threaded ITK/BLAS so the iterative optimizers (ANTs, CanICA) are
-      # reproducible -- the band checks in tests/validation/baselines.py rely on
-      # it. conftest.py sets these too; this makes the pinning explicit in CI.
+      # reproducible -- the exact / first-principles checks in tests/validation/
+      # rely on it. conftest.py sets these too; this makes the pinning explicit in CI.
       ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS: "1"
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"

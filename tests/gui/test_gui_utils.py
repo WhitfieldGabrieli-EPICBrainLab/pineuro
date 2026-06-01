@@ -249,64 +249,28 @@ class TestCrossSessionReuseHelpers:
 
 
 class TestValidateParticipantId:
-    def test_empty_string_invalid(self):
-        ok, msg = validate_participant_id("")
-        assert not ok
-        assert msg is not None
-
-    def test_valid_simple_alphanumeric(self):
-        ok, msg = validate_participant_id("sub01")
+    @pytest.mark.parametrize("value", ["sub01", "sub-01", "001", "A", "P001"])
+    def test_valid_ids_accepted(self, value):
+        ok, msg = validate_participant_id(value)
         assert ok
-        assert msg is None
+        assert msg is None  # valid ids carry no error message
 
-    def test_valid_bids_with_hyphen(self):
-        ok, msg = validate_participant_id("sub-01")
-        assert ok
-
-    def test_valid_digits_only(self):
-        ok, msg = validate_participant_id("001")
-        assert ok
-
-    def test_valid_single_char(self):
-        ok, msg = validate_participant_id("A")
-        assert ok
-
-    def test_valid_uppercase(self):
-        ok, msg = validate_participant_id("P001")
-        assert ok
-
-    def test_leading_hyphen_invalid(self):
-        ok, msg = validate_participant_id("-sub01")
-        assert not ok
-
-    def test_space_invalid(self):
-        ok, msg = validate_participant_id("my id")
-        assert not ok
-
-    def test_exclamation_mark_invalid(self):
-        ok, msg = validate_participant_id("sub01!")
-        assert not ok
-
-    def test_underscore_invalid(self):
-        ok, msg = validate_participant_id("sub_01")
-        assert not ok
-
-    def test_dot_invalid(self):
-        ok, msg = validate_participant_id("sub.01")
-        assert not ok
-
-    def test_at_symbol_invalid(self):
-        ok, msg = validate_participant_id("sub@01")
-        assert not ok
-
-    def test_error_message_is_string(self):
-        ok, msg = validate_participant_id("")
-        assert isinstance(msg, str)
-        assert len(msg) > 0
-
-    def test_valid_returns_none_error(self):
-        ok, msg = validate_participant_id("sub-01")
-        assert msg is None
+    @pytest.mark.parametrize(
+        ("value", "label"),
+        [
+            ("", "empty"),
+            ("-sub01", "leading hyphen"),
+            ("my id", "space"),
+            ("sub01!", "exclamation"),
+            ("sub_01", "underscore"),
+            ("sub.01", "dot"),
+            ("sub@01", "at-symbol"),
+        ],
+    )
+    def test_invalid_ids_rejected_with_message(self, value, label):
+        ok, msg = validate_participant_id(value)
+        assert not ok, f"{label} id {value!r} should be rejected"
+        assert isinstance(msg, str) and msg  # a non-empty explanation
 
 
 # =============================================================================

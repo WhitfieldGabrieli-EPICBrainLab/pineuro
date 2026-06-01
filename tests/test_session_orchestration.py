@@ -235,13 +235,8 @@ class TestIsLastFeedbackForFrc:
 
 
 class TestFeedbackRunConfig:
-    def test_defaults(self):
-        frc = FeedbackRunConfig()
-        assert frc.task == "ball"
-        assert frc.max_runs == 1
-        assert frc.tr == 1.2
-        assert frc.glm.motion_correction == "siemens_moco"
-
+    # `test_defaults` lives in test_session_config.py (the fuller copy); this
+    # class keeps only orchestration-specific FeedbackRunConfig behavior.
     def test_invalid_motion_correction(self):
         import pytest
 

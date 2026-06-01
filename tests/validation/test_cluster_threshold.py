@@ -150,6 +150,63 @@ def test_all_clusters_returned_with_return_all_true():
     assert int(mask.sum()) == 35
 
 
+def test_nonpositive_target_does_not_crash_and_returns_a_real_cluster():
+    """A non-positive ``target_n_voxels`` is not validated; the sweep still
+    terminates on a real cluster instead of crashing, hanging, or emptying out.
+
+    No contiguous cluster can ever satisfy ``size <= 0`` (cluster sizes are
+    strictly positive), so the iterative search keeps raising the threshold
+    until the suprathreshold region disappears, then steps back one step to the
+    last threshold where a cluster survived. For the single 8-voxel cube below
+    that last-surviving cluster is the cube itself: the function returns
+    ``outcome="success"`` with a non-empty mask of exactly that cube, and the
+    info dict reports a positive cluster size that never exceeds the atlas.
+    """
+    stat = np.zeros((10, 10, 10), dtype=np.float64)
+    stat[3:5, 3:5, 3:5] = 5.0  # one 2x2x2 cube -> 8 voxels
+    atlas = np.ones((10, 10, 10), dtype=np.int32)
+
+    mask, info = cluster_threshold_stat_map(
+        stat_data=stat,
+        atlas_data=atlas,
+        target_n_voxels=0,  # non-positive: nothing can ever "fit"
+        start_threshold=1.0,
+        step=0.5,
+    )
+    # The implementation does not raise on target <= 0; it converges normally.
+    assert info["outcome"] == "success"
+    # A real, non-empty, finite cluster comes back -- not zero, not the whole atlas.
+    assert info["cluster_size"] == 8
+    assert int(mask.sum()) == 8
+    assert int(mask.sum()) <= info["atlas_voxel_count"]
+    # The returned mask is exactly the cube; nothing leaks outside it.
+    expected_mask = np.zeros_like(stat, dtype=np.uint8)
+    expected_mask[3:5, 3:5, 3:5] = 1
+    np.testing.assert_array_equal(mask, expected_mask)
+
+
+def test_negative_target_matches_zero_target_behavior():
+    """A strictly negative ``target_n_voxels`` behaves the same as zero.
+
+    Both 0 and any negative budget make the ``size <= target`` test impossible
+    to satisfy, so the convergence path is identical. This pins that a negative
+    value is not special-cased into an error or a different outcome.
+    """
+    stat = np.zeros((10, 10, 10), dtype=np.float64)
+    stat[3:5, 3:5, 3:5] = 5.0
+    atlas = np.ones((10, 10, 10), dtype=np.int32)
+
+    mask_zero, info_zero = cluster_threshold_stat_map(
+        stat_data=stat, atlas_data=atlas, target_n_voxels=0, start_threshold=1.0, step=0.5
+    )
+    mask_neg, info_neg = cluster_threshold_stat_map(
+        stat_data=stat, atlas_data=atlas, target_n_voxels=-5, start_threshold=1.0, step=0.5
+    )
+    assert info_neg["outcome"] == info_zero["outcome"] == "success"
+    assert info_neg["cluster_size"] == info_zero["cluster_size"]
+    np.testing.assert_array_equal(mask_neg, mask_zero)
+
+
 def test_atlas_restricts_to_within_atlas():
     """Stat values outside the atlas are ignored even if they exceed threshold."""
     stat = np.zeros((10, 10, 10), dtype=np.float64)

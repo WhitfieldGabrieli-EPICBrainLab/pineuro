@@ -5,10 +5,10 @@ the ``record`` fixture. At the end of a session that recorded anything, the
 ``pytest_sessionfinish`` hook writes ``_report/validation_metrics.json`` and
 renders the markdown / HTML report.
 
-This module also **pins the numerical environment** (see below). Several
-validation metrics are asserted against recorded baselines (``baselines.py``);
-those baselines are only reproducible if the iterative optimizers underneath them
-run deterministically. Single-threading ITK and BLAS removes the float-addition
+This module also **pins the numerical environment** (see below). The validation
+metrics are exact / first-principles checks (see ``README.md``); those assertions
+are only reproducible if the iterative optimizers underneath them run
+deterministically. Single-threading ITK and BLAS removes the float-addition
 reorder that multithreaded reductions would otherwise introduce.
 """
 

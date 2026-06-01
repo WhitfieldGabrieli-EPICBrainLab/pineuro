@@ -13,39 +13,11 @@ from pineuro.mask_extraction import (
 )
 
 # =============================================================================
-# MaskSelection dataclass
-# =============================================================================
-
-
-class TestMaskSelection:
-    def test_construction(self):
-        sel = MaskSelection(
-            network_name="DefaultA",
-            source_type="ica",
-            component_index=5,
-            correlation=0.85,
-            selection_reason="auto",
-        )
-        assert sel.network_name == "DefaultA"
-        assert sel.component_index == 5
-        assert sel.correlation == 0.85
-
-    def test_optional_fields(self):
-        sel = MaskSelection(
-            network_name="ContA",
-            source_type="ica_combined",
-            component_index=3,
-            correlation=0.7,
-            selection_reason="manual_combined",
-            secondary_component_index=8,
-            secondary_correlation=0.6,
-        )
-        assert sel.secondary_component_index == 8
-        assert sel.secondary_correlation == 0.6
-
-
-# =============================================================================
 # save/load mask selections roundtrip
+#
+# MaskSelection is a plain dataclass; its field round-trip (including the optional
+# secondary_* fields) is exercised by TestMaskSelectionsIO below, so no separate
+# attribute-storage test is kept.
 # =============================================================================
 
 
@@ -59,12 +31,16 @@ class TestMaskSelectionsIO:
                 correlation=0.85,
                 selection_reason="auto",
             ),
+            # A combined selection exercises the optional secondary_* fields through
+            # real save/load serialization (the field round-trip, not attr storage).
             "ContA": MaskSelection(
                 network_name="ContA",
-                source_type="ica",
+                source_type="ica_combined",
                 component_index=12,
                 correlation=0.72,
-                selection_reason="auto",
+                selection_reason="manual_combined",
+                secondary_component_index=8,
+                secondary_correlation=0.6,
             ),
         }
 
@@ -74,6 +50,8 @@ class TestMaskSelectionsIO:
         assert set(loaded.keys()) == {"DefaultA", "ContA"}
         assert loaded["DefaultA"].component_index == 5
         assert loaded["ContA"].correlation == pytest.approx(0.72)
+        assert loaded["ContA"].secondary_component_index == 8
+        assert loaded["ContA"].secondary_correlation == pytest.approx(0.6)
 
     def test_empty_selections(self, tmp_path):
         save_mask_selections(tmp_path, {})

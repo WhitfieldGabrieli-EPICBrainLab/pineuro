@@ -76,7 +76,7 @@ class TaskMirror:
         self._container = ft.Container(
             content=self._image,
             bgcolor=ft.Colors.BLACK,
-            border=ft.border.all(1, st.PANEL_BORDER),
+            border=ft.Border.all(1, st.PANEL_BORDER),
             border_radius=5,
             width=self.width,
             height=self.height,

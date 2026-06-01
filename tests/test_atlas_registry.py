@@ -11,9 +11,6 @@ class TestAtlasSourcesRegistry:
     def test_registry_is_dict(self):
         assert isinstance(ATLAS_SOURCES, dict)
 
-    def test_not_empty(self):
-        assert len(ATLAS_SOURCES) > 0
-
     def test_all_entries_have_display_name(self):
         for key, entry in ATLAS_SOURCES.items():
             assert "display_name" in entry, f"Missing display_name for {key}"

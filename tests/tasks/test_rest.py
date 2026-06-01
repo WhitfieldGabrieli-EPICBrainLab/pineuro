@@ -2,20 +2,8 @@
 
 
 class TestRestMetadata:
-    def test_registered(self):
-        from pineuro.tasks.task_registry import list_available_tasks
-
-        tasks = list_available_tasks()
-        assert "rest" in tasks
-
-    def test_metadata_fields(self):
-        from pineuro.tasks.task_registry import get_task_metadata
-
-        meta = get_task_metadata("rest")
-        assert meta.task_id == "rest"
-        assert "localizer" in meta.roles
-        assert meta.n_networks == 0
-
+    # Registration + n_networks/role well-formedness is covered generically in
+    # test_task_registry.py; this keeps the rest-specific declared-contract check.
     def test_has_duration_parameter(self):
         from pineuro.tasks.task_registry import get_task_metadata
 

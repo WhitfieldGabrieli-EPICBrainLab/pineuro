@@ -10,23 +10,13 @@ from unittest.mock import MagicMock
 import pytest
 
 
-class _ConcreteTask:
-    """Minimal concrete BaseTask subclass for tests (avoids abstract instantiation)."""
-
-
 @pytest.fixture
-def base_task(mock_coordinator):
-    """Construct a real `BaseTask` via a concrete subclass with stub setup/update."""
-    from pineuro.tasks.base import BaseTask
+def base_task(stub_task):
+    """A real `BaseTask` via a concrete stub subclass (setup/update stubbed).
 
-    class _StubTask(BaseTask):
-        def setup(self):  # pragma: no cover — never invoked here
-            pass
-
-        def update(self, data):  # pragma: no cover — never invoked here
-            pass
-
-    return _StubTask(coordinator=mock_coordinator())
+    See the shared ``stub_task`` factory in tests/tasks/conftest.py.
+    """
+    return stub_task()
 
 
 # =============================================================================

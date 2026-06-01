@@ -714,7 +714,7 @@ class StudyEditorScreen:
         self._sidebar = ft.Container(
             width=250,
             bgcolor=st.SIDEBAR_BG,
-            padding=ft.padding.symmetric(vertical=st.GAP_MD, horizontal=st.GAP_SM),
+            padding=ft.Padding.symmetric(vertical=st.GAP_MD, horizontal=st.GAP_SM),
             content=self._build_sidebar_content(),
         )
         self._render_detail()
@@ -870,9 +870,9 @@ class StudyEditorScreen:
                 content=ft.Column(lines, spacing=1),
                 on_click=on_click,
                 bgcolor=st.SELECTED_BG if selected else None,
-                border=ft.border.only(left=ft.BorderSide(3, st.ACCENT)) if selected else None,
+                border=ft.Border.only(left=ft.BorderSide(3, st.ACCENT)) if selected else None,
                 border_radius=6,
-                padding=ft.padding.symmetric(vertical=st.GAP_SM, horizontal=st.GAP_MD),
+                padding=ft.Padding.symmetric(vertical=st.GAP_SM, horizontal=st.GAP_MD),
                 ink=True,
             )
 
@@ -923,7 +923,7 @@ class StudyEditorScreen:
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             bgcolor=st.HEADER_BG,
-            border=ft.border.only(left=ft.BorderSide(4, st.ACCENT)),
+            border=ft.Border.only(left=ft.BorderSide(4, st.ACCENT)),
             border_radius=6,
             padding=st.GAP_MD,
             expand=True,

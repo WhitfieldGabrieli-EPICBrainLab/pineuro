@@ -57,7 +57,9 @@ def _heavy_libs_loaded(module: str, candidates: tuple[str, ...]) -> set[str]:
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        timeout=180,
+        # A cold subprocess importing a GUI module takes a few seconds; 60s is a
+        # generous ceiling that still fails fast on a real module-level hang.
+        timeout=60,
     )
     assert result.returncode == 0, f"importing {module} failed:\n{result.stdout}\n{result.stderr}"
     for line in result.stdout.splitlines():
@@ -67,6 +69,7 @@ def _heavy_libs_loaded(module: str, candidates: tuple[str, ...]) -> set[str]:
     raise AssertionError(f"sentinel not found in output for {module}:\n{result.stdout}\n{result.stderr}")
 
 
+@pytest.mark.slow  # spawns a cold interpreter per module (~seconds each)
 @pytest.mark.parametrize("module", _STRICT_MODULES)
 def test_strict_modules_import_without_heavy_libs(module):
     leaked = _heavy_libs_loaded(module, _NO_CHART_BACKEND)
@@ -77,6 +80,7 @@ def test_strict_modules_import_without_heavy_libs(module):
     )
 
 
+@pytest.mark.slow  # spawns a cold interpreter (~seconds)
 def test_participant_workflow_defers_pineuro_heavy_libs():
     """The main workflow screen may load numpy+matplotlib via its chart backend, but must
     never eagerly import the heavy pineuro neuroimaging/data stack."""

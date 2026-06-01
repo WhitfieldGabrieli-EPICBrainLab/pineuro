@@ -298,7 +298,7 @@ class MaskSelectionDialog:
                         # Overlay image
                         ft.Container(
                             content=overlay_content,
-                            border=ft.border.all(1, st.PANEL_BORDER),
+                            border=ft.Border.all(1, st.PANEL_BORDER),
                             border_radius=5,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
@@ -326,7 +326,7 @@ class MaskSelectionDialog:
                 padding=st.GAP,
                 bgcolor=st.SUCCESS_BG if is_accepted else st.SUBTLE_BG,
                 border_radius=8,
-                border=ft.border.all(2, st.SUCCESS_BORDER if is_accepted else st.PANEL_BORDER),
+                border=ft.Border.all(2, st.SUCCESS_BORDER if is_accepted else st.PANEL_BORDER),
             )
             mask_cards.append(card)
 
@@ -349,7 +349,7 @@ class MaskSelectionDialog:
                             ],
                             spacing=st.GAP_SM,
                         ),
-                        padding=ft.padding.only(left=st.GAP_XS, bottom=st.GAP_XS),
+                        padding=ft.Padding.only(left=st.GAP_XS, bottom=st.GAP_XS),
                     )
                 )
                 mask_cards.extend(hemisphere_cards)
@@ -373,7 +373,7 @@ class MaskSelectionDialog:
                             ],
                             spacing=st.GAP_SM,
                         ),
-                        padding=ft.padding.only(left=st.GAP_XS, bottom=st.GAP_XS),
+                        padding=ft.Padding.only(left=st.GAP_XS, bottom=st.GAP_XS),
                     )
                 )
                 mask_cards.extend(tissue_cards)
@@ -434,7 +434,7 @@ class MaskSelectionDialog:
                                 ft.Container(
                                     content=ft.Text(role_label, size=st.CAPTION, color=st.ON_NEUTRAL),
                                     bgcolor=role_color,
-                                    padding=ft.padding.symmetric(horizontal=st.GAP_SM, vertical=st.GAP_XS),
+                                    padding=ft.Padding.symmetric(horizontal=st.GAP_SM, vertical=st.GAP_XS),
                                     border_radius=10,
                                 ),
                             ],
@@ -442,7 +442,7 @@ class MaskSelectionDialog:
                         # Overlay image
                         ft.Container(
                             content=overlay_content,
-                            border=ft.border.all(1, st.PANEL_BORDER),
+                            border=ft.Border.all(1, st.PANEL_BORDER),
                             border_radius=5,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
@@ -452,7 +452,7 @@ class MaskSelectionDialog:
                 padding=st.GAP_MD,
                 bgcolor=st.INFO_BG,
                 border_radius=6,
-                border=ft.border.all(1, st.INFO_BORDER),
+                border=ft.Border.all(1, st.INFO_BORDER),
             )
             cards.append(card)
 
@@ -500,7 +500,7 @@ class MaskSelectionDialog:
                         ),
                         ft.Container(
                             content=overlay_content,
-                            border=ft.border.all(1, st.PANEL_BORDER),
+                            border=ft.Border.all(1, st.PANEL_BORDER),
                             border_radius=5,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
@@ -510,7 +510,7 @@ class MaskSelectionDialog:
                 padding=st.GAP_MD,
                 bgcolor=st.MASK_TISSUE_BG,
                 border_radius=6,
-                border=ft.border.all(1, st.MASK_TISSUE_BORDER),
+                border=ft.Border.all(1, st.MASK_TISSUE_BORDER),
             )
             cards.append(card)
 
@@ -812,7 +812,7 @@ class MaskSelectionDialog:
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 padding=st.GAP_MD,
-                border=ft.border.all(1, st.PANEL_BORDER),
+                border=ft.Border.all(1, st.PANEL_BORDER),
                 border_radius=5,
             )
             alternative_items.append(item)
@@ -841,14 +841,14 @@ class MaskSelectionDialog:
                         height=st.OVERLAY_H,
                         alignment=ft.Alignment(0, 0),
                         bgcolor=st.SUBTLE_BG,
-                        border=ft.border.all(1, st.PANEL_BORDER),
+                        border=ft.Border.all(1, st.PANEL_BORDER),
                         border_radius=5,
                     ),
                 ],
                 spacing=st.GAP_SM,
             ),
             visible=self._combine_mode,
-            padding=ft.padding.only(top=st.GAP_MD),
+            padding=ft.Padding.only(top=st.GAP_MD),
         )
 
         # Build the content column
@@ -861,8 +861,8 @@ class MaskSelectionDialog:
                         st.caption("Combine two ICA components when a network is split"),
                     ],
                 ),
-                padding=ft.padding.only(bottom=st.GAP_MD),
-                border=ft.border.only(bottom=ft.BorderSide(1, st.PANEL_BORDER)),
+                padding=ft.Padding.only(bottom=st.GAP_MD),
+                border=ft.Border.only(bottom=ft.BorderSide(1, st.PANEL_BORDER)),
             ),
             # Combined preview at the top (visible only in combine mode)
             self._combine_preview_container,
@@ -1113,7 +1113,7 @@ class MaskSelectionDialog:
                             ),
                             ft.Container(
                                 content=self._create_image(overlay_path, height=st.OVERLAY_H, width=st.MASK_OVERLAY_W),
-                                border=ft.border.all(1, st.INFO_BORDER),
+                                border=ft.Border.all(1, st.INFO_BORDER),
                                 border_radius=5,
                             ),
                         ],

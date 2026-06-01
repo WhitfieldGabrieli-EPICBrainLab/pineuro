@@ -22,9 +22,10 @@ classifiers = [
 ]
 dependencies = [
     # antspyx/nilearn are exact-pinned: the validation suite asserts their
-    # (iterative-optimizer) output against recorded baselines. A version bump
-    # changes that output, so it must be a deliberate, re-baselined change --
-    # see tests/validation/baselines.py.
+    # output via exact / first-principles checks that only reproduce when the
+    # iterative optimizers run deterministically (single-threaded ITK/BLAS; see
+    # tests/validation/conftest.py). A version bump can change that output, so it
+    # must be a deliberate, re-verified change -- see tests/validation/README.md.
     "antspyx==0.6.2",
     "dcm2niix",
     "flet==0.80.5",
