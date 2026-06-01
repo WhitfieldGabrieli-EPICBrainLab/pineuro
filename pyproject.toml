@@ -28,6 +28,11 @@ dependencies = [
     # must be a deliberate, re-verified change -- see tests/validation/README.md.
     "antspyx==0.6.2",
     "dcm2niix",
+    # Linux-only: reads /dev/input/event* for global key polling under Wayland,
+    # where XQueryKeymap is starved of events when the stimulus window is
+    # unfocused (see tasks/task_base.py:_poll_keys_evdev). Compiles against
+    # linux/input.h, so it must not install on Windows/macOS.
+    "evdev; sys_platform == 'linux'",
     "flet==0.80.5",
     "flet-charts>=0.1.0",
     "matplotlib",

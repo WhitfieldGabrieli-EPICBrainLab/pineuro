@@ -169,6 +169,33 @@ class TaskBase(ABC):  # noqa: B024
         "return": "Return",
     }
 
+    # evdev key-constant names (resolved to integer key codes in _ensure_evdev,
+    # so the module still imports on non-Linux where evdev is absent). Mirrors
+    # the X11 set above; "+" -> numpad plus to match Windows' VK_ADD choice.
+    _PSYCHOPY_TO_EVKEY: dict[str, str] = {
+        "0": "KEY_0",
+        "1": "KEY_1",
+        "2": "KEY_2",
+        "3": "KEY_3",
+        "4": "KEY_4",
+        "5": "KEY_5",
+        "6": "KEY_6",
+        "7": "KEY_7",
+        "8": "KEY_8",
+        "9": "KEY_9",
+        "t": "KEY_T",
+        "equal": "KEY_EQUAL",
+        "+": "KEY_KPPLUS",
+        "space": "KEY_SPACE",
+        "return": "KEY_ENTER",
+    }
+
+    # evdev poll state, lazily populated by _ensure_evdev (annotation-only so the
+    # hasattr/getattr lazy-init guards still see them as unset on first use).
+    _evdev_devices: list[Any]
+    _evdev_codes: dict[str, int]
+    _evdev_disabled: bool
+
     # macOS ANSI virtual keycodes
     _PSYCHOPY_TO_MAC_VK: dict[str, int] = {
         "0": 0x1D,
@@ -225,7 +252,9 @@ class TaskBase(ABC):  # noqa: B024
         if sys.platform == "win32":
             return self._snapshot_win32()
         if sys.platform == "linux":
-            return self._snapshot_x11()
+            from pineuro.config import is_wayland
+
+            return self._snapshot_evdev() if is_wayland() else self._snapshot_x11()
         if sys.platform == "darwin":
             return self._snapshot_quartz()
         return set()
@@ -280,6 +309,22 @@ class TaskBase(ABC):  # noqa: B024
                 held.add(name)
         return held
 
+    def _snapshot_evdev(self) -> set[str]:
+        if not self._ensure_evdev():
+            return set()
+        held_codes: set[int] = set()
+        for dev in self._evdev_devices:
+            try:
+                held_codes.update(dev.active_keys())
+            except Exception:
+                continue
+        held: set[str] = set()
+        for name in self._SNAPSHOT_KEYS:
+            code = self._evdev_codes.get(name)
+            if code is not None and code in held_codes:
+                held.add(name)
+        return held
+
     def _snapshot_quartz(self) -> set[str]:
         try:
             from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedTaskState
@@ -312,7 +357,12 @@ class TaskBase(ABC):  # noqa: B024
         if sys.platform == "win32":
             self._poll_keys_win32(key_names)
         elif sys.platform == "linux":
-            self._poll_keys_x11(key_names)
+            from pineuro.config import is_wayland
+
+            if is_wayland():
+                self._poll_keys_evdev(key_names)
+            else:
+                self._poll_keys_x11(key_names)
         elif sys.platform == "darwin":
             self._poll_keys_quartz(key_names)
 
@@ -401,6 +451,116 @@ class TaskBase(ABC):  # noqa: B024
             if pressed and name not in self._poll_prev:
                 psychopy_event._keyBuffer.append((name, 0, core.getTime()))
                 self._last_inject_source = "poll_x11"
+                self._poll_prev.add(name)
+            elif not pressed:
+                self._poll_prev.discard(name)
+
+    # -- Linux (Wayland, evdev) ------------------------------------------------
+
+    def _ensure_evdev(self) -> bool:
+        """Lazily open keyboard input devices for global key polling on Wayland.
+
+        Reads ``/dev/input/event*`` via python-evdev, which sits *below* the
+        compositor and so reports key state regardless of which window holds
+        Wayland focus -- XQueryKeymap (the Xorg path) cannot, because XWayland
+        only sees keys the compositor forwards to it.
+
+        Returns True if at least one keyboard device is open.
+        """
+        if getattr(self, "_evdev_disabled", False):
+            return False
+        if hasattr(self, "_evdev_devices"):
+            return bool(self._evdev_devices)
+        try:
+            import evdev
+        except ImportError:
+            self._evdev_disabled = True
+            return False
+
+        # Resolve psychopy names -> evdev integer key codes once.
+        codes: dict[str, int] = {}
+        for name, ev_name in self._PSYCHOPY_TO_EVKEY.items():
+            code = getattr(evdev.ecodes, ev_name, None)
+            if isinstance(code, int):
+                codes[name] = code
+
+        # Keep any device that can emit a key we care about. A full keyboard and
+        # a minimal scanner-trigger box both qualify; mice (BTN_* codes) and
+        # power/sleep buttons do not, since their EV_KEY caps miss our KEY_ set.
+        wanted = set(codes.values())
+        devices: list = []
+        saw_permission_error = False
+        for path in evdev.list_devices():
+            try:
+                dev = evdev.InputDevice(path)
+            except PermissionError:
+                saw_permission_error = True
+                continue
+            except Exception:
+                continue
+            key_caps = set(dev.capabilities().get(evdev.ecodes.EV_KEY, []))
+            if wanted & key_caps:
+                devices.append(dev)
+            else:
+                with contextlib.suppress(Exception):
+                    dev.close()
+
+        if not devices and saw_permission_error:
+            logger.warning(
+                "Cannot read keyboard devices for unfocused key polling under "
+                "Wayland: permission denied on /dev/input/event*. Add this user "
+                "to the 'input' group ('sudo usermod -aG input $USER', then "
+                "re-login), or use an Xorg session."
+            )
+            self._evdev_disabled = True
+            return False
+
+        self._evdev_devices = devices
+        self._evdev_codes = codes
+        return bool(devices)
+
+    def _poll_keys_evdev(self, key_names: list[str]) -> None:
+        """Poll global key state on Linux/Wayland via evdev (/dev/input)."""
+        from psychopy import core
+        from psychopy import event as psychopy_event
+
+        if not self._ensure_evdev():
+            return
+
+        # Focus gate: the PsychoPy window is an XWayland client, so the X11
+        # input-focus check still tells us whether *our* window is focused.
+        # When it is, pyglet delivers keys normally -- skip evdev to avoid a
+        # double injection (evdev + pyglet). If focus can't be determined,
+        # poll anyway (matches the Xorg path's "assume unfocused" behavior).
+        if not hasattr(self, "_x11_display"):
+            self._snapshot_x11()
+        if hasattr(self, "_x11_display"):
+            try:
+                window_id = self.win.winHandle._window
+                focused, _ = self._x11_display.get_input_focus()
+                focused_id = focused.id if hasattr(focused, "id") else None
+                if focused_id == window_id:
+                    return
+            except Exception:
+                pass
+
+        held: set[int] = set()
+        for dev in self._evdev_devices:
+            try:
+                held.update(dev.active_keys())
+            except Exception:
+                continue
+
+        for name in key_names:
+            if name == "escape":
+                continue
+            code = self._evdev_codes.get(name)
+            if code is None:
+                continue
+            pressed = code in held
+            if pressed and name not in self._poll_prev:
+                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                self._last_inject_source = "poll_evdev"
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)
@@ -1182,6 +1342,14 @@ class TaskBase(ABC):  # noqa: B024
             event.clearEvents()
         except Exception:
             pass
+
+        # Close evdev devices opened for Wayland key polling (real file
+        # descriptors -- closing avoids leaking one set per run).
+        if hasattr(self, "_evdev_devices"):
+            for dev in self._evdev_devices:
+                with contextlib.suppress(Exception):
+                    dev.close()
+            del self._evdev_devices
 
         # Reset pyglet gl_info for clean window recreation
         self._reset_pyglet_gl_info()
