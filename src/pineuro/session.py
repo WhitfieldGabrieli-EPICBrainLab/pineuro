@@ -1412,6 +1412,32 @@ def resolve_localizer_masks(config: SessionConfig) -> list[tuple[LocalizerConfig
     return results
 
 
+def _session_has_masks(me_dir: Path) -> bool:
+    """Whether a session has extracted thresholded masks.
+
+    Handles both the flat ``mask_extraction/03_masks`` layout and the per-localizer
+    ``mask_extraction/loc_*/03_masks`` layout used by per-session protocols.
+    """
+
+    def _has_thr(d: Path) -> bool:
+        return d.is_dir() and next(d.glob("*.nii.gz"), None) is not None
+
+    if _has_thr(me_dir / "03_masks"):
+        return True
+    return any(_has_thr(loc / "03_masks") for loc in me_dir.glob("loc_*"))
+
+
+def _session_masks_approved(me_dir: Path) -> bool:
+    """Whether a session's masks have been approved.
+
+    Handles both the flat ``mask_extraction/.masks_approved`` marker and the
+    per-localizer ``mask_extraction/loc_*/.masks_approved`` markers.
+    """
+    if (me_dir / ".masks_approved").exists():
+        return True
+    return any((loc / ".masks_approved").exists() for loc in me_dir.glob("loc_*"))
+
+
 def _session_status_label(session_dir: Path) -> str:
     """Return a human-readable label for the furthest pipeline milestone reached.
 
@@ -1443,14 +1469,10 @@ def _session_status_label(session_dir: Path) -> str:
         return _glob_any(session_dir / "preprocessing", "*_preproc.nii.gz")
 
     def _masks_extracted() -> bool:
-        if _glob_any(me_dir / "03_masks", "*.nii.gz"):
-            return True
-        return any(_glob_any(loc / "03_masks", "*.nii.gz") for loc in me_dir.glob("loc_*"))
+        return _session_has_masks(me_dir)
 
     def _masks_approved() -> bool:
-        if (me_dir / ".masks_approved").exists():
-            return True
-        return any((loc / ".masks_approved").exists() for loc in me_dir.glob("loc_*"))
+        return _session_masks_approved(me_dir)
 
     def _reference_coregistered() -> bool:
         return _dir_has_files(me_dir / "04_reference" / "masks")
@@ -1516,9 +1538,9 @@ def detect_existing_sessions(base_dir: Path, participant_id: str) -> list[dict[s
                 {
                     "session_id": entry.name,
                     "status": _session_status_label(entry),
-                    "has_masks": (me_dir / "03_masks").exists(),
+                    "has_masks": _session_has_masks(me_dir),
                     "has_feedback": (entry / "feedback" / "02_feedback_output" / "task_state.json").exists(),
-                    "masks_approved": (me_dir / ".masks_approved").exists(),
+                    "masks_approved": _session_masks_approved(me_dir),
                 }
             )
 

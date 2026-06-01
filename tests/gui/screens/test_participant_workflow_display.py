@@ -1,10 +1,6 @@
 """Tests for participant workflow pipeline-panel display helpers."""
 
-import pytest
-
 from pineuro.gui.screens.participant_workflow import _format_threshold_summary
-
-pytestmark = pytest.mark.unit
 
 
 def test_threshold_summary_top_n():
