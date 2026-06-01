@@ -72,38 +72,91 @@ class SignalMode(str, Enum):
 __all__ = ["BallTask", "SignalMode"]
 
 
-# Instruction text constants
-INSTRUCTIONS_FIRST_TRANSFER = (
-    "Next, you will continue the practice you just learned.\n\n"
-    "You will see 2 circles with a white ball in the middle, "
-    "but they won't move for now."
-)
+# Instruction text builders
+#
+# The run duration (XX minutes) and the initial baseline/fixation duration are
+# computed at display time from the coordinator (n_volumes / n_baseline / TR),
+# so the slides stay correct across runs of different lengths. The first
+# transfer run has its own closing slide (it names the baseline duration and
+# frames the run as practice); the later-transfer and both feedback run types
+# share `_ready_slide()`.
 
-INSTRUCTIONS_LATER_TRANSFER = (
-    "Great job! Next, you'll practice for another 2.5 min.\n\n"
-    "This time the ball and circles will not move, "
-    "so you don't need to check them."
-)
 
-INSTRUCTIONS_FIRST_FEEDBACK = (
-    "Great job! Now, you'll get to try moving the ball with your practice!\n\n"
-    "You will see the 2 circles and white ball again. "
-    "When the white ball moves up towards the top yellow circle, "
-    "this means you are in a mindful brain state with your practice.\n\n"
-    "If the ball reaches either of the circles, it will move back to the center."
-)
+def _format_minutes(n_volumes: int, tr: float) -> str:
+    """Total run duration in minutes, e.g. '2.5' (trailing zeros stripped)."""
+    minutes = n_volumes * tr / 60.0
+    return f"{minutes:.1f}".rstrip("0").rstrip(".")
 
-INSTRUCTIONS_LATER_FEEDBACK = (
-    "Great job! Now, you're going to practice for another 2.5 min "
-    "with more brain feedback from the ball.\n\n"
-    "When the ball moves upwards, that corresponds to your practice."
-)
 
-INSTRUCTIONS_READY = (
-    "When you see the plus sign (+), just relax.\n\n"
-    "Once the circles appear, please start the practice. "
-    "This scan will last 2.5 min."
-)
+def _format_seconds(n_baseline: int, tr: float) -> str:
+    """Initial baseline (fixation) duration in whole seconds, e.g. '30'."""
+    return f"{n_baseline * tr:.0f}"
+
+
+def _ready_slide(minutes: str) -> str:
+    """Closing slide shared by later-transfer and both feedback run types."""
+    return (
+        "When you see the plus sign (+), just relax.\n\n"
+        "Once the circles appear, please start the mental noting practice. "
+        f"This scan will last {minutes} minutes."
+    )
+
+
+def _first_transfer_slides(n_volumes: int, n_baseline: int, tr: float) -> list[str]:
+    minutes = _format_minutes(n_volumes, tr)
+    seconds = _format_seconds(n_baseline, tr)
+    return [
+        (
+            "You will now get to continue the mental noting practice you just "
+            "learned, using your chosen body part as an anchor for your practice. "
+            "Try to continue using this as your anchor, but it's okay to switch anytime."
+        ),
+        ("You will see two circles with a white ball in the middle, but they won't move for now."),
+        (
+            f"You will see the plus sign (+) for {seconds} seconds at the start. "
+            "Whenever you see the plus, please don't practice mental noting - just relax.\n\n"
+            "Once the circles appear, please start the mental noting practice. "
+            f"This practice will last {minutes} minutes."
+        ),
+    ]
+
+
+def _later_transfer_slides(n_volumes: int, tr: float) -> list[str]:
+    minutes = _format_minutes(n_volumes, tr)
+    return [
+        (
+            f"Great job! Next, you'll get to practice mental noting for another {minutes} min.\n\n"
+            "This time the ball and circles will not move, "
+            "so you don't need to check them."
+        ),
+        _ready_slide(minutes),
+    ]
+
+
+def _first_feedback_slides(n_volumes: int, tr: float) -> list[str]:
+    minutes = _format_minutes(n_volumes, tr)
+    return [
+        "Great job! Now, you'll get to try moving the ball with your mental noting practice!",
+        (
+            "You will see the 2 circles and the white ball again. "
+            "When the white ball moves up towards the top yellow circle, "
+            "this means you are in a mindful brain state with your mental noting practice.\n\n"
+            "If the ball reaches either of the circles, it will move back to the center."
+        ),
+        _ready_slide(minutes),
+    ]
+
+
+def _later_feedback_slides(n_volumes: int, tr: float) -> list[str]:
+    minutes = _format_minutes(n_volumes, tr)
+    return [
+        (
+            f"Great job! Now, you're going to practice mental noting for another {minutes} min "
+            "with more brain feedback from the ball.\n\n"
+            "When the ball moves upwards, that corresponds to your mental noting practice."
+        ),
+        _ready_slide(minutes),
+    ]
 
 
 class BallTask(BaseTask):
@@ -414,23 +467,29 @@ class BallTask(BaseTask):
     def show_instructions(self):
         """Display instruction slides before task begins.
 
-        Instructions vary based on feedback_mode and is_first_of_type:
+        Instructions vary based on feedback_mode and is_first_of_type. Slide
+        text (and the embedded run/baseline durations) is built at display time
+        from the coordinator so it matches the actual run length:
         - First transfer run: explains task with no movement
         - Later transfer runs: brief reminder about no movement
         - First feedback run: explains ball movement mechanism
         - Later feedback runs: brief reminder
         """
         # Determine which instruction slides to show
+        n_volumes = self.coordinator.n_volumes
+        n_baseline = self.coordinator.n_baseline
+        tr = self.coordinator.tr
+
         if not self.feedback_mode:
             if self.is_first_of_type:
-                slides = [INSTRUCTIONS_FIRST_TRANSFER, INSTRUCTIONS_READY]
+                slides = _first_transfer_slides(n_volumes, n_baseline, tr)
             else:
-                slides = [INSTRUCTIONS_LATER_TRANSFER, INSTRUCTIONS_READY]
+                slides = _later_transfer_slides(n_volumes, tr)
         else:  # feedback_mode
             if self.is_first_of_type:
-                slides = [INSTRUCTIONS_FIRST_FEEDBACK, INSTRUCTIONS_READY]
+                slides = _first_feedback_slides(n_volumes, tr)
             else:
-                slides = [INSTRUCTIONS_LATER_FEEDBACK, INSTRUCTIONS_READY]
+                slides = _later_feedback_slides(n_volumes, tr)
 
         # Use base class method
         super().show_instructions(
@@ -466,6 +525,7 @@ class BallTask(BaseTask):
 
         # Show instruction screen (BallTask-specific)
         if not hasattr(self, "slider_instruction_text"):
+            logger.debug("Slider instruction text not initialized; skipping post-run questions")
             return []
         self.slider_instruction_text.draw()
         self._capture_and_emit_screenshot(force=True)
@@ -528,6 +588,11 @@ class BallTask(BaseTask):
             # For "decrease" target, negate so negative correlation → ball UP
             directed_val = -val if self._connectivity_target == "decrease" else val
             self.current_direction = 1.0 if directed_val >= 0 else -1.0
+            direction_label = "UP" if self.current_direction > 0 else "DOWN"
+            logger.debug(
+                f"Connectivity: r={val:.4f}, target={self._connectivity_target}, "
+                f"directed={directed_val:.4f} → {direction_label}"
+            )
             return
 
         # Dual-network activation mode
@@ -778,6 +843,37 @@ class BallTask(BaseTask):
         # Reset circle fill color after flash
         for circle in self.circles:
             circle.fillColor = None
+
+    def save_state(self, task_state: Optional["TaskState"] = None) -> None:
+        """Persist current adaptive parameters to the TaskState store for multi-run continuity.
+
+        Parameters
+        ----------
+        task_state : TaskState, optional
+            TaskState to save to. If None, uses the task_state passed
+            to __init__. If neither is available, does nothing.
+        """
+        state = task_state or self._task_state
+        if state is None:
+            logger.debug("No task state provided, skipping save")
+            return
+
+        run_type = "feedback" if self.feedback_mode else "transfer"
+        state.record_run(
+            run_type=run_type,
+            volumes_processed=self.current_volume,
+            task_state_snapshot={
+                "hit_counters": self.hit_counters,
+                "scale_factor": self.scale_factor,
+                "circle_radii": self.circle_radii,
+                "min_hits_threshold": self._min_hits_threshold,
+                "max_hits_threshold": self._max_hits_threshold,
+                "scale_adjust_factor": self._scale_adjust_factor,
+            },
+            # Slot-based tracking
+            slot_run_number=self._slot_run_number,
+            attempt=self._attempt,
+        )
 
     def get_run_results(self) -> dict:
         """Return BallTask-specific results from the completed run."""
@@ -1103,6 +1199,10 @@ class BallTask(BaseTask):
                 )
             logger.info(f"Total hits: {sum(self.hit_counters)}")
             logger.info(f"Final scale factor: {self.scale_factor:.1f}")
+            logger.debug(f"Total frames rendered: {self._frame_counter}")
+            if self.current_volume > 0:
+                avg_frames_per_vol = self._frame_counter / self.current_volume
+                logger.debug(f"Average frames per volume: {avg_frames_per_vol:.1f}")
             logger.info(f"PsychoPy log saved: {self._psychopy_log_path}")
 
             # cleanup() handles post-run questions via super().cleanup()
@@ -1243,7 +1343,7 @@ BALL_TASK_METADATA = TaskMetadata(
     post_run_questions=[
         # Core questions (always asked)
         PostRunQuestion(
-            text="How often were you using the Mindful Describing practice?",
+            text="How often were you using the mental noting practice?",
             left_label="Never",
             right_label="Always",
             condition="always",
@@ -1255,7 +1355,7 @@ BALL_TASK_METADATA = TaskMetadata(
             condition="always",
         ),
         PostRunQuestion(
-            text="How difficult was it to apply Mindful Describing?",
+            text="How difficult was it to apply mental noting?",
             left_label="Not at all",
             right_label="Very Difficult",
             condition="always",
@@ -1268,7 +1368,7 @@ BALL_TASK_METADATA = TaskMetadata(
         ),
         # Conditional questions (last feedback run only)
         PostRunQuestion(
-            text="The ball seemed to move up while I was practicing Mindful Describing",
+            text="The ball seemed to move up while I was practicing mental noting",
             left_label="False",
             right_label="True",
             condition="last_feedback_only",
