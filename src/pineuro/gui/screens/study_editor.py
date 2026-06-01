@@ -498,7 +498,7 @@ class StudyEditorScreen:
         # Initial reference visibility
         ref_row = getattr(self, "_sim_loc_ref_row", None)
         if ref_row is not None:
-            enabled = self.reference_initial_enabled_checkbox.value
+            enabled = self.reference_initial_enabled_checkbox.value and bool(self._localizer_configs)
             ref_row.visible = enabled
             ref_label = getattr(self, "_sim_loc_ref_label", None)
             if ref_label is not None:
@@ -511,7 +511,7 @@ class StudyEditorScreen:
         # Realtime reference visibility
         rt_ref_row = getattr(self, "_sim_fb_ref_row", None)
         if rt_ref_row is not None:
-            enabled = self.reference_realtime_enabled_checkbox.value
+            enabled = self.reference_realtime_enabled_checkbox.value and bool(self._feedback_configs)
             rt_ref_row.visible = enabled
             rt_ref_label = getattr(self, "_sim_fb_ref_label", None)
             if rt_ref_label is not None:
@@ -1338,8 +1338,11 @@ class StudyEditorScreen:
         controls: list[ft.Control] = []
         reference_dicoms = self._active_session().get("reference_dicoms", {})
 
+        # The initial reference registers fresh localizer masks, and the realtime
+        # reference precedes feedback — so each is only collected (and thus only
+        # needs a simulator source) when this session actually has that acquisition.
         # Initial reference
-        init_enabled = self.reference_initial_enabled_checkbox.value
+        init_enabled = self.reference_initial_enabled_checkbox.value and bool(self._localizer_configs)
         self._sim_loc_ref_label = st.subsection("Initial Reference Scan")
         self._sim_loc_ref_label.visible = init_enabled
         controls.append(self._sim_loc_ref_label)
@@ -1355,7 +1358,7 @@ class StudyEditorScreen:
         controls.append(self._sim_loc_ref_row)
 
         # Real-time reference
-        rt_enabled = self.reference_realtime_enabled_checkbox.value
+        rt_enabled = self.reference_realtime_enabled_checkbox.value and bool(self._feedback_configs)
         self._sim_fb_ref_label = st.subsection("Real-Time Reference Scan")
         self._sim_fb_ref_label.visible = rt_enabled
         controls.append(self._sim_fb_ref_label)
