@@ -20,6 +20,7 @@ from pineuro.gui.utils import (
     pick_file,
     pick_save_file,
     resolve_use_transfer_runs,
+    reuse_realtime_error,
     reused_localizer_indices,
     ses_num,
     session_reuse_sources,
@@ -207,6 +208,40 @@ class TestCrossSessionReuseHelpers:
         ]
         assert session_reuse_sources(sessions, 1) == {"ses-01"}
         assert session_reuse_sources(sessions, 0) == set()
+
+    def test_reuse_realtime_error_fires_when_off(self):
+        sessions = [
+            {"localizers": [], "feedback_runs": []},
+            {"localizers": [], "feedback_runs": [{"mask_sources": {"X": "ses-01"}}]},
+        ]
+        err = reuse_realtime_error(sessions, 1, realtime_enabled=False)
+        assert err is not None
+        assert "ses-01" in err
+        assert "Realtime reference" in err
+
+    def test_reuse_realtime_error_none_when_enabled(self):
+        sessions = [
+            {"localizers": [], "feedback_runs": []},
+            {"localizers": [], "feedback_runs": [{"mask_sources": {"X": "ses-01"}}]},
+        ]
+        assert reuse_realtime_error(sessions, 1, realtime_enabled=True) is None
+
+    def test_reuse_realtime_error_none_for_same_session(self):
+        # Unqualified masks (no mask_sources) are produced this session — realtime off is fine.
+        sessions = [{"localizers": [], "feedback_runs": [{"mask_sources": {}}]}]
+        assert reuse_realtime_error(sessions, 0, realtime_enabled=False) is None
+
+    def test_reuse_realtime_error_fires_with_fresh_localizer_mix(self):
+        # A session may mix a fresh localizer with a reused mask; the reused mask still
+        # needs the realtime reference to be coregistered into this session.
+        sessions = [
+            {"localizers": [{"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}}], "feedback_runs": []},
+            {
+                "localizers": [{"id": "rest", "type": "rest", "networks": ["Fresh"]}],
+                "feedback_runs": [{"mask_sources": {"Trigger": "ses-01"}}],
+            },
+        ]
+        assert reuse_realtime_error(sessions, 1, realtime_enabled=False) is not None
 
     def test_tissue_required_own_feedback(self):
         sessions = [

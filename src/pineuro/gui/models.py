@@ -62,6 +62,7 @@ from pathlib import Path
 from pineuro.gui.utils import (
     frc_referenced_masks,
     localizer_mask_names,
+    reuse_realtime_error,
     synthesize_reused_localizers,
     tissue_required_in_session,
 )
@@ -223,6 +224,15 @@ class StudyConfig:
                     mask_source = name_to_loc_id[mask_name]
                     break
             frc["mask_source"] = mask_source
+
+        # Cross-session reuse needs the realtime reference to coregister the source
+        # session's masks into this session; reject the combination up front (catches
+        # hand-edited YAML, not just the study editor).
+        reuse_error = reuse_realtime_error(
+            sessions, session_index, result.get("reference", {}).get("realtime_enabled", True)
+        )
+        if reuse_error:
+            raise ValueError(reuse_error)
 
         # Whether this session must extract WM/CSF tissue masks: its own feedback or
         # any later session reusing its masks needs nuisance regressors. Consumed by

@@ -16,7 +16,13 @@ from pineuro.tasks.task_registry import get_task_metadata, list_available_tasks
 from .. import styles as st
 from ..config_manager import ConfigManager
 from ..models import StudyConfig, StudyMetadata
-from ..utils import frc_referenced_masks, localizer_is_reused, localizer_mask_names, resolve_use_transfer_runs
+from ..utils import (
+    frc_referenced_masks,
+    localizer_is_reused,
+    localizer_mask_names,
+    resolve_use_transfer_runs,
+    reuse_realtime_error,
+)
 from ._feedback_tab import FeedbackTabBuilder
 from ._localizer_tab import LocalizerTabBuilder
 
@@ -1759,14 +1765,15 @@ class StudyEditorScreen:
         if self.on_cancel_callback:
             self.on_cancel_callback()
 
-    def _validate_sessions(self, sessions: list) -> str | None:
+    def _validate_sessions(self, sessions: list, realtime_enabled: bool = True) -> str | None:
         """Return an error string if the per-session protocol is invalid, else None.
 
         Requires at least one session, each with a localizer or feedback task; every
         mask a feedback run uses must be produced by a fresh localizer in the chosen
         source session (this session for an unqualified mask, or the earlier session
-        recorded in its ``mask_sources``); and a mask name must not be sourced from
-        two different sessions within one session.
+        recorded in its ``mask_sources``); a mask name must not be sourced from two
+        different sessions within one session; and cross-session reuse requires the
+        realtime reference (``realtime_enabled``) to coregister source-session masks.
         """
         if not sessions:
             return "At least one session is required"
@@ -1811,6 +1818,10 @@ class StudyEditorScreen:
                         )
                     if name not in _fresh_names(sessions[src_num - 1]):
                         return f"Session {idx + 1}: mask '{name}' is not produced by {source}"
+
+            reuse_error = reuse_realtime_error(sessions, idx, realtime_enabled)
+            if reuse_error:
+                return reuse_error
         return None
 
     def _save_study(self) -> bool:
@@ -1835,7 +1846,9 @@ class StudyEditorScreen:
         # Validate sessions: at least one session, each with a localizer or feedback
         # task, and no localizer reusing a non-earlier session.
         config = self.study_config.session_config
-        session_error = self._validate_sessions(config.get("sessions", []))
+        session_error = self._validate_sessions(
+            config.get("sessions", []), config.get("reference", {}).get("realtime_enabled", True)
+        )
         if session_error:
             _snack = ft.SnackBar(ft.Text(session_error), bgcolor=st.ERROR_BG)
             _snack.open = True

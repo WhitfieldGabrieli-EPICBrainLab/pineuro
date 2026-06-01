@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from pineuro.gui.models import StudyConfig, StudyMetadata
 
 # =============================================================================
@@ -305,3 +307,23 @@ class TestBuildSessionConfigReuse:
         sc = SessionConfig._from_dict(cfg)
         assert sc.localizers[0].reuse_from_session == "ses-01"
         assert sc.tissue_required is False
+
+    def test_build_raises_when_reuse_and_realtime_off(self):
+        # Cross-session reuse with realtime reference disabled cannot align the source
+        # masks into this session — fail fast at flatten time, not cryptically later.
+        study = self._study()
+        study.session_config["reference"]["realtime_enabled"] = False
+        with pytest.raises(ValueError, match="Realtime reference"):
+            study.build_session_config(1, "sub-07", "ses-02")
+
+    def test_build_ok_when_reuse_and_realtime_on(self):
+        # Regression guard: the check must not over-fire on the intended configuration.
+        cfg = self._study().build_session_config(1, "sub-07", "ses-02")
+        assert cfg["localizers"][0]["reuse_from_session"] == "ses-01"
+
+    def test_build_ok_fresh_session_realtime_off(self):
+        # A same-session (no reuse) session is unaffected by realtime being off.
+        study = self._study()
+        study.session_config["reference"]["realtime_enabled"] = False
+        cfg = study.build_session_config(0, "sub-07", "ses-01")
+        assert not cfg["localizers"][0].get("reuse_from_session")

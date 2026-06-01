@@ -44,9 +44,9 @@ class TestMaskValueFor:
 
 
 class TestValidateSessions:
-    def _validate(self, sessions):
+    def _validate(self, sessions, realtime_enabled=True):
         editor = StudyEditorScreen.__new__(StudyEditorScreen)
-        return editor._validate_sessions(sessions)
+        return editor._validate_sessions(sessions, realtime_enabled)
 
     def _localizer_session(self):
         return {
@@ -69,6 +69,25 @@ class TestValidateSessions:
             },
         ]
         assert self._validate(sessions) is None
+
+    def test_reuse_requires_realtime_reference(self):
+        sessions = [
+            self._localizer_session(),
+            {
+                "localizers": [],
+                "feedback_runs": [
+                    {
+                        "task": "rittriggeredball",
+                        "network_assignment": {"trigger_network": "Trigger", "movement_network": "Movement"},
+                        "mask_sources": {"Trigger": "ses-01", "Movement": "ses-01"},
+                    }
+                ],
+            },
+        ]
+        # Valid with the realtime reference on; rejected when it is off.
+        assert self._validate(sessions, realtime_enabled=True) is None
+        err = self._validate(sessions, realtime_enabled=False)
+        assert err is not None and "Realtime reference" in err
 
     def test_unqualified_mask_must_be_produced_this_session(self):
         sessions = [

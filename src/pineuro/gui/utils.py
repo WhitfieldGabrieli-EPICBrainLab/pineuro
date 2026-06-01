@@ -649,6 +649,33 @@ def session_reuse_sources(sessions: list[dict[str, Any]], session_index: int) ->
     return sources
 
 
+def reuse_realtime_error(
+    sessions: list[dict[str, Any]],
+    session_index: int,
+    realtime_enabled: bool,
+) -> str | None:
+    """Error if a session reuses earlier-session masks while realtime reference is off.
+
+    Cross-session masks live in their source session's space; the realtime reference
+    coregistration (``_run_coregistration(run_id=2)``, gated on ``realtime_enabled``)
+    is the only step that brings them into this session's space. With it disabled the
+    reused masks are never coregistered and the feedback step fails to find them, so
+    this combination is rejected up front. Returns None when realtime is enabled or the
+    session sources no masks from an earlier session.
+    """
+    if realtime_enabled:
+        return None
+    sources = session_reuse_sources(sessions, session_index)
+    if not sources:
+        return None
+    return (
+        f"Session {session_index + 1} reuses masks from an earlier session "
+        f"({', '.join(sorted(sources))}), which requires the realtime reference "
+        f'coregistration to align them to this session. Enable "Realtime reference" '
+        f"on the Reference tab (a realtime reference scan source will then also be needed)."
+    )
+
+
 def tissue_required_in_session(sessions: list[dict[str, Any]], session_index: int) -> bool:
     """Whether session ``session_index`` must extract WM/CSF tissue masks.
 
