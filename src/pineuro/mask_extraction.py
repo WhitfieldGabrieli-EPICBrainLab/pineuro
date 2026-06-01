@@ -3241,8 +3241,8 @@ def mask_extraction_task(
     emit_progress("Events loaded", f"{len(events_df)} events, conditions: {available_conditions}")
 
     # --- Validate threshold_method and cluster-specific params ---
-    if threshold_method not in ("top_n", "cluster"):
-        raise ValueError(f"threshold_method must be 'top_n' or 'cluster', got '{threshold_method}'")
+    if threshold_method not in ("top_n", "cluster", "cluster_extent"):
+        raise ValueError(f"threshold_method must be 'top_n', 'cluster', or 'cluster_extent', got '{threshold_method}'")
     if threshold_method == "cluster":
         if atlas_mask is None and atlas_source is None:
             raise ValueError(

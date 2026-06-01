@@ -424,6 +424,10 @@ class LocalizerTabBuilder:
                 self.manual_section,
             ]
         else:
+            # "Voxels per mask" (threshold) only drives top_n / cluster sizing;
+            # cluster_extent is threshold/extent-driven and ignores it, so hide it there.
+            self.threshold_row = st.field_row(self.threshold_field)
+            self.threshold_row.visible = self.threshold_method_dropdown.value != "cluster_extent"
             controls = [
                 st.section("Localizer Type"),
                 self.type_display_text,
@@ -443,8 +447,8 @@ class LocalizerTabBuilder:
                 self.include_reverse_contrasts_checkbox,
                 st.section("Mask Extraction"),
                 st.caption("Configure how network masks are extracted from the stat maps."),
-                st.field_row(self.threshold_field),
                 st.field_row(self.threshold_method_dropdown),
+                self.threshold_row,
                 self.cluster_settings_section,
                 self.cluster_extent_settings_section,
             ]
@@ -720,6 +724,8 @@ class LocalizerTabBuilder:
         method = self.threshold_method_dropdown.value
         self.cluster_settings_section.visible = method == "cluster"
         self.cluster_extent_settings_section.visible = method == "cluster_extent"
+        # "Voxels per mask" is unused by cluster_extent — hide it for that mode.
+        self.threshold_row.visible = method != "cluster_extent"
         with contextlib.suppress(Exception):
             self.page.update()
 

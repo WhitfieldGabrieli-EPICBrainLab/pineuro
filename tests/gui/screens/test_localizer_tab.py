@@ -315,6 +315,37 @@ class TestCollectConfigClusterMethods:
         assert ex["atlas_source"] == "gray_matter"
 
 
+class TestThresholdRowVisibility:
+    """ "Voxels per mask" (threshold) drives top_n/cluster sizing only; cluster_extent
+    ignores it, so the row is hidden for that mode and shown for the other two."""
+
+    def test_hidden_initially_for_cluster_extent(self):
+        builder = _builder({"type": "rit", "id": "r", "extraction": {"threshold_method": "cluster_extent"}})
+        builder.build()  # build() creates self.threshold_row + sets initial visibility
+        assert builder.threshold_row.visible is False
+
+    @pytest.mark.parametrize("method", ["top_n", "cluster"])
+    def test_visible_initially_for_count_based_methods(self, method):
+        builder = _builder({"type": "rit", "id": "r", "extraction": {"threshold_method": method}})
+        builder.build()
+        assert builder.threshold_row.visible is True
+
+    def test_toggle_follows_dropdown_changes(self):
+        builder = _builder({"type": "rit", "id": "r", "extraction": {"threshold_method": "top_n"}})
+        builder.build()
+        assert builder.threshold_row.visible is True
+
+        builder.threshold_method_dropdown.value = "cluster_extent"
+        builder._on_threshold_method_changed(None)
+        assert builder.threshold_row.visible is False
+        assert builder.cluster_extent_settings_section.visible is True
+
+        builder.threshold_method_dropdown.value = "cluster"
+        builder._on_threshold_method_changed(None)
+        assert builder.threshold_row.visible is True
+        assert builder.cluster_extent_settings_section.visible is False
+
+
 class TestCollectConfigTask:
     def test_task_emits_glm_fields(self):
         out = _builder({"type": "rit", "id": "rit1", "tr": 1.2, "n_volumes": 400, "n_runs": 1}).collect_config()
