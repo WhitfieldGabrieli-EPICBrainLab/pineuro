@@ -394,3 +394,93 @@ class TestConstructorValidation:
         coord = mock_coordinator(mask_names=["RIT"])
         with pytest.raises(ValueError, match="movement_direction"):
             RITTriggeredBallTask(coord, movement_direction="bogus")
+
+
+class TestRITTriggeredBallLogSuffix:
+    """Per-volume log suffix built from the shared trigger evaluation.
+
+    The suffix and the real trigger both route through _evaluate_trigger, so
+    these assertions also confirm the log can't disagree with the decision.
+    """
+
+    def _suffix(self, task, current_time, activation):
+        time_since_last = current_time - task._trigger_state.last_prompt_time
+        history = list(task._trigger_state.activation_history)
+        ev = task._evaluate_trigger(time_since_last, activation, history)
+        return task._format_trigger_suffix(ev)
+
+    def test_warmup_while_history_filling(self):
+        from collections import deque
+
+        task = _make_task(consecutive_volumes=3, min_prompt_interval=0.0)
+        task._trigger_state.last_prompt_time = 40.0
+        task._trigger_state.activation_history = deque([0.1, 0.5], maxlen=50)
+
+        suffix = self._suffix(task, 50.0, 0.5)
+        assert suffix == " | warmup 2/3"
+        assert suffix.isascii()
+
+    def test_slope_trigger_shows_both_gates_and_verdict(self):
+        from collections import deque
+
+        task = _make_task(trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0)
+        task._trigger_state.last_prompt_time = 40.0
+        task._trigger_state.activation_history = deque([0.1, 0.4, 0.9], maxlen=50)
+
+        suffix = self._suffix(task, 50.0, 0.9)
+        assert suffix.startswith(" | trend slope +")
+        assert "need>0 ok" in suffix
+        assert "thresh act>0 ok" in suffix
+        assert suffix.endswith("=> TRIGGER")
+        assert suffix.isascii()
+        # Must match the authoritative decision.
+        assert task._check_trigger(50.0, 0.9) == "triggered"
+
+    def test_slope_blocked_trend_has_no_trailer(self):
+        from collections import deque
+
+        task = _make_task(trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0)
+        task._trigger_state.last_prompt_time = 40.0
+        task._trigger_state.activation_history = deque([0.9, 0.4, 0.3], maxlen=50)
+
+        suffix = self._suffix(task, 50.0, 0.3)
+        assert "need>0 no" in suffix
+        assert "thresh act>0 ok" in suffix
+        assert "=>" not in suffix
+        assert task._check_trigger(50.0, 0.3) is None
+
+    def test_cooldown_waiting_trailer_rounds_up(self):
+        from collections import deque
+
+        task = _make_task(trend_method="slope", consecutive_volumes=3, min_prompt_interval=10.0)
+        task._trigger_state.last_prompt_time = 45.5  # 4.5s ago -> still in cooldown
+        task._trigger_state.activation_history = deque([0.1, 0.4, 0.9], maxlen=50)
+
+        suffix = self._suffix(task, 50.0, 0.9)
+        assert suffix.endswith("=> waiting (cooldown 6s)")
+        assert suffix.isascii()
+        assert task._check_trigger(50.0, 0.9) is None
+
+    def test_strict_shows_progress_fraction(self):
+        from collections import deque
+
+        task = _make_task(trend_method="strict", consecutive_volumes=3, min_prompt_interval=0.0)
+        task._trigger_state.last_prompt_time = 40.0
+        # Largest increasing run ending at current value is [0.4, 0.9] -> 2/3.
+        task._trigger_state.activation_history = deque([0.9, 0.4, 0.9], maxlen=50)
+
+        suffix = self._suffix(task, 50.0, 0.9)
+        assert suffix == " | trend increasing 2/3 | thresh act>0 ok"
+        assert "=>" not in suffix
+
+    def test_timeout_trailer(self):
+        from collections import deque
+
+        task = _make_task(trend_method="slope", consecutive_volumes=3, min_prompt_interval=10.0, timeout_duration=60.0)
+        task._trigger_state.last_prompt_time = 0.0
+        task._trigger_state.activation_history = deque([0.1, 0.4, 0.9], maxlen=50)
+
+        suffix = self._suffix(task, 70.0, 0.9)
+        assert suffix.endswith("=> TIMEOUT (no trigger in 60s)")
+        assert suffix.isascii()
+        assert task._check_trigger(70.0, 0.9) == "timeout"

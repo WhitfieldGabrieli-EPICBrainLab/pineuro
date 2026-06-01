@@ -57,7 +57,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 
@@ -95,6 +95,27 @@ def _least_squares_slope(values: list[float]) -> float:
     y = np.asarray(values, dtype=float)
     slope, _ = np.polyfit(x, y, 1)
     return float(slope)
+
+
+class _TriggerEval(NamedTuple):
+    """Result of evaluating trigger conditions for one volume.
+
+    ``decision`` is authoritative (it drives the actual trigger). The remaining
+    fields are diagnostics consumed by the per-volume log suffix, computed even
+    when ``decision`` short-circuits so the log can explain why a volume did or
+    did not fire.
+    """
+
+    decision: str | None
+    in_cooldown: bool
+    cooldown_remaining: float
+    timeout_fired: bool
+    threshold_met: bool
+    warming_up: bool
+    history_len: int
+    trend_met: bool
+    slope: float
+    consecutive: int
 
 
 # ============================================================================
@@ -374,25 +395,9 @@ class RITTriggeredBallTask(BaseTask):
             self._trigger_state.volume_history.append(volume)
 
             history = list(self._trigger_state.activation_history)
-            if self.trend_method == "strict":
-                consecutive = 0
-                for w in range(min(len(history), self.consecutive_volumes), 0, -1):
-                    window = history[-w:]
-                    if self.activation_trend == "increasing":
-                        if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
-                            consecutive = w
-                            break
-                    else:
-                        if all(window[i] > window[i + 1] for i in range(len(window) - 1)):
-                            consecutive = w
-                            break
-
-                trend_str = f"{consecutive}/{self.consecutive_volumes}"
-                self._volume_log_suffix = f" | {self.activation_trend} {trend_str}"
-            else:  # "slope"
-                window = history[-self.consecutive_volumes :] if len(history) >= self.consecutive_volumes else history
-                slope = _least_squares_slope(window)
-                self._volume_log_suffix = f" | slope {slope:+.3f} (n={len(window)})"
+            time_since_last = elapsed - self._trigger_state.last_prompt_time
+            ev = self._evaluate_trigger(time_since_last, trigger_val, history)
+            self._volume_log_suffix = self._format_trigger_suffix(ev)
         else:
             self._volume_log_suffix = ""
 
@@ -420,49 +425,119 @@ class RITTriggeredBallTask(BaseTask):
         """Check if a ball episode should be triggered.
 
         Returns ``"triggered"`` if threshold + trend conditions met,
-        ``"timeout"`` if timeout elapsed, ``None`` otherwise.
+        ``"timeout"`` if timeout elapsed, ``None`` otherwise. Delegates to
+        :meth:`_evaluate_trigger` so the decision and the per-volume log suffix
+        can never disagree.
         """
         time_since_last = current_time - self._trigger_state.last_prompt_time
+        history = list(self._trigger_state.activation_history)
+        return self._evaluate_trigger(time_since_last, activation, history).decision
 
-        # Cooldown
-        if time_since_last < self.min_prompt_interval:
-            return None
+    def _evaluate_trigger(self, time_since_last: float, activation: float, history: list[float]) -> _TriggerEval:
+        """Evaluate every trigger gate for one volume (single source of truth).
 
-        # Timeout
-        if time_since_last >= self.timeout_duration:
-            return "timeout"
+        ``decision`` reproduces the exact short-circuit order of the original
+        check (cooldown -> timeout -> threshold -> warmup -> trend); the other
+        fields are computed unconditionally so the log suffix can explain the
+        outcome. Shared by :meth:`_check_trigger` (uses ``.decision``) and the
+        per-volume log suffix (uses the diagnostics).
+        """
+        in_cooldown = time_since_last < self.min_prompt_interval
+        cooldown_remaining = max(0.0, self.min_prompt_interval - time_since_last)
+        timeout_fired = time_since_last >= self.timeout_duration
 
-        # Threshold
         if self.activation_contrast == "positive":
             threshold_met = activation > 0
         else:
             threshold_met = activation < 0
 
-        if not threshold_met:
-            return None
+        history_len = len(history)
+        warming_up = history_len < self.consecutive_volumes
 
-        # Trend
-        history = list(self._trigger_state.activation_history)
-        if len(history) < self.consecutive_volumes:
-            return None
+        # Trend gate: only meaningful once history fills the window.
+        slope = 0.0
+        trend_met = False
+        if not warming_up:
+            recent = history[-self.consecutive_volumes :]
+            if self.trend_method == "strict":
+                if self.activation_trend == "increasing":
+                    trend_met = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
+                else:
+                    trend_met = all(recent[i] > recent[i + 1] for i in range(len(recent) - 1))
+            else:  # "slope"
+                slope = _least_squares_slope(recent)
+                trend_met = slope > 0 if self.activation_trend == "increasing" else slope < 0
 
-        recent = history[-self.consecutive_volumes :]
+        # Strict display fraction: largest monotonic run (up to consecutive_volumes)
+        # ending at the current value. This is the display metric, distinct from
+        # trend_met (whole-window rule that actually gates the trigger).
+        consecutive = 0
         if self.trend_method == "strict":
-            if self.activation_trend == "increasing":
-                trending = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
-            else:
-                trending = all(recent[i] > recent[i + 1] for i in range(len(recent) - 1))
-        else:  # "slope"
-            slope = _least_squares_slope(recent)
-            if self.activation_trend == "increasing":
-                trending = slope > 0
-            else:
-                trending = slope < 0
+            for w in range(min(history_len, self.consecutive_volumes), 0, -1):
+                window = history[-w:]
+                if self.activation_trend == "increasing":
+                    if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
+                        consecutive = w
+                        break
+                else:
+                    if all(window[i] > window[i + 1] for i in range(len(window) - 1)):
+                        consecutive = w
+                        break
 
-        if trending:
-            return "triggered"
+        if in_cooldown:
+            decision: str | None = None
+        elif timeout_fired:
+            decision = "timeout"
+        elif not threshold_met or warming_up:
+            decision = None
+        elif trend_met:
+            decision = "triggered"
+        else:
+            decision = None
 
-        return None
+        return _TriggerEval(
+            decision=decision,
+            in_cooldown=in_cooldown,
+            cooldown_remaining=cooldown_remaining,
+            timeout_fired=timeout_fired,
+            threshold_met=threshold_met,
+            warming_up=warming_up,
+            history_len=history_len,
+            trend_met=trend_met,
+            slope=slope,
+            consecutive=consecutive,
+        )
+
+    def _format_trigger_suffix(self, ev: _TriggerEval) -> str:
+        """Build the ASCII per-volume log suffix from a trigger evaluation.
+
+        Shows both gates and, only when relevant, the verdict (TRIGGER /
+        TIMEOUT / cooldown wait). Strictly ASCII: the session log FileHandler
+        has no explicit encoding, so non-ASCII would raise UnicodeEncodeError
+        on Windows and drop the line.
+        """
+        if ev.warming_up:
+            return f" | warmup {ev.history_len}/{self.consecutive_volumes}"
+
+        if self.trend_method == "strict":
+            trend_part = f"trend {self.activation_trend} {ev.consecutive}/{self.consecutive_volumes}"
+        else:
+            need = ">0" if self.activation_trend == "increasing" else "<0"
+            trend_part = f"trend slope {ev.slope:+.3f} need{need} {'ok' if ev.trend_met else 'no'}"
+
+        act = ">0" if self.activation_contrast == "positive" else "<0"
+        thresh_part = f"thresh act{act} {'ok' if ev.threshold_met else 'no'}"
+
+        if ev.decision == "triggered":
+            trailer = " => TRIGGER"
+        elif ev.decision == "timeout":
+            trailer = f" => TIMEOUT (no trigger in {self.timeout_duration:.0f}s)"
+        elif ev.in_cooldown:
+            trailer = f" => waiting (cooldown {math.ceil(ev.cooldown_remaining)}s)"
+        else:
+            trailer = ""
+
+        return f" | {trend_part} | {thresh_part}{trailer}"
 
     # =========================================================================
     # Ball movement (simplified from BallTask)

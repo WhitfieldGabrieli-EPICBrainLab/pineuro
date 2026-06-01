@@ -111,8 +111,11 @@ class TestTriggerDetection:
         stub.timeout_duration = kwargs.get("timeout_duration", 60.0)
         stub._trigger_state = TriggerState()
 
-        # Bind the method
+        # Bind the methods. _check_trigger delegates to _evaluate_trigger, and
+        # the log suffix uses _format_trigger_suffix, so all three are needed.
         stub._check_trigger = RITExperienceSamplingTask._check_trigger.__get__(stub)
+        stub._evaluate_trigger = RITExperienceSamplingTask._evaluate_trigger.__get__(stub)
+        stub._format_trigger_suffix = RITExperienceSamplingTask._format_trigger_suffix.__get__(stub)
         return stub
 
     def test_cooldown_blocks_trigger(self):
@@ -299,6 +302,8 @@ class TestSlopeModeTriggerDetection:
         stub.timeout_duration = kwargs.get("timeout_duration", 60.0)
         stub._trigger_state = TriggerState()
         stub._check_trigger = RITExperienceSamplingTask._check_trigger.__get__(stub)
+        stub._evaluate_trigger = RITExperienceSamplingTask._evaluate_trigger.__get__(stub)
+        stub._format_trigger_suffix = RITExperienceSamplingTask._format_trigger_suffix.__get__(stub)
         return stub
 
     def test_strict_rejects_blip(self):
@@ -373,3 +378,88 @@ class TestConstructorValidation:
         coord = mock_coordinator(mask_names=["RIT"])
         with pytest.raises(ValueError, match="trend_method"):
             RITExperienceSamplingTask(coord, trend_method="bogus")
+
+
+# =============================================================================
+# Log suffix (_format_trigger_suffix)
+# =============================================================================
+
+
+class TestLogSuffix(TestTriggerDetection):
+    """Per-volume log suffix built from the shared trigger evaluation.
+
+    Inherits _make_task_stub from TestTriggerDetection. The suffix and the real
+    trigger both route through _evaluate_trigger, so these also confirm the log
+    can't disagree with the decision.
+    """
+
+    def _suffix(self, stub, current_time, activation):
+        time_since_last = current_time - stub._trigger_state.last_prompt_time
+        history = list(stub._trigger_state.activation_history)
+        ev = stub._evaluate_trigger(time_since_last, activation, history)
+        return stub._format_trigger_suffix(ev)
+
+    def test_warmup_while_history_filling(self):
+        stub = self._make_task_stub(consecutive_volumes=3, min_prompt_interval=0.0)
+        stub._trigger_state.last_prompt_time = 0.0
+        stub._trigger_state.activation_history.extend([0.1, 0.5])
+
+        suffix = self._suffix(stub, 35.0, 0.5)
+        assert suffix == " | warmup 2/3"
+        assert suffix.isascii()
+
+    def test_slope_trigger_shows_both_gates_and_verdict(self):
+        stub = self._make_task_stub(trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0)
+        stub._trigger_state.last_prompt_time = 0.0
+        stub._trigger_state.activation_history.extend([0.1, 0.4, 0.9])
+
+        suffix = self._suffix(stub, 35.0, 0.9)
+        assert suffix.startswith(" | trend slope +")
+        assert "need>0 ok" in suffix
+        assert "thresh act>0 ok" in suffix
+        assert suffix.endswith("=> TRIGGER")
+        assert suffix.isascii()
+        assert stub._check_trigger(35.0, 0.9) == "triggered"
+
+    def test_slope_blocked_trend_has_no_trailer(self):
+        stub = self._make_task_stub(trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0)
+        stub._trigger_state.last_prompt_time = 0.0
+        stub._trigger_state.activation_history.extend([0.9, 0.4, 0.3])
+
+        suffix = self._suffix(stub, 35.0, 0.3)
+        assert "need>0 no" in suffix
+        assert "thresh act>0 ok" in suffix
+        assert "=>" not in suffix
+        assert stub._check_trigger(35.0, 0.3) is None
+
+    def test_cooldown_waiting_trailer_rounds_up(self):
+        stub = self._make_task_stub(trend_method="slope", consecutive_volumes=3, min_prompt_interval=30.0)
+        stub._trigger_state.last_prompt_time = 10.5  # 4.5s ago at t=15 -> in cooldown
+        stub._trigger_state.activation_history.extend([0.1, 0.4, 0.9])
+
+        suffix = self._suffix(stub, 15.0, 0.9)
+        assert suffix.endswith("=> waiting (cooldown 26s)")
+        assert suffix.isascii()
+        assert stub._check_trigger(15.0, 0.9) is None
+
+    def test_strict_shows_progress_fraction(self):
+        stub = self._make_task_stub(trend_method="strict", consecutive_volumes=3, min_prompt_interval=0.0)
+        stub._trigger_state.last_prompt_time = 0.0
+        # Largest increasing run ending at current value is [0.4, 0.9] -> 2/3.
+        stub._trigger_state.activation_history.extend([0.9, 0.4, 0.9])
+
+        suffix = self._suffix(stub, 35.0, 0.9)
+        assert suffix == " | trend increasing 2/3 | thresh act>0 ok"
+        assert "=>" not in suffix
+
+    def test_timeout_trailer(self):
+        stub = self._make_task_stub(
+            trend_method="slope", consecutive_volumes=3, min_prompt_interval=30.0, timeout_duration=60.0
+        )
+        stub._trigger_state.last_prompt_time = 0.0
+        stub._trigger_state.activation_history.extend([0.1, 0.4, 0.9])
+
+        suffix = self._suffix(stub, 70.0, 0.9)
+        assert suffix.endswith("=> TIMEOUT (no trigger in 60s)")
+        assert suffix.isascii()
+        assert stub._check_trigger(70.0, 0.9) == "timeout"
