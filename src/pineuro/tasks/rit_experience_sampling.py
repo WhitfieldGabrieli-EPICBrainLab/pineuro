@@ -183,7 +183,7 @@ class RITExperienceSamplingTask(BaseTask):
         activation_contrast: str = "positive",
         consecutive_volumes: int = 3,
         activation_trend: str = "increasing",
-        trend_method: str = "strict",
+        trend_method: str = "slope",
         min_prompt_interval: float = 30.0,
         timeout_duration: float = 60.0,
         rating_timeout: float = 15.0,
@@ -1057,13 +1057,13 @@ RIT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
             key="trend_method",
             label="Trend Method",
             type="str",
-            default="strict",
+            default="slope",
             choices=["strict", "slope"],
             hint=(
-                "strict = require monotonic change across all Consecutive Volumes "
-                "(current behavior). slope = require least-squares slope sign to "
-                "match Activation Trend (tolerant of single blips; increase "
-                "Consecutive Volumes to ~5 for stronger blip-tolerance)."
+                "slope = require least-squares slope sign to match Activation Trend "
+                "(default; tolerant of single blips; increase Consecutive Volumes to "
+                "~5 for stronger blip-tolerance). strict = require monotonic change "
+                "across all Consecutive Volumes."
             ),
         ),
         TaskParameter(
