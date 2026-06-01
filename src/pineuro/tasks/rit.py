@@ -1106,7 +1106,7 @@ class RITTask(BaseLocalizerTask):
             self._run_trial(trial_idx)
 
         total_time = self._experiment_clock.getTime()
-        logger.info(f"[TIMING] Paradigm complete: {self.n_trials_per_run} trials, total={total_time:.1f}s")
+        logger.info(f"[TIMING] Paradigm complete: {self.n_trials_per_run} trials, elapsed={total_time:.1f}s")
 
     def cleanup(self) -> None:
         """Release resources after task completes."""

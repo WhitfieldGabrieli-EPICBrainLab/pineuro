@@ -29,6 +29,7 @@ class AttemptInfo:
     n_volumes: int
     expected_volumes: int
     is_complete: bool
+    task_done: bool = False
 
 
 @dataclass
@@ -67,6 +68,10 @@ def scan_collection_attempts(
     if not collection_dir.exists():
         return []
 
+    # Lazy import: pineuro.utils pulls numpy/nibabel — keep it out of GUI
+    # module-load time (see architecture.md GUI lazy-import rule).
+    from pineuro.utils import COLLECTION_COMPLETE_MARKER, collection_is_complete, count_volume_files
+
     pattern = f"{task}_run-{run:02d}_attempt-*"
     attempts = []
 
@@ -75,14 +80,14 @@ def scan_collection_attempts(
             match = re.search(r"attempt-(\d+)", folder.name)
             if match:
                 attempt_num = int(match.group(1))
-                n_files = len([f for f in folder.iterdir() if f.is_file()])
                 attempts.append(
                     AttemptInfo(
                         attempt_num=attempt_num,
                         directory=folder,
-                        n_volumes=n_files,
+                        n_volumes=count_volume_files(folder),
                         expected_volumes=expected_volumes,
-                        is_complete=n_files >= expected_volumes,
+                        is_complete=collection_is_complete(folder, expected_volumes),
+                        task_done=(folder / COLLECTION_COMPLETE_MARKER).exists(),
                     )
                 )
 
@@ -169,7 +174,15 @@ class UnifiedAttemptDialog(BaseDialog):
                     status_text = "Incomplete"
                     can_select = True
 
-                progress_value = attempt.n_volumes / attempt.expected_volumes if attempt.expected_volumes > 0 else 0
+                # A task-signaled completion stops early by design, so the bar
+                # would read <100% against the worst-case ceiling. Show it full
+                # and label the actual volume count instead of "N / ceiling".
+                if attempt.task_done:
+                    progress_value = 1.0
+                    volumes_label = f"{attempt.n_volumes} volumes (complete)"
+                else:
+                    progress_value = attempt.n_volumes / attempt.expected_volumes if attempt.expected_volumes > 0 else 0
+                    volumes_label = f"{attempt.n_volumes} / {attempt.expected_volumes}"
 
                 checked = can_select and attempt.attempt_num == default_attempt
                 checkbox = ft.Checkbox(
@@ -202,7 +215,7 @@ class UnifiedAttemptDialog(BaseDialog):
                                                     color=st.MUTED,
                                                 ),
                                                 ft.Text(
-                                                    f"{attempt.n_volumes} / {attempt.expected_volumes}",
+                                                    volumes_label,
                                                     size=st.CAPTION,
                                                     weight=ft.FontWeight.W_500,
                                                     color=status_color,

@@ -156,6 +156,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "Timer": (".utils", "Timer"),
     "check_platform_requirements": (".utils", "check_platform_requirements"),
     "outputs_exist": (".utils", "outputs_exist"),
+    "count_volume_files": (".utils", "count_volume_files"),
+    "collection_is_complete": (".utils", "collection_is_complete"),
     "ProgressEmitter": (".utils", "ProgressEmitter"),
     "compute_hrf": (".utils", "compute_hrf"),
     "compute_boxcar_task_regressor": (".utils", "compute_boxcar_task_regressor"),
@@ -267,6 +269,8 @@ __all__ = [
     "check_platform_requirements",
     # Utilities
     "outputs_exist",
+    "count_volume_files",
+    "collection_is_complete",
     "ProgressEmitter",
     # Script generation
     "generate_mask_extraction_script",

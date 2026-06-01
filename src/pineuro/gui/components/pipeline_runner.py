@@ -280,6 +280,10 @@ class PipelineRunner:
         if not collection_dir.exists():
             return []
 
+        # Lazy import: pineuro.utils pulls numpy/nibabel — keep it out of GUI
+        # module-load time (see architecture.md GUI lazy-import rule).
+        from pineuro.utils import collection_is_complete, count_volume_files
+
         pattern = f"{task}_run-{run:02d}_attempt-*"
         collections: list[dict[str, Any]] = []
 
@@ -288,15 +292,12 @@ class PipelineRunner:
                 match = re.search(r"attempt-(\d+)", folder.name)
                 if match:
                     attempt_num = int(match.group(1))
-                    n_files = len([f for f in folder.iterdir() if f.is_file()])
-                    is_complete = n_files >= expected_volumes
-
                     collections.append(
                         {
                             "attempt": attempt_num,
                             "path": folder,
-                            "n_volumes": n_files,
-                            "is_complete": is_complete,
+                            "n_volumes": count_volume_files(folder),
+                            "is_complete": collection_is_complete(folder, expected_volumes),
                         }
                     )
 
@@ -761,7 +762,9 @@ class PipelineRunner:
 
         # Report actual collected count (may be less than n_volumes for
         # variable-duration tasks that finish before the configured max)
-        actual_count = len(list(output_dir.iterdir())) if output_dir.exists() else 0
+        from pineuro.utils import count_volume_files
+
+        actual_count = count_volume_files(output_dir)
         self._emit_progress(f"Collected {actual_count} volumes to {output_dir}")
 
         # Stop and wait for localizer task (collection is done, task can end)

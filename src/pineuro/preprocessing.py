@@ -98,6 +98,7 @@ References
 # Type hints for function signatures (improves IDE support and documentation)
 import contextlib
 import heapq  # Priority queue for ordered volume collection
+import json  # Serialize the collection-complete marker
 import logging  # Structured logging throughout the pipeline
 import re  # Parse run/attempt numbers from collection folder names
 import shutil  # File operations (copy during DICOM collection)
@@ -126,6 +127,8 @@ from watchdog.observers import Observer
 
 # --- Local Imports ---
 from pineuro.utils import (
+    # Collection completion
+    COLLECTION_COMPLETE_MARKER,  # Sentinel for task-signaled completion
     # Timing
     Timer,  # Performance timing context manager
     # Masking
@@ -1463,6 +1466,12 @@ def collect_volumes(
                 f.unlink()
         logger.info(f"Cleared output directory: {output_dir}")
 
+    # Remove any stale completion marker so a re-entrant call on the same
+    # output_dir can never inherit a previous run's "complete" claim. The
+    # marker is (re)written only if this collection itself reaches task_done.
+    with contextlib.suppress(OSError):
+        (output_dir / COLLECTION_COMPLETE_MARKER).unlink(missing_ok=True)
+
     # -------------------------------------------------------------------------
     # Collection State
     # -------------------------------------------------------------------------
@@ -1664,6 +1673,23 @@ def collect_volumes(
                         elapsed = time.time() - start_time
                         with contextlib.suppress(Exception):
                             progress_callback(collected_count, n_volumes, elapsed, dest_path)
+                # Write the completion marker: the task signaled done, so this
+                # attempt ran to its natural end even though collected_count is
+                # below the worst-case ceiling. Best-effort — a write failure
+                # must never crash collection.
+                marker = output_dir / COLLECTION_COMPLETE_MARKER
+                try:
+                    marker.write_text(
+                        json.dumps(
+                            {
+                                "collected_count": collected_count,
+                                "configured_max": n_volumes,
+                                "reason": "task_done",
+                            }
+                        )
+                    )
+                except OSError as e:
+                    logger.warning(f"Could not write completion marker: {e}")
                 logger.info(
                     f"Task done — collection stopped after {collected_count} volumes (configured max: {n_volumes})"
                 )

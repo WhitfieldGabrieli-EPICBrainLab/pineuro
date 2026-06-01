@@ -1952,10 +1952,15 @@ class ParticipantWorkflowScreen:
         if not collection_dir.exists():
             return StepStatus.PENDING
 
-        # Count all files in directory - DICOM files from scanners often lack .dcm extension
-        # (e.g., Siemens names them with UIDs like "MR.1.3.12.2...")
-        dicom_count = len([f for f in collection_dir.iterdir() if f.is_file()])
-        if dicom_count >= expected_volumes:
+        # Lazy import: pineuro.utils pulls numpy/nibabel — keep it out of GUI
+        # module-load time (see architecture.md GUI lazy-import rule).
+        from pineuro.utils import collection_is_complete, count_volume_files
+
+        # DICOM files from scanners often lack a .dcm extension (e.g. Siemens
+        # names them with UIDs); count_volume_files counts them while excluding
+        # the completion marker, JSON sidecars, and the QC log.
+        dicom_count = count_volume_files(collection_dir)
+        if collection_is_complete(collection_dir, expected_volumes):
             return StepStatus.COMPLETE
         elif dicom_count > 0:
             return StepStatus.INTERRUPTED

@@ -746,6 +746,49 @@ def _filter_volume_files(directory: Path, validator: Callable[[Path], bool], *, 
     return valid
 
 
+# ==============================================================
+#  Collection completion
+# ==============================================================
+
+# Sentinel written into an attempt directory by ``collect_volumes`` when a
+# variable-duration task signals it has finished (``task_done_event``). Its
+# presence means the collection ran to its natural end even though fewer
+# volumes were collected than the worst-case ceiling. A dotfile so it is
+# excluded from volume counts by :func:`_is_obvious_junk`.
+COLLECTION_COMPLETE_MARKER = ".collection_complete"
+
+
+def count_volume_files(folder: Path) -> int:
+    """Count collected volume files in an attempt directory.
+
+    Excludes the completion marker and OS junk (dotfiles), ``.json`` NIfTI
+    sidecars, and the ``collectionlog.tsv`` QC log — none of which are volumes.
+    """
+    if not folder.exists():
+        return 0
+    return sum(
+        1
+        for f in folder.iterdir()
+        if f.is_file()
+        and not _is_obvious_junk(f)
+        and not f.name.lower().endswith(".json")
+        and f.name != "collectionlog.tsv"
+    )
+
+
+def collection_is_complete(folder: Path, expected_volumes: int) -> bool:
+    """Whether an attempt directory represents a complete collection.
+
+    Complete if the task signaled done (the :data:`COLLECTION_COMPLETE_MARKER`
+    is present — the authoritative signal for variable-duration tasks that stop
+    early) OR enough volume files were collected to meet ``expected_volumes``
+    (the path for fixed-length tasks, which never write the marker).
+    """
+    if (folder / COLLECTION_COMPLETE_MARKER).exists():
+        return True
+    return count_volume_files(folder) >= expected_volumes
+
+
 def get_dicom_files(directory: Path, validate: bool = True) -> list[Path]:
     """
     Get all DICOM files in a directory, sorted by filename.
