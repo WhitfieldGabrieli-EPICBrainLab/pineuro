@@ -878,6 +878,21 @@ class TaskBase(ABC):  # noqa: B024
         except Exception:
             pass
 
+        # macOS: pyglet's cocoapy ObjCInstance cache maps live objc pointers to
+        # Python wrappers but does not reliably evict entries when the underlying
+        # objects are deallocated on window close. When the OS later reuses a freed
+        # pointer for an unrelated object (e.g. an __NSSingleObjectArrayI), the next
+        # PygletDelegate.alloc() collides with the stale wrapper and crashes with
+        # "ObjCInstance __NSSingleObjectArrayI has no attribute initWithWindow_".
+        # Clear the cache so fresh wrappers are built for the new window.
+        if sys.platform == "darwin":
+            try:
+                from pyglet.libs.darwin.cocoapy import runtime as _cocoa_rt
+
+                _cocoa_rt.ObjCInstance._cached_objects.clear()
+            except Exception:
+                pass
+
     def _clear_font_caches(self) -> None:
         """Clear all font / glyph caches that hold OpenGL texture IDs.
 

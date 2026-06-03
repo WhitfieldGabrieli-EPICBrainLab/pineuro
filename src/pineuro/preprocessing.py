@@ -148,6 +148,8 @@ from pineuro.utils import (
 )
 
 if TYPE_CHECKING:
+    import multiprocessing.synchronize
+
     from pineuro.collection_qc import CollectionQCMonitor
 
 # --- Module Logger ---
@@ -1160,7 +1162,7 @@ def collect_volumes(
     progress_callback: Callable[[int, int, float, Path], None] | None = None,
     stop_event: threading.Event | None = None,
     trigger_event: threading.Event | None = None,
-    task_done_event: threading.Event | None = None,
+    task_done_event: "threading.Event | multiprocessing.synchronize.Event | None" = None,
     qc_monitor: "CollectionQCMonitor | None" = None,
 ) -> Path:
     """

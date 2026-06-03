@@ -505,6 +505,7 @@ def _bare_coordinator(keep_moco: bool) -> NeurofeedbackCoordinator:
     c._skipped_originals_no_moco = 0
     c._skipped_moco_no_original = 0
     c._MOCO_MISMATCH_THRESHOLD = 10
+    c._noted_dual_series = False
     c._error = None
     c._stop_event = threading.Event()
     return c
@@ -542,8 +543,9 @@ class TestMocoMismatchDetection:
         with pytest.raises(RuntimeError, match="siemens_moco"):
             c.check_error()
 
-    def test_interleaved_moco_and_originals_no_false_positive(self):
+    def test_interleaved_moco_and_originals_no_false_positive(self, caplog):
         import heapq
+        import logging
         from pathlib import Path
         from unittest.mock import patch
 
@@ -554,6 +556,7 @@ class TestMocoMismatchDetection:
             kind = "orig" if i % 2 == 0 else "moco"
             heapq.heappush(c._pending_heap, (f"{i:03d}", Path(f"/fake/{kind}_{i}.dcm")))
 
+        caplog.set_level(logging.INFO, logger="pineuro.feedback")
         with (
             patch("pineuro.feedback.is_valid_volume", return_value=True),
             patch("pineuro.feedback.is_moco_series", side_effect=lambda p: "moco" in str(p)),
@@ -567,6 +570,9 @@ class TestMocoMismatchDetection:
         assert c.n_processed > 0
         assert c._error is None
         assert not c._stop_event.is_set()
+        # The dual-series transfer note is logged once per run, not per skipped original.
+        notes = [r for r in caplog.records if "also transferring" in r.getMessage()]
+        assert len(notes) == 1
 
     def test_moco_only_data_in_software_mode_sets_error(self):
         import heapq
@@ -597,8 +603,9 @@ class TestMocoMismatchDetection:
         with pytest.raises(RuntimeError, match="software"):
             c.check_error()
 
-    def test_software_mode_with_originals_present_no_false_positive(self):
+    def test_software_mode_with_originals_present_no_false_positive(self, caplog):
         import heapq
+        import logging
         from pathlib import Path
         from unittest.mock import patch
 
@@ -609,6 +616,7 @@ class TestMocoMismatchDetection:
             kind = "orig" if i % 2 == 0 else "moco"
             heapq.heappush(c._pending_heap, (f"{i:03d}", Path(f"/fake/{kind}_{i}.dcm")))
 
+        caplog.set_level(logging.INFO, logger="pineuro.feedback")
         with (
             patch("pineuro.feedback.is_valid_volume", return_value=True),
             patch("pineuro.feedback.is_moco_series", side_effect=lambda p: "moco" in str(p)),
@@ -621,6 +629,9 @@ class TestMocoMismatchDetection:
         assert c.n_processed > 0
         assert c._error is None
         assert not c._stop_event.is_set()
+        # The dual-series transfer note is logged once per run, not per skipped MoCoSeries.
+        notes = [r for r in caplog.records if "also transferring" in r.getMessage()]
+        assert len(notes) == 1
 
     def test_user_stop_not_reported_as_mismatch(self):
         c = _bare_coordinator(keep_moco=True)

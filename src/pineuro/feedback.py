@@ -2644,6 +2644,7 @@ class NeurofeedbackCoordinator:
         self._skipped_originals_no_moco: int = 0  # originals skipped while 0 MoCo processed
         self._skipped_moco_no_original: int = 0  # MoCoSeries skipped (software/none) while 0 processed
         self._MOCO_MISMATCH_THRESHOLD: int = 10  # skipped w/ 0 processed -> fail
+        self._noted_dual_series: bool = False  # log the dual original/MoCo transfer note once per run
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()  # Signal when coordinator is ready
@@ -3036,13 +3037,16 @@ class NeurofeedbackCoordinator:
                             self._processed_files.add(key)
                             if self.n_processed == 0:
                                 self._skipped_originals_no_moco += 1
-                            # Surface the skipping at INFO (first + every 10th) so a
-                            # MoCo data/config mismatch is observable before it trips.
-                            if self._skipped_originals_no_moco == 1 or self._skipped_originals_no_moco % 10 == 0:
+                            # The scanner sends both an original reconstruction and a
+                            # corrected MoCoSeries; in siemens_moco mode we read MoCoSeries
+                            # only and skip the paired original every TR. Note the dual-series
+                            # transfer once instead of per volume. A genuine mismatch (no
+                            # MoCoSeries ever arrives) is surfaced by _check_moco_mismatch().
+                            if not self._noted_dual_series:
+                                self._noted_dual_series = True
                                 logger.info(
-                                    f"Skipping original (non-MoCo) volume in siemens_moco mode; "
-                                    f"waiting for MoCoSeries: {file_path.name} "
-                                    f"(skipped {self._skipped_originals_no_moco} so far)"
+                                    "Scanner is also transferring original (non-MoCo) volumes; "
+                                    "reading MoCoSeries only (originals skipped)."
                                 )
                             continue
                         if not self._keep_moco and moco:
@@ -3050,13 +3054,18 @@ class NeurofeedbackCoordinator:
                             self._processed_files.add(key)
                             if self.n_processed == 0:
                                 self._skipped_moco_no_original += 1
-                            # Surface the skipping at INFO (first + every 10th) so a
-                            # MoCo data/config mismatch is observable before it trips.
-                            if self._skipped_moco_no_original == 1 or self._skipped_moco_no_original % 10 == 0:
+                            # The scanner sends both an original reconstruction and a
+                            # corrected MoCoSeries; in software/none mode we read the
+                            # originals only and skip the MoCoSeries every TR. Note the
+                            # dual-series transfer once instead of per volume. A genuine
+                            # mismatch (only MoCoSeries arrives) is surfaced by
+                            # _check_moco_mismatch().
+                            if not self._noted_dual_series:
+                                self._noted_dual_series = True
                                 logger.info(
-                                    f"Skipping MoCoSeries volume in {self._motion_correction} mode; "
-                                    f"waiting for original (non-MoCo) data: {file_path.name} "
-                                    f"(skipped {self._skipped_moco_no_original} so far)"
+                                    "Scanner is also transferring Siemens MoCoSeries volumes; "
+                                    "reading original (non-MoCo) data only in "
+                                    f"{self._motion_correction} mode (MoCoSeries skipped)."
                                 )
                             continue
 

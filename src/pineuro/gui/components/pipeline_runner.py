@@ -7,6 +7,7 @@ allowing the GUI to remain responsive during long-running operations.
 import contextlib
 import logging
 import math
+import multiprocessing
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +17,16 @@ from typing import Any
 # numpy/nibabel/scipy when the GUI module is first imported.
 
 logger = logging.getLogger(__name__)
+
+# PsychoPy task steps (localizer + feedback) run in a fresh child process so that
+# pyglet / OpenGL / Cocoa global state can never leak between windows — see
+# tasks/subprocess_runner.py. "spawn" is required on macOS and Windows for a clean
+# graphics stack (and is the default on macOS).
+_MP_CONTEXT = multiprocessing.get_context("spawn")
+
+# Grace period (seconds) after a stop is requested before a still-running task
+# subprocess is forcibly terminated. Generous so post-run questions can finish.
+_GRACEFUL_STOP_TIMEOUT = 60.0
 
 
 def _loc(config: dict, idx: int = 0) -> dict:
@@ -75,25 +86,6 @@ def _coreg_localizer_networks(config: dict[str, Any], loc: dict[str, Any]) -> se
     return set(localizer_mask_names(loc)) | set(sham_networks_for_localizer(config, loc))
 
 
-class _DispatchedTask:
-    """Thin wrapper around a :class:`~concurrent.futures.Future`.
-
-    Exposes ``.is_alive()`` and ``.join()`` so it can be used as a drop-in
-    replacement for the :class:`threading.Thread` returned by
-    ``_launch_localizer_task()`` on Windows/Linux.
-    """
-
-    def __init__(self, future):
-        self._future = future
-
-    def is_alive(self) -> bool:
-        return not self._future.done()
-
-    def join(self, timeout: float | None = None) -> None:
-        with contextlib.suppress(Exception):
-            self._future.result(timeout=timeout)
-
-
 class PipelineRunner:
     """Execute pipeline steps in background threads with progress callbacks."""
 
@@ -136,14 +128,21 @@ class PipelineRunner:
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._current_coordinator = None  # Track coordinator for feedback tasks
-        self._current_feedback_task: Any = None  # Track feedback task for stop support
-        self._current_localizer_task = None  # Track localizer task for stop support
+        # PsychoPy task steps run in a child process (tasks/subprocess_runner.py).
+        # These track the live child and its IPC handles so stop() can signal it
+        # and the worker thread can drain its messages.
+        self._current_process: Any = None  # multiprocessing.Process for the active step
+        self._child_stop_event: Any = None  # mp Event: parent -> child stop request
+        self._child_show_questions: Any = None  # mp Value('b'): show post-run questions on stop
+        self._msg_queue: Any = None  # mp Queue: child -> parent messages
+        self._child_result: dict[str, Any] | None = None
+        self._child_error: tuple[str, str] | None = None  # (exc_type_name, traceback)
+        self._child_has_post_run_questions: bool = False  # last value reported by the child
         # Tracks the in-flight run/attempt so stop() can return enough info
         # for the workflow to offer Keep/Discard. Cleared when the step finishes.
         self._current_attempt: dict[str, Any] | None = None
-        # Guards the four _current_* refs above: written by the worker
-        # thread, read by stop() on the UI thread.
+        # Guards the child-process refs above: written by the worker thread,
+        # read by stop() on the UI thread.
         self._task_lock = threading.Lock()
         self._task_mirror_callback: Callable[[dict[str, Any]], None] | None = None
         self.overwrite: bool = False
@@ -240,6 +239,136 @@ class PipelineRunner:
             Function that receives visual state dict from task.get_mirror_state()
         """
         self._task_mirror_callback = callback
+
+    # =====================================================================
+    # PsychoPy task subprocess execution
+    # =====================================================================
+
+    def _spawn_task_step(self, payload: Any, *, task_done_event: Any = None) -> tuple[Any, threading.Thread]:
+        """Spawn the child process for a PsychoPy task step + a message-drain thread.
+
+        The child reconstructs the coordinator/task from *payload* and streams
+        progress / mirror / log / result / error messages back over a queue.
+        Returns ``(process, reader_thread)``.
+        """
+        from pineuro.tasks.subprocess_runner import run_step_in_subprocess
+
+        self._child_stop_event = _MP_CONTEXT.Event()
+        self._child_show_questions = _MP_CONTEXT.Value("b", False)
+        self._msg_queue = _MP_CONTEXT.Queue()
+        self._child_result = None
+        self._child_error = None
+        self._child_has_post_run_questions = False
+
+        proc = _MP_CONTEXT.Process(
+            target=run_step_in_subprocess,
+            args=(
+                payload,
+                self._msg_queue,
+                self._child_stop_event,
+                self._child_show_questions,
+                task_done_event,
+            ),
+            name=f"pineuro-task-{payload.kind}",
+            daemon=False,
+        )
+        with self._task_lock:
+            self._current_process = proc
+        reader = threading.Thread(
+            target=self._drain_child_messages,
+            args=(proc, self._msg_queue),
+            name="child-msg-reader",
+            daemon=True,
+        )
+        proc.start()
+        reader.start()
+        logger.info(f"Dispatched {payload.kind} task to subprocess (pid={proc.pid})")
+        return proc, reader
+
+    def _drain_child_messages(self, proc: Any, msg_queue: Any) -> None:
+        """Route child -> parent messages until DONE (or the child dies)."""
+        import queue as _queue
+
+        from pineuro.tasks.subprocess_runner import (
+            MSG_DONE,
+            MSG_ERROR,
+            MSG_LOG,
+            MSG_MIRROR,
+            MSG_POST_RUN_QUESTIONS,
+            MSG_PROGRESS,
+            MSG_RESULT,
+        )
+
+        while True:
+            try:
+                msg = msg_queue.get(timeout=0.5)
+            except _queue.Empty:
+                if not proc.is_alive():
+                    break  # child exited without DONE (hard crash) — stop draining
+                continue
+            except (EOFError, OSError):
+                break
+            tag = msg[0]
+            if tag == MSG_DONE:
+                break
+            if tag == MSG_PROGRESS:
+                self._emit_progress(msg[1])
+            elif tag == MSG_MIRROR:
+                cb = self._task_mirror_callback
+                if cb is not None:
+                    with contextlib.suppress(Exception):
+                        cb(msg[1])
+            elif tag == MSG_LOG:
+                _, levelno, name, message = msg
+                logging.getLogger(name).log(levelno, message)
+            elif tag == MSG_RESULT:
+                self._child_result = msg[1]
+            elif tag == MSG_ERROR:
+                self._child_error = (msg[1], msg[2])
+            elif tag == MSG_POST_RUN_QUESTIONS:
+                self._child_has_post_run_questions = bool(msg[1])
+
+    def _finish_task_step(self, proc: Any, reader: threading.Thread, *, force_timeout: float | None = None) -> None:
+        """Join the child + drain thread after the step finishes.
+
+        For feedback ``force_timeout`` is None: the run takes as long as it takes
+        and a stop arms a watchdog (see :meth:`stop`) to terminate an overrun. For
+        the localizer the caller passes a timeout because collection has already
+        ended and the child should wrap up promptly once signalled.
+        """
+        if force_timeout is None:
+            proc.join()
+        else:
+            proc.join(timeout=force_timeout)
+            if proc.is_alive():
+                logger.warning("Task subprocess did not exit in time; terminating")
+                with contextlib.suppress(Exception):
+                    proc.terminate()
+                proc.join(timeout=5)
+            if proc.is_alive():
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                proc.join()
+        reader.join(timeout=10)
+        with self._task_lock:
+            self._current_process = None
+            self._child_stop_event = None
+            self._child_show_questions = None
+
+    def _escalate_child_stop(self) -> None:
+        """Force-terminate the task subprocess if it overran the stop grace period."""
+        with self._task_lock:
+            proc = self._current_process
+        if proc is not None and proc.is_alive():
+            logger.warning("Task subprocess did not stop within grace period; terminating")
+            with contextlib.suppress(Exception):
+                proc.terminate()
+
+    def _raise_child_error_if_any(self) -> None:
+        """Re-raise a child failure so the step reports an error, not fake success."""
+        if self._child_error is not None:
+            etype, tb = self._child_error
+            raise RuntimeError(f"Task subprocess failed ({etype}):\n{tb}")
 
     @staticmethod
     def find_available_collections(
@@ -344,24 +473,22 @@ class PipelineRunner:
 
         # Snapshot the shared refs under the lock, then act outside it.
         with self._task_lock:
-            coordinator = self._current_coordinator
-            feedback_task = self._current_feedback_task
-            localizer_task = self._current_localizer_task
+            proc = self._current_process
+            child_stop = self._child_stop_event
+            child_show_q = self._child_show_questions
             attempt = dict(self._current_attempt) if self._current_attempt else None
 
-        # Stop thread-based steps
-        if self._thread is not None and self._thread.is_alive():
-            # If a feedback task is running, stop the coordinator and the task
-            if coordinator is not None:
-                logger.info("Stopping feedback coordinator")
-                coordinator.stop(show_questions=show_questions)
-            if feedback_task is not None:
-                logger.info("Stopping feedback task (PsychoPy)")
-                feedback_task.stop()
-            # If a localizer task is running, stop it
-            if localizer_task is not None:
-                logger.info("Stopping localizer task")
-                localizer_task.stop()
+        # Signal the active task subprocess to stop. Its in-child stop bridge calls
+        # coordinator.stop(show_questions=...) + task.stop() — the cross-process
+        # equivalent of the old in-process stop. The show-questions flag is set
+        # BEFORE the stop event so the child reads the right value; a watchdog
+        # force-terminates the child if it overruns the grace period.
+        if proc is not None and proc.is_alive() and child_stop is not None:
+            logger.info("Stopping task subprocess")
+            if child_show_q is not None:
+                child_show_q.value = bool(show_questions)
+            child_stop.set()
+            threading.Timer(_GRACEFUL_STOP_TIMEOUT, self._escalate_child_stop).start()
 
         # Suppress the discard prompt for localizer stops that happened before
         # the collection dir was created (nothing on disk to discard yet).
@@ -380,21 +507,18 @@ class PipelineRunner:
     def current_task_has_post_run_questions(self) -> bool:
         """Whether the in-flight feedback task would show post-run questions if stopped now.
 
-        Queries the live task so the answer matches exactly what the stop path
-        would display (its ``feedback_mode`` / ``_task_state`` are unchanged by a
-        stop, since stopped runs aren't recorded as completed). Returns False when
-        no feedback task is running (e.g. localizer steps), so the Stop dialog
-        omits the questions checkbox.
+        The feedback task runs in the child process and reports this flag once,
+        right after it is built (it can't change mid-run since stopped runs aren't
+        recorded as completed). Returns False when no task subprocess is running
+        (e.g. localizer steps), so the Stop dialog omits the questions checkbox.
         """
         with self._task_lock:
-            task = self._current_feedback_task
-        if task is None:
+            proc = self._current_process
+        if proc is None or not proc.is_alive():
             return False
-        try:
-            return bool(task.has_pending_post_run_questions())
-        except Exception:  # never block the stop dialog on a metadata/state hiccup
-            logger.exception("Failed to check for pending post-run questions")
-            return False
+        # The child reports this right after building the feedback task (it can't
+        # change mid-run); the worker caches it as messages drain.
+        return self._child_has_post_run_questions
 
     def _run_step_impl(self, step_id: str) -> None:
         """Implementation of step execution (runs in background thread).
@@ -688,46 +812,59 @@ class PipelineRunner:
             watch_dir = Path(config.get("scanner", {}).get("dicom_dir", "/BOLD_DICOM"))
             simulator_speed = 1.0
 
-        # Create simulator if in simulator mode
-        simulator = None
-        if simulator_enabled and source_dir:
-            from pineuro.simulator import VolumeSimulator
+        # The localizer PsychoPy task + its simulator run in a CHILD process (one
+        # window per process). collect_volumes stays here in the parent and reads
+        # the DICOMs the child's simulator writes to watch_dir on disk.
+        from pineuro.tasks.subprocess_runner import LocalizerStepPayload
+        from pineuro.tasks.task_registry import get_task_metadata
 
-            simulator = VolumeSimulator(
-                source_dir=source_dir,
-                target_dir=watch_dir,
-                tr=(
-                    config["localizers"][0].get("tr", 1.2) if config.get("localizers") else 1.2
-                ),  # Use configured TR from study
-                speed=simulator_speed,
-                clear_target=True,
-                trigger_mode=config.get("simulator", {}).get("trigger_mode", "manual"),
-            )
-
-        # Determine which localizer task to use
         actual_task_id = task_name if is_task_localizer else "rest"
 
-        # Shared event so collect_volumes knows when acquisition actually starts
-        trigger_event = threading.Event()
+        # Resolve the localizer task's runtime params (mirrors the old
+        # _launch_localizer_task setup, now sent to the child as plain data).
+        try:
+            params_from_scan = get_task_metadata(actual_task_id).localizer_params_from_scan
+        except Exception:
+            params_from_scan = False
+        if params_from_scan:
+            localizer_params = {"duration": loc.get("n_volumes", 250) * loc.get("tr", 2.0)}
+        else:
+            localizer_params = loc.get("task_params", {})
 
-        # Event set when the localizer task's paradigm finishes.
-        # For variable-duration tasks (e.g., RIT), this signals collect_volumes
-        # to drain remaining volumes and stop, rather than waiting for n_volumes.
-        task_done_event = threading.Event()
+        events_dir = base_dir / "preprocessing"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        presenter_monitor = config.get("display", {}).get("presenter_monitor", "right")
+        scanner_cfg = config.get("scanner", {}) or {}
+        trigger_keys = scanner_cfg.get("trigger_keys") or ["t", "+", "5", "="]
+        sim_tr = config["localizers"][0].get("tr", 1.2) if config.get("localizers") else 1.2
+        sim_trigger_mode = config.get("simulator", {}).get("trigger_mode", "manual")
 
-        # Always launch a localizer task - it controls simulator start timing
-        localizer_thread = self._launch_localizer_task(
-            run_num,
-            actual_task_id,
-            watch_dir,
+        payload = LocalizerStepPayload(
+            kind="localizer",
+            task_id=actual_task_id,
+            output_dir=str(events_dir),
+            participant_id=self.participant_id,
+            session_id=self.session_id,
+            config=localizer_params,
+            task_state_dir=str(events_dir / f"task_state_{actual_task_id}"),
+            run=run_num,
             attempt=attempt,
-            simulator=simulator,
-            trigger_event=trigger_event,
-            task_done_event=task_done_event,
+            watch_dir=str(watch_dir),
+            monitor_position=presenter_monitor,
+            trigger_keys=trigger_keys,
+            simulator_source_dir=str(source_dir) if (simulator_enabled and source_dir) else None,
+            simulator_target_dir=str(watch_dir),
+            simulator_tr=sim_tr,
+            simulator_speed=simulator_speed,
+            simulator_trigger_mode=sim_trigger_mode,
         )
 
-        # collect_volumes just watches the directory - no simulator
-        # (simulator is controlled by the task for synchronization)
+        # Event set (in the child) when the localizer paradigm finishes; passed
+        # straight into collect_volumes so it drains + stops for variable-duration
+        # tasks. trigger_event is dropped — collect_volumes' first-volume fallback
+        # supplies the elapsed-timer start.
+        task_done_event = _MP_CONTEXT.Event()
+        proc, reader = self._spawn_task_step(payload, task_done_event=task_done_event)
 
         # Create QC monitor for real-time motion/quality metrics during collection
         from pineuro.collection_qc import CollectionQCMonitor
@@ -742,156 +879,38 @@ class PipelineRunner:
             on_qc_data=self.on_qc_data,
         )
 
-        collect_volumes(
-            watch_dir=watch_dir,
-            output_dir=output_dir,
-            n_volumes=n_volumes,
-            simulator_source_dir=None,  # No simulator - task controls it
-            simulator_speed=simulator_speed,
-            clear_watch_dir=False,  # Task's simulator handles clearing
-            clear_output_dir=False,
-            progress_callback=self.on_collection_progress,
-            stop_event=self._stop_event,
-            trigger_event=trigger_event,
-            task_done_event=task_done_event,
-            qc_monitor=qc_monitor,
-        )
-
-        # Report actual collected count (may be less than n_volumes for
-        # variable-duration tasks that finish before the configured max)
-        from pineuro.utils import count_volume_files
-
-        actual_count = count_volume_files(output_dir)
-        self._emit_progress(f"Collected {actual_count} volumes to {output_dir}")
-
-        # Stop and wait for localizer task (collection is done, task can end)
-        if self._current_localizer_task is not None:
-            self._current_localizer_task.stop()
-        if localizer_thread is not None and localizer_thread.is_alive():
-            self._emit_progress("Waiting for localizer task to complete...")
-            localizer_thread.join(timeout=10)
-            with self._task_lock:
-                self._current_localizer_task = None
-
-    def _launch_localizer_task(
-        self,
-        run_num: int,
-        task_id: str,
-        watch_dir: Path,
-        attempt: int = 1,
-        simulator=None,
-        trigger_event=None,
-        task_done_event: threading.Event | None = None,
-    ):
-        """Launch a localizer PsychoPy task on the main thread.
-
-        The task runs concurrently with DICOM collection, presenting stimuli
-        while the scanner acquires volumes.  The task is dispatched to the
-        main thread via :func:`~pineuro.gui.dispatch.get_dispatcher` (required
-        on macOS for Cocoa NSWindow creation).
-
-        Args:
-            run_num: Run number (1-based)
-            task_id: Task identifier (e.g., "rest", "selfother")
-            watch_dir: Directory to watch for first DICOM arrival (auto-trigger)
-            attempt: Attempt number (for retry handling)
-            simulator: VolumeSimulator instance (optional, for offline testing)
-            trigger_event: Event set when scanner trigger is received
-            task_done_event: Event to set when task paradigm finishes, signaling
-                collect_volumes to drain remaining volumes and stop
-
-        Returns:
-            _DispatchedTask wrapping the main-thread Future
-        """
-        from pineuro.tasks.factory import create_localizer_task
-
-        config = self.config
-        base_dir = Path(config["paths"]["base_dir"])
-
-        # Get task-specific parameters from config. Fixed-duration localizers
-        # (flagged via TaskMetadata.localizer_params_from_scan) derive their
-        # params from the scan parameters; others read from the per-task
-        # localizer_task config section.
-        from pineuro.tasks.task_registry import get_task_metadata
-
         try:
-            params_from_scan = get_task_metadata(task_id).localizer_params_from_scan
-        except Exception:
-            params_from_scan = False
+            collect_volumes(
+                watch_dir=watch_dir,
+                output_dir=output_dir,
+                n_volumes=n_volumes,
+                simulator_source_dir=None,  # the child's simulator feeds watch_dir
+                simulator_speed=simulator_speed,
+                clear_watch_dir=False,
+                clear_output_dir=False,
+                progress_callback=self.on_collection_progress,
+                stop_event=self._stop_event,
+                trigger_event=None,
+                task_done_event=task_done_event,
+                qc_monitor=qc_monitor,
+            )
 
-        loc = _loc(config)
-        if params_from_scan:
-            localizer_params = {"duration": loc.get("n_volumes", 250) * loc.get("tr", 2.0)}
-        else:
-            # Task-localizer parameters live on the localizer entry itself
-            localizer_params = loc.get("task_params", {})
+            # Report actual collected count (may be < n_volumes for variable-duration tasks).
+            from pineuro.utils import count_volume_files
 
-        # Output events to the preprocessing directory (survives cleanup)
-        events_dir = base_dir / "preprocessing"
-        events_dir.mkdir(parents=True, exist_ok=True)
+            actual_count = count_volume_files(output_dir)
+            self._emit_progress(f"Collected {actual_count} volumes to {output_dir}")
+        finally:
+            # Collection is done: tell the child task to finish (if it hasn't yet)
+            # and join the subprocess.
+            if self._child_stop_event is not None:
+                self._child_stop_event.set()
+            self._finish_task_step(proc, reader, force_timeout=_GRACEFUL_STOP_TIMEOUT)
 
-        # Every localizer gets a TaskState: the completed_runs ledger (resume/audit)
-        # plus any adaptive per-run snapshot the task records. Lives in a per-task-id
-        # subdir of the (shared) preprocessing dir so localizer types don't collide.
-        from pineuro.tasks.state import TaskState
-
-        task_state = TaskState.load(events_dir / f"task_state_{task_id}", task_id=task_id)
-
-        # Get presenter monitor from display config
-        display_config = config.get("display", {})
-        presenter_monitor = display_config.get("presenter_monitor", "right")
-
-        scanner_cfg = config.get("scanner", {}) or {}
-        trigger_keys = scanner_cfg.get("trigger_keys") or ["t", "+", "5", "="]
-
-        task = create_localizer_task(
-            task_id=task_id,
-            output_dir=events_dir,
-            participant_id=self.participant_id,
-            session_id=self.session_id,
-            config=localizer_params,
-            task_state=task_state,
-            run=run_num,
-            attempt=attempt,  # Pass attempt for events file naming
-            watch_dir=str(watch_dir),  # Pass watch_dir for auto-trigger on first DICOM
-            simulator=simulator,  # Pass simulator for task-controlled start timing
-            monitor_position=presenter_monitor,
-            trigger_keys=trigger_keys,
-        )
-
-        # Set trigger event for timing synchronization with collect_volumes
-        if trigger_event is not None:
-            task.trigger_event = trigger_event
-
-        # Set mirror callback if available
-        if self._task_mirror_callback is not None:
-            task.set_mirror_callback(self._task_mirror_callback)
-
-        with self._task_lock:
-            self._current_localizer_task = task
-
-        def run_localizer():
-            try:
-                self._emit_progress(f"Localizer task '{task_id}' started (run {run_num})")
-                events_path = task.run()
-                if events_path:
-                    self._emit_progress(f"Localizer events saved to {events_path}")
-            except Exception as e:
-                logger.error(f"Localizer task error: {e}", exc_info=True)
-                self._emit_progress(f"Localizer task error: {e}")
-            finally:
-                # Signal that the task paradigm is done, allowing collect_volumes
-                # to drain remaining volumes and stop for variable-duration tasks
-                if task_done_event is not None:
-                    task_done_event.set()
-
-        # Dispatch task.run() to the main thread (required on macOS for
-        # Cocoa NSWindow; used on all platforms for a single code path).
-        from pineuro.gui.dispatch import get_dispatcher
-
-        future = get_dispatcher().submit(run_localizer)
-        logger.info(f"Dispatched localizer task '{task_id}' to main thread")
-        return _DispatchedTask(future)
+        # Surface a child failure / the saved events path after the child has stopped.
+        self._raise_child_error_if_any()
+        if self._child_result and self._child_result.get("events_path"):
+            self._emit_progress(f"Localizer events saved to {self._child_result['events_path']}")
 
     def _resolve_attempt_paths(
         self, task_name: str, runs_to_process: list[int], rest_volumes: list[int]
@@ -2109,7 +2128,7 @@ class PipelineRunner:
         Args:
             step_id: One of transfer_1, transfer_2, feedback_1, feedback_2, feedback_3, etc.
         """
-        from pineuro.feedback import get_slot_run_info, run_feedback_task
+        from pineuro.feedback import get_slot_run_info
         from pineuro.sham import (
             ReplayActivationProvider,
             find_feedbacklog_for_replay,
@@ -2574,86 +2593,28 @@ class PipelineRunner:
             if sham_pair not in connectivity_pairs:
                 connectivity_pairs = list(connectivity_pairs) + [sham_pair]
 
-        # Run feedback task (this will handle DICOM collection + processing)
-        # Pass ALL masks so all activations are computed and logged
+        # Run the feedback task in a fresh child process (one PsychoPy window per
+        # process — see tasks/subprocess_runner.py). Everything below resolves the
+        # already-built parent state into a picklable payload; the child replays
+        # run_feedback_task() + create_task() and streams results back.
         try:
-            session_info = run_feedback_task(
-                mask_paths=[str(f) for f in all_mask_files],
-                subject=self.participant_id,
-                session=self.session_id,
-                task=task_entity,
-                run=task_run_number,
-                output_dir=output_dir,
-                collection_dir=collection_dir,
-                incoming_dir=watch_dir,
-                n_baseline=n_baseline,
-                n_volumes=n_volumes,
-                tr=tr,
-                task_regressors=task_regressor,
-                mask_names=all_mask_names,  # All masks for logging
-                roi_combine_method=_fb("roi_combine_method", "voxel_efficiency"),
-                simulator_source_dir=simulator_source_dir,
-                simulator_speed=simulator_speed,
-                simulator_trigger_mode=config.get("simulator", {}).get("trigger_mode", "manual"),
-                step_id=step_id,  # Use slot-based naming with attempt entity
-                qc_enabled=True,
-                fd_threshold=_fb("fd_threshold", 0.5),
-                dvars_threshold=_fb("dvars_threshold", 1.5),
-                condition=condition,  # Log the actual condition
-                sham_provider=sham_provider,  # Replay provider for sham participants
-                motion_correction=_fb("motion_correction", "siemens_moco"),
-                include_drift=_fb("include_drift", True),
-                include_motion_regressors=_fb("include_motion_regressors", True),
-                include_wm_regressor=_fb("include_wm_regressor", False),
-                include_csf_regressor=_fb("include_csf_regressor", False),
-                wm_mask_path=wm_mask_path,
-                csf_mask_path=csf_mask_path,
-                smooth_fwhm=_fb("smooth_fwhm"),  # Real-time spatial smoothing
-                differential_pair=self._derive_differential_pair(frc, feedback_task_type),
-                feedback_interval=_fb("feedback_interval"),  # Intermittent feedback mode
-                connectivity_pairs=connectivity_pairs,  # Sliding-window correlation pairs (may include sham pair)
-                connectivity_window=_fb("connectivity_window", 15),  # Correlation window size
-                connectivity_target=_fb("connectivity_target", "increase"),  # Target direction
-                task_id=feedback_task_type,  # Registered task_id for live-metric QC summary
-            )
+            from pineuro.tasks.subprocess_runner import FeedbackStepPayload
 
-            # Wait for the coordinator thread to complete
-            coordinator = session_info["coordinator"]
-            coordinator_thread = session_info["thread"]
-
-            # Track coordinator for stop signal
-            with self._task_lock:
-                self._current_coordinator = coordinator
-
-            # Launch PsychoPy task in separate thread
-            self._emit_progress("Launching PsychoPy task...")
-
-            # Import task factory
-            from pineuro.tasks import create_task
-
-            # Get task configuration — per-run from frc.
-            task_specific_config = frc.get("task_params", {}) if frc else {}
-
-            # Get display configuration
             display_config = config.get("display", {})
             presenter_monitor = display_config.get("presenter_monitor", "right")
+            task_specific_config = frc.get("task_params", {}) if frc else {}
 
-            # Load task state for adaptive difficulty persistence across runs
+            # Load task state (adaptive difficulty + run-type gating). The child
+            # reloads it for create_task; both read the same on-disk slot.
             task_state = TaskState.load(output_dir, task_id=feedback_task_type)
-
-            # Update max_feedback_runs from config if different (sum across all feedback_runs)
             max_feedback_runs = sum(fr.get("max_runs", 1) for fr in config.get("feedback_runs", [])) or 2
             if task_state.max_feedback_runs != max_feedback_runs:
                 task_state.max_feedback_runs = max_feedback_runs
                 task_state.save()
-
             self._emit_progress(f"Task state: task={feedback_task_type}, runs={len(task_state.completed_runs)}")
 
-            # Build factory config with task parameters plus runtime settings
             signal_mode = _fb("feedback_mode", "activation")
-
             connectivity_target = _fb("connectivity_target", "increase")
-
             # First run of its type (transfer/feedback) gets the detailed
             # instruction slides; later runs get the brief reminder.
             run_type = "feedback" if feedback_mode else "transfer"
@@ -2669,74 +2630,80 @@ class PipelineRunner:
                 "is_first_of_type": is_first_of_type,
             }
 
-            # Create task via factory (validates config against task metadata)
-            simulator = session_info.get("simulator")
-            task = create_task(
+            # Exact run_feedback_task kwargs, replayed in the child. The live
+            # sham_provider object is dropped here and rebuilt in the child from a
+            # picklable spec (see sham_replay below).
+            feedback_kwargs: dict[str, Any] = {
+                "mask_paths": [str(f) for f in all_mask_files],
+                "subject": self.participant_id,
+                "session": self.session_id,
+                "task": task_entity,
+                "run": task_run_number,
+                "output_dir": str(output_dir),
+                "collection_dir": str(collection_dir),
+                "incoming_dir": str(watch_dir),
+                "n_baseline": n_baseline,
+                "n_volumes": n_volumes,
+                "tr": tr,
+                "task_regressors": task_regressor,
+                "mask_names": all_mask_names,
+                "roi_combine_method": _fb("roi_combine_method", "voxel_efficiency"),
+                "simulator_source_dir": simulator_source_dir,
+                "simulator_speed": simulator_speed,
+                "simulator_trigger_mode": config.get("simulator", {}).get("trigger_mode", "manual"),
+                "step_id": step_id,
+                "qc_enabled": True,
+                "fd_threshold": _fb("fd_threshold", 0.5),
+                "dvars_threshold": _fb("dvars_threshold", 1.5),
+                "condition": condition,
+                "motion_correction": _fb("motion_correction", "siemens_moco"),
+                "include_drift": _fb("include_drift", True),
+                "include_motion_regressors": _fb("include_motion_regressors", True),
+                "include_wm_regressor": _fb("include_wm_regressor", False),
+                "include_csf_regressor": _fb("include_csf_regressor", False),
+                "wm_mask_path": str(wm_mask_path) if wm_mask_path is not None else None,
+                "csf_mask_path": str(csf_mask_path) if csf_mask_path is not None else None,
+                "smooth_fwhm": _fb("smooth_fwhm"),
+                "differential_pair": self._derive_differential_pair(frc, feedback_task_type),
+                "feedback_interval": _fb("feedback_interval"),
+                "connectivity_pairs": connectivity_pairs,
+                "connectivity_window": _fb("connectivity_window", 15),
+                "connectivity_target": connectivity_target,
+                "task_id": feedback_task_type,
+            }
+
+            sham_replay = None
+            if isinstance(sham_provider, ReplayActivationProvider):
+                # Rebuilt in the child (it reads the feedbacklog from disk on init).
+                sham_replay = {
+                    "feedbacklog_path": str(sham_provider.feedbacklog_path),
+                    "mask_names": list(sham_provider.mask_names),
+                }
+
+            payload = FeedbackStepPayload(
+                kind="feedback",
+                feedback_kwargs=feedback_kwargs,
+                factory_config=factory_config,
                 task_id=feedback_task_type,
-                coordinator=coordinator,
-                config=factory_config,
-                task_state=task_state,
                 output_dir=str(output_dir),
-                simulator=simulator,
+                feedback_mode=feedback_mode,
+                is_last_feedback=step.is_last_feedback,
+                max_feedback_runs=max_feedback_runs,
+                sham_replay=sham_replay,
             )
 
-            # Register callback so coordinator updates task with new activations
-            coordinator._activation_callback = task._update_data
-
-            # Gate "last_feedback_only" post-run questions on the last feedback run for this task.
-            task._is_last_feedback_run = feedback_mode and step.is_last_feedback
-
-            # Track task for stop support
-            with self._task_lock:
-                self._current_feedback_task = task
-
-            # Connect GUI mirror callback if set
-            if self._task_mirror_callback is not None:
-                task.set_mirror_callback(self._task_mirror_callback)
-
-            # Dispatch task.run() to the main thread (required on macOS for
-            # Cocoa NSWindow; used on all platforms for a single code path).
-            def run_task():
-                try:
-                    self._emit_progress("Task started...")
-                    task.run()
-                    self._emit_progress("Task completed successfully")
-                except Exception as e:
-                    logger.error(f"Task error: {e}", exc_info=True)
-                    self._emit_progress(f"Task error: {e}")
-
-            from pineuro.gui.dispatch import get_dispatcher
-
-            task_future = get_dispatcher().submit(run_task)
-            logger.info("Dispatched feedback task to main thread")
-
+            self._emit_progress("Launching PsychoPy task (subprocess)...")
+            proc, reader = self._spawn_task_step(payload)
             self._emit_progress("Session running, waiting for completion...")
+            self._finish_task_step(proc, reader)
 
-            # Wait for both coordinator and task to complete
-            coordinator_thread.join()
-            with contextlib.suppress(Exception):
-                task_future.result(timeout=30)
+            # Surface a child failure (e.g. a MoCo mismatch or the 0-volume guard)
+            # so the step fails instead of reporting fake success.
+            self._raise_child_error_if_any()
 
-            # Surface any error recorded by the coordinator background thread (e.g. a
-            # MoCo data/config mismatch) so the step fails instead of reporting fake
-            # success. check_error() is a no-op on a clean or user-stopped run (a stop
-            # sets _stop_event but not _error), so this only raises on genuine errors.
-            coordinator.check_error()  # re-raises coordinator._error if set
-
-            # Extract results generically via task contract
-            results = task.get_run_results()
-            volumes_processed = results.get("volumes_processed", coordinator.n_processed)
-
-            # Defense in depth: a run that processed nothing produced no feedback.
-            # Fail it (unless the user stopped it) so other silent-0-volume causes
-            # (wrong watch dir, scanner not sending, all volumes failing validation)
-            # don't masquerade as success.
-            if volumes_processed == 0 and not coordinator.was_stopped() and coordinator._error is None:
-                raise RuntimeError(
-                    f"{task_type.capitalize()} run {task_run_number} processed 0 volumes. "
-                    f"No feedback was produced. Check that the scanner is sending volumes to the "
-                    f"watch directory and that the motion correction mode matches the incoming data."
-                )
+            # Results from the child (empty if it was stopped before producing any).
+            results = self._child_result or {}
+            volumes_processed = results.get("volumes_processed", 0)
 
             result_msg = (
                 f"{task_type.capitalize()} run {task_run_number} complete! Processed {volumes_processed} volumes."
@@ -2747,7 +2714,13 @@ class PipelineRunner:
 
             self._emit_progress(result_msg)
         finally:
-            # Clear coordinator and task references
+            # Ensure no task subprocess is left running on any exit path.
             with self._task_lock:
-                self._current_coordinator = None
-                self._current_feedback_task = None
+                leftover = self._current_process
+                self._current_process = None
+                self._child_stop_event = None
+                self._child_show_questions = None
+            if leftover is not None and leftover.is_alive():
+                with contextlib.suppress(Exception):
+                    leftover.terminate()
+                    leftover.join(timeout=5)
