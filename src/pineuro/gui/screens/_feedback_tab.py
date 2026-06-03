@@ -197,7 +197,7 @@ class FeedbackTabBuilder:
             on_change=lambda _: self._validate_field("n_volumes", self.n_volumes_field, validate_positive_int),
         )
 
-        # Session structure
+        # Baseline volumes (shown under Scan Parameters)
         n_baseline_default = c.get("n_baseline", 25)
 
         self.n_baseline_field = ft.TextField(
@@ -559,24 +559,34 @@ class FeedbackTabBuilder:
             st.field_row(self.max_runs_field),
             st.field_row(self.tr_field),
             st.field_row(self.n_volumes_field),
+            st.field_row(self.n_baseline_field),
+            st.field_row(self.motion_correction_dropdown),
+            st.caption(
+                "Siemens MoCo: parse from scanner JSON (~0ms). "
+                "Software: ANTsPy registration (~400-500ms/vol). "
+                "None: no motion correction.",
+            ),
             ft.Divider(),
         ]
 
-        # Session structure
+        # Quality control thresholds (mirrors the localizer tab's layout)
+        quality_control_section = [
+            st.section("Quality Control"),
+            st.caption(
+                "Real-time QC thresholds for collection monitoring. FD/DVARS also censor "
+                "motion-contaminated volumes from the tSNR estimate."
+            ),
+            st.field_row(self.fd_threshold_field),
+            st.field_row(self.dvars_threshold_field),
+            st.field_row(self.tsnr_threshold_field),
+            ft.Divider(),
+        ]
+
+        # Real-time GLM (no localizer equivalent — feedback runs a real-time GLM)
         self.session_structure_section = ft.Container(
             content=ft.Column(
                 [
                     st.section("Real-Time Processing"),
-                    st.field_row(self.n_baseline_field),
-                    st.field_row(self.fd_threshold_field),
-                    st.field_row(self.dvars_threshold_field),
-                    st.field_row(self.tsnr_threshold_field),
-                    st.field_row(self.motion_correction_dropdown),
-                    st.caption(
-                        "Siemens MoCo: parse from scanner JSON (~0ms). "
-                        "Software: ANTsPy registration (~400-500ms/vol). "
-                        "None: no motion correction.",
-                    ),
                     st.subsection("GLM Nuisance Regressors"),
                     st.caption(
                         "Select which regressors to include in the real-time GLM (intercept is always included)."
@@ -624,12 +634,16 @@ class FeedbackTabBuilder:
         sham_section = self._build_sham_section()
 
         # Assemble
-        all_controls = scanner_section + [
-            self.session_structure_section,
-            self.feedback_signal_section,
-            self.task_specific_section,
-            sham_section,
-        ]
+        all_controls = (
+            scanner_section
+            + quality_control_section
+            + [
+                self.session_structure_section,
+                self.feedback_signal_section,
+                self.task_specific_section,
+                sham_section,
+            ]
+        )
 
         return ft.Container(
             content=ft.Column(all_controls, scroll=ft.ScrollMode.AUTO, spacing=st.GAP_MD),
