@@ -108,7 +108,7 @@ Generate QC report for mask extraction with browser preview:
 >>> report = qc.generate_mask_extraction_report(
 ...     mask_extraction_dir=Path('/data/sub-01/mask_extraction'),
 ...     participant_id='sub-01',
-...     network_names=['DefaultA', 'ContA'],
+...     network_names=['ContA', 'DefaultA'],
 ...     open_browser=True
 ... )
 
@@ -311,7 +311,7 @@ class MaskSummary:
     Attributes
     ----------
     name : str
-        Display name of the network mask (e.g., 'DefaultA', 'ContA').
+        Display name of the network mask (e.g., 'ContA', 'DefaultA').
     voxels : int
         Total number of non-zero voxels in the thresholded mask.
     volume_ml : float
@@ -2173,7 +2173,7 @@ def generate_alternative_overlays(
     participant_id : str
         Participant identifier
     network_names : sequence of str
-        Names of extracted networks (e.g., ['DefaultA', 'ContA'])
+        Names of extracted networks (e.g., ['ContA', 'DefaultA'])
     n_alternatives : int, default=3
         Number of alternative components to generate overlays for
     output_dir : Path, optional

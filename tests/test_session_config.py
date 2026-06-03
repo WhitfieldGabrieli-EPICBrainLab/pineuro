@@ -58,7 +58,7 @@ class TestLocalizerConfig:
         config = LocalizerConfig()
         assert config.type == "rest"
         assert config.id == "rest"  # defaults to type
-        assert config.networks == ["DefaultA", "ContA"]
+        assert config.networks == ["ContA", "DefaultA"]
         assert config.extraction.network_atlas == "yeo_17"
         assert config.motion_monitoring == "none"
 

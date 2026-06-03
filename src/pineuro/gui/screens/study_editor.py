@@ -535,7 +535,7 @@ class StudyEditorScreen:
                 "n_volumes": 250,
                 "n_runs": 2,
                 "motion_monitoring": "siemens_moco",
-                "networks": ["DefaultA", "ContA"],
+                "networks": ["ContA", "DefaultA"],
                 "extraction": {
                     "network_atlas": "yeo_17",
                     "n_components": 30,
@@ -569,7 +569,7 @@ class StudyEditorScreen:
         cfg["type"] = new_type
         if new_type == "rest" and old_type != "rest":
             # Switching to rest: set ICA defaults
-            cfg.setdefault("networks", ["DefaultA", "ContA"])
+            cfg.setdefault("networks", ["ContA", "DefaultA"])
             extraction = cfg.setdefault("extraction", {})
             extraction.setdefault("network_atlas", "yeo_17")
             extraction.setdefault("n_components", 30)

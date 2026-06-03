@@ -431,9 +431,9 @@ class ParticipantWorkflowScreen:
         config = self.study_config.session_config
         atlas_name = _loc(config).get("extraction", {}).get("network_atlas", "yeo_17")
         targets = (
-            config["localizers"][0].get("networks", ["DefaultA", "ContA"])
+            config["localizers"][0].get("networks", ["ContA", "DefaultA"])
             if config.get("localizers")
-            else ["DefaultA", "ContA"]
+            else ["ContA", "DefaultA"]
         )
         targets_str = ", ".join(targets) if targets else "(none configured)"
 
@@ -5262,9 +5262,9 @@ class ParticipantWorkflowScreen:
                 "parameters": {
                     "Atlas": _loc(config).get("extraction", {}).get("network_atlas", "yeo_17"),
                     "Networks": ", ".join(
-                        config["localizers"][0].get("networks", ["DefaultA", "ContA"])
+                        config["localizers"][0].get("networks", ["ContA", "DefaultA"])
                         if config.get("localizers")
-                        else ["DefaultA", "ContA"]
+                        else ["ContA", "DefaultA"]
                     ),
                     "Output": base_dir / "mask_extraction" / "03_masks",
                 },

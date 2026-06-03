@@ -53,7 +53,7 @@ The pipeline follows these steps:
    Pull the Yeo atlas into participant space for correlation.
 
 3. **Network Selection** (03_masks/)
-   For each target network (e.g., DefaultA, ContA):
+   For each target network (e.g., ContA, DefaultA):
    - Compute spatial correlation between each ICA component and atlas network
    - Select the component with highest correlation
    - Threshold to retain ~2000 highest-loading voxels
@@ -371,7 +371,7 @@ class MaskSelection:
     Attributes
     ----------
     network_name : str
-        Name of the network (e.g., "DefaultA", "ContA")
+        Name of the network (e.g., "ContA", "DefaultA")
     source_type : str
         One of: "ica" for single ICA component, "ica_combined" for two merged
         ICA components, "yeo_atlas" for atlas fallback (per-network, after ICA),
@@ -1567,7 +1567,7 @@ def mask_extraction_rest(
     ref_file : str or Path
         Path to NIfTI file to use as a BOLD reference in participant space
     networks : str or List of str
-        Network targets to extract masks for (e.g., ["DefaultA", "ContA"])
+        Network targets to extract masks for (e.g., ["ContA", "DefaultA"])
     network_atlas : str, default="yeo_17"
         Network atlas for ICA component identification. Options:
         ``"yeo_7"``, ``"yeo_17"``, ``"schaefer_100_7net"``,
@@ -1618,7 +1618,7 @@ def mask_extraction_rest(
     """
 
     if networks is None:
-        networks = ["DefaultA", "ContA"]
+        networks = ["ContA", "DefaultA"]
 
     from nilearn.image import get_data
 
@@ -1892,8 +1892,8 @@ def mask_extraction_mni(
         BOLD reference in participant space. Can be a boldref from preprocessing
         or the mean of a reference scan collection.
     networks : str or list of str, optional
-        Target networks to extract (e.g., ``["DefaultA", "ContA"]``).
-        Defaults to ``["DefaultA", "ContA"]``.
+        Target networks to extract (e.g., ``["ContA", "DefaultA"]``).
+        Defaults to ``["ContA", "DefaultA"]``.
     network_atlas : str, default="yeo_17"
         Atlas identifier. See ``_register_atlas_to_subject`` for options.
     threshold : int, default=2000
@@ -1915,7 +1915,7 @@ def mask_extraction_mni(
         Thresholded mask files (``*_thr.nii.gz``)
     """
     if networks is None:
-        networks = ["DefaultA", "ContA"]
+        networks = ["ContA", "DefaultA"]
 
     # Helper to emit progress to both logger and callback
     def emit_progress(step: str, detail: str = ""):

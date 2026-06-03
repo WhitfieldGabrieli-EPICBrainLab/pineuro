@@ -49,7 +49,7 @@ Examples
 ...     participant_id='sub-01', session_id='ses-01',
 ...     root_dir='/data/sub-01/ses-01/mask_extraction',
 ...     input_file=preproc_file, mask_file=mask_file, ref_file=ref_file,
-...     networks=['DefaultA', 'ContA'],  # returns a list of mask Paths
+...     networks=['ContA', 'DefaultA'],  # returns a list of mask Paths
 ... )
 >>>
 >>> # Step 3: Run a real-time feedback task (here, simulated offline)

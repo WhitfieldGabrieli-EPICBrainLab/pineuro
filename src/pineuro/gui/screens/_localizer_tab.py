@@ -218,7 +218,7 @@ class LocalizerTabBuilder:
 
         # Network selection dropdowns (up to MAX_NETWORKS)
         MAX_NETWORKS = 5
-        networks = c.get("networks", ["DefaultA", "ContA"])
+        networks = c.get("networks", ["ContA", "DefaultA"])
         self._n_target_networks = len(networks) if networks else 2
 
         current_n = ATLAS_SOURCES.get(network_atlas, {}).get("n_networks", 17)

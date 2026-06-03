@@ -165,7 +165,7 @@ class FeedbackLogPoller:
                     # Handle boolean columns
                     data[header] = value.lower() in ("true", "1", "yes")
                 else:
-                    # Try to parse as float for numeric columns (e.g., DefaultA, ContA)
+                    # Try to parse as float for numeric columns (e.g., ContA, DefaultA)
                     try:
                         data[header] = float(value)
                     except (ValueError, TypeError):

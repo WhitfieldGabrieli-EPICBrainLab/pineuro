@@ -299,7 +299,7 @@ class ShamRunConfig:
         The other hemisphere becomes the non-target/sham mask.
     alternative_mask_targets : list[str]
         For 'two_networks' mode: network names to use for sham participants
-        (e.g., ["SomMotA", "SomMotB"] instead of ["DefaultA", "ContA"]).
+        (e.g., ["SomMotA", "SomMotB"] instead of ["ContA", "DefaultA"]).
     """
 
     delivery_method: str = "alternative_masks"  # "alternative_masks" or "replay"
@@ -723,8 +723,8 @@ class LocalizerConfig:
     motion_monitoring: str = "none"
     source_dicoms: list[Path] = field(default_factory=list)
 
-    # Rest-specific (ICA): list of Yeo network short names (e.g. ["DefaultA", "ContA"])
-    networks: list[str] = field(default_factory=lambda: ["DefaultA", "ContA"])
+    # Rest-specific (ICA): list of Yeo network short names (e.g. ["ContA", "DefaultA"])
+    networks: list[str] = field(default_factory=lambda: ["ContA", "DefaultA"])
 
     # Mask-extraction parameters (grouped)
     extraction: LocalizerExtractionConfig = field(default_factory=LocalizerExtractionConfig)
@@ -876,14 +876,14 @@ class SessionConfig:
     >>> config = SessionConfig(
     ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", session_id="ses-01"),
     ...     session=SessionMetadata(session_id="ses-01", session_number=1),
-    ...     localizers=[LocalizerConfig(id="rest", networks=["DefaultA", "ContA"])],
+    ...     localizers=[LocalizerConfig(id="rest", networks=["ContA", "DefaultA"])],
     ... )
 
     >>> # Multi-session reusing the rest masks from ses-01 (per-localizer)
     >>> config = SessionConfig(
     ...     paths=PathConfig(base_dir="/data/study", participant_id="sub-01", session_id="ses-02"),
     ...     session=SessionMetadata(session_id="ses-02", session_number=2),
-    ...     localizers=[LocalizerConfig(id="rest", networks=["DefaultA", "ContA"], reuse_from_session="ses-01")],
+    ...     localizers=[LocalizerConfig(id="rest", networks=["ContA", "DefaultA"], reuse_from_session="ses-01")],
     ... )
     """
 

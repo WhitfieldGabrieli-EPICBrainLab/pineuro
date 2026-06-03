@@ -1735,7 +1735,7 @@ class PipelineRunner:
         loc0 = _loc(config)
         extraction = loc0.get("extraction", {})
         network_atlas = extraction.get("network_atlas", "yeo_17")
-        networks = list(loc0.get("networks", ["DefaultA", "ContA"]))
+        networks = list(loc0.get("networks", ["ContA", "DefaultA"]))
         threshold = extraction.get("threshold", 2000)
 
         # Handle sham construction networks (same per-run resolution as _run_mask_extraction)

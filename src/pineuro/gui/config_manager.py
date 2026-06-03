@@ -24,7 +24,7 @@ Example YAML structure:
         - id: rest
           type: rest
           tr: 1.2
-          networks: [DefaultA, ContA]
+          networks: [ContA, DefaultA]
           extraction:
             network_atlas: yeo_17
             ...

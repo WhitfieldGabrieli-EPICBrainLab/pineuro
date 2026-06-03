@@ -66,7 +66,7 @@ and added to the page controls. Example:
 
 >>> from pineuro.gui.components import ActivationPlot
 >>> plot = ActivationPlot(
-...     mask_names=['DefaultA', 'ContA'],
+...     mask_names=['ContA', 'DefaultA'],
 ...     n_volumes=200,
 ...     height=250,
 ... )
