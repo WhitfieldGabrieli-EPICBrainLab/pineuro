@@ -50,7 +50,7 @@ Create a shared directory where the simulator will push files — the same direc
 
 ### macOS
 
-1. **Create a dedicated local user**: System Settings > Users & Groups > Add User... > Standard account (not Admin) > set username and password. You do not need to log into this account.
+1. **Create a dedicated local user**: System Settings > Users & Groups > Add User... > Standard account (not Admin) > set username and password. You must log into this account and run pineuro from it (see the note below) — the scanner writes DICOMs readable only by this user.
 2. **Enable SMB sharing**: System Settings > General > Sharing > File Sharing ON > click (i) > Options... > ensure "Share files and folders using SMB" is checked > check the box next to the dedicated user (enter their password when prompted) > Done
 3. **Create and share the folder**:
 
@@ -103,6 +103,8 @@ After setting up the SMB share, configure the scanner to export DICOMs. Open the
 - **Target Directory**: `BOLD_DICOM`
 - **User Name**: `WORKGROUP\<username>`
 - **Password**: the dedicated user's password
+
+> **Important — run pineuro as the same user (all platforms).** The scanner writes each DICOM to the share owned by the **User Name** configured above, granting read/write/execute permission to that account only. pineuro must therefore be launched while logged in as that same dedicated user — on Windows, macOS, and Linux alike. If pineuro runs under any other account, it will not be able to read the incoming DICOMs even though the files arrive in the share.
 
 **macOS only**: Before running BOLD sequences, open a Command Prompt on the scanner console (Ctrl+Esc > Advanced User > Command Prompt) and run:
 
