@@ -34,13 +34,21 @@ monitored for threshold/trend. Ball movement depends on ``movement_mode``:
   mask_names[1] (top, ball up when more active) minus mask_names[2]
   (bottom, ball down when more active). Requires 3 masks.
 
-Trigger Conditions (all must be met simultaneously)
----------------------------------------------------
-- Cooldown elapsed: >= min_prompt_interval since last episode
-- Threshold: current activation above (or below) baseline
-- Trend: N consecutive volumes of increasing (or decreasing) signal
+Trigger Conditions
+------------------
+Cooldown must always be elapsed (>= min_prompt_interval since last episode).
+Beyond that, up to four neural condition gates can be independently enabled and
+combined via ``trigger_logic`` (``"all"`` = AND, ``"any"`` = OR):
 
-Timeout episodes bypass threshold/trend checks but still respect cooldown.
+- Activation level: current activation past ``activation_threshold``
+- Trend: slope/strict trend over ``consecutive_volumes`` (vs ``slope_threshold``)
+- Mean: mean activation over the window past ``mean_threshold``
+- Count: at least ``count_min`` of the window past ``activation_threshold``
+
+The activation contrast (``positive``/``negative``) sets the comparison
+direction for the level, mean, and count gates; ``activation_trend`` sets it for
+the slope gate. Defaults reproduce the original behavior: activation > 0 AND
+slope > 0. Timeout episodes bypass the neural gates but still respect cooldown.
 
 Dependencies
 ------------
@@ -116,6 +124,10 @@ class _TriggerEval(NamedTuple):
     trend_met: bool
     slope: float
     consecutive: int
+    mean_met: bool
+    mean_value: float
+    count_met: bool
+    count_above: int
 
 
 # ============================================================================
@@ -177,6 +189,31 @@ class RITTriggeredBallTask(BaseTask):
         Number of consecutive volumes with trending signal needed to trigger.
     activation_trend : str
         ``"increasing"`` or ``"decreasing"`` — direction of consecutive trend.
+    use_activation_condition : bool
+        Enable the activation-level gate (current activation vs
+        ``activation_threshold``; direction from ``activation_contrast``).
+    activation_threshold : float
+        Activation level used by the activation-level and count gates. Positive
+        contrast fires when activation > this value; negative when < this value.
+    use_trend_condition : bool
+        Enable the slope/strict trend gate over ``consecutive_volumes``.
+    slope_threshold : float
+        Slope-method comparison value: increasing fires when slope >
+        ``slope_threshold``, decreasing when slope < it. 0 = any rise/fall.
+    use_mean_condition : bool
+        Enable the mean-over-window gate (mean of the last
+        ``consecutive_volumes`` activations vs ``mean_threshold``).
+    mean_threshold : float
+        Mean-activation threshold over the window (direction from
+        ``activation_contrast``).
+    use_count_condition : bool
+        Enable the sustained-count gate (how many of the last
+        ``consecutive_volumes`` pass ``activation_threshold``).
+    count_min : int
+        Minimum number of in-window volumes that must pass
+        ``activation_threshold`` for the count gate.
+    trigger_logic : str
+        How enabled gates combine: ``"all"`` (AND) or ``"any"`` (OR).
     min_prompt_interval : float
         Minimum seconds between episodes (cooldown).
     timeout_duration : float
@@ -213,6 +250,15 @@ class RITTriggeredBallTask(BaseTask):
         consecutive_volumes: int = 3,
         activation_trend: str = "increasing",
         trend_method: str = "slope",
+        use_activation_condition: bool = True,
+        activation_threshold: float = 0.0,
+        use_trend_condition: bool = True,
+        slope_threshold: float = 0.0,
+        use_mean_condition: bool = False,
+        mean_threshold: float = 0.0,
+        use_count_condition: bool = False,
+        count_min: int = 3,
+        trigger_logic: str = "all",
         min_prompt_interval: float = 30.0,
         timeout_duration: float = 60.0,
         episode_duration: float = 30.0,
@@ -232,6 +278,10 @@ class RITTriggeredBallTask(BaseTask):
             raise ValueError("RITTriggeredBallTask requires at least 1 mask name (trigger network)")
         if trend_method not in ("strict", "slope"):
             raise ValueError(f"trend_method must be 'strict' or 'slope', got {trend_method!r}")
+        if trigger_logic not in ("all", "any"):
+            raise ValueError(f"trigger_logic must be 'all' or 'any', got {trigger_logic!r}")
+        if not (use_activation_condition or use_trend_condition or use_mean_condition or use_count_condition):
+            raise ValueError("At least one trigger condition must be enabled")
         if movement_mode not in ("single", "dual"):
             raise ValueError(f"movement_mode must be 'single' or 'dual', got {movement_mode!r}")
         if movement_direction not in ("positive_down", "positive_up"):
@@ -259,6 +309,17 @@ class RITTriggeredBallTask(BaseTask):
         self.trend_method = trend_method
         self.min_prompt_interval = min_prompt_interval
         self.timeout_duration = timeout_duration
+
+        # Trigger condition gates (each independently toggleable, combined by trigger_logic)
+        self.use_activation_condition = use_activation_condition
+        self.activation_threshold = activation_threshold
+        self.use_trend_condition = use_trend_condition
+        self.slope_threshold = slope_threshold
+        self.use_mean_condition = use_mean_condition
+        self.mean_threshold = mean_threshold
+        self.use_count_condition = use_count_condition
+        self.count_min = count_min
+        self.trigger_logic = trigger_logic
 
         # Ball episode parameters
         self.episode_duration = episode_duration
@@ -436,51 +497,96 @@ class RITTriggeredBallTask(BaseTask):
     def _evaluate_trigger(self, time_since_last: float, activation: float, history: list[float]) -> _TriggerEval:
         """Evaluate every trigger gate for one volume (single source of truth).
 
-        ``decision`` reproduces the exact short-circuit order of the original
-        check (cooldown -> timeout -> threshold -> warmup -> trend); the other
-        fields are computed unconditionally so the log suffix can explain the
-        outcome. Shared by :meth:`_check_trigger` (uses ``.decision``) and the
-        per-volume log suffix (uses the diagnostics).
+        Cooldown and timeout are timing gates evaluated first (cooldown blocks
+        everything; timeout forces an episode but still respects cooldown).
+        Beyond those, up to four neural condition gates -- activation level,
+        trend, mean over the window, and sustained count -- are each evaluated
+        only when enabled, then combined by ``trigger_logic`` (``"all"`` = AND,
+        ``"any"`` = OR). The remaining fields are diagnostics consumed by the
+        per-volume log suffix. Shared by :meth:`_check_trigger` (uses
+        ``.decision``) and the suffix (uses the diagnostics).
         """
         in_cooldown = time_since_last < self.min_prompt_interval
         cooldown_remaining = max(0.0, self.min_prompt_interval - time_since_last)
         timeout_fired = time_since_last >= self.timeout_duration
 
-        if self.activation_contrast == "positive":
-            threshold_met = activation > 0
-        else:
-            threshold_met = activation < 0
-
+        contrast_positive = self.activation_contrast == "positive"
         history_len = len(history)
-        warming_up = history_len < self.consecutive_volumes
+        window = history[-self.consecutive_volumes :]
 
-        # Trend gate: only meaningful once history fills the window.
+        # Window-based gates (trend / mean / count) need a full window first.
+        needs_window = self.use_trend_condition or self.use_mean_condition or self.use_count_condition
+        warming_up = needs_window and history_len < self.consecutive_volumes
+
+        # --- Activation-level gate: current activation vs activation_threshold ---
+        if contrast_positive:
+            threshold_met = activation > self.activation_threshold
+        else:
+            threshold_met = activation < self.activation_threshold
+
+        # --- Trend gate: slope sign (vs slope_threshold) or strict monotonic ---
         slope = 0.0
         trend_met = False
-        if not warming_up:
-            recent = history[-self.consecutive_volumes :]
+        if self.use_trend_condition and not warming_up:
             if self.trend_method == "strict":
                 if self.activation_trend == "increasing":
-                    trend_met = all(recent[i] < recent[i + 1] for i in range(len(recent) - 1))
+                    trend_met = all(window[i] < window[i + 1] for i in range(len(window) - 1))
                 else:
-                    trend_met = all(recent[i] > recent[i + 1] for i in range(len(recent) - 1))
+                    trend_met = all(window[i] > window[i + 1] for i in range(len(window) - 1))
             else:  # "slope"
-                slope = _least_squares_slope(recent)
-                trend_met = slope > 0 if self.activation_trend == "increasing" else slope < 0
+                slope = _least_squares_slope(window)
+                if self.activation_trend == "increasing":
+                    trend_met = slope > self.slope_threshold
+                else:
+                    trend_met = slope < self.slope_threshold
+
+        # --- Mean-over-window gate: mean activation vs mean_threshold ---
+        mean_value = 0.0
+        mean_met = False
+        if self.use_mean_condition and not warming_up:
+            mean_value = float(np.mean(window))
+            mean_met = mean_value > self.mean_threshold if contrast_positive else mean_value < self.mean_threshold
+
+        # --- Sustained-count gate: K of N window volumes past activation_threshold ---
+        count_above = 0
+        count_met = False
+        if self.use_count_condition and not warming_up:
+            if contrast_positive:
+                count_above = sum(1 for v in window if v > self.activation_threshold)
+            else:
+                count_above = sum(1 for v in window if v < self.activation_threshold)
+            count_met = count_above >= self.count_min
+
+        # Combine the enabled gates by trigger_logic.
+        gate_results: list[bool] = []
+        if self.use_activation_condition:
+            gate_results.append(threshold_met)
+        if self.use_trend_condition:
+            gate_results.append(trend_met)
+        if self.use_mean_condition:
+            gate_results.append(mean_met)
+        if self.use_count_condition:
+            gate_results.append(count_met)
+        if not gate_results:
+            conditions_met = False
+        elif self.trigger_logic == "any":
+            conditions_met = any(gate_results)
+        else:  # "all"
+            conditions_met = all(gate_results)
 
         # Strict display fraction: largest monotonic run (up to consecutive_volumes)
         # ending at the current value. This is the display metric, distinct from
         # trend_met (whole-window rule that actually gates the trigger).
         consecutive = 0
-        if self.trend_method == "strict":
+        if self.use_trend_condition and self.trend_method == "strict":
             for w in range(min(history_len, self.consecutive_volumes), 0, -1):
-                window = history[-w:]
+                run = history[-w:]
                 if self.activation_trend == "increasing":
-                    if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
+                    if all(run[i] < run[i + 1] for i in range(len(run) - 1)):
                         consecutive = w
                         break
                 else:
-                    if all(window[i] > window[i + 1] for i in range(len(window) - 1)):
+                    if all(run[i] > run[i + 1] for i in range(len(run) - 1)):
                         consecutive = w
                         break
 
@@ -488,9 +594,9 @@ class RITTriggeredBallTask(BaseTask):
             decision: str | None = None
         elif timeout_fired:
             decision = "timeout"
-        elif not threshold_met or warming_up:
+        elif warming_up:
             decision = None
-        elif trend_met:
+        elif conditions_met:
             decision = "triggered"
         else:
             decision = None
@@ -506,27 +612,43 @@ class RITTriggeredBallTask(BaseTask):
             trend_met=trend_met,
             slope=slope,
             consecutive=consecutive,
+            mean_met=mean_met,
+            mean_value=mean_value,
+            count_met=count_met,
+            count_above=count_above,
         )
 
     def _format_trigger_suffix(self, ev: _TriggerEval) -> str:
         """Build the ASCII per-volume log suffix from a trigger evaluation.
 
-        Shows both gates and, only when relevant, the verdict (TRIGGER /
-        TIMEOUT / cooldown wait). Strictly ASCII: the session log FileHandler
-        has no explicit encoding, so non-ASCII would raise UnicodeEncodeError
-        on Windows and drop the line.
+        Shows one part per *enabled* condition gate plus the combine mode and,
+        only when relevant, the verdict (TRIGGER / TIMEOUT / cooldown wait).
+        Strictly ASCII: the session log FileHandler has no explicit encoding, so
+        non-ASCII would raise UnicodeEncodeError on Windows and drop the line.
         """
         if ev.warming_up:
             return f" | warmup {ev.history_len}/{self.consecutive_volumes}"
 
-        if self.trend_method == "strict":
-            trend_part = f"trend {self.activation_trend} {ev.consecutive}/{self.consecutive_volumes}"
-        else:
-            need = ">0" if self.activation_trend == "increasing" else "<0"
-            trend_part = f"trend slope {ev.slope:+.3f} need{need} {'ok' if ev.trend_met else 'no'}"
-
-        act = ">0" if self.activation_contrast == "positive" else "<0"
-        thresh_part = f"thresh act{act} {'ok' if ev.threshold_met else 'no'}"
+        parts: list[str] = []
+        if self.use_activation_condition:
+            op = ">" if self.activation_contrast == "positive" else "<"
+            parts.append(f"act{op}{self.activation_threshold:g} {'ok' if ev.threshold_met else 'no'}")
+        if self.use_trend_condition:
+            if self.trend_method == "strict":
+                parts.append(
+                    f"trend {self.activation_trend} {ev.consecutive}/{self.consecutive_volumes} "
+                    f"{'ok' if ev.trend_met else 'no'}"
+                )
+            else:
+                op = ">" if self.activation_trend == "increasing" else "<"
+                parts.append(f"slope {ev.slope:+.3f}{op}{self.slope_threshold:g} {'ok' if ev.trend_met else 'no'}")
+        if self.use_mean_condition:
+            op = ">" if self.activation_contrast == "positive" else "<"
+            parts.append(f"mean {ev.mean_value:+.3f}{op}{self.mean_threshold:g} {'ok' if ev.mean_met else 'no'}")
+        if self.use_count_condition:
+            parts.append(
+                f"count {ev.count_above}/{self.consecutive_volumes}>={self.count_min} {'ok' if ev.count_met else 'no'}"
+            )
 
         if ev.decision == "triggered":
             trailer = " => TRIGGER"
@@ -537,7 +659,8 @@ class RITTriggeredBallTask(BaseTask):
         else:
             trailer = ""
 
-        return f" | {trend_part} | {thresh_part}{trailer}"
+        joined = " | ".join(parts) if parts else "no-conditions"
+        return f" | [{self.trigger_logic}] {joined}{trailer}"
 
     # =========================================================================
     # Ball movement (simplified from BallTask)
@@ -1178,6 +1301,32 @@ class RITTriggeredBallTask(BaseTask):
 # Task metadata and registration
 # ============================================================================
 
+
+def _validate_rit_trigger_conditions(config: dict[str, Any]) -> None:
+    """Cross-parameter validator for the configurable trigger condition gates.
+
+    Ensures at least one neural condition is enabled (otherwise only timeout
+    episodes would ever fire) and that ``count_min`` fits the window when the
+    count gate is enabled.
+    """
+    enabled = any(
+        config.get(key, default)
+        for key, default in (
+            ("use_activation_condition", True),
+            ("use_trend_condition", True),
+            ("use_mean_condition", False),
+            ("use_count_condition", False),
+        )
+    )
+    if not enabled:
+        raise ValueError("At least one trigger condition must be enabled")
+    if config.get("use_count_condition", False):
+        count_min = config.get("count_min", 3)
+        window = config.get("consecutive_volumes", 3)
+        if count_min is not None and window is not None and count_min > window:
+            raise ValueError("Count Min must be <= Consecutive Volumes when the count condition is enabled")
+
+
 RIT_TRIGGERED_BALL_METADATA = TaskMetadata(
     task_id="rittriggeredball",
     display_name="RIT Triggered Ball",
@@ -1288,6 +1437,75 @@ RIT_TRIGGERED_BALL_METADATA = TaskMetadata(
             hint="Consecutive volumes increasing or decreasing in trigger activation",
         ),
         TaskParameter(
+            key="use_activation_condition",
+            label="Use Activation-Level Condition",
+            type="bool",
+            default=True,
+            hint="Gate on current activation vs Activation Threshold (direction from Activation Contrast).",
+        ),
+        TaskParameter(
+            key="activation_threshold",
+            label="Activation Threshold",
+            type="float",
+            default=0.0,
+            hint=(
+                "Level used by the activation and count gates. Positive contrast fires when "
+                "activation > this; negative when < this. 0 = at baseline."
+            ),
+        ),
+        TaskParameter(
+            key="use_trend_condition",
+            label="Use Trend Condition",
+            type="bool",
+            default=True,
+            hint="Gate on the slope/strict trend over Consecutive Volumes (uses Trend Method + Activation Trend).",
+        ),
+        TaskParameter(
+            key="slope_threshold",
+            label="Slope Threshold",
+            type="float",
+            default=0.0,
+            hint="Slope method only: increasing fires when slope > this, decreasing when slope < this. 0 = any rise/fall.",
+        ),
+        TaskParameter(
+            key="use_mean_condition",
+            label="Use Mean-Activation Condition",
+            type="bool",
+            default=False,
+            hint="Gate on the mean activation across Consecutive Volumes vs Mean Threshold (direction from Activation Contrast).",
+        ),
+        TaskParameter(
+            key="mean_threshold",
+            label="Mean Threshold",
+            type="float",
+            default=0.0,
+            hint="Mean-activation threshold over the window. Positive contrast fires when mean > this; negative when < this.",
+        ),
+        TaskParameter(
+            key="use_count_condition",
+            label="Use Sustained-Count Condition",
+            type="bool",
+            default=False,
+            hint="Gate on how many of the last Consecutive Volumes pass Activation Threshold (>= Count Min).",
+        ),
+        TaskParameter(
+            key="count_min",
+            label="Count Min (K of window)",
+            type="int",
+            default=3,
+            min_value=1,
+            max_value=20,
+            hint="Minimum in-window volumes that must pass Activation Threshold for the count condition.",
+        ),
+        TaskParameter(
+            key="trigger_logic",
+            label="Combine Conditions",
+            type="str",
+            default="all",
+            choices=["all", "any"],
+            hint="all = every enabled condition must hold (AND). any = at least one enabled condition holds (OR).",
+        ),
+        TaskParameter(
             key="min_prompt_interval",
             label="Min Episode Interval (s)",
             type="float",
@@ -1340,6 +1558,7 @@ RIT_TRIGGERED_BALL_METADATA = TaskMetadata(
             hint="If true, ball position and circles reset at each episode start",
         ),
     ],
+    cross_parameter_validator=_validate_rit_trigger_conditions,
     task_state_fields=[],
     post_run_questions=[],
     live_metrics=[

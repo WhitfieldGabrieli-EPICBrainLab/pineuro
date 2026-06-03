@@ -109,6 +109,15 @@ class TestTriggerDetection:
         stub.trend_method = kwargs.get("trend_method", "strict")
         stub.min_prompt_interval = kwargs.get("min_prompt_interval", 30.0)
         stub.timeout_duration = kwargs.get("timeout_duration", 60.0)
+        stub.use_activation_condition = kwargs.get("use_activation_condition", True)
+        stub.activation_threshold = kwargs.get("activation_threshold", 0.0)
+        stub.use_trend_condition = kwargs.get("use_trend_condition", True)
+        stub.slope_threshold = kwargs.get("slope_threshold", 0.0)
+        stub.use_mean_condition = kwargs.get("use_mean_condition", False)
+        stub.mean_threshold = kwargs.get("mean_threshold", 0.0)
+        stub.use_count_condition = kwargs.get("use_count_condition", False)
+        stub.count_min = kwargs.get("count_min", 3)
+        stub.trigger_logic = kwargs.get("trigger_logic", "all")
         stub._trigger_state = TriggerState()
 
         # Bind the methods. _check_trigger delegates to _evaluate_trigger, and
@@ -300,6 +309,15 @@ class TestSlopeModeTriggerDetection:
         stub.trend_method = kwargs.get("trend_method", "strict")
         stub.min_prompt_interval = kwargs.get("min_prompt_interval", 30.0)
         stub.timeout_duration = kwargs.get("timeout_duration", 60.0)
+        stub.use_activation_condition = kwargs.get("use_activation_condition", True)
+        stub.activation_threshold = kwargs.get("activation_threshold", 0.0)
+        stub.use_trend_condition = kwargs.get("use_trend_condition", True)
+        stub.slope_threshold = kwargs.get("slope_threshold", 0.0)
+        stub.use_mean_condition = kwargs.get("use_mean_condition", False)
+        stub.mean_threshold = kwargs.get("mean_threshold", 0.0)
+        stub.use_count_condition = kwargs.get("use_count_condition", False)
+        stub.count_min = kwargs.get("count_min", 3)
+        stub.trigger_logic = kwargs.get("trigger_logic", "all")
         stub._trigger_state = TriggerState()
         stub._check_trigger = RITExperienceSamplingTask._check_trigger.__get__(stub)
         stub._evaluate_trigger = RITExperienceSamplingTask._evaluate_trigger.__get__(stub)
@@ -414,9 +432,9 @@ class TestLogSuffix(TestTriggerDetection):
         stub._trigger_state.activation_history.extend([0.1, 0.4, 0.9])
 
         suffix = self._suffix(stub, 35.0, 0.9)
-        assert suffix.startswith(" | trend slope +")
-        assert "need>0 ok" in suffix
-        assert "thresh act>0 ok" in suffix
+        assert suffix.startswith(" | [all] ")
+        assert "act>0 ok" in suffix
+        assert "slope +" in suffix and ">0 ok" in suffix
         assert suffix.endswith("=> TRIGGER")
         assert suffix.isascii()
         assert stub._check_trigger(35.0, 0.9) == "triggered"
@@ -427,8 +445,8 @@ class TestLogSuffix(TestTriggerDetection):
         stub._trigger_state.activation_history.extend([0.9, 0.4, 0.3])
 
         suffix = self._suffix(stub, 35.0, 0.3)
-        assert "need>0 no" in suffix
-        assert "thresh act>0 ok" in suffix
+        assert "slope " in suffix and ">0 no" in suffix
+        assert "act>0 ok" in suffix
         assert "=>" not in suffix
         assert stub._check_trigger(35.0, 0.3) is None
 
@@ -449,7 +467,7 @@ class TestLogSuffix(TestTriggerDetection):
         stub._trigger_state.activation_history.extend([0.9, 0.4, 0.9])
 
         suffix = self._suffix(stub, 35.0, 0.9)
-        assert suffix == " | trend increasing 2/3 | thresh act>0 ok"
+        assert suffix == " | [all] act>0 ok | trend increasing 2/3 no"
         assert "=>" not in suffix
 
     def test_timeout_trailer(self):
@@ -463,3 +481,163 @@ class TestLogSuffix(TestTriggerDetection):
         assert suffix.endswith("=> TIMEOUT (no trigger in 60s)")
         assert suffix.isascii()
         assert stub._check_trigger(70.0, 0.9) == "timeout"
+
+
+class TestConfigurableTriggerConditions(TestTriggerDetection):
+    """Configurable condition gates: thresholds, new metrics, and combine logic.
+
+    Inherits _make_task_stub from TestTriggerDetection.
+    """
+
+    def _seed(self, stub, history, last_prompt_time=0.0):
+        stub._trigger_state.last_prompt_time = last_prompt_time
+        stub._trigger_state.activation_history.extend(history)
+
+    def test_defaults_reproduce_activation_and_slope(self):
+        stub = self._make_task_stub(trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0)
+        self._seed(stub, [0.1, 0.4, 0.9])
+        assert stub._check_trigger(35.0, 0.9) == "triggered"
+
+    def test_activation_threshold_blocks_below(self):
+        stub = self._make_task_stub(
+            trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0, activation_threshold=1.5
+        )
+        self._seed(stub, [0.1, 0.4, 0.9])
+        assert stub._check_trigger(35.0, 0.9) is None
+
+    def test_activation_threshold_fires_above(self):
+        stub = self._make_task_stub(
+            trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0, activation_threshold=1.5
+        )
+        self._seed(stub, [1.0, 1.6, 2.0])
+        assert stub._check_trigger(35.0, 2.0) == "triggered"
+
+    def test_slope_threshold_requires_steeper_rise(self):
+        stub = self._make_task_stub(
+            trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0, slope_threshold=0.5
+        )
+        self._seed(stub, [0.8, 0.9, 1.0])
+        assert stub._check_trigger(35.0, 1.0) is None
+
+    def test_mean_condition_only(self):
+        stub = self._make_task_stub(
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            use_activation_condition=False,
+            use_trend_condition=False,
+            use_mean_condition=True,
+            mean_threshold=1.0,
+        )
+        self._seed(stub, [1.2, 1.4, 1.6])
+        assert stub._check_trigger(35.0, 1.6) == "triggered"
+
+    def test_mean_condition_blocks_below(self):
+        stub = self._make_task_stub(
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            use_activation_condition=False,
+            use_trend_condition=False,
+            use_mean_condition=True,
+            mean_threshold=1.0,
+        )
+        self._seed(stub, [0.2, 0.4, 0.6])
+        assert stub._check_trigger(35.0, 0.6) is None
+
+    def test_count_condition_only(self):
+        stub = self._make_task_stub(
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            use_activation_condition=False,
+            use_trend_condition=False,
+            use_count_condition=True,
+            activation_threshold=1.0,
+            count_min=2,
+        )
+        self._seed(stub, [1.5, 0.2, 1.5])
+        assert stub._check_trigger(35.0, 1.5) == "triggered"
+        stub2 = self._make_task_stub(
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            use_activation_condition=False,
+            use_trend_condition=False,
+            use_count_condition=True,
+            activation_threshold=1.0,
+            count_min=2,
+        )
+        self._seed(stub2, [1.5, 0.2, 0.2])
+        assert stub2._check_trigger(35.0, 0.2) is None
+
+    def test_trigger_logic_any_fires_on_single_gate(self):
+        stub = self._make_task_stub(
+            trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0, trigger_logic="any"
+        )
+        self._seed(stub, [0.9, 0.5, 0.4])  # slope negative, current > 0
+        assert stub._check_trigger(35.0, 0.4) == "triggered"
+
+    def test_trigger_logic_all_requires_every_gate(self):
+        stub = self._make_task_stub(
+            trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0, trigger_logic="all"
+        )
+        self._seed(stub, [0.9, 0.5, 0.4])
+        assert stub._check_trigger(35.0, 0.4) is None
+
+    def test_activation_only_needs_no_warmup(self):
+        stub = self._make_task_stub(
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            use_activation_condition=True,
+            use_trend_condition=False,
+        )
+        self._seed(stub, [0.5])
+        assert stub._check_trigger(35.0, 0.5) == "triggered"
+
+
+class TestTriggerConditionValidation:
+    def test_no_condition_enabled_raises(self, mock_coordinator):
+        import pytest
+
+        from pineuro.tasks.rit_experience_sampling import RITExperienceSamplingTask
+
+        coord = mock_coordinator(mask_names=["RIT"])
+        with pytest.raises(ValueError, match="At least one trigger condition"):
+            RITExperienceSamplingTask(
+                coord,
+                use_activation_condition=False,
+                use_trend_condition=False,
+                use_mean_condition=False,
+                use_count_condition=False,
+            )
+
+    def test_invalid_trigger_logic_raises(self, mock_coordinator):
+        import pytest
+
+        from pineuro.tasks.rit_experience_sampling import RITExperienceSamplingTask
+
+        coord = mock_coordinator(mask_names=["RIT"])
+        with pytest.raises(ValueError, match="trigger_logic"):
+            RITExperienceSamplingTask(coord, trigger_logic="both")
+
+    def test_cross_validator_rejects_count_min_over_window(self):
+        import pytest
+
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("ritexperiencesampling")
+        with pytest.raises(ValueError, match="Count Min"):
+            meta.validate_config({"use_count_condition": True, "count_min": 5, "consecutive_volumes": 3})
+
+    def test_cross_validator_rejects_no_condition(self):
+        import pytest
+
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("ritexperiencesampling")
+        with pytest.raises(ValueError, match="At least one trigger condition"):
+            meta.validate_config(
+                {
+                    "use_activation_condition": False,
+                    "use_trend_condition": False,
+                    "use_mean_condition": False,
+                    "use_count_condition": False,
+                }
+            )

@@ -81,6 +81,19 @@ def _make_task(**kwargs):
     task.trend_method = kwargs.get("trend_method", "strict")
     task.min_prompt_interval = kwargs.get("min_prompt_interval", 10.0)
     task.timeout_duration = kwargs.get("timeout_duration", 60.0)
+
+    # Configurable trigger condition gates (defaults reproduce the original
+    # activation>0 AND slope/strict-trend behavior).
+    task.use_activation_condition = kwargs.get("use_activation_condition", True)
+    task.activation_threshold = kwargs.get("activation_threshold", 0.0)
+    task.use_trend_condition = kwargs.get("use_trend_condition", True)
+    task.slope_threshold = kwargs.get("slope_threshold", 0.0)
+    task.use_mean_condition = kwargs.get("use_mean_condition", False)
+    task.mean_threshold = kwargs.get("mean_threshold", 0.0)
+    task.use_count_condition = kwargs.get("use_count_condition", False)
+    task.count_min = kwargs.get("count_min", 3)
+    task.trigger_logic = kwargs.get("trigger_logic", "all")
+
     task._trigger_state = TriggerState()
 
     # Movement state so _calculate_ball_movement can be exercised directly
@@ -428,9 +441,9 @@ class TestRITTriggeredBallLogSuffix:
         task._trigger_state.activation_history = deque([0.1, 0.4, 0.9], maxlen=50)
 
         suffix = self._suffix(task, 50.0, 0.9)
-        assert suffix.startswith(" | trend slope +")
-        assert "need>0 ok" in suffix
-        assert "thresh act>0 ok" in suffix
+        assert suffix.startswith(" | [all] ")
+        assert "act>0 ok" in suffix
+        assert "slope +" in suffix and ">0 ok" in suffix
         assert suffix.endswith("=> TRIGGER")
         assert suffix.isascii()
         # Must match the authoritative decision.
@@ -444,8 +457,8 @@ class TestRITTriggeredBallLogSuffix:
         task._trigger_state.activation_history = deque([0.9, 0.4, 0.3], maxlen=50)
 
         suffix = self._suffix(task, 50.0, 0.3)
-        assert "need>0 no" in suffix
-        assert "thresh act>0 ok" in suffix
+        assert "slope " in suffix and ">0 no" in suffix
+        assert "act>0 ok" in suffix
         assert "=>" not in suffix
         assert task._check_trigger(50.0, 0.3) is None
 
@@ -470,7 +483,7 @@ class TestRITTriggeredBallLogSuffix:
         task._trigger_state.activation_history = deque([0.9, 0.4, 0.9], maxlen=50)
 
         suffix = self._suffix(task, 50.0, 0.9)
-        assert suffix == " | trend increasing 2/3 | thresh act>0 ok"
+        assert suffix == " | [all] act>0 ok | trend increasing 2/3 no"
         assert "=>" not in suffix
 
     def test_timeout_trailer(self):
@@ -484,3 +497,169 @@ class TestRITTriggeredBallLogSuffix:
         assert suffix.endswith("=> TIMEOUT (no trigger in 60s)")
         assert suffix.isascii()
         assert task._check_trigger(70.0, 0.9) == "timeout"
+
+
+class TestConfigurableTriggerConditions:
+    """Configurable condition gates: thresholds, new metrics, and combine logic."""
+
+    def _seed(self, task, history, last_prompt_time=40.0):
+        from collections import deque
+
+        task._trigger_state.last_prompt_time = last_prompt_time
+        task._trigger_state.activation_history = deque(history, maxlen=50)
+
+    def test_defaults_reproduce_activation_and_slope(self):
+        # Default config = activation>0 AND slope>0; rising window past zero fires.
+        task = _make_task(trend_method="slope", consecutive_volumes=3, min_prompt_interval=0.0)
+        self._seed(task, [0.1, 0.4, 0.9])
+        assert task._check_trigger(50.0, 0.9) == "triggered"
+
+    def test_activation_threshold_blocks_below(self):
+        # Slope is positive but activation 0.9 is below the 1.5 level -> blocked.
+        task = _make_task(
+            trend_method="slope",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            activation_threshold=1.5,
+        )
+        self._seed(task, [0.1, 0.4, 0.9])
+        assert task._check_trigger(50.0, 0.9) is None
+
+    def test_activation_threshold_fires_above(self):
+        task = _make_task(
+            trend_method="slope",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            activation_threshold=1.5,
+        )
+        self._seed(task, [1.0, 1.6, 2.0])
+        assert task._check_trigger(50.0, 2.0) == "triggered"
+
+    def test_slope_threshold_requires_steeper_rise(self):
+        # Gentle rise (slope ~0.1) blocked when a steeper slope is demanded.
+        task = _make_task(
+            trend_method="slope",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            slope_threshold=0.5,
+        )
+        self._seed(task, [0.8, 0.9, 1.0])
+        assert task._check_trigger(50.0, 1.0) is None
+        # A steep rise clears the same bar.
+        self._seed(task, [0.5, 1.5, 2.5])
+        assert task._check_trigger(50.0, 2.5) == "triggered"
+
+    def test_mean_condition_only(self):
+        # Disable activation+trend; gate purely on mean over the window.
+        task = _make_task(
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            use_activation_condition=False,
+            use_trend_condition=False,
+            use_mean_condition=True,
+            mean_threshold=1.0,
+        )
+        self._seed(task, [1.2, 1.4, 1.6])  # mean 1.4 > 1.0
+        assert task._check_trigger(50.0, 1.6) == "triggered"
+        self._seed(task, [0.2, 0.4, 0.6])  # mean 0.4 < 1.0
+        assert task._check_trigger(50.0, 0.6) is None
+
+    def test_count_condition_only(self):
+        # Fire when >= 2 of the last 3 volumes exceed the activation threshold.
+        task = _make_task(
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            use_activation_condition=False,
+            use_trend_condition=False,
+            use_count_condition=True,
+            activation_threshold=1.0,
+            count_min=2,
+        )
+        self._seed(task, [1.5, 0.2, 1.5])  # 2 of 3 above 1.0
+        assert task._check_trigger(50.0, 1.5) == "triggered"
+        self._seed(task, [1.5, 0.2, 0.2])  # only 1 of 3
+        assert task._check_trigger(50.0, 0.2) is None
+
+    def test_trigger_logic_any_fires_on_single_gate(self):
+        # activation passes, slope fails; "any" still fires.
+        task = _make_task(
+            trend_method="slope",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            trigger_logic="any",
+        )
+        self._seed(task, [0.9, 0.5, 0.4])  # slope negative, current still > 0
+        assert task._check_trigger(50.0, 0.4) == "triggered"
+
+    def test_trigger_logic_all_requires_every_gate(self):
+        # Same data under "all" is blocked because slope fails.
+        task = _make_task(
+            trend_method="slope",
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            trigger_logic="all",
+        )
+        self._seed(task, [0.9, 0.5, 0.4])
+        assert task._check_trigger(50.0, 0.4) is None
+
+    def test_activation_only_needs_no_warmup(self):
+        # With only the activation gate enabled, no window is needed.
+        task = _make_task(
+            consecutive_volumes=3,
+            min_prompt_interval=0.0,
+            use_activation_condition=True,
+            use_trend_condition=False,
+        )
+        self._seed(task, [0.5])  # short history, but no window-based gate
+        assert task._check_trigger(50.0, 0.5) == "triggered"
+
+
+class TestTriggerConditionValidation:
+    def test_no_condition_enabled_raises(self, mock_coordinator):
+        import pytest
+
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
+
+        coord = mock_coordinator(mask_names=["RIT"])
+        with pytest.raises(ValueError, match="At least one trigger condition"):
+            RITTriggeredBallTask(
+                coord,
+                use_activation_condition=False,
+                use_trend_condition=False,
+                use_mean_condition=False,
+                use_count_condition=False,
+            )
+
+    def test_invalid_trigger_logic_raises(self, mock_coordinator):
+        import pytest
+
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
+
+        coord = mock_coordinator(mask_names=["RIT"])
+        with pytest.raises(ValueError, match="trigger_logic"):
+            RITTriggeredBallTask(coord, trigger_logic="both")
+
+    def test_cross_validator_rejects_count_min_over_window(self):
+        import pytest
+
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("rittriggeredball")
+        with pytest.raises(ValueError, match="Count Min"):
+            meta.validate_config({"use_count_condition": True, "count_min": 5, "consecutive_volumes": 3})
+
+    def test_cross_validator_rejects_no_condition(self):
+        import pytest
+
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        meta = get_task_metadata("rittriggeredball")
+        with pytest.raises(ValueError, match="At least one trigger condition"):
+            meta.validate_config(
+                {
+                    "use_activation_condition": False,
+                    "use_trend_condition": False,
+                    "use_mean_condition": False,
+                    "use_count_condition": False,
+                }
+            )
