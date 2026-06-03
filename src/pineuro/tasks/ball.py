@@ -1285,7 +1285,7 @@ BALL_TASK_METADATA = TaskMetadata(
             default=3,
             min_value=0,
             max_value=10,
-            hint="If hits < this, increase scale factor 25%",
+            hint="If hits < this, increase scale by the adjustment factor",
         ),
         TaskParameter(
             key="max_hits_threshold",
@@ -1294,7 +1294,7 @@ BALL_TASK_METADATA = TaskMetadata(
             default=5,
             min_value=0,
             max_value=10,
-            hint="If hits > this, decrease scale factor 25%",
+            hint="If hits > this, decrease scale by the adjustment factor",
         ),
         TaskParameter(
             key="left_button",
