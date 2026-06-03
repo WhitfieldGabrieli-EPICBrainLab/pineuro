@@ -146,17 +146,20 @@ class LocalizerTabBuilder:
             on_change=self._on_n_runs_changed,
         )
 
-        # Motion correction for QC monitoring
-        mc_value = c.get("motion_correction", "siemens_moco")
-        self.motion_correction_dropdown = ft.Dropdown(
-            label="Motion correction",
+        # Motion monitoring for real-time QC
+        mc_value = c.get("motion_monitoring", "siemens_moco")
+        self.motion_monitoring_dropdown = ft.Dropdown(
+            label="Motion monitoring",
             value=mc_value,
             options=[
                 ft.dropdown.Option(key="siemens_moco", text="Siemens MoCo"),
                 ft.dropdown.Option(key="software", text="Software (ANTsPy)"),
                 ft.dropdown.Option(key="none", text="None"),
             ],
-            tooltip="How motion parameters are extracted during localizer collection for real-time QC monitoring.",
+            tooltip=(
+                "How head motion is estimated during localizer collection for real-time QC. "
+                "Volumes are still motion-corrected post-hoc before mask extraction."
+            ),
         )
 
         # Real-time QC thresholds (qc sub-block). FD/DVARS also censor motion-contaminated
@@ -470,7 +473,7 @@ class LocalizerTabBuilder:
                 st.field_row(self.n_volumes_field),
                 self.n_volumes_info_text,
                 st.field_row(self.n_runs_field),
-                st.field_row(self.motion_correction_dropdown),
+                st.field_row(self.motion_monitoring_dropdown),
                 ft.Divider(),
                 st.section("Quality Control"),
                 st.caption(
@@ -522,7 +525,7 @@ class LocalizerTabBuilder:
             "tr": float(self.tr_field.value or 1.2),
             "n_volumes": int(self.n_volumes_field.value or 250),
             "n_runs": int(self.n_runs_field.value or 2),
-            "motion_correction": self.motion_correction_dropdown.value or "siemens_moco",
+            "motion_monitoring": self.motion_monitoring_dropdown.value or "siemens_moco",
             "qc": {
                 "fd_threshold": float(self.fd_threshold_field.value or 0.5),
                 "dvars_threshold": float(self.dvars_threshold_field.value or 1.5),

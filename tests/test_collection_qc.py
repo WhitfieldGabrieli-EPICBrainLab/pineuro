@@ -67,7 +67,7 @@ class TestCollectionQCMonitor:
         import nibabel as nib
 
         log_path = tmp_path / "collectionlog.tsv"
-        monitor = CollectionQCMonitor(log_path, motion_correction="none")
+        monitor = CollectionQCMonitor(log_path, motion_monitoring="none")
 
         # Create a simple NIfTI volume
         vol_path = tmp_path / "vol_001.nii.gz"
@@ -87,7 +87,7 @@ class TestCollectionQCMonitor:
         import nibabel as nib
 
         log_path = tmp_path / "collectionlog.tsv"
-        monitor = CollectionQCMonitor(log_path, motion_correction="none")
+        monitor = CollectionQCMonitor(log_path, motion_monitoring="none")
 
         rng = np.random.default_rng(42)
         for i in range(2):
@@ -108,7 +108,7 @@ class TestCollectionQCMonitor:
             callback_args.append((vol, fd, dvars, tsnr))
 
         log_path = tmp_path / "collectionlog.tsv"
-        monitor = CollectionQCMonitor(log_path, motion_correction="none", on_qc_data=on_qc)
+        monitor = CollectionQCMonitor(log_path, motion_monitoring="none", on_qc_data=on_qc)
 
         vol_path = tmp_path / "vol_001.nii.gz"
         data = np.ones((4, 4, 4), dtype=np.float32)
@@ -124,7 +124,7 @@ class TestCollectionQCMonitor:
         import nibabel as nib
 
         log_path = tmp_path / "collectionlog.tsv"
-        monitor = CollectionQCMonitor(log_path, motion_correction="none")
+        monitor = CollectionQCMonitor(log_path, motion_monitoring="none")
 
         rng = np.random.default_rng(42)
         tsnr_vals = []
@@ -170,7 +170,7 @@ class TestCollectionQCMonitor:
     def test_tsnr_held_until_two_volumes(self, tmp_path):
         import nibabel as nib
 
-        monitor = CollectionQCMonitor(tmp_path / "log.tsv", motion_correction="none")
+        monitor = CollectionQCMonitor(tmp_path / "log.tsv", motion_monitoring="none")
         rng = np.random.default_rng(1)
         shape = (6, 6, 6)
 
@@ -187,7 +187,7 @@ class TestCollectionQCMonitor:
     def test_motion_spike_is_censored_from_tsnr(self, tmp_path):
         import nibabel as nib
 
-        monitor = CollectionQCMonitor(tmp_path / "log.tsv", motion_correction="none", dvars_threshold=1.5)
+        monitor = CollectionQCMonitor(tmp_path / "log.tsv", motion_monitoring="none", dvars_threshold=1.5)
         rng = np.random.default_rng(0)
         shape = (6, 6, 6)
 

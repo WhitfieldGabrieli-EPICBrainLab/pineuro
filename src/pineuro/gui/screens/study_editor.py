@@ -534,7 +534,7 @@ class StudyEditorScreen:
                 "tr": 1.2,
                 "n_volumes": 250,
                 "n_runs": 2,
-                "motion_correction": "siemens_moco",
+                "motion_monitoring": "siemens_moco",
                 "networks": ["DefaultA", "ContA"],
                 "extraction": {
                     "network_atlas": "yeo_17",

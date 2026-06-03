@@ -90,9 +90,12 @@ class CollectionQCMonitor:
     ----------
     log_path : Path
         Path to the collectionlog.tsv output file.
-    motion_correction : str
-        Motion correction mode: ``"siemens_moco"`` reads motion params from
-        DICOM ImageComments; ``"none"`` skips FD computation.
+    motion_monitoring : str
+        Motion-monitoring mode controlling how motion params are estimated for
+        QC: ``"siemens_moco"`` reads motion params from DICOM ImageComments;
+        ``"software"`` derives them via ANTsPy rigid registration; ``"none"``
+        skips FD computation. No volumes are realigned — correction happens
+        post-hoc in preprocessing.
     fd_threshold : float
         FD (mm) above which a volume is censored from the running tSNR estimate.
     dvars_threshold : float
@@ -109,13 +112,13 @@ class CollectionQCMonitor:
     def __init__(
         self,
         log_path: Path,
-        motion_correction: str = "siemens_moco",
+        motion_monitoring: str = "siemens_moco",
         fd_threshold: float = 0.5,
         dvars_threshold: float = 1.5,
         on_qc_data: Callable[[int, float, float, float, str | None], None] | None = None,
     ):
         self.log_path = Path(log_path)
-        self._motion_correction = motion_correction
+        self._motion_monitoring = motion_monitoring
         self._fd_threshold = fd_threshold
         self._dvars_threshold = dvars_threshold
         self._on_qc_data = on_qc_data
@@ -275,7 +278,7 @@ class CollectionQCMonitor:
                 data = np.asarray(img.dataobj, dtype=np.float64)  # type: ignore[attr-defined]
                 voxels = data.ravel()
 
-                if self._motion_correction == "siemens_moco":
+                if self._motion_monitoring == "siemens_moco":
                     # Motion: check JSON sidecar
                     from .utils import get_json_sidecar_path
 
@@ -289,7 +292,7 @@ class CollectionQCMonitor:
                         parsed = parse_siemens_motion_comment(comments)
                         if parsed is not None:
                             motion_params = parsed
-                elif self._motion_correction == "software" and data.ndim >= 3:
+                elif self._motion_monitoring == "software" and data.ndim >= 3:
                     vol_3d = data
                     spacing = list(img.header.get_zooms()[:3])  # type: ignore[union-attr,attr-defined]
 
@@ -299,7 +302,7 @@ class CollectionQCMonitor:
 
             else:
                 # DICOM path
-                if self._motion_correction == "software":
+                if self._motion_monitoring == "software":
                     # Use _read_dicom_volume for proper mosaic unpacking → 3D
                     from .feedback import _read_dicom_volume
 
@@ -317,14 +320,14 @@ class CollectionQCMonitor:
                     pixel_array = dcm.pixel_array
                     voxels = pixel_array.astype(np.float64).ravel()
 
-                    if self._motion_correction == "siemens_moco":
+                    if self._motion_monitoring == "siemens_moco":
                         motion_params = _extract_motion_from_dicom_header(dcm)
 
                     # Slice image
                     slice_b64 = _dicom_middle_slice_png(pixel_array)
 
             # Software motion correction (ANTsPy rigid registration)
-            if self._motion_correction == "software" and vol_3d is not None and spacing is not None:
+            if self._motion_monitoring == "software" and vol_3d is not None and spacing is not None:
                 motion_params = self._software_motion_correct(vol_3d, spacing)
 
             # Compute QC metrics on in-brain voxels only (not the whole raveled image,

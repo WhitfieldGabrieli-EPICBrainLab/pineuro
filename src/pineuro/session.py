@@ -720,7 +720,7 @@ class LocalizerConfig:
     tr: float = 1.2
     n_volumes: int = 250
     n_runs: int = 2
-    motion_correction: str = "none"
+    motion_monitoring: str = "none"
     source_dicoms: list[Path] = field(default_factory=list)
 
     # Rest-specific (ICA): list of Yeo network short names (e.g. ["DefaultA", "ContA"])
@@ -1690,11 +1690,11 @@ def run_dicom_collection(
 
             qc_log_path = qc_log_dir / f"{task_name}_run-{run_num:02d}_attempt-{attempt:02d}_collectionlog.tsv"
             loc0 = config.localizers[0] if config.localizers else None
-            motion_mode = loc0.motion_correction if loc0 else "siemens_moco"
+            motion_mode = loc0.motion_monitoring if loc0 else "siemens_moco"
             qc = loc0.qc if loc0 else QCConfig()
             qc_mon = CollectionQCMonitor(
                 log_path=qc_log_path,
-                motion_correction=motion_mode,
+                motion_monitoring=motion_mode,
                 fd_threshold=qc.fd_threshold,
                 dvars_threshold=qc.dvars_threshold,
                 on_qc_data=qc_callback,

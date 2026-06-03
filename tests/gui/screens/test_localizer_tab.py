@@ -174,7 +174,7 @@ class TestCollectConfigRest:
                 "tr": 1.5,
                 "n_volumes": 300,
                 "n_runs": 3,
-                "motion_correction": "software",
+                "motion_monitoring": "software",
                 "networks": ["DefaultA", "ContA"],
             }
         )
@@ -184,7 +184,7 @@ class TestCollectConfigRest:
         assert out["tr"] == 1.5
         assert out["n_volumes"] == 300
         assert out["n_runs"] == 3
-        assert out["motion_correction"] == "software"
+        assert out["motion_monitoring"] == "software"
 
     def test_networks_collected_from_visible_dropdowns(self):
         builder = _builder({"type": "rest", "id": "r", "networks": ["DefaultA", "ContA", "SalVentAttnA"]})
@@ -237,7 +237,7 @@ class TestCollectConfigRest:
         assert out["tr"] == 1.2
         assert out["n_volumes"] == 250
         assert out["n_runs"] == 2
-        assert out["motion_correction"] == "siemens_moco"
+        assert out["motion_monitoring"] == "siemens_moco"
         assert out["extraction"]["network_atlas"] == "yeo_17"
         assert out["extraction"]["n_components"] == 30
         assert out["extraction"]["smooth_fwhm"] == 5.0
