@@ -146,3 +146,67 @@ class TestCollectionQCMonitor:
         monitor._ensure_csv()
         monitor.close()
         monitor.close()  # Should not raise
+
+    def test_brain_voxels_gate_excludes_background(self, tmp_path):
+        # tSNR/DVARS must measure tissue, not a FOV-weighted blend with air. The intensity
+        # gate keeps the bright (brain) voxels and drops the ~0 background.
+        monitor = CollectionQCMonitor(tmp_path / "log.tsv")
+        voxels = np.concatenate([np.full(200, 1.0), np.full(200, 1000.0)])
+        brain = monitor._brain_voxels(voxels)
+        assert len(brain) == 200
+        assert np.all(brain > 100.0)
+        # The mask is fixed after the first volume — a later volume reuses the same indices
+        # (required so Welford accumulates a consistent voxel set).
+        voxels2 = np.concatenate([np.full(200, 5.0), np.full(200, 900.0)])
+        brain2 = monitor._brain_voxels(voxels2)
+        assert np.all(brain2 == 900.0)
+
+    def test_brain_voxels_falls_back_when_too_few(self, tmp_path):
+        # Degenerate/tiny volume: gate would keep <100 voxels, so use all of them.
+        monitor = CollectionQCMonitor(tmp_path / "log.tsv")
+        voxels = np.array([0.0, 0.0, 1000.0, 1000.0])  # gate keeps only 2 (<100)
+        assert len(monitor._brain_voxels(voxels)) == 4
+
+    def test_tsnr_held_until_two_volumes(self, tmp_path):
+        import nibabel as nib
+
+        monitor = CollectionQCMonitor(tmp_path / "log.tsv", motion_correction="none")
+        rng = np.random.default_rng(1)
+        shape = (6, 6, 6)
+
+        def _save(name, data):
+            p = tmp_path / name
+            nib.save(nib.Nifti1Image(data.astype(np.float32), np.eye(4)), p)
+            return p
+
+        r1 = monitor.process_volume(_save("a.nii.gz", 1000.0 + rng.standard_normal(shape) * 2.0), 1)
+        assert r1["tsnr"] == 0.0  # one volume — below the 2-volume variance floor
+        r2 = monitor.process_volume(_save("b.nii.gz", 1000.0 + rng.standard_normal(shape) * 2.0), 2)
+        assert r2["tsnr"] > 0  # two volumes — reported
+
+    def test_motion_spike_is_censored_from_tsnr(self, tmp_path):
+        import nibabel as nib
+
+        monitor = CollectionQCMonitor(tmp_path / "log.tsv", motion_correction="none", dvars_threshold=1.5)
+        rng = np.random.default_rng(0)
+        shape = (6, 6, 6)
+
+        def _save(name, data):
+            p = tmp_path / name
+            nib.save(nib.Nifti1Image(data.astype(np.float32), np.eye(4)), p)
+            return p
+
+        # Six stable volumes accumulate a clean tSNR estimate.
+        tsnr_before = 0.0
+        for i in range(6):
+            data = 1000.0 + rng.standard_normal(shape) * 2.0
+            tsnr_before = monitor.process_volume(_save(f"v{i:03d}.nii.gz", data), i + 1)["tsnr"]
+        assert monitor._welford_count == 6
+
+        # A large intensity jump -> standardized DVARS >> 1.5 -> volume is censored: the
+        # running tSNR is held and the Welford state is untouched (no permanent dent).
+        spike = 1000.0 + rng.standard_normal(shape) * 2.0 + 200.0
+        r_spike = monitor.process_volume(_save("spike.nii.gz", spike), 7)
+        assert r_spike["dvars"] > 1.5
+        assert r_spike["tsnr"] == tsnr_before
+        assert monitor._welford_count == 6  # spike did not enter the variance estimate

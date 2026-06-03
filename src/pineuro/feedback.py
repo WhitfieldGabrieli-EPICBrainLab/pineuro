@@ -172,6 +172,7 @@ from .utils import (
     is_nifti_file,  # Check if file is NIfTI format
     is_valid_volume,  # Validate DICOM/NIfTI files
     parse_siemens_motion_comment,  # Parse Siemens MoCo motion string
+    standardize_dvars,  # Running-median standardization of raw DVARS
 )
 
 # --- Module Logger ---
@@ -1141,6 +1142,8 @@ class FeedbackEstimator:
         include_csf_regressor: bool = False,
         wm_mask_path: Path | str | None = None,
         csf_mask_path: Path | str | None = None,
+        fd_threshold: float = 0.5,
+        dvars_threshold: float = 1.5,
     ) -> None:
         if len(mask_paths) == 0:
             raise ValueError("At least one mask path required")
@@ -1283,11 +1286,18 @@ class FeedbackEstimator:
         # Framewise displacement tracking (computed each volume)
         self._latest_fd: float = 0.0
 
-        # DVARS tracking (per-volume metric: RMS of temporal derivative across voxels)
+        # DVARS tracking (per-volume metric: RMS of temporal derivative across voxels).
+        # Standardized by the running median of prior raw DVARS so the threshold is
+        # scale-free (raw DVARS is in arbitrary scanner-intensity units).
         self._latest_dvars: float = 0.0
         self._prev_voxel_values: NDArray[np.float64] | None = None
+        self._dvars_history: list[float] = []
 
-        # tSNR tracking (running aggregate via Welford's online algorithm)
+        # tSNR tracking (running aggregate via Welford's online algorithm). Volumes whose
+        # FD/DVARS exceed threshold are censored so a transient motion spike does not
+        # permanently inflate the accumulated variance.
+        self._fd_threshold = fd_threshold
+        self._dvars_threshold = dvars_threshold
         self._latest_tsnr: float = 0.0
         self._welford_count: int = 0
         self._welford_mean: NDArray[np.float64] | None = None
@@ -1538,12 +1548,29 @@ class FeedbackEstimator:
         """
         return compute_dvars(voxel_values, self._prev_voxel_values)
 
-    def _update_tsnr(self, voxel_values: NDArray[np.float64]) -> float:
-        """Update running tSNR estimate using Welford's online algorithm.
+    #: Retained (non-censored) volumes required before a tSNR value is reported.
+    #: Two is the mathematical floor for a variance estimate; until then hold the prior value.
+    _MIN_TSNR_VOLUMES = 2
 
-        tSNR = median(mean_i / std_i) across voxels, where mean and std are
-        computed incrementally (Welford, 1962). Returns 0.0 until at least
-        2 volumes have been processed.
+    def _current_tsnr(self) -> float:
+        """Report running tSNR from current Welford state without accumulating."""
+        if self._welford_m2 is None or self._welford_count < self._MIN_TSNR_VOLUMES:
+            return self._latest_tsnr
+        variance = self._welford_m2 / (self._welford_count - 1)
+        std = np.sqrt(variance)
+        valid = std > 0
+        if not np.any(valid):
+            return self._latest_tsnr
+        assert self._welford_mean is not None
+        voxel_tsnr = self._welford_mean[valid] / std[valid]
+        return float(np.median(voxel_tsnr))
+
+    def _update_tsnr(self, voxel_values: NDArray[np.float64]) -> float:
+        """Accumulate one volume into the running tSNR (Welford, 1962) and report it.
+
+        tSNR = median(mean_i / std_i) across mask voxels, computed incrementally. Returns
+        the previous estimate until at least ``_MIN_TSNR_VOLUMES`` have been accumulated.
+        Motion-contaminated volumes are censored upstream (not passed here).
 
         Parameters
         ----------
@@ -1559,24 +1586,15 @@ class FeedbackEstimator:
         if self._welford_mean is None:
             self._welford_mean = voxel_values.copy()
             self._welford_m2 = np.zeros_like(voxel_values)
-            return 0.0
+        else:
+            assert self._welford_m2 is not None  # initialized alongside _welford_mean
+            delta = voxel_values - self._welford_mean
+            self._welford_mean += delta / self._welford_count
+            delta2 = voxel_values - self._welford_mean
+            self._welford_m2 += delta * delta2
 
-        assert self._welford_m2 is not None  # initialized alongside _welford_mean
-        delta = voxel_values - self._welford_mean
-        self._welford_mean += delta / self._welford_count
-        delta2 = voxel_values - self._welford_mean
-        self._welford_m2 += delta * delta2
-
-        if self._welford_count < 2:
-            return 0.0
-
-        variance = self._welford_m2 / (self._welford_count - 1)
-        std = np.sqrt(variance)
-        valid = std > 0
-        if not np.any(valid):
-            return 0.0
-        voxel_tsnr = self._welford_mean[valid] / std[valid]
-        return float(np.median(voxel_tsnr))
+        self._latest_tsnr = self._current_tsnr()
+        return self._latest_tsnr
 
     def _build_design_row(self, motion_params: np.ndarray) -> NDArray[np.float64]:
         """Build design matrix row for current volume.
@@ -1760,12 +1778,22 @@ class FeedbackEstimator:
         else:
             self._latest_fd = self._compute_fd(motion_params)
 
-        # DVARS: RMS of temporal derivative across mask voxels
-        self._latest_dvars = self._compute_dvars(voxel_values)
+        # DVARS: RMS of temporal derivative across mask voxels, standardized by the running
+        # median of prior raw DVARS so the threshold is scale-free (clean volume ≈ 1.0).
+        raw_dvars = self._compute_dvars(voxel_values)
+        self._latest_dvars = standardize_dvars(raw_dvars, self._dvars_history)
+        if self._prev_voxel_values is not None:
+            self._dvars_history.append(raw_dvars)
         self._prev_voxel_values = voxel_values.copy()
 
-        # tSNR: running median(mean/std) across voxels (Welford's algorithm)
-        self._latest_tsnr = self._update_tsnr(voxel_values)
+        # tSNR: running median(mean/std) across voxels (Welford's algorithm). Censor
+        # motion-contaminated volumes so a transient spike does not permanently inflate the
+        # accumulated variance; hold the previous value. FD is NaN when motion correction is
+        # off, and `nan > threshold` is False, so censoring then relies on DVARS alone.
+        if self._latest_fd > self._fd_threshold or self._latest_dvars > self._dvars_threshold:
+            self._latest_tsnr = self._current_tsnr()
+        else:
+            self._latest_tsnr = self._update_tsnr(voxel_values)
 
         X = self._build_design_row(motion_params)
         self._last_design_row = X
@@ -2421,7 +2449,8 @@ class NeurofeedbackCoordinator:
         activation_callback: Callable[[dict[str, float], int, float, bool, bool], None] | None = None,
         error_callback: Callable[[Exception], None] | None = None,
         qc_enabled: bool = True,  # Generate QC report after session completes
-        fd_threshold: float = 0.5,  # FD threshold in mm for QC plots
+        fd_threshold: float = 0.5,  # FD threshold in mm (QC plots + tSNR censoring)
+        dvars_threshold: float = 1.5,  # Standardized DVARS threshold (QC plots + tSNR censoring)
         sham_provider: Optional["ShamActivationProvider"] = None,  # Sham activation source
         condition: str = "real",  # Participant condition: "real" or "sham"
         motion_correction: str = "siemens_moco",  # "siemens_moco", "software", "none"
@@ -2453,6 +2482,7 @@ class NeurofeedbackCoordinator:
         self._tr = tr
         self._qc_enabled = qc_enabled
         self._fd_threshold = fd_threshold
+        self._dvars_threshold = dvars_threshold
 
         # Debug: dump algo vars for comparison with MURFI
         self._dump_algo_vars_path = Path(dump_algo_vars_path) if dump_algo_vars_path else None
@@ -2594,6 +2624,8 @@ class NeurofeedbackCoordinator:
             include_csf_regressor=include_csf_regressor,
             wm_mask_path=wm_mask_path,
             csf_mask_path=csf_mask_path,
+            fd_threshold=fd_threshold,
+            dvars_threshold=dvars_threshold,
         )
 
         # Processing state
@@ -3765,6 +3797,7 @@ def run_feedback_task(
     error_callback: Callable[[Exception], None] | None = None,
     qc_enabled: bool = True,
     fd_threshold: float = 0.5,
+    dvars_threshold: float = 1.5,
     step_id: str | None = None,
     sham_provider: Optional["ShamActivationProvider"] = None,
     condition: str = "real",
@@ -4088,6 +4121,7 @@ def run_feedback_task(
         error_callback=error_callback,
         qc_enabled=qc_enabled,
         fd_threshold=fd_threshold,
+        dvars_threshold=dvars_threshold,
         attempt=attempt,
         sham_provider=sham_provider,
         condition=condition,

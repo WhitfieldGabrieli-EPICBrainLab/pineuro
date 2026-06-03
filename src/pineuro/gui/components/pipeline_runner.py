@@ -733,9 +733,12 @@ class PipelineRunner:
         from pineuro.collection_qc import CollectionQCMonitor
 
         motion_mode = loc.get("motion_correction", "siemens_moco")
+        loc_qc = loc.get("qc", {})
         qc_monitor = CollectionQCMonitor(
             log_path=output_dir / "collectionlog.tsv",
             motion_correction=motion_mode,
+            fd_threshold=loc_qc.get("fd_threshold", 0.5),
+            dvars_threshold=loc_qc.get("dvars_threshold", 1.5),
             on_qc_data=self.on_qc_data,
         )
 
@@ -2595,6 +2598,7 @@ class PipelineRunner:
                 step_id=step_id,  # Use slot-based naming with attempt entity
                 qc_enabled=True,
                 fd_threshold=_fb("fd_threshold", 0.5),
+                dvars_threshold=_fb("dvars_threshold", 1.5),
                 condition=condition,  # Log the actual condition
                 sham_provider=sham_provider,  # Replay provider for sham participants
                 motion_correction=_fb("motion_correction", "siemens_moco"),

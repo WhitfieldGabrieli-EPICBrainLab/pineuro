@@ -40,7 +40,7 @@ TSNR_LINE_COLOR = ft.Colors.CYAN_500
 
 # Default thresholds
 DEFAULT_FD_THRESHOLD = 0.5  # mm
-DEFAULT_DVARS_THRESHOLD = 1.5  # Standardized (Nichols 2013, fMRIPrep default)
+DEFAULT_DVARS_THRESHOLD = 1.5  # Standardized DVARS: 1.5x the run's typical volume-to-volume change
 DEFAULT_TSNR_THRESHOLD = 20.0  # Below this = flagged
 
 
@@ -410,11 +410,10 @@ class FDPlot(BaseQCPlot):
 class DVARSPlot(BaseQCPlot):
     """Real-time standardized DVARS timeseries plot.
 
-    Raw DVARS (Power 2012) is standardized by dividing by sqrt(median(DVARS^2))
-    from stable volumes (Nichols 2013). Threshold default is 1.5 (fMRIPrep).
-
-    Requires full rebuild on every update because standardization divides all
-    y-values by a median that changes as new data arrives.
+    DVARS is already standardized at compute time (``utils.standardize_dvars``: raw DVARS
+    divided by the running median of prior raw DVARS, so a clean volume ≈ 1.0). The logged
+    values are plotted directly against the threshold (default 1.5 ≈ "1.5× the run's typical
+    volume-to-volume change"). The first-volume 0.0 is skipped.
     """
 
     line_color = DVARS_LINE_COLOR
@@ -422,39 +421,15 @@ class DVARSPlot(BaseQCPlot):
     axis_title_size = 10
     legend_label = "DVARS"
     flag_above = True
-    _incremental_append = False  # Standardization changes all y-values retroactively
 
     def __init__(self, n_volumes: int, height: float = 100, threshold: float = DEFAULT_DVARS_THRESHOLD):
         super().__init__(n_volumes, height, threshold)
 
-    def _get_plot_values(self) -> list[float]:
-        return self._get_standardized_values()
-
     def _skip_point(self, index: int) -> bool:
         return self.data.values[index] == 0.0
 
-    def _get_standardized_values(self) -> list[float]:
-        """Standardize raw DVARS: divide by sqrt(median(DVARS^2)) from stable volumes."""
-        vals = self.data.values
-        if not vals:
-            return []
-
-        # Prefer volumes 6+ (past scanner stabilization) for robust median
-        pool = [v for v in vals[5:] if v > 0] if len(vals) > 5 else [v for v in vals if v > 0]
-        if not pool:
-            return [0.0] * len(vals)
-
-        squared = sorted(v * v for v in pool)
-        median_sq = squared[len(squared) // 2]
-        if median_sq <= 0:
-            return [0.0] * len(vals)
-
-        denom = math.sqrt(median_sq)
-        return [v / denom for v in vals]
-
     def _calculate_axis_range(self):
-        std_values = self._get_standardized_values()
-        stable = [v for v in std_values[5:] if v > 0] if len(std_values) > 5 else [v for v in std_values if v > 0]
+        stable = [v for v in self.data.values if v > 0]
         data_max = max(stable) if stable else 0.0
         max_y = max(self.threshold * 1.5, data_max * 1.2)
         return (1, self._x_max, 0.0, max_y)
@@ -466,9 +441,9 @@ class DVARSPlot(BaseQCPlot):
         return f"{self.threshold}"
 
     def _format_summary(self) -> tuple[str, str]:
-        std_values = self._get_standardized_values()
-        n = sum(1 for v in std_values if v > self.threshold)
-        pct = (n / len(std_values) * 100) if std_values else 0.0
+        values = [v for v in self.data.values if v > 0]
+        n = sum(1 for v in values if v > self.threshold)
+        pct = (n / len(values) * 100) if values else 0.0
         text = f"{n} > {self.threshold} ({pct:.1f}%)"
         color = THRESHOLD_LINE_COLOR if n > 0 else st.MUTED
         return text, color

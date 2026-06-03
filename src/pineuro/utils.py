@@ -121,7 +121,7 @@ import subprocess
 import tempfile
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Union, cast
@@ -629,6 +629,39 @@ def compute_dvars(
         return 0.0
     diff = voxel_values - prev_voxel_values
     return float(np.sqrt(np.mean(diff**2)))
+
+
+def standardize_dvars(raw_dvars: float, prior_raw_dvars: Sequence[float]) -> float:
+    """Standardize a raw DVARS value by the running median of prior raw DVARS.
+
+    Raw DVARS (:func:`compute_dvars`) is in scanner-intensity units, so its absolute
+    scale is arbitrary and acquisition-dependent (typically tens of units for BOLD EPI).
+    A fixed threshold like 1.5 is meaningless against it. Dividing by the running median
+    of prior raw DVARS yields a scale-free metric where a typical (clean) volume ≈ 1.0 and
+    a spike is >1, so a fixed threshold means "this many times the run's typical
+    volume-to-volume change" and transfers across protocols. The median is robust, so
+    spike volumes already in the history do not inflate the scale.
+
+    The first real value (no prior history) is defined as 1.0 — it *is* the reference.
+
+    Parameters
+    ----------
+    raw_dvars : float
+        Raw DVARS for the current volume (0.0 on the first volume).
+    prior_raw_dvars : sequence of float
+        Raw DVARS values from earlier volumes (excluding the first-volume 0.0).
+
+    Returns
+    -------
+    float
+        Standardized DVARS (≈1.0 for a clean volume), or 0.0 when ``raw_dvars`` is 0.
+    """
+    if raw_dvars <= 0:
+        return 0.0
+    if len(prior_raw_dvars) == 0:
+        return 1.0
+    scale = float(np.median(prior_raw_dvars))
+    return raw_dvars / scale if scale > 0 else 1.0
 
 
 def parse_siemens_motion_comment(comments: str) -> NDArray[np.float64] | None:

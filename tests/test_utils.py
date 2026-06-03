@@ -638,6 +638,43 @@ class TestComputeDVARS:
 
 
 # =============================================================================
+# standardize_dvars
+# =============================================================================
+
+
+class TestStandardizeDVARS:
+    def test_raw_zero_returns_zero(self):
+        # First-volume DVARS is 0.0 and stays 0.0 regardless of history.
+        from pineuro.utils import standardize_dvars
+
+        assert standardize_dvars(0.0, []) == 0.0
+        assert standardize_dvars(0.0, [10.0, 10.0]) == 0.0
+
+    def test_first_real_value_is_reference(self):
+        # With no prior history the first real DVARS is the reference -> 1.0.
+        from pineuro.utils import standardize_dvars
+
+        assert standardize_dvars(12.3, []) == 1.0
+
+    def test_divides_by_running_median(self):
+        from pineuro.utils import standardize_dvars
+
+        assert standardize_dvars(10.0, [10.0, 10.0, 10.0]) == pytest.approx(1.0)
+        assert standardize_dvars(20.0, [10.0, 10.0, 10.0]) == pytest.approx(2.0)
+
+    def test_median_is_robust_to_spikes(self):
+        # A spike already in the history must not inflate the scale (median, not mean).
+        from pineuro.utils import standardize_dvars
+
+        assert standardize_dvars(10.0, [10.0, 10.0, 100.0]) == pytest.approx(1.0)
+
+    def test_degenerate_scale_returns_one(self):
+        from pineuro.utils import standardize_dvars
+
+        assert standardize_dvars(5.0, [0.0, 0.0]) == 1.0
+
+
+# =============================================================================
 # parse_siemens_motion_comment
 # =============================================================================
 

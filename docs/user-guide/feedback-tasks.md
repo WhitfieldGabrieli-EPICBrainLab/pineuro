@@ -100,10 +100,12 @@ Real-time quality metrics are computed per volume and used for outlier detection
 | Metric | Default Threshold | Description |
 |--------|-------------------|-------------|
 | FD (Framewise Displacement) | 0.5 mm | Head motion between consecutive volumes |
-| DVARS | 1.5 (standardized) | Intensity change between consecutive volumes |
-| tSNR | 20.0 | Temporal signal-to-noise ratio |
+| DVARS | 1.5 (standardized) | Intensity change between consecutive volumes, standardized by the running median of prior raw DVARS so 1.5 means "1.5× the run's typical volume-to-volume change" (scale-free across protocols) |
+| tSNR | 20.0 | Temporal signal-to-noise ratio (running median across in-brain voxels) |
 
-Volumes exceeding FD or DVARS thresholds are flagged as outliers. Outlier volumes are logged but their activation values are not delivered to the task display (the previous valid value is held).
+Volumes exceeding FD or DVARS thresholds are flagged as outliers. Outlier volumes are logged but their activation values are not delivered to the task display (the previous valid value is held). These same volumes are **censored from the running tSNR estimate** — a transient motion or intensity spike is excluded from the accumulated variance, so it does not permanently depress tSNR for the rest of the run.
+
+These thresholds are configurable per **feedback run** (Feedback tab) and per **localizer** (Localizer tab); both run types compute and display the same FD/DVARS/tSNR plots during collection. tSNR is computed over an intensity-gated in-brain voxel set (background/air is excluded) so the value reflects tissue rather than the field of view.
 
 ## Real-Time Monitoring
 

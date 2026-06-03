@@ -6988,6 +6988,21 @@ class ParticipantWorkflowScreen:
 
         return 0
 
+    def _loc_qc(self, step_id: str) -> dict:
+        """Return the QC threshold sub-block for the localizer that owns ``step_id``.
+
+        Localizer collection plots must read thresholds from the localizer config
+        (``localizers[*].qc``), not the active feedback run — they are independent runs.
+        """
+        config = self.study_config.session_config
+        localizers = config.get("localizers", []) or []
+        loc_idx = 0
+        if step_id.startswith("localizer_") and "_run_" in step_id:
+            loc_idx = int(step_id.split("_")[1])
+        if loc_idx < len(localizers):
+            return localizers[loc_idx].get("qc", {}) or {}
+        return {}
+
     def _build_localizer_monitoring_panel(self, step_id: str, n_volumes: int) -> ft.Container:
         """Build the right-hand monitoring panel for a localizer run.
 
@@ -7021,11 +7036,12 @@ class ParticipantWorkflowScreen:
 
         self.task_mirror = TaskMirror(width=st.TASK_MIRROR_W, height=st.TASK_MIRROR_H)
 
-        fd_threshold = self._fb("fd_threshold", 0.5)
+        loc_qc = self._loc_qc(step_id)
+        fd_threshold = loc_qc.get("fd_threshold", 0.5)
         self.fd_plot = FDPlot(n_volumes=n_volumes, height=st.PREVIEW_H_SM, threshold=fd_threshold)
-        dvars_threshold = self._fb("dvars_threshold", 1.5)
+        dvars_threshold = loc_qc.get("dvars_threshold", 1.5)
         self.dvars_plot = DVARSPlot(n_volumes=n_volumes, height=st.PREVIEW_H_SM, threshold=dvars_threshold)
-        tsnr_threshold = self._fb("tsnr_threshold", 20)
+        tsnr_threshold = loc_qc.get("tsnr_threshold", 20)
         self.tsnr_plot = TSNRPlot(n_volumes=n_volumes, height=st.PREVIEW_H_SM, threshold=tsnr_threshold)
 
         self._progress_bar = ft.ProgressBar(value=0, width=st.PROGRESS_BAR_W)

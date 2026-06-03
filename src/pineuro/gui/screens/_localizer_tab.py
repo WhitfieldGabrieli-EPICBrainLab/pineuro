@@ -84,6 +84,7 @@ class LocalizerTabBuilder:
         c = self.config
         loc_type = c.get("type", "rest")
         self._loc_type = loc_type
+        qc_cfg = c.get("qc", {})
 
         # Type display (read-only — type is set in Study tab)
         if loc_type == "rest":
@@ -156,6 +157,36 @@ class LocalizerTabBuilder:
                 ft.dropdown.Option(key="none", text="None"),
             ],
             tooltip="How motion parameters are extracted during localizer collection for real-time QC monitoring.",
+        )
+
+        # Real-time QC thresholds (qc sub-block). FD/DVARS also censor motion-contaminated
+        # volumes from the running tSNR estimate so a transient spike doesn't depress it.
+        self.fd_threshold_field = ft.TextField(
+            label="FD threshold (mm)",
+            value=str(qc_cfg.get("fd_threshold", 0.5)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Frames exceeding this are flagged and excluded from tSNR (default: 0.5 mm)",
+            on_change=lambda _: self._validate_field("fd_threshold", self.fd_threshold_field, validate_positive_number),
+        )
+
+        self.dvars_threshold_field = ft.TextField(
+            label="DVARS threshold (standardized)",
+            value=str(qc_cfg.get("dvars_threshold", 1.5)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Standardized DVARS above this are flagged and excluded from tSNR (default: 1.5)",
+            on_change=lambda _: self._validate_field(
+                "dvars_threshold", self.dvars_threshold_field, validate_positive_number
+            ),
+        )
+
+        self.tsnr_threshold_field = ft.TextField(
+            label="tSNR threshold",
+            value=str(qc_cfg.get("tsnr_threshold", 20)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="tSNR below this is flagged in real time (default: 20)",
+            on_change=lambda _: self._validate_field(
+                "tsnr_threshold", self.tsnr_threshold_field, validate_positive_number
+            ),
         )
 
         # Reverse contrasts checkbox (task-based only)
@@ -441,6 +472,15 @@ class LocalizerTabBuilder:
                 st.field_row(self.n_runs_field),
                 st.field_row(self.motion_correction_dropdown),
                 ft.Divider(),
+                st.section("Quality Control"),
+                st.caption(
+                    "Real-time QC thresholds for collection monitoring. FD/DVARS also censor "
+                    "motion-contaminated volumes from the tSNR estimate."
+                ),
+                st.field_row(self.fd_threshold_field),
+                st.field_row(self.dvars_threshold_field),
+                st.field_row(self.tsnr_threshold_field),
+                ft.Divider(),
                 self.target_networks_section,
                 self.networks_section,
                 self.task_params_section,
@@ -483,6 +523,11 @@ class LocalizerTabBuilder:
             "n_volumes": int(self.n_volumes_field.value or 250),
             "n_runs": int(self.n_runs_field.value or 2),
             "motion_correction": self.motion_correction_dropdown.value or "siemens_moco",
+            "qc": {
+                "fd_threshold": float(self.fd_threshold_field.value or 0.5),
+                "dvars_threshold": float(self.dvars_threshold_field.value or 1.5),
+                "tsnr_threshold": float(self.tsnr_threshold_field.value or 20),
+            },
         }
 
         # Cluster settings — go into extraction sub-block

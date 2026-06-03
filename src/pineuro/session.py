@@ -701,6 +701,9 @@ class LocalizerConfig:
         Starting stat threshold for cluster search.
     cluster_step : float
         Threshold increment per iteration.
+    qc : QCConfig
+        Real-time QC thresholds (fd, dvars, tsnr) applied during collection. The fd/dvars
+        thresholds also censor motion-contaminated volumes from the tSNR estimate.
     """
 
     type: str = "rest"
@@ -725,6 +728,9 @@ class LocalizerConfig:
 
     # Mask-extraction parameters (grouped)
     extraction: LocalizerExtractionConfig = field(default_factory=LocalizerExtractionConfig)
+
+    # Real-time QC thresholds applied during collection (fd, dvars, tsnr)
+    qc: QCConfig = field(default_factory=QCConfig)
 
     # Task-specific GLM parameters
     contrasts: dict[str, str] = field(default_factory=dict)
@@ -965,11 +971,14 @@ class SessionConfig:
 
     @staticmethod
     def _build_localizer(loc_data: dict[str, Any]) -> LocalizerConfig:
-        """Build a LocalizerConfig, unpacking the nested ``extraction:`` block."""
+        """Build a LocalizerConfig, unpacking the nested ``extraction:`` and ``qc:`` blocks."""
         loc_data = dict(loc_data)  # don't mutate caller's dict
         extraction_data = loc_data.pop("extraction", None)
         if extraction_data:
             loc_data["extraction"] = LocalizerExtractionConfig(**extraction_data)
+        qc_data = loc_data.pop("qc", None)
+        if qc_data:
+            loc_data["qc"] = QCConfig(**qc_data)
         return LocalizerConfig(**loc_data)
 
     @staticmethod
@@ -1680,10 +1689,14 @@ def run_dicom_collection(
             from .collection_qc import CollectionQCMonitor
 
             qc_log_path = qc_log_dir / f"{task_name}_run-{run_num:02d}_attempt-{attempt:02d}_collectionlog.tsv"
-            motion_mode = config.localizers[0].motion_correction if config.localizers else "siemens_moco"
+            loc0 = config.localizers[0] if config.localizers else None
+            motion_mode = loc0.motion_correction if loc0 else "siemens_moco"
+            qc = loc0.qc if loc0 else QCConfig()
             qc_mon = CollectionQCMonitor(
                 log_path=qc_log_path,
                 motion_correction=motion_mode,
+                fd_threshold=qc.fd_threshold,
+                dvars_threshold=qc.dvars_threshold,
                 on_qc_data=qc_callback,
             )
 
@@ -2485,6 +2498,8 @@ def run_single_task(
         task_regressors=task_regressors,
         mask_names=config.combined_mask_names,
         roi_combine_method=run_config.roi_combine_method,
+        fd_threshold=run_config.qc.fd_threshold,
+        dvars_threshold=run_config.qc.dvars_threshold,
         motion_correction=eff_motion_correction,
         include_drift=eff_include_drift,
         include_motion_regressors=eff_include_motion_regressors,

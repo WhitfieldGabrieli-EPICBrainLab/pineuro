@@ -8,7 +8,6 @@ Displays a summary after feedback runs complete, showing:
 """
 
 import logging
-import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,17 +95,10 @@ def compute_feedback_summary(
 
     completed = total_volumes >= n_expected_volumes
 
-    # DVARS statistics (standardized to match real-time display)
-    raw_dvars = pd.to_numeric(df["dvars"], errors="coerce").values
-    # Standardize: divide by sqrt(median(DVARS^2)) from stable volumes (6+)
-    pool = raw_dvars[5:] if len(raw_dvars) > 5 else raw_dvars
-    pool = pool[(pool > 0) & np.isfinite(pool)]
-    if len(pool) > 0:
-        median_sq = float(np.median(pool**2))
-        denom = math.sqrt(median_sq) if median_sq > 0 else 1.0
-    else:
-        denom = 1.0
-    dvars_values = raw_dvars / denom
+    # DVARS is already standardized at compute time (utils.standardize_dvars: raw DVARS
+    # divided by the running median of prior raw DVARS, so a clean volume ≈ 1.0). Consume
+    # the logged column directly — do not re-standardize.
+    dvars_values = pd.to_numeric(df["dvars"], errors="coerce").values
     dvars_mean = float(np.nanmean(dvars_values)) if len(dvars_values) > 0 else 0.0
     dvars_max = float(np.nanmax(dvars_values)) if len(dvars_values) > 0 else 0.0
     dvars_above = int(np.nansum(dvars_values > dvars_threshold))

@@ -36,47 +36,30 @@ class TestIsFlagged:
 
 
 # =============================================================================
-# DVARS standardization
+# DVARS plot (values are standardized upstream by utils.standardize_dvars)
 # =============================================================================
 
 
-class TestDVARSStandardization:
-    def test_empty_returns_empty(self):
-        from pineuro.gui.components.qc_plots import DVARSPlot
-
-        plot = DVARSPlot(n_volumes=200)
-        assert plot._get_standardized_values() == []
-
-    def test_zero_pool_returns_zeros(self):
-        from pineuro.gui.components.qc_plots import DVARSPlot
-
-        plot = DVARSPlot(n_volumes=200)
-        # Only zeros (pool excludes them) and fewer than 6 → no usable median
-        _populate(plot, [0.0, 0.0, 0.0])
-        assert plot._get_standardized_values() == [0.0, 0.0, 0.0]
-
-    def test_division_by_sqrt_median_sq(self):
-        from pineuro.gui.components.qc_plots import DVARSPlot
-
-        plot = DVARSPlot(n_volumes=200)
-        # 5 unused prefix + a stable pool: [2, 2, 4, 4, 4]
-        _populate(plot, [99.0, 99.0, 99.0, 99.0, 99.0, 2.0, 2.0, 4.0, 4.0, 4.0])
-        # squared pool sorted: [4, 4, 16, 16, 16] → median = 16 → denom = 4
-        std = plot._get_standardized_values()
-        # Standardize all values (including the prefix) by denom=4
-        assert std[5] == 0.5  # 2.0 / 4
-        assert std[8] == 1.0  # 4.0 / 4
-        assert std[0] == 24.75  # 99.0 / 4
-
+class TestDVARSPlot:
     def test_skip_point_zero_in_dvars(self):
         from pineuro.gui.components.qc_plots import DVARSPlot
 
         plot = DVARSPlot(n_volumes=200)
         _populate(plot, [1.0, 0.0, 2.0])
-        # _skip_point returns True for raw-zero entries
+        # The first-volume 0.0 is skipped; real values are plotted as-is.
         assert plot._skip_point(0) is False
         assert plot._skip_point(1) is True
         assert plot._skip_point(2) is False
+
+    def test_summary_counts_above_threshold_excluding_zero(self):
+        from pineuro.gui.components.qc_plots import DVARSPlot
+
+        plot = DVARSPlot(n_volumes=200, threshold=1.5)
+        # First-volume 0.0 excluded; of the 4 real volumes, 2 exceed 1.5.
+        _populate(plot, [0.0, 1.0, 2.0, 1.0, 3.0])
+        text, _ = plot._format_summary()
+        assert "2 > 1.5" in text
+        assert "(50.0%)" in text  # 2 of 4 real volumes
 
 
 # =============================================================================

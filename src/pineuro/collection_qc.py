@@ -6,7 +6,9 @@ Also generates brain slice images for display.
 
 FD, DVARS, and Siemens MoCo motion parsing are delegated to the shared helpers
 in pineuro.utils, so this monitor and the feedback estimator cannot silently
-diverge. No GLM/design-matrix/mask machinery is involved here.
+diverge. No GLM/design-matrix machinery is involved here; tSNR/DVARS use a simple
+intensity-gated in-brain voxel set (no extracted brain mask is available yet at
+collection time) and censor volumes whose FD/DVARS exceed threshold.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from typing import IO, Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .utils import compute_dvars, compute_fd, parse_siemens_motion_comment
+from .utils import compute_dvars, compute_fd, parse_siemens_motion_comment, standardize_dvars
 
 logger = logging.getLogger(__name__)
 
@@ -91,19 +93,31 @@ class CollectionQCMonitor:
     motion_correction : str
         Motion correction mode: ``"siemens_moco"`` reads motion params from
         DICOM ImageComments; ``"none"`` skips FD computation.
+    fd_threshold : float
+        FD (mm) above which a volume is censored from the running tSNR estimate.
+    dvars_threshold : float
+        Standardized DVARS above which a volume is censored from the running tSNR estimate.
     on_qc_data : callable, optional
         ``(volume, fd, dvars, tsnr, slice_b64) -> None``
         Called after each volume with QC metrics and optional slice image.
     """
 
+    #: Retained (non-censored) volumes required before a tSNR value is reported.
+    #: Two is the mathematical floor for a variance estimate; until then hold the prior value.
+    _MIN_TSNR_VOLUMES = 2
+
     def __init__(
         self,
         log_path: Path,
         motion_correction: str = "siemens_moco",
+        fd_threshold: float = 0.5,
+        dvars_threshold: float = 1.5,
         on_qc_data: Callable[[int, float, float, float, str | None], None] | None = None,
     ):
         self.log_path = Path(log_path)
         self._motion_correction = motion_correction
+        self._fd_threshold = fd_threshold
+        self._dvars_threshold = dvars_threshold
         self._on_qc_data = on_qc_data
 
         # Running state
@@ -112,6 +126,13 @@ class CollectionQCMonitor:
         self._welford_count = 0
         self._welford_mean: NDArray[np.float64] | None = None
         self._welford_m2: NDArray[np.float64] | None = None
+        self._last_tsnr = 0.0
+        # Fixed in-brain voxel mask (flat boolean), derived once from the first volume so
+        # tSNR/DVARS measure tissue rather than a FOV-weighted blend with background air.
+        self._brain_mask: NDArray[np.bool_] | None = None
+        # Raw DVARS history for running standardization (scanner-intensity units are
+        # arbitrary; the running median gives a scale-free metric where clean ≈ 1.0).
+        self._dvars_history: list[float] = []
 
         # Software motion correction state (ANTsPy)
         self._ref_ants: Any = None  # Cached ANTs reference image
@@ -170,30 +191,51 @@ class CollectionQCMonitor:
         self._prev_transform = transform_path
         return motion_params
 
-    def _update_tsnr(self, voxel_values: NDArray[np.float64]) -> float:
-        """Update running tSNR via Welford's online algorithm."""
-        self._welford_count += 1
-        if self._welford_mean is None:
-            self._welford_mean = voxel_values.copy()
-            self._welford_m2 = np.zeros_like(voxel_values)
-            return 0.0
+    def _brain_voxels(self, voxels: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Return in-brain voxels using a fixed intensity gate derived from the first volume.
 
-        assert self._welford_m2 is not None
-        delta = voxel_values - self._welford_mean
-        self._welford_mean += delta / self._welford_count
-        delta2 = voxel_values - self._welford_mean
-        self._welford_m2 += delta * delta2
+        Raveling the whole image mixes brain tissue (tSNR ~40-90) with background/air
+        (mean/std ~1.9 at the Rician noise floor), making the median FOV/head-size
+        dependent rather than a tissue measure. We threshold once on the first volume at
+        10% of its 98th percentile (robust to a few bright outliers) and reuse that voxel
+        set for every subsequent volume so Welford accumulates a consistent voxel set. A
+        fixed gate also drops the black inter-tile gaps in 2-D mosaic DICOMs.
+        """
+        if self._brain_mask is None:
+            thr = 0.1 * float(np.percentile(voxels, 98))
+            mask = voxels > thr
+            # Fall back to all voxels if the gate is degenerate (e.g. empty/uniform volume).
+            self._brain_mask = mask if int(mask.sum()) >= 100 else np.ones_like(voxels, dtype=bool)
+        return voxels[self._brain_mask]
 
-        if self._welford_count < 2:
-            return 0.0
-
+    def _current_tsnr(self) -> float:
+        """Report the running tSNR from current Welford state without accumulating."""
+        if self._welford_m2 is None or self._welford_count < self._MIN_TSNR_VOLUMES:
+            return self._last_tsnr
         variance = self._welford_m2 / (self._welford_count - 1)
         std = np.sqrt(variance)
         valid = std > 0
         if not np.any(valid):
-            return 0.0
+            return self._last_tsnr
+        assert self._welford_mean is not None
         voxel_tsnr = self._welford_mean[valid] / std[valid]
         return float(np.median(voxel_tsnr))
+
+    def _update_tsnr(self, voxel_values: NDArray[np.float64]) -> float:
+        """Accumulate one volume into the running tSNR (Welford's algorithm) and report it."""
+        self._welford_count += 1
+        if self._welford_mean is None:
+            self._welford_mean = voxel_values.copy()
+            self._welford_m2 = np.zeros_like(voxel_values)
+        else:
+            assert self._welford_m2 is not None
+            delta = voxel_values - self._welford_mean
+            self._welford_mean += delta / self._welford_count
+            delta2 = voxel_values - self._welford_mean
+            self._welford_m2 += delta * delta2
+
+        self._last_tsnr = self._current_tsnr()
+        return self._last_tsnr
 
     def process_volume(self, volume_path: Path, volume_num: int) -> dict:
         """Process a collected volume and compute QC metrics.
@@ -285,15 +327,29 @@ class CollectionQCMonitor:
             if self._motion_correction == "software" and vol_3d is not None and spacing is not None:
                 motion_params = self._software_motion_correct(vol_3d, spacing)
 
-            # Compute QC metrics
+            # Compute QC metrics on in-brain voxels only (not the whole raveled image,
+            # which would mix tissue with background air and FOV-dependent voxel counts).
+            brain_voxels = self._brain_voxels(voxels)
+
             if motion_params is not None:
                 fd = compute_fd(motion_params, self._prev_motion)
                 self._prev_motion = motion_params
 
-            dvars_val = compute_dvars(voxels, self._prev_voxel_values)
-            self._prev_voxel_values = voxels
+            # DVARS standardized by the running median of prior raw DVARS so the threshold
+            # is scale-free (raw DVARS is in arbitrary scanner-intensity units, ~tens).
+            raw_dvars = compute_dvars(brain_voxels, self._prev_voxel_values)
+            dvars_val = standardize_dvars(raw_dvars, self._dvars_history)
+            if self._prev_voxel_values is not None:
+                self._dvars_history.append(raw_dvars)
+            self._prev_voxel_values = brain_voxels
 
-            tsnr_val = self._update_tsnr(voxels)
+            # Censor motion-contaminated volumes from the tSNR estimate: a transient spike
+            # would otherwise permanently inflate the accumulated variance. FD is 0.0 here
+            # when motion params are unavailable, so it never censors in that case.
+            if fd > self._fd_threshold or dvars_val > self._dvars_threshold:
+                tsnr_val = self._last_tsnr
+            else:
+                tsnr_val = self._update_tsnr(brain_voxels)
 
         except Exception as e:
             logger.warning(f"QC computation failed for volume {volume_num}: {e}")
