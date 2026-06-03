@@ -14,7 +14,7 @@ from pineuro.feedback import FeedbackEstimator
 
 from .metrics import pearson_r
 from .phantom import PhantomSpec, ROISpec, build_phantom, hrf_convolved_events, write_nifti
-from .references import _reference_inverse_sd_timeseries, _reference_with_drift_timeseries
+from .references import _reference_voxel_efficiency_timeseries, _reference_with_drift_timeseries
 
 pytestmark = pytest.mark.validation
 
@@ -106,18 +106,18 @@ def test_process_volume_recovers_injected_signal(tmp_path, record):
     )
 
 
-def test_inverse_sd_matches_batch_reference(tmp_path, record):
+def test_voxel_efficiency_matches_batch_reference(tmp_path, record):
     """Reliability-weighted region averaging matches a batch reference.
 
     The phantom uses a fixed-seed RNG and FeedbackEstimator with
     motion_correction="none" is pure numpy -- both deterministic. The reference
-    (see ``_reference_inverse_sd_timeseries``) solves the per-voxel, per-volume
+    (see ``_reference_voxel_efficiency_timeseries``) solves the per-voxel, per-volume
     least-squares problem via ``numpy.linalg.lstsq`` (LAPACK ``gelsd``, SVD-based)
     -- a genuinely different numerical algorithm from pineuro's Gentleman's
     incremental QR. Agreement to floating-point precision means a shared bug
     would have to manifest in both LAPACK SVD and Gentleman's QR independently,
-    which is essentially impossible. The dedicated inverse-SD weighting math
-    check is ``combine_roi_inverse_sd_error == 0`` in test_numeric_core.
+    which is essentially impossible. The dedicated voxel-efficiency weighting math
+    check is ``combine_roi_voxel_efficiency_error == 0`` in test_numeric_core.
     """
     spec = PhantomSpec(
         vol_shape=(24, 24, 18),
@@ -131,15 +131,15 @@ def test_inverse_sd_matches_batch_reference(tmp_path, record):
     write_nifti(gt.roi("roi").mask(gt.vol_shape), gt.affine, mask_path)
     nb = gt.n_baseline
 
-    est_inv = _run_estimator(data, gt, [mask_path], ["roi"], roi_combine_method="inverse_sd")
+    est_inv = _run_estimator(data, gt, [mask_path], ["roi"], roi_combine_method="voxel_efficiency")
     pineuro_inv = np.array(est_inv.timeseries["roi"], dtype=np.float64)
-    reference_inv = _reference_inverse_sd_timeseries(data, gt.roi("roi").mask(gt.vol_shape), nb)
+    reference_inv = _reference_voxel_efficiency_timeseries(data, gt.roi("roi").mask(gt.vol_shape), nb)
 
     max_err = float(np.max(np.abs(pineuro_inv[nb:] - reference_inv[nb:])))
     assert (
         record(
             "feedback",
-            "inverse_sd_vs_batch_reference_max_err",
+            "voxel_efficiency_vs_batch_reference_max_err",
             max_err,
             threshold=1e-9,
             op="<",
@@ -238,7 +238,7 @@ def test_drift_regressor_matches_batch_reference(tmp_path, record):
         n_baseline=n_baseline,
         tr=tr,
         seed=5,
-        # noisy_fraction>0 gives the inverse-SD weighting non-trivial work
+        # noisy_fraction>0 gives the voxel-efficiency weighting non-trivial work
         # (varying voxel variance) without compromising determinism -- the
         # phantom rng is seeded and pineuro is pure numpy.
         rois=[ROISpec("roi", n_voxels=60, signal=clean + drift, noise_sd=6.0, noisy_fraction=0.5, noisy_sd=100.0)],
@@ -253,7 +253,7 @@ def test_drift_regressor_matches_batch_reference(tmp_path, record):
         [mask_path],
         ["roi"],
         include_drift=True,
-        roi_combine_method="inverse_sd",
+        roi_combine_method="voxel_efficiency",
     )
     pineuro_out = np.array(estimator.timeseries["roi"], dtype=np.float64)
     reference = _reference_with_drift_timeseries(data, gt.roi("roi").mask(gt.vol_shape), n_baseline)

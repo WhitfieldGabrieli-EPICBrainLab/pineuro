@@ -18,8 +18,8 @@ from __future__ import annotations
 import numpy as np
 
 
-def _reference_inverse_sd_timeseries(data4d: np.ndarray, roi_mask: np.ndarray, n_baseline: int) -> np.ndarray:
-    """SVD-based reference for FeedbackEstimator(intercept-only, inverse_sd).
+def _reference_voxel_efficiency_timeseries(data4d: np.ndarray, roi_mask: np.ndarray, n_baseline: int) -> np.ndarray:
+    """SVD-based reference for FeedbackEstimator(intercept-only, voxel_efficiency).
 
     Per voxel ``v`` at volume ``t`` (0-indexed), with the intercept-only design
     ``X = ones((t+1, 1))``:
@@ -32,7 +32,7 @@ def _reference_inverse_sd_timeseries(data4d: np.ndarray, roi_mask: np.ndarray, n
       is ``rss`` / ``n_obs`` at that point (``n_obs_at_freeze = n_baseline - 1``).
     - Deviation post-freeze: ``sqrt(frozen_rss / n_obs_at_freeze)``.
     - Activation: ``error / deviation``.
-    - ROI inverse-SD combine uses *current* (running) rss, matching pineuro's
+    - ROI voxel-efficiency combine uses *current* (running) rss, matching pineuro's
       ``current_rss = self._glm.get_rss()`` call site: ``w = 1 / sqrt(rss)``.
     - Combined: ``sum_v w[v,t] * activation[v,t] / sum_v w[v,t]``.
     """
@@ -68,9 +68,9 @@ def _reference_inverse_sd_timeseries(data4d: np.ndarray, roi_mask: np.ndarray, n
 
 
 def _reference_with_drift_timeseries(data4d: np.ndarray, roi_mask: np.ndarray, n_baseline: int) -> np.ndarray:
-    """SVD-based reference for FeedbackEstimator(intercept+drift, inverse_sd).
+    """SVD-based reference for FeedbackEstimator(intercept+drift, voxel_efficiency).
 
-    Extends ``_reference_inverse_sd_timeseries`` to the two-regressor model
+    Extends ``_reference_voxel_efficiency_timeseries`` to the two-regressor model
     pineuro builds when ``include_drift=True``: design row at vol_idx t is
     ``[1, t+1]`` (intercept + 1-indexed linear drift), per ``feedback.py:1675``.
 
@@ -111,7 +111,7 @@ def _reference_with_drift_timeseries(data4d: np.ndarray, roi_mask: np.ndarray, n
     deviation = np.sqrt(running_rss[:, t_freeze] / n_obs_at_freeze)
     activation = error / deviation[:, None]
 
-    # ROI inverse-SD combine: w = 1/sqrt(running_rss).
+    # ROI voxel-efficiency combine: w = 1/sqrt(running_rss).
     with np.errstate(divide="ignore", invalid="ignore"):
         weights = np.where(running_rss > 0, 1.0 / np.sqrt(running_rss), 0.0)
     weight_sum = weights.sum(axis=0)

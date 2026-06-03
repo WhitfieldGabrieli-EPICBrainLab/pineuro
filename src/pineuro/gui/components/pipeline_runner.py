@@ -2591,7 +2591,7 @@ class PipelineRunner:
                 tr=tr,
                 task_regressors=task_regressor,
                 mask_names=all_mask_names,  # All masks for logging
-                roi_combine_method=_fb("roi_combine_method", "inverse_sd"),
+                roi_combine_method=_fb("roi_combine_method", "voxel_efficiency"),
                 simulator_source_dir=simulator_source_dir,
                 simulator_speed=simulator_speed,
                 simulator_trigger_mode=config.get("simulator", {}).get("trigger_mode", "manual"),

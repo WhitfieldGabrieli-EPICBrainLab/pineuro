@@ -1025,7 +1025,7 @@ class IncrementalGLM:
 #    Hinds et al. 2011 efficiency weighting (w = 1/sigma).
 
 
-ROI_COMBINE_METHODS = ("mean", "inverse_sd")
+ROI_COMBINE_METHODS = ("mean", "voxel_efficiency")
 
 
 def _combine_roi(
@@ -1044,7 +1044,7 @@ def _combine_roi(
         proportional to the noise variance (sigma**2).
     method : str
         ``"mean"`` -- unweighted mean of the per-voxel activations.
-        ``"inverse_sd"`` -- Hinds et al. 2011 voxel efficiency weighting:
+        ``"voxel_efficiency"`` -- Hinds et al. 2011 voxel efficiency weighting:
         weight ``w_i = 1 / sigma_i`` with ``sigma_i = sqrt(RSS_i)``, giving
         the weighted average ``sum(w_i * z_i) / sum(w_i)``. Noisier voxels
         (larger sigma) contribute less.
@@ -1058,7 +1058,7 @@ def _combine_roi(
         return 0.0
     if method == "mean":
         return float(np.mean(activations))
-    if method != "inverse_sd":
+    if method != "voxel_efficiency":
         raise ValueError(f"roi_combine_method must be one of {ROI_COMBINE_METHODS}, got '{method}'")
     sigma = np.sqrt(rss)
     ok = np.isfinite(sigma) & (sigma > 0) & np.isfinite(activations)
@@ -1096,7 +1096,7 @@ class FeedbackEstimator:
         Names for each mask. If not provided, uses mask filenames.
     roi_combine_method : str, optional
         How per-voxel activations are combined into one ROI value:
-        ``"inverse_sd"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
+        ``"voxel_efficiency"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
         the default) or ``"mean"`` (unweighted average).
 
     Attributes
@@ -1131,7 +1131,7 @@ class FeedbackEstimator:
         tr: float,
         task_regressors: NDArray[np.float64] | None = None,
         mask_names: list[str] | None = None,
-        roi_combine_method: str = "inverse_sd",
+        roi_combine_method: str = "voxel_efficiency",
         sham_provider: Optional["ShamActivationProvider"] = None,
         dump_algo_vars_path: Path | str | None = None,
         smooth_fwhm: float | None = None,
@@ -1826,7 +1826,7 @@ class FeedbackEstimator:
             self._glm.freeze_steady_state()
 
         # ===== 4. Combine per-voxel activations into one value per mask =====
-        # Per-voxel RSS is read fresh each volume so inverse-SD weighting
+        # Per-voxel RSS is read fresh each volume so voxel-efficiency weighting
         # tracks the current noise estimate; see _combine_roi.
         real_activations: dict[str, float] = {}
         current_rss = self._glm.get_rss()
@@ -2396,7 +2396,7 @@ class NeurofeedbackCoordinator:
         Names for each mask. If not provided, uses mask filenames.
     roi_combine_method : str, optional
         How per-voxel activations are combined into one ROI value:
-        ``"inverse_sd"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
+        ``"voxel_efficiency"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
         the default) or ``"mean"`` (unweighted average).
 
     Attributes
@@ -2445,7 +2445,7 @@ class NeurofeedbackCoordinator:
         tr: float,
         task_regressors: NDArray[np.float64] | None = None,
         mask_names: list[str] | None = None,
-        roi_combine_method: str = "inverse_sd",
+        roi_combine_method: str = "voxel_efficiency",
         activation_callback: Callable[[dict[str, float], int, float, bool, bool], None] | None = None,
         error_callback: Callable[[Exception], None] | None = None,
         qc_enabled: bool = True,  # Generate QC report after session completes
@@ -3787,7 +3787,7 @@ def run_feedback_task(
     task_regressors: NDArray[np.float64] | None = None,
     incoming_dir: Path | str | None = None,
     mask_names: list[str] | None = None,
-    roi_combine_method: str = "inverse_sd",
+    roi_combine_method: str = "voxel_efficiency",
     simulator_source_dir: Path | str | None = None,
     simulator_speed: float = 1.0,
     simulator_clear_target: bool = True,
@@ -3856,7 +3856,7 @@ def run_feedback_task(
         Names for each mask. If not provided, uses mask filenames.
     roi_combine_method : str, optional
         How per-voxel activations are combined into one ROI value:
-        ``"inverse_sd"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
+        ``"voxel_efficiency"`` (Hinds et al. 2011 efficiency weighting, w = 1/sigma;
         the default) or ``"mean"`` (unweighted average).
     simulator_source_dir : Path or str, optional
         If provided, runs in simulation mode. Directory containing source volume

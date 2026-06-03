@@ -462,13 +462,13 @@ def test_combine_roi_mean_is_unweighted_average():
     assert _combine_roi(activations, rss, "mean") == 2.5  # mean of 1,2,3,4 is exactly 2.5
 
 
-# Hand-calculated inverse-SD weighting cases. By definition (Hinds et al. 2011)
+# Hand-calculated voxel-efficiency weighting cases. By definition (Hinds et al. 2011)
 # weight_i = 1/sigma_i with sigma_i = sqrt(rss_i), and the combined value is
 # sum(w_i * a_i) / sum(w_i). Each (activations, rss, expected) below is derived
 # from that definition for inputs where the result is trivially known, and is
 # chosen to *discriminate* between the correct formula and likely-buggy variants
 # (e.g. w = 1/rss instead of 1/sqrt(rss), missing normalisation, wrong reduction).
-_INVERSE_SD_CASES = [
+_VOXEL_EFFICIENCY_CASES = [
     # Equal weights (rss all equal) -> plain mean of activations. Reduces to the
     # mean under any reasonable weighting; validates the basic combination.
     ([10.0, 10.0], [1.0, 1.0], 10.0),
@@ -489,8 +489,8 @@ _INVERSE_SD_CASES = [
 ]
 
 
-@pytest.mark.parametrize("activations, rss, expected", _INVERSE_SD_CASES)
-def test_combine_roi_inverse_sd_hand_calculated(record, activations, rss, expected):
+@pytest.mark.parametrize("activations, rss, expected", _VOXEL_EFFICIENCY_CASES)
+def test_combine_roi_voxel_efficiency_hand_calculated(record, activations, rss, expected):
     """Region averaging weights steadier voxels more, matching a hand calculation.
 
     Each expected value is derived from the Hinds et al. 2011 definition
@@ -502,14 +502,14 @@ def test_combine_roi_inverse_sd_hand_calculated(record, activations, rss, expect
     """
     a = np.asarray(activations, dtype=np.float64)
     r = np.asarray(rss, dtype=np.float64)
-    combined = _combine_roi(a, r, "inverse_sd")
+    combined = _combine_roi(a, r, "voxel_efficiency")
     err = abs(combined - expected)
     # Per-case label keeps the report rows distinguishable.
     case = f"a{activations}_rss{rss}".replace(" ", "")
     assert (
         record(
             "feedback_glm",
-            f"combine_roi_inverse_sd_error_{case}",
+            f"combine_roi_voxel_efficiency_error_{case}",
             err,
             threshold=1e-12,
             op="<",
@@ -523,16 +523,16 @@ def test_combine_roi_inverse_sd_hand_calculated(record, activations, rss, expect
     )
 
 
-def test_combine_roi_inverse_sd_downweights_noisy_voxels(record):
+def test_combine_roi_voxel_efficiency_downweights_noisy_voxels(record):
     """Directional property: clean voxels dominate the weighted average.
 
     With clean voxels at activation 10 and noisy voxels (100x noisier) at activation
-    2, the inverse-SD weighting must pull the result much closer to 10 than to a
+    2, the voxel-efficiency weighting must pull the result much closer to 10 than to a
     plain mean of 6 would. This is a property check distinct from the exact
     hand-calculated values above -- it catches sign / weighting-direction bugs.
     """
     activations = np.array([10.0, 10.0, 2.0, 2.0])
     rss = np.array([1.0, 1.0, 100.0, 100.0])  # last two voxels are 100x noisier
-    combined = _combine_roi(activations, rss, "inverse_sd")
+    combined = _combine_roi(activations, rss, "voxel_efficiency")
     assert combined > 6.0  # plain-mean baseline: clean voxels must pull above it
     assert combined < 10.0  # but not all the way to the clean value

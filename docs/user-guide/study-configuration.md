@@ -56,7 +56,7 @@ select, remove). For the selected session you define:
   correlation). **Differential pair** for dual-network activation (e.g. `Cont − Default`).
 - **Motion correction** — `siemens_moco` (default), `software` (ANTsPy), or `none`.
 - **Nuisance regressors** — drift, motion (6 DOF), white matter, CSF (toggled independently).
-- **ROI combine** — `inverse_sd` (default) or `mean`. **QC thresholds** — FD, DVARS, tSNR.
+- **ROI combine** — `voxel_efficiency` (default) or `mean`. **QC thresholds** — FD, DVARS, tSNR.
 - **Transfer runs** — practice runs without active feedback.
 
 See [Feedback Tasks](feedback-tasks.md) for the feedback computation details.

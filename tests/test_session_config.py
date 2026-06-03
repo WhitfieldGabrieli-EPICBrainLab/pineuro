@@ -152,7 +152,7 @@ class TestFeedbackRunConfig:
         assert frc.task == "ball"
         assert frc.mask_source == ""
         assert frc.max_runs == 1
-        assert frc.roi_combine_method == "inverse_sd"
+        assert frc.roi_combine_method == "voxel_efficiency"
         assert frc.qc.fd_threshold == 0.5
         assert frc.glm.motion_correction == "siemens_moco"
         assert frc.glm.include_drift is True

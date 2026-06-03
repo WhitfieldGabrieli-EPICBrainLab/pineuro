@@ -90,7 +90,7 @@ Per-voxel activations within each mask are combined into a single feedback value
 
 | Method | Description |
 |--------|-------------|
-| `inverse_sd` (default) | Voxel efficiency weighting (Hinds et al., 2011): each voxel is weighted by `1/σ`, the inverse of its residual standard deviation, so noisier voxels contribute less. |
+| `voxel_efficiency` (default) | Voxel efficiency weighting (Hinds et al., 2011): each voxel is weighted by `1/σ`, the inverse of its residual standard deviation, so noisier voxels contribute less. |
 | `mean` | Unweighted mean — every mask voxel contributes equally. |
 
 ## QC Thresholds

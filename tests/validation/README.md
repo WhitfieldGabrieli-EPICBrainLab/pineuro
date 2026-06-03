@@ -20,7 +20,7 @@ an exact deterministic boolean invariant. The suite has **no soft floors**.
 
 Concretely:
 
-- For deterministic operations (FD, DVARS, inverse-SD combine, ROI compute,
+- For deterministic operations (FD, DVARS, voxel-efficiency combine, ROI compute,
   task design regressors, GLM betas, connectivity, state persistence, mask
   threshold helpers): pick inputs where the expected output is computable by
   hand or by an orthogonal procedure that does not share pineuro's
@@ -36,8 +36,8 @@ Concretely:
   makes the `.par` column monotonic).
 - Phantom defaults are **noise-free** (`background_noise_sd=0.0`,
   `ROISpec.noise_sd=0.0`). Tests that need noise (e.g.
-  `inverse_sd_matches_batch_reference` and the pipeline test need non-degenerate
-  per-voxel variance for the inverse-SD weighting to be well-conditioned) pass
+  `voxel_efficiency_matches_batch_reference` and the pipeline test need non-degenerate
+  per-voxel variance for the voxel-efficiency weighting to be well-conditioned) pass
   it explicitly and document the reason in their docstring.
 
 ## Running it
@@ -80,8 +80,8 @@ tests/validation/
 ├── conftest.py                       the `record` fixture, environment pinning
 │
 │   Core math (exact / independent-reference)
-├── test_numeric_core.py              HRF, task designs, smoother/normalizer, IncrementalGLM, inverse-SD combine
-├── test_feedback_estimator.py        FD/DVARS/tSNR/inverse-SD hand-calculated; SVD reference; multi-mask recovery
+├── test_numeric_core.py              HRF, task designs, smoother/normalizer, IncrementalGLM, voxel-efficiency combine
+├── test_feedback_estimator.py        FD/DVARS/tSNR/voxel-efficiency hand-calculated; SVD reference; multi-mask recovery
 ├── test_connectivity_estimator.py    sliding-window Pearson on hand-calculated signals
 ├── test_qc_helpers.py                summarize_mask (voxels, volume_ml, centroid), _pick_slices
 ├── test_task_state_persistence.py    TaskState / RunInfo JSON round-trip
@@ -122,7 +122,7 @@ under test). Generalizes `analysis/weights_bug/murfi_synthetic/generate_syntheti
 Every recorded metric is **exact** — there are no soft floors. Two patterns:
 
 - **Independent reference** (e.g. `glm_vs_lstsq_max_error < 1e-9`,
-  `inverse_sd_vs_batch_reference_max_err < 1e-9`, `hrf_max_abs_error < 1e-9`,
+  `voxel_efficiency_vs_batch_reference_max_err < 1e-9`, `hrf_max_abs_error < 1e-9`,
   `end_to_end_glm_vs_reference_max_err < 1e-9`): the test reimplements the
   algorithm via an independent code path (LAPACK SVD vs Gentleman's QR,
   `scipy.stats.gamma` vs pineuro's own gamma), and pineuro must match to
@@ -204,7 +204,7 @@ def test_fd_hand_calculated(record, prev, curr, expected_fd):
 The expected values are constants you can verify by reading the docstring.
 A bug in pineuro (wrong head radius, dropped abs/sum, wrong axis indexing)
 moves the produced value off the literal — the case fails. Discriminative
-cases (e.g. `[10.0, 0.0], [1.0, 100.0] -> 10/1.1` for inverse-SD) yield
+cases (e.g. `[10.0, 0.0], [1.0, 100.0] -> 10/1.1` for voxel-efficiency) yield
 different numbers under common buggy variants (`1/rss` vs `1/sqrt(rss)`),
 making the discrimination explicit.
 

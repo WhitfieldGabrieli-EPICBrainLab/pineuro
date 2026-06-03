@@ -25,7 +25,7 @@ class ROISpec:
 
     Default ``noise_sd`` is 0.0 (noise-free): a phantom built with the defaults
     carries the injected signal exactly, with no random residual. Tests that
-    need noise to exercise a specific path (e.g. inverse-SD weighting requires
+    need noise to exercise a specific path (e.g. voxel efficiency weighting requires
     varying voxel variance) pass it explicitly and document the reason.
     """
 

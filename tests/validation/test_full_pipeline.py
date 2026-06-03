@@ -42,7 +42,7 @@ from .phantom import (
     random_motion_sequence,
     write_nifti,
 )
-from .references import _reference_inverse_sd_timeseries
+from .references import _reference_voxel_efficiency_timeseries
 
 pytestmark = [pytest.mark.validation, pytest.mark.slow]
 
@@ -63,13 +63,13 @@ def test_pipeline_composes_and_recovers_signal(tmp_path, record):
         tests "given whatever data motion correction produced, does the feedback
         GLM compute correctly?" without depending on ANTs' recovery accuracy.
     """
-    # noise_sd > 0 is required: the inverse-SD ROI combine weights voxels by
+    # noise_sd > 0 is required: the voxel-efficiency ROI combine weights voxels by
     # 1/sqrt(rss), so a noise-free phantom (near-zero per-voxel residual after
     # the intercept-only fit) makes those weights numerically ill-conditioned
     # and amplifies the tiny QR-vs-SVD difference. Moderate noise keeps the
     # residual variance non-degenerate; pineuro and the reference are still
     # compared on the *same* data, so the test stays exact (same rationale as
-    # test_inverse_sd_matches_batch_reference).
+    # test_voxel_efficiency_matches_batch_reference).
     spec = PhantomSpec(
         vol_shape=(48, 48, 32),
         n_volumes=30,
@@ -119,7 +119,7 @@ def test_pipeline_composes_and_recovers_signal(tmp_path, record):
         motion_correction="none",
         include_drift=False,
         include_motion_regressors=False,
-        roi_combine_method="inverse_sd",
+        roi_combine_method="voxel_efficiency",
     )
     for t in range(gt.n_volumes):
         estimator.process_volume("volume.nii", volume_data=corrected[..., t], volume_affine=gt.affine)
@@ -127,7 +127,7 @@ def test_pipeline_composes_and_recovers_signal(tmp_path, record):
 
     # Reference computed on the EXACT data the estimator received (corrected),
     # so the comparison isolates the feedback GLM from motion-correction accuracy.
-    reference = _reference_inverse_sd_timeseries(corrected, roi_mask, gt.n_baseline)
+    reference = _reference_voxel_efficiency_timeseries(corrected, roi_mask, gt.n_baseline)
 
     nb = gt.n_baseline
     max_err = float(np.max(np.abs(pineuro_out[nb:] - reference[nb:])))

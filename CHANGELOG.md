@@ -5,6 +5,12 @@ All notable changes to pineuro will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Breaking
+
+- **The `inverse_sd` ROI-combine method is renamed to `voxel_efficiency`.** The Hinds et al. (2011) `1/σ` efficiency weighting is now named after what it does rather than how it is computed, matching the name already used in the docs and GUI help. `roi_combine_method` configs carrying `inverse_sd` no longer validate — `FeedbackRunConfig.VALID_ROI_COMBINE_METHODS` and `ROI_COMBINE_METHODS` accept only `voxel_efficiency` and `mean` — so existing study YAMLs must be updated to `voxel_efficiency` (active studies in `~/.pineuro/studies/` were migrated out of band). The GUI dropdown label drops the citation and reads "Voxel efficiency weighting"; the math, defaults, and the `mean` option are unchanged.
+
 ## [0.11.1] - 2026-06-01
 
 ### Changed

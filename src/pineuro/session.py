@@ -563,7 +563,7 @@ class FeedbackRunConfig:
     feedback_mode : str
         ``"activation"`` or ``"connectivity"``.
     roi_combine_method : str
-        How per-voxel activations are combined per ROI: ``"inverse_sd"``
+        How per-voxel activations are combined per ROI: ``"voxel_efficiency"``
         (Hinds 2011 efficiency weighting, w = 1/sigma; the default) or ``"mean"``.
     qc : QCConfig
         Per-run QC thresholds (fd, dvars, tsnr).
@@ -597,7 +597,7 @@ class FeedbackRunConfig:
         Simulator DICOM source for transfer runs.
     """
 
-    VALID_ROI_COMBINE_METHODS = {"mean", "inverse_sd"}
+    VALID_ROI_COMBINE_METHODS = {"mean", "voxel_efficiency"}
 
     task: str = "ball"
     mask_source: str = ""
@@ -608,7 +608,7 @@ class FeedbackRunConfig:
 
     # Feedback signal
     feedback_mode: str = "activation"
-    roi_combine_method: str = "inverse_sd"
+    roi_combine_method: str = "voxel_efficiency"
 
     # Grouped sub-blocks
     qc: QCConfig = field(default_factory=QCConfig)

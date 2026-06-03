@@ -312,10 +312,10 @@ class FeedbackTabBuilder:
         self.roi_combine_dropdown = ft.Dropdown(
             label="ROI combine method",
             options=[
-                ft.dropdown.Option("inverse_sd", "Inverse-SD weighting (Hinds 2011)"),
+                ft.dropdown.Option("voxel_efficiency", "Voxel efficiency weighting"),
                 ft.dropdown.Option("mean", "Unweighted mean"),
             ],
-            value=c.get("roi_combine_method", "inverse_sd"),
+            value=c.get("roi_combine_method", "voxel_efficiency"),
         )
 
         # network_assignment is the single source of truth for role-to-mask mapping.
@@ -678,7 +678,7 @@ class FeedbackTabBuilder:
         cfg["feedback_mode"] = feedback_mode
 
         # ROI combine method
-        cfg["roi_combine_method"] = self.roi_combine_dropdown.value or "inverse_sd"
+        cfg["roi_combine_method"] = self.roi_combine_dropdown.value or "voxel_efficiency"
 
         # Network assignment — single source of truth for role-to-mask mapping.
         # Always emit it (no more 3+ network gating; differential_pair / target_mask
