@@ -66,11 +66,6 @@ Vandewouw, M. M. (2026). pineuro: Python for Individualized Neurofeedback.
 https://github.com/marlvan/pineuro
 ```
 
-Key references:
-- Gentleman, W. M. (1974). Basic procedures for large, sparse or weighted linear least squares problems. *Applied Statistics*, 23(3), 448-454.
-- Hinds, O. et al. (2011). Computing moment-to-moment BOLD activation for real-time neurofeedback. *NeuroImage*, 54(1), 361-368.
-- Yeo, B. T. et al. (2011). The organization of the human cerebral cortex estimated by intrinsic functional connectivity. *Journal of Neurophysiology*, 106(3), 1125-1165.
-
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
