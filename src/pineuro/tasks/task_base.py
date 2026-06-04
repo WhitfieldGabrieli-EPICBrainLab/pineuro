@@ -127,9 +127,10 @@ class TaskBase(ABC):  # noqa: B024
     # waiting loops (trigger, instructions, slider) — never during the main
     # task loop.
     #
-    # Windows uses GetAsyncKeyState via ctypes; Linux uses XQueryKeymap via
-    # python-xlib (already a dependency); macOS uses CGEventSourceKeyState via
-    # pyobjc-framework-Quartz (ships with PsychoPy).
+    # Windows uses GetAsyncKeyState via ctypes; Linux/Xorg uses XQueryKeymap via
+    # python-xlib; Linux/Wayland reads /dev/input via evdev (XQueryKeymap is
+    # starved of events for unfocused XWayland windows); macOS uses
+    # CGEventSourceKeyState via pyobjc-framework-Quartz (ships with PsychoPy).
 
     # Windows virtual-key codes
     _PSYCHOPY_TO_VK: dict[str, int] = {
@@ -195,6 +196,8 @@ class TaskBase(ABC):  # noqa: B024
     _evdev_devices: list[Any]
     _evdev_codes: dict[str, int]
     _evdev_disabled: bool
+    # Set once, the first time the Linux poll backend is chosen (diagnostics).
+    _poll_backend_logged: bool
 
     # macOS ANSI virtual keycodes
     _PSYCHOPY_TO_MAC_VK: dict[str, int] = {
@@ -357,9 +360,21 @@ class TaskBase(ABC):  # noqa: B024
         if sys.platform == "win32":
             self._poll_keys_win32(key_names)
         elif sys.platform == "linux":
+            import os
+
             from pineuro.config import is_wayland
 
-            if is_wayland():
+            wayland = is_wayland()
+            if not getattr(self, "_poll_backend_logged", False):
+                logger.info(
+                    "Unfocused-key poll backend=%s (is_wayland=%s XDG_SESSION_TYPE=%r WAYLAND_DISPLAY=%r)",
+                    "evdev" if wayland else "x11",
+                    wayland,
+                    os.environ.get("XDG_SESSION_TYPE"),
+                    os.environ.get("WAYLAND_DISPLAY"),
+                )
+                self._poll_backend_logged = True
+            if wayland:
                 self._poll_keys_evdev(key_names)
             else:
                 self._poll_keys_x11(key_names)
@@ -474,6 +489,11 @@ class TaskBase(ABC):  # noqa: B024
         try:
             import evdev
         except ImportError:
+            logger.error(
+                "evdev is not importable -- unfocused key polling is disabled under "
+                "Wayland (scanner triggers will be missed unless the stimulus window "
+                "has focus). Reinstall dependencies with 'pip install -e .'."
+            )
             self._evdev_disabled = True
             return False
 
@@ -505,16 +525,27 @@ class TaskBase(ABC):  # noqa: B024
                 with contextlib.suppress(Exception):
                     dev.close()
 
-        if not devices and saw_permission_error:
-            logger.warning(
-                "Cannot read keyboard devices for unfocused key polling under "
-                "Wayland: permission denied on /dev/input/event*. Add this user "
-                "to the 'input' group ('sudo usermod -aG input $USER', then "
-                "re-login), or use an Xorg session."
-            )
+        if not devices:
+            if saw_permission_error:
+                logger.warning(
+                    "Cannot read keyboard devices for unfocused key polling under "
+                    "Wayland: permission denied on /dev/input/event*. Add this user "
+                    "to the 'input' group ('sudo usermod -aG input $USER', then "
+                    "re-login), or use an Xorg session."
+                )
+            else:
+                logger.warning(
+                    "No readable /dev/input device exposes the polled keys; "
+                    "unfocused key polling is disabled under Wayland."
+                )
             self._evdev_disabled = True
             return False
 
+        logger.info(
+            "evdev: opened %d keyboard device(s) for unfocused polling: %s",
+            len(devices),
+            [getattr(d, "name", "?") for d in devices],
+        )
         self._evdev_devices = devices
         self._evdev_codes = codes
         return bool(devices)
@@ -527,29 +558,25 @@ class TaskBase(ABC):  # noqa: B024
         if not self._ensure_evdev():
             return
 
-        # Focus gate: the PsychoPy window is an XWayland client, so the X11
-        # input-focus check still tells us whether *our* window is focused.
-        # When it is, pyglet delivers keys normally -- skip evdev to avoid a
-        # double injection (evdev + pyglet). If focus can't be determined,
-        # poll anyway (matches the Xorg path's "assume unfocused" behavior).
-        if not hasattr(self, "_x11_display"):
-            self._snapshot_x11()
-        if hasattr(self, "_x11_display"):
-            try:
-                window_id = self.win.winHandle._window
-                focused, _ = self._x11_display.get_input_focus()
-                focused_id = focused.id if hasattr(focused, "id") else None
-                if focused_id == window_id:
-                    return
-            except Exception:
-                pass
-
         held: set[int] = set()
         for dev in self._evdev_devices:
             try:
                 held.update(dev.active_keys())
             except Exception:
                 continue
+
+        # Dedup against the focused (pyglet) path instead of an X11 focus gate.
+        # The old gate skipped evdev whenever get_input_focus() reported our
+        # window focused -- but under XWayland that signal is unreliable (the
+        # compositor can keep X focus on our window while a Wayland-native window
+        # actually holds focus), which silently suppressed *all* evdev injection
+        # and broke triggers on Wayland. Instead, pump our window so any key it
+        # received as the focused window is already in _keyBuffer, then inject
+        # only the keys pyglet did NOT deliver. This needs no focus query and
+        # never double-injects (which would, e.g., advance a slider twice).
+        with contextlib.suppress(Exception):
+            self.win.winHandle.dispatch_events()
+        already = {k[0] for k in psychopy_event._keyBuffer}
 
         for name in key_names:
             if name == "escape":
@@ -559,8 +586,9 @@ class TaskBase(ABC):  # noqa: B024
                 continue
             pressed = code in held
             if pressed and name not in self._poll_prev:
-                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
-                self._last_inject_source = "poll_evdev"
+                if name not in already:
+                    psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                    self._last_inject_source = "poll_evdev"
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)
@@ -1213,7 +1241,13 @@ class TaskBase(ABC):  # noqa: B024
         if sys.platform == "win32":
             return self._PSYCHOPY_TO_VK
         if sys.platform == "linux":
-            # Force X11 init via a snapshot call; populates self._x11_keycodes.
+            from pineuro.config import is_wayland
+
+            if is_wayland():
+                # Wayland polls via evdev; resolve and return those key codes.
+                self._ensure_evdev()
+                return getattr(self, "_evdev_codes", None)
+            # Xorg: force X11 init via a snapshot call; populates _x11_keycodes.
             self._snapshot_x11()
             return getattr(self, "_x11_keycodes", None)
         if sys.platform == "darwin":
