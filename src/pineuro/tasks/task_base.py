@@ -510,16 +510,28 @@ class TaskBase(ABC):  # noqa: B024
         wanted = set(codes.values())
         devices: list = []
         saw_permission_error = False
-        for path in evdev.list_devices():
+        all_paths = evdev.list_devices()
+        logger.info("evdev: list_devices() returned %d node(s): %s", len(all_paths), all_paths)
+        for path in all_paths:
             try:
                 dev = evdev.InputDevice(path)
-            except PermissionError:
+            except PermissionError as e:
                 saw_permission_error = True
+                logger.info("evdev: %s -> PermissionError (%s)", path, e)
                 continue
-            except Exception:
+            except Exception as e:
+                logger.info("evdev: %s -> open failed: %s: %s", path, type(e).__name__, e)
                 continue
             key_caps = set(dev.capabilities().get(evdev.ecodes.EV_KEY, []))
-            if wanted & key_caps:
+            matched = bool(wanted & key_caps)
+            logger.info(
+                "evdev: %s name=%r ev_key_caps=%d matches_polled_keys=%s",
+                path,
+                getattr(dev, "name", "?"),
+                len(key_caps),
+                matched,
+            )
+            if matched:
                 devices.append(dev)
             else:
                 with contextlib.suppress(Exception):
@@ -535,8 +547,11 @@ class TaskBase(ABC):  # noqa: B024
                 )
             else:
                 logger.warning(
-                    "No readable /dev/input device exposes the polled keys; "
-                    "unfocused key polling is disabled under Wayland."
+                    "evdev: none of the %d /dev/input node(s) is a usable keyboard for "
+                    "unfocused polling under Wayland. If pineuro was launched from a "
+                    "sandboxed environment (Snap/Flatpak), it cannot see /dev/input -- "
+                    "launch from a normal terminal, or use an Xorg session.",
+                    len(all_paths),
                 )
             self._evdev_disabled = True
             return False
