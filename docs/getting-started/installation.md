@@ -43,6 +43,7 @@ All Python dependencies are installed automatically:
 - **psychopy** — Visual stimulus display
 - **flet** — GUI framework
 - numpy, scipy, pandas, matplotlib, pydicom, pyyaml, screeninfo, pygame, templateflow, watchdog
+- **Linux only**: `evdev` and `python-xlib` — keyboard polling and window positioning
 
 ## Development Installation
 
@@ -79,6 +80,15 @@ CMAKE_BUILD_PARALLEL_LEVEL=4 pip install antspyx
 ### PsychoPy installation issues
 
 PsychoPy requires wxPython, which may need to be installed separately on some platforms. See [PsychoPy installation docs](https://www.psychopy.org/download.html) if you encounter issues.
+
+### Linux: scanner triggers not detected under Wayland
+
+Under Wayland, receiving scanner triggers / advance keys while the operator is
+focused on the control monitor requires read access to `/dev/input` — add your
+user to the `input` group (`sudo usermod -aG input $USER`, then log out and back
+in), or use an Xorg session. See
+[Display Setup → Linux](../user-guide/display-setup.md#scanner-triggers-while-the-control-monitor-is-focused-wayland)
+for the full explanation.
 
 ## Next Steps
 

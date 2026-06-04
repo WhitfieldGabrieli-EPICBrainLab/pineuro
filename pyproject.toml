@@ -44,6 +44,10 @@ dependencies = [
     "psychopy>=2025.2.0",
     "pygame>=2.6.0",  # Cross-platform audio backend for PsychoPy
     "pydicom",
+    # Linux-only: Xlib window positioning (_move_window_xlib) and the Xorg
+    # unfocused-key poll path (XQueryKeymap). Present transitively via PsychoPy
+    # today, but pineuro uses it directly, so depend on it explicitly.
+    "python-xlib; sys_platform == 'linux'",
     "pyyaml",
     "scipy>=1.14.0",
     "screeninfo>=0.8",

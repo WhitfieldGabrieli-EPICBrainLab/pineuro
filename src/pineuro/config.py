@@ -48,14 +48,22 @@ def is_wayland() -> bool:
     Returns
     -------
     bool
-        True if XDG_SESSION_TYPE is 'wayland', False otherwise.
+        True if XDG_SESSION_TYPE is 'wayland' or WAYLAND_DISPLAY is set,
+        False otherwise.
 
     Notes
     -----
+    WAYLAND_DISPLAY is checked in addition to XDG_SESSION_TYPE because a
+    spawned task subprocess does not always inherit XDG_SESSION_TYPE, whereas
+    WAYLAND_DISPLAY is present whenever a Wayland compositor is in use (it is
+    also set for XWayland clients, which is exactly what we want -- they must
+    poll keys via evdev). A pure Xorg session sets neither, so the X11 path is
+    unaffected.
+
     Some X11-dependent features (like Xlib window positioning) may not
     work correctly under Wayland without XWayland compatibility layer.
     """
-    return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or bool(os.environ.get("WAYLAND_DISPLAY"))
 
 
 def get_platform() -> Literal["darwin", "linux", "windows"]:

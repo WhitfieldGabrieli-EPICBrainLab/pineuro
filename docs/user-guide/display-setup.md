@@ -29,7 +29,22 @@ Monitor enumeration by position matches between screeninfo and pyglet. No specia
 
 ### Linux
 
-On X11/GNOME, pineuro uses Xlib to position the PsychoPy window at the correct monitor coordinates. Wayland support detects the display server and adjusts accordingly.
+pineuro uses Xlib to position the PsychoPy window at the correct monitor coordinates; it detects the display server (X11 vs Wayland) and adjusts accordingly.
+
+#### Scanner triggers while the control monitor is focused (Wayland)
+
+During a run the operator works in the control-monitor GUI, so the participant's stimulus window is unfocused. To still receive scanner triggers / advance keys there, pineuro reads global key state:
+
+- **X11 / Xorg** — works out of the box.
+- **Wayland** — the compositor does not deliver keys to unfocused windows, so pineuro reads `/dev/input/event*` directly via `evdev`, which requires read access to those device nodes. On many Wayland setups the logged-in user is **not** granted that access automatically, so triggers are silently ignored while the stimulus window is unfocused. Add your user to the `input` group:
+
+  ```bash
+  sudo usermod -aG input $USER   # then log out and back in
+  ```
+
+  Verify with `id | grep input`. Alternatively, log in with an **Xorg/X11** session, which needs no extra permissions.
+
+The detected session type and chosen backend are logged at task start (`Unfocused-key poll backend=evdev|x11 ...`); if evdev cannot read the keyboard you'll see a `permission denied on /dev/input/event*` warning pointing to this same fix.
 
 ## Projector Setups
 
