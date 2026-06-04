@@ -519,28 +519,16 @@ class TaskBase(ABC):  # noqa: B024
         wanted = set(codes.values())
         devices: list = []
         saw_permission_error = False
-        all_paths = sorted(glob.glob("/dev/input/event*"))
-        logger.info("evdev: scanning %d /dev/input node(s): %s", len(all_paths), all_paths)
-        for path in all_paths:
+        for path in sorted(glob.glob("/dev/input/event*")):
             try:
                 dev = evdev.InputDevice(path)
-            except PermissionError as e:
+            except PermissionError:
                 saw_permission_error = True
-                logger.info("evdev: %s -> PermissionError (%s)", path, e)
                 continue
-            except Exception as e:
-                logger.info("evdev: %s -> open failed: %s: %s", path, type(e).__name__, e)
+            except Exception:
                 continue
             key_caps = set(dev.capabilities().get(evdev.ecodes.EV_KEY, []))
-            matched = bool(wanted & key_caps)
-            logger.info(
-                "evdev: %s name=%r ev_key_caps=%d matches_polled_keys=%s",
-                path,
-                getattr(dev, "name", "?"),
-                len(key_caps),
-                matched,
-            )
-            if matched:
+            if wanted & key_caps:
                 devices.append(dev)
             else:
                 with contextlib.suppress(Exception):
@@ -556,10 +544,8 @@ class TaskBase(ABC):  # noqa: B024
                 )
             else:
                 logger.warning(
-                    "evdev: scanned %d /dev/input node(s) but none is a usable keyboard "
-                    "for unfocused polling under Wayland (see the per-node lines above). "
-                    "Use an Xorg session if this persists.",
-                    len(all_paths),
+                    "No usable keyboard found in /dev/input for unfocused polling under "
+                    "Wayland; use an Xorg session if this persists."
                 )
             self._evdev_disabled = True
             return False

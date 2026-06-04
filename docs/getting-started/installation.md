@@ -83,21 +83,12 @@ PsychoPy requires wxPython, which may need to be installed separately on some pl
 
 ### Linux: scanner triggers not detected under Wayland
 
-So the stimulus window can receive scanner triggers / advance keys while the
-operator is focused on the control GUI, pineuro reads global key state. On an
-**Xorg** session this works out of the box. On a **Wayland** session the
-compositor does not deliver keys to unfocused windows, so pineuro reads
-`/dev/input/event*` directly via `evdev`, which requires read access to those
-devices. If triggers are ignored while the stimulus window is unfocused under
-Wayland, add your user to the `input` group and re-login:
-
-```bash
-sudo usermod -aG input $USER   # then log out and back in
-```
-
-Alternatively, log in with an "Xorg"/"X11" session, which needs no extra
-permissions. The session type and chosen key-poll backend are written to the
-session log at task start (`Unfocused-key poll backend=...`).
+Under Wayland, receiving scanner triggers / advance keys while the operator is
+focused on the control monitor requires read access to `/dev/input` — add your
+user to the `input` group (`sudo usermod -aG input $USER`, then log out and back
+in), or use an Xorg session. See
+[Display Setup → Linux](../user-guide/display-setup.md#scanner-triggers-while-the-control-monitor-is-focused-wayland)
+for the full explanation.
 
 ## Next Steps
 
