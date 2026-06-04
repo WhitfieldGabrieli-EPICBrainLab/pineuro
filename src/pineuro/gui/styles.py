@@ -309,11 +309,20 @@ def subsection(text: str, **kwargs: object) -> ft.Text:
     return ft.Text(text, size=SUBSECTION, weight=ft.FontWeight.W_500, **kwargs)  # type: ignore[arg-type]
 
 
-def caption(text: str, **kwargs: object) -> ft.Text:
-    """Muted helper / hint text (size ``CAPTION``, italic, ``MUTED`` color)."""
+def caption(text: str, **kwargs: object) -> ft.Container:
+    """Muted helper / hint text (size ``CAPTION``, italic, ``MUTED`` color).
+
+    Returns a ``Container`` whose ``.content`` is the underlying ``ft.Text``.
+    The negative top margin pulls the caption closer to the preceding element
+    (section header, field row, etc.) so it reads as a tight subtitle rather
+    than an independent row separated by the column's default spacing.
+    """
     kwargs.setdefault("color", MUTED)
     kwargs.setdefault("italic", True)
-    return ft.Text(text, size=CAPTION, **kwargs)  # type: ignore[arg-type]
+    return ft.Container(
+        content=ft.Text(text, size=CAPTION, **kwargs),  # type: ignore[arg-type]
+        margin=ft.margin.only(top=-GAP_SM, bottom=GAP_SM),
+    )
 
 
 # ---------------------------------------------------------------------------
