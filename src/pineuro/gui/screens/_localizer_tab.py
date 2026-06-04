@@ -411,7 +411,6 @@ class LocalizerTabBuilder:
                 [
                     st.section("Target Networks"),
                     st.caption("Select target networks for neurofeedback training."),
-                    ft.Divider(),
                     st.subsection("Network Atlas"),
                     st.field_row(self.network_atlas_dropdown),
                     ft.Divider(),
@@ -430,7 +429,6 @@ class LocalizerTabBuilder:
                 [
                     st.section("ICA Settings"),
                     st.caption("ICA decomposition parameters for resting-state localizer"),
-                    ft.Divider(),
                     st.field_row(self.n_components_field),
                     st.field_row(self.smooth_fwhm_field),
                     st.field_row(self.highpass_field),
@@ -688,7 +686,6 @@ class LocalizerTabBuilder:
                         "each participant's workflow at the Import Masks step. Here you only "
                         "set the mask space and the network names.",
                     ),
-                    ft.Divider(),
                     st.field_row(self.manual_mask_space_dropdown),
                     st.subsection("Network names"),
                     st.caption("Each network becomes a feedback mask; the name wires it to feedback runs."),

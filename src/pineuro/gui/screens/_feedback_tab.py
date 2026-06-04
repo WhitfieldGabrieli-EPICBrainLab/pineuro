@@ -902,12 +902,12 @@ class FeedbackTabBuilder:
             self.sham_target_hemisphere_container.visible = not is_conn
         if hasattr(self, "sham_hemisphere_description"):
             if is_conn:
-                self.sham_hemisphere_description.value = (
+                self.sham_hemisphere_description.content.value = (
                     "Split the selected network into left and right hemispheres. "
                     "Compute correlation between hemispheres for sham participants."
                 )
             else:
-                self.sham_hemisphere_description.value = (
+                self.sham_hemisphere_description.content.value = (
                     "Split the selected network into left and right hemispheres. "
                     "One hemisphere is target, the other is non-target."
                 )
@@ -1086,7 +1086,6 @@ class FeedbackTabBuilder:
         controls: list[ft.Control] = [
             st.section(f"{meta.display_name} Parameters"),
             st.caption(meta.description),
-            ft.Divider(),
         ]
 
         for param in meta.parameters:
