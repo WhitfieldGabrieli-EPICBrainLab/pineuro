@@ -141,6 +141,11 @@ class PipelineRunner:
         # Tracks the in-flight run/attempt so stop() can return enough info
         # for the workflow to offer Keep/Discard. Cleared when the step finishes.
         self._current_attempt: dict[str, Any] | None = None
+        # Watchdog armed by stop() to force-terminate a child that overruns the
+        # grace period. Bound to the specific process it was armed for and
+        # cancelled when that child exits, so a leaked timer can never reach a
+        # later run's process.
+        self._stop_watchdog: threading.Timer | None = None
         # Guards the child-process refs above: written by the worker thread,
         # read by stop() on the UI thread.
         self._task_lock = threading.Lock()
@@ -354,11 +359,17 @@ class PipelineRunner:
             self._current_process = None
             self._child_stop_event = None
             self._child_show_questions = None
+            if self._stop_watchdog is not None:
+                self._stop_watchdog.cancel()
+                self._stop_watchdog = None
 
-    def _escalate_child_stop(self) -> None:
-        """Force-terminate the task subprocess if it overran the stop grace period."""
-        with self._task_lock:
-            proc = self._current_process
+    def _escalate_child_stop(self, proc: Any) -> None:
+        """Force-terminate the specific subprocess if it overran the stop grace period.
+
+        Bound to the process active when stop() was called — never reads the
+        current process — so a watchdog left over from a previous run can't kill
+        a later run's subprocess.
+        """
         if proc is not None and proc.is_alive():
             logger.warning("Task subprocess did not stop within grace period; terminating")
             with contextlib.suppress(Exception):
@@ -488,7 +499,10 @@ class PipelineRunner:
             if child_show_q is not None:
                 child_show_q.value = bool(show_questions)
             child_stop.set()
-            threading.Timer(_GRACEFUL_STOP_TIMEOUT, self._escalate_child_stop).start()
+            watchdog = threading.Timer(_GRACEFUL_STOP_TIMEOUT, self._escalate_child_stop, args=(proc,))
+            with self._task_lock:
+                self._stop_watchdog = watchdog
+            watchdog.start()
 
         # Suppress the discard prompt for localizer stops that happened before
         # the collection dir was created (nothing on disk to discard yet).
@@ -2720,6 +2734,9 @@ class PipelineRunner:
                 self._current_process = None
                 self._child_stop_event = None
                 self._child_show_questions = None
+                if self._stop_watchdog is not None:
+                    self._stop_watchdog.cancel()
+                    self._stop_watchdog = None
             if leftover is not None and leftover.is_alive():
                 with contextlib.suppress(Exception):
                     leftover.terminate()

@@ -1,8 +1,25 @@
 """Tests for pineuro.gui.components.pipeline_runner pure helpers."""
 
+import threading
+
 import pytest
 
 from pineuro.gui.components.pipeline_runner import PipelineRunner, _select_sham_task_mask_names
+
+
+class _FakeProcess:
+    """Minimal stand-in for a multiprocessing.Process used by the watchdog."""
+
+    def __init__(self, alive: bool = True):
+        self._alive = alive
+        self.terminated = False
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self._alive = False
 
 
 class TestSelectShamTaskMaskNames:
@@ -63,3 +80,36 @@ class TestRunManualMaskImport:
                 root_dir=tmp_path / "mask_extraction",
                 qc_dir=tmp_path / "qc",
             )
+
+
+class TestEscalateChildStop:
+    """The stop watchdog must only ever kill the process it was armed for."""
+
+    def _bare_runner(self) -> PipelineRunner:
+        runner = PipelineRunner.__new__(PipelineRunner)
+        runner._task_lock = threading.Lock()
+        return runner
+
+    def test_terminates_only_the_armed_process(self):
+        # Regression: a watchdog armed for run A (proc_a) must not terminate the
+        # new run's process (proc_b), even though _current_process now points at B.
+        # This is the orphaned-Timer bug that killed feedback re-runs early.
+        runner = self._bare_runner()
+        proc_a = _FakeProcess(alive=True)
+        proc_b = _FakeProcess(alive=True)
+        runner._current_process = proc_b
+
+        runner._escalate_child_stop(proc_a)
+
+        assert proc_a.terminated is True
+        assert proc_b.terminated is False
+
+    def test_noop_when_armed_process_already_exited(self):
+        # A child that stopped cleanly within the grace period is not alive when
+        # the watchdog fires; it must be left untouched.
+        runner = self._bare_runner()
+        proc = _FakeProcess(alive=False)
+
+        runner._escalate_child_stop(proc)
+
+        assert proc.terminated is False
