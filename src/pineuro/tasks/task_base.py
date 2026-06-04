@@ -507,11 +507,20 @@ class TaskBase(ABC):  # noqa: B024
         # Keep any device that can emit a key we care about. A full keyboard and
         # a minimal scanner-trigger box both qualify; mice (BTN_* codes) and
         # power/sleep buttons do not, since their EV_KEY caps miss our KEY_ set.
+        #
+        # Glob /dev/input ourselves instead of evdev.list_devices(): the latter
+        # filters via os.access(R_OK|W_OK), which does NOT honor the POSIX ACLs
+        # that systemd-logind (uaccess) grants the active user on the local seat.
+        # That silently hid the keyboard on Wayland even though open() -- which
+        # DOES honor the ACL -- can read it. Opening each node directly also lets
+        # a genuine permission problem surface as PermissionError.
+        import glob
+
         wanted = set(codes.values())
         devices: list = []
         saw_permission_error = False
-        all_paths = evdev.list_devices()
-        logger.info("evdev: list_devices() returned %d node(s): %s", len(all_paths), all_paths)
+        all_paths = sorted(glob.glob("/dev/input/event*"))
+        logger.info("evdev: scanning %d /dev/input node(s): %s", len(all_paths), all_paths)
         for path in all_paths:
             try:
                 dev = evdev.InputDevice(path)
@@ -547,10 +556,9 @@ class TaskBase(ABC):  # noqa: B024
                 )
             else:
                 logger.warning(
-                    "evdev: none of the %d /dev/input node(s) is a usable keyboard for "
-                    "unfocused polling under Wayland. If pineuro was launched from a "
-                    "sandboxed environment (Snap/Flatpak), it cannot see /dev/input -- "
-                    "launch from a normal terminal, or use an Xorg session.",
+                    "evdev: scanned %d /dev/input node(s) but none is a usable keyboard "
+                    "for unfocused polling under Wayland (see the per-node lines above). "
+                    "Use an Xorg session if this persists.",
                     len(all_paths),
                 )
             self._evdev_disabled = True
