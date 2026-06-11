@@ -2149,9 +2149,14 @@ class ParticipantWorkflowScreen:
         localizers = config.get("localizers", [])
         has_localizers = len(localizers) > 1 or n_localizer_runs > 0
 
-        # Store for section visibility in _refresh_step_list
+        # Store for section visibility in _refresh_step_list. The mask-extraction
+        # section is shown whenever this session produces masks — any fresh/manual
+        # localizer, or the MNI-atlas mode (no localizers + feedback) — not only when
+        # this session also runs feedback. A localizer-only session produces masks a
+        # later feedback session reuses, so it must still preprocess/extract.
         self._has_feedback = has_feedback
         self._has_localizers = has_localizers
+        self._has_mask_extraction = has_any_fresh or (not has_localizers and has_feedback)
 
         if not has_localizers and has_feedback:
             # No localizers: MNI atlas mode
@@ -2163,24 +2168,14 @@ class ParticipantWorkflowScreen:
             # Add transfer and feedback steps (no coregistration needed —
             # masks are already in realtime reference space)
             steps.extend(sid for sid, _label in fb_steps)
-        elif has_localizers and not has_feedback:
-            # Localizer-only mode: collect fresh localizers with QC monitoring, no feedback
-            if reference_initial_enabled and has_any_fresh:
-                steps.append("reference_initial")
-            if localizers and len(localizers) > 1:
-                for loc_idx, loc in enumerate(localizers):
-                    if loc.get("type") == "manual" or localizer_is_reused(loc):
-                        continue
-                    loc_n_runs = loc.get("n_runs", 2)
-                    for run in range(1, loc_n_runs + 1):
-                        steps.append(f"localizer_{loc_idx}_run_{run}")
-            elif not (localizers and localizer_is_reused(localizers[0])):
-                for i in range(1, n_localizer_runs + 1):
-                    steps.append(f"rest_run_{i}")
-        else:
-            # Standard pipeline (localizers + feedback). Reused/manual localizers
-            # emit no collection/preprocessing/extraction steps; the initial
-            # reference + its coregistration are only needed to align freshly-
+        elif has_localizers:
+            # Localizer pipeline, with or without feedback this session. The full
+            # collect→preprocess→extract→approve→coregister chain runs whenever there
+            # are localizers; a localizer-only (no-feedback) session produces masks a
+            # later feedback session reuses, so it differs from the standard pipeline
+            # only in omitting the realtime-reference + feedback tail below. Reused/
+            # manual localizers emit no collection/preprocessing/extraction steps; the
+            # initial reference + its coregistration are only needed to align freshly-
             # extracted masks, so an all-reused session skips straight to realtime.
             if reference_initial_enabled and has_any_fresh:
                 steps.append("reference_initial")
@@ -2216,10 +2211,16 @@ class ParticipantWorkflowScreen:
             # Initial-reference coregistration only when fresh masks were extracted
             if reference_initial_enabled and has_any_fresh:
                 steps.append("coregistration")
-            if reference_realtime_enabled:
-                steps.extend(["reference_realtime", "coregistration_realtime"])
-            # Add transfer and feedback steps
-            steps.extend(sid for sid, _label in fb_steps)
+            # Realtime reference + feedback only when this session runs feedback; a
+            # localizer-only session stops after mask extraction/coregistration.
+            if has_feedback:
+                if reference_realtime_enabled:
+                    steps.extend(["reference_realtime", "coregistration_realtime"])
+                # Add transfer and feedback steps
+                steps.extend(sid for sid, _label in fb_steps)
+        else:
+            # Degenerate session: no localizers and no feedback. Nothing to seed.
+            pass
 
         for step in steps:
             self.step_statuses[step] = StepStatus.PENDING
@@ -7743,11 +7744,14 @@ class ParticipantWorkflowScreen:
             panels.append(self._build_scanner_connection_section())
         has_localizers = getattr(self, "_has_localizers", True)
         has_feedback = getattr(self, "_has_feedback", True)
+        has_mask_extraction = getattr(self, "_has_mask_extraction", True)
 
-        # Only show localizer and mask extraction sections if NOT in mask reuse mode
+        # Only show localizer and mask extraction sections if NOT in mask reuse mode.
+        # The mask-extraction section follows mask production (any fresh/manual localizer
+        # or MNI-atlas mode), not feedback — a localizer-only session still extracts.
         if not self._is_all_reused_mode and has_localizers:
             panels.append(self._build_localizer_tasks_section())
-        if not self._is_all_reused_mode and has_feedback:
+        if not self._is_all_reused_mode and has_mask_extraction:
             panels.append(self._build_mask_extraction_section())
         if has_feedback:
             panels.append(self._build_feedback_section())
@@ -7841,9 +7845,10 @@ class ParticipantWorkflowScreen:
         # Only show sections relevant to the session mode
         has_localizers = getattr(self, "_has_localizers", True)
         has_feedback = getattr(self, "_has_feedback", True)
+        has_mask_extraction = getattr(self, "_has_mask_extraction", True)
         if not self._is_all_reused_mode and has_localizers:
             panels.append(self._build_localizer_tasks_section())
-        if not self._is_all_reused_mode and has_feedback:
+        if not self._is_all_reused_mode and has_mask_extraction:
             panels.append(self._build_mask_extraction_section())
         if has_feedback:
             panels.append(self._build_feedback_section())

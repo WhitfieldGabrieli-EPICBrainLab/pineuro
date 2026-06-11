@@ -270,3 +270,99 @@ class TestGetFeedbackStepFrcIndex:
 
     def test_no_feedback_runs_returns_none(self):
         assert self._idx("feedback_1", {}) is None
+
+
+# ---------------------------------------------------------------------------
+# _detect_completed_steps — localizer-only sessions still seed the mask pipeline
+# ---------------------------------------------------------------------------
+def _make_detect_screen(tmp_path: Path, session_config: dict, *, session_id: str = "ses-01"):
+    """Bare screen wired with the attributes ``_detect_completed_steps`` reads.
+
+    ``base_dir`` points at an empty ``tmp_path`` so every on-disk status check
+    returns PENDING — what remains is the pure step-seeding logic.
+    """
+    screen = ParticipantWorkflowScreen.__new__(ParticipantWorkflowScreen)
+    session_config.setdefault("paths", {})["base_dir"] = str(tmp_path)
+    screen.study_config = SimpleNamespace(session_config=session_config)
+    screen.participant_id = "sub-01"
+    screen.session_id = session_id
+    screen._bids_prefix = f"sub-01_{session_id}"
+    screen.step_statuses = {}
+    screen._initial_qc_approved = False
+    screen._is_mni_atlas_mode = False
+    screen._is_all_reused_mode = False
+    return screen
+
+
+class TestLocalizerOnlyStepSeeding:
+    """Issue #3: a localizer-only session (no feedback) must still seed the
+    preprocessing/extraction/approval pipeline so it produces masks a later
+    feedback session reuses — without seeding any realtime/feedback steps."""
+
+    def test_single_localizer_no_feedback_seeds_mask_pipeline(self, tmp_path):
+        config = {
+            "localizers": [{"type": "rest", "n_runs": 2, "networks": ["DefaultA"]}],
+            "feedback_runs": [],
+            # Drop the realtime tail so only the localizer pipeline remains to inspect.
+            "reference": {"initial_enabled": False, "realtime_enabled": False},
+        }
+        screen = _make_detect_screen(tmp_path, config)
+        screen._detect_completed_steps()
+
+        # The masks-producing steps are seeded (PENDING — nothing on disk).
+        assert screen.step_statuses.get("preprocessing") == StepStatus.PENDING
+        assert screen.step_statuses.get("mask_extraction") == StepStatus.PENDING
+        assert screen.step_statuses.get("mask_approval") == StepStatus.PENDING
+        # The section is shown because this session produces masks.
+        assert screen._has_mask_extraction is True
+        # No feedback this session => no realtime/feedback steps seeded.
+        assert "reference_realtime" not in screen.step_statuses
+        assert "coregistration_realtime" not in screen.step_statuses
+        assert not any(s.startswith("feedback_") for s in screen.step_statuses)
+
+    def test_multi_localizer_no_feedback_seeds_per_localizer_steps(self, tmp_path):
+        config = {
+            "localizers": [
+                {"type": "rest", "n_runs": 2, "networks": ["DefaultA"]},
+                {"type": "rit", "n_runs": 1},
+            ],
+            "feedback_runs": [],
+            "reference": {"initial_enabled": False, "realtime_enabled": False},
+        }
+        screen = _make_detect_screen(tmp_path, config)
+        screen._detect_completed_steps()
+
+        for loc_idx in (0, 1):
+            assert screen.step_statuses.get(f"localizer_{loc_idx}_preprocessing") == StepStatus.PENDING
+            assert screen.step_statuses.get(f"localizer_{loc_idx}_extraction") == StepStatus.PENDING
+            assert screen.step_statuses.get(f"localizer_{loc_idx}_approval") == StepStatus.PENDING
+        assert screen._has_mask_extraction is True
+        assert not any(s.startswith("feedback_") for s in screen.step_statuses)
+
+    def test_next_step_advances_into_preprocessing_after_collection(self, tmp_path):
+        # The regression: previously _get_next_step skipped the unseeded
+        # preprocessing step and reported the session complete after collection.
+        config = {
+            "localizers": [{"type": "rest", "n_runs": 2, "networks": ["DefaultA"]}],
+            "feedback_runs": [],
+            "reference": {"initial_enabled": False, "realtime_enabled": False},
+        }
+        screen = _make_detect_screen(tmp_path, config)
+        screen._detect_completed_steps()
+        # Mark collection done; the next pending step must be preprocessing, not None.
+        screen.step_statuses["rest_run_1"] = StepStatus.COMPLETE
+        screen.step_statuses["rest_run_2"] = StepStatus.COMPLETE
+
+        nxt = screen._get_next_step()
+        assert nxt is not None
+        assert nxt[0] == "preprocessing"
+
+    def test_all_reused_localizer_hides_mask_extraction(self, tmp_path):
+        # Every localizer reused => no masks produced this session => section hidden.
+        config = {
+            "localizers": [{"type": "rest", "reuse_from_session": "ses-01", "networks": ["DefaultA"]}],
+            "feedback_runs": [],
+        }
+        screen = _make_detect_screen(tmp_path, config, session_id="ses-02")
+        screen._detect_completed_steps()
+        assert screen._has_mask_extraction is False
