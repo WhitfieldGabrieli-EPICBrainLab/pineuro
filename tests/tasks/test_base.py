@@ -121,26 +121,8 @@ class TestRunRecordFields:
 
 
 # =============================================================================
-# Mirror state + run results
+# Run results
 # =============================================================================
-
-
-class TestMirrorState:
-    def test_default_is_empty(self, base_task):
-        state = base_task.get_mirror_state()
-        assert state == {"background": "black", "shapes": []}
-
-    def test_emit_calls_callback(self, base_task):
-        cb = MagicMock()
-        base_task.set_mirror_callback(cb)
-        base_task._emit_mirror_state()
-        cb.assert_called_once()
-        assert cb.call_args[0][0]["background"] == "black"
-
-    def test_emit_swallows_callback_errors(self, base_task):
-        base_task.set_mirror_callback(MagicMock(side_effect=RuntimeError("boom")))
-        # Should not raise — failure is logged, not propagated.
-        base_task._emit_mirror_state()
 
 
 class TestRunResults:

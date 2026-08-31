@@ -235,13 +235,14 @@ class PipelineRunner:
     def set_task_mirror_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
         """Set callback for task visual state mirroring.
 
-        The callback receives visual state dictionaries from tasks
+        The callback receives screenshot state dictionaries from tasks
         for rendering in a GUI mirror component.
 
         Parameters
         ----------
         callback : Callable or None
-            Function that receives visual state dict from task.get_mirror_state()
+            Function that receives the screenshot state dict emitted by
+            ``TaskBase._capture_and_emit_screenshot()``
         """
         self._task_mirror_callback = callback
 

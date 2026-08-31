@@ -52,7 +52,6 @@ PsychoPy tasks that need thread-safe access to live activations.
 """
 
 # Standard library imports
-import contextlib
 import logging
 import threading
 import time
@@ -187,40 +186,6 @@ class BaseTask(TaskBase):
             return get_task_metadata(self.task_id)
         except ValueError:
             return None
-
-    # =========================================================================
-    # Mirror state (vector-based, for structured GUI rendering)
-    # =========================================================================
-
-    def get_mirror_state(self) -> dict[str, Any]:
-        """Return current visual state for GUI mirroring.
-
-        Subclasses should override this to provide their visual representation.
-        Default implementation returns an empty state.
-
-        Returns
-        -------
-        Dict[str, Any]
-            Dictionary with:
-            - 'background': str - background color (default: 'black')
-            - 'shapes': List[dict] - list of drawable primitives
-
-            Each shape dict has 'type' and type-specific properties.
-            All coordinates are normalized 0-1 (x: left-right, y: top-bottom).
-
-            Supported shape types:
-            - circle: x, y, radius, fill or stroke, stroke_width
-            - line: x1, y1, x2, y2, stroke, stroke_width
-            - rect: x, y, width, height, fill or stroke, stroke_width
-            - text: x, y, content, size, color
-        """
-        return {"background": "black", "shapes": []}
-
-    def _emit_mirror_state(self) -> None:
-        """Emit current visual state to mirror callback if set."""
-        if self._mirror_callback is not None:
-            with contextlib.suppress(Exception):
-                self._mirror_callback(self.get_mirror_state())
 
     # =========================================================================
     # Thread-safe Coordinator Data Access
@@ -553,7 +518,6 @@ class BaseTask(TaskBase):
     #   _record_run_completion()    Custom task-state recording. Call super() first.
     #
     # May override (no super() needed):
-    #   get_mirror_state()          Return vector state for GUI mirror.
     #   get_volume_log_suffix()     String appended to coordinator volume log line.
     #   _show_post_run_questions()  Replace the post-run question display entirely.
     #
@@ -660,9 +624,6 @@ class BaseTask(TaskBase):
                 data = self.get_latest_data()
                 self.update(data)
 
-                # Emit visual state to GUI mirror if callback is set
-                self._emit_mirror_state()
-
                 # Frame timing
                 elapsed = time.time() - frame_start
                 if elapsed < self.frame_duration:
@@ -673,7 +634,6 @@ class BaseTask(TaskBase):
             # before we've had a chance to process the final volume.
             data = self.get_latest_data()
             self.update(data)
-            self._emit_mirror_state()
 
         except KeyboardInterrupt:
             pass

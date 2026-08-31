@@ -3,7 +3,7 @@
 This module provides a component that displays screenshots from the PsychoPy
 window, providing a true mirror of what participants see during tasks.
 
-The TaskMirror receives base64-encoded PNG screenshots from tasks and
+The TaskMirror receives base64-encoded JPEG screenshots from tasks and
 displays them in the GUI.
 """
 
@@ -38,7 +38,7 @@ class TaskMirror:
     >>> # Later, when task emits screenshot:
     >>> mirror.update_state({
     ...     'type': 'screenshot',
-    ...     'image': '<base64 PNG data>'
+    ...     'image': 'data:image/jpeg;base64,<...>'
     ... })
     """
 
@@ -60,6 +60,12 @@ class TaskMirror:
     def build(self) -> ft.Container:
         """Build the image container.
 
+        ``gapless_playback`` is required, not cosmetic: every screenshot is a new
+        data URI, so each ``update_state`` swaps in a new image provider. With the
+        Flet default (False) the widget "briefly shows nothing" between providers,
+        which at the ~15 Hz capture rate reads as a strobe. True keeps the previous
+        frame on screen until the next one has decoded.
+
         Returns
         -------
         ft.Container
@@ -72,6 +78,7 @@ class TaskMirror:
             width=self.width,
             height=self.height,
             fit=ft.BoxFit.CONTAIN,
+            gapless_playback=True,
         )
         self._container = ft.Container(
             content=self._image,

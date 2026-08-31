@@ -6608,8 +6608,10 @@ class ParticipantWorkflowScreen:
                 threshold=tsnr_threshold,
             )
 
-            # Create task mirror for visual feedback display
-            self.task_mirror = TaskMirror(width=None, height=None)
+            # Create task mirror for visual feedback display. Sized explicitly (like
+            # the localizer panel) so the container reserves its box even while an
+            # image is decoding — an unsized container collapses and reflows the row.
+            self.task_mirror = TaskMirror(width=st.TASK_MIRROR_W, height=st.TASK_MIRROR_H)
 
             # Create progress and status UI elements (compact for status strip)
             self._progress_bar = ft.ProgressBar(value=0, width=st.PROGRESS_BAR_W)
@@ -7335,13 +7337,14 @@ class ParticipantWorkflowScreen:
             self.feedback_monitor = None
 
     def _on_task_mirror_update(self, state: dict) -> None:
-        """Handle task visual state update for GUI mirroring.
+        """Handle task screenshot update for GUI mirroring.
 
-        Called from BallTask (or any task) with its current visual state.
+        Called from any task with the latest frame it captured.
         This runs in a background thread, so we schedule UI update on main thread.
 
         Args:
-            state: Visual state dictionary from task.get_mirror_state()
+            state: Screenshot state dict emitted by
+                ``TaskBase._capture_and_emit_screenshot()``
         """
         # Capture state in closure
         state_copy = state.copy()

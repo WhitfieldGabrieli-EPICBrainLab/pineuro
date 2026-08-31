@@ -855,7 +855,6 @@ class RITExperienceSamplingTask(BaseTask):
                 self.coordinator.check_error()
                 data = self.get_latest_data()
                 self.update(data)
-                self._emit_mirror_state()
                 elapsed = time.time() - frame_start
                 if elapsed < self.frame_duration:
                     time.sleep(self.frame_duration - elapsed)
@@ -863,7 +862,6 @@ class RITExperienceSamplingTask(BaseTask):
             # Process final data
             data = self.get_latest_data()
             self.update(data)
-            self._emit_mirror_state()
 
             # Let participant finish current prompt before stopping
             if self._phase == _PHASE_PROMPT:
@@ -872,7 +870,6 @@ class RITExperienceSamplingTask(BaseTask):
                     frame_start = time.time()
                     data = self.get_latest_data()
                     self.update(data)
-                    self._emit_mirror_state()
                     elapsed = time.time() - frame_start
                     if elapsed < self.frame_duration:
                         time.sleep(self.frame_duration - elapsed)

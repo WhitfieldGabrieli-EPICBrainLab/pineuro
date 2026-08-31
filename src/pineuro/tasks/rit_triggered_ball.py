@@ -959,7 +959,6 @@ class RITTriggeredBallTask(BaseTask):
                 self.coordinator.check_error()
                 data = self.get_latest_data()
                 self.update(data)
-                self._emit_mirror_state()
                 elapsed = time.time() - frame_start
                 if elapsed < self.frame_duration:
                     time.sleep(self.frame_duration - elapsed)
@@ -967,7 +966,6 @@ class RITTriggeredBallTask(BaseTask):
             # Process final data
             data = self.get_latest_data()
             self.update(data)
-            self._emit_mirror_state()
 
             # Let ball episode finish if active
             if self._phase == _PHASE_BALL_EPISODE:
@@ -976,7 +974,6 @@ class RITTriggeredBallTask(BaseTask):
                     frame_start = time.time()
                     data = self.get_latest_data()
                     self.update(data)
-                    self._emit_mirror_state()
                     elapsed = time.time() - frame_start
                     if elapsed < self.frame_duration:
                         time.sleep(self.frame_duration - elapsed)
@@ -1140,80 +1137,6 @@ class RITTriggeredBallTask(BaseTask):
     # =========================================================================
     # Mirror state (for GUI)
     # =========================================================================
-
-    def get_mirror_state(self) -> dict[str, Any]:
-        """Return current visual state for GUI mirroring."""
-        shapes: list[dict] = []
-
-        if self._phase == _PHASE_BALL_EPISODE:
-            # Circles
-            for pos, color, radius in zip(
-                self._circle_positions,
-                self._circle_colors,
-                self._circle_radii,
-                strict=False,
-            ):
-                y = 0.5 - pos
-                shapes.append(
-                    {
-                        "type": "circle",
-                        "x": 0.5,
-                        "y": y,
-                        "radius": radius,
-                        "stroke": color,
-                        "stroke_width": 3,
-                    }
-                )
-
-            # Ball
-            ball_y = 0.5 - self._ball_pos[1]
-            shapes.append({"type": "circle", "x": 0.5, "y": ball_y, "radius": 0.03, "fill": "white"})
-
-            # Hit counter. Dual mode labels by network; single mode by direction.
-            if len(self._ball_mask_names) > 1:
-                hit_text = (
-                    f"{self._ball_mask_names[0]}: {self._episode_hits[0]}  "
-                    f"{self._ball_mask_names[1]}: {self._episode_hits[1]}"
-                )
-            else:
-                hit_text = f"Up: {self._episode_hits[0]}  Down: {self._episode_hits[1]}"
-            shapes.append(
-                {
-                    "type": "text",
-                    "content": hit_text,
-                    "x": 0.5,
-                    "y": 0.95,
-                    "size": 10,
-                    "color": "gray",
-                }
-            )
-        else:
-            # Fixation cross
-            cross_size = 0.1
-            shapes.extend(
-                [
-                    {
-                        "type": "line",
-                        "x1": 0.5 - cross_size,
-                        "y1": 0.5,
-                        "x2": 0.5 + cross_size,
-                        "y2": 0.5,
-                        "stroke": "white",
-                        "stroke_width": 3,
-                    },
-                    {
-                        "type": "line",
-                        "x1": 0.5,
-                        "y1": 0.5 - cross_size,
-                        "x2": 0.5,
-                        "y2": 0.5 + cross_size,
-                        "stroke": "white",
-                        "stroke_width": 3,
-                    },
-                ]
-            )
-
-        return {"background": "black", "shapes": shapes}
 
     # =========================================================================
     # Cleanup and results

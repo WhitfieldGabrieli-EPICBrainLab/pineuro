@@ -5,6 +5,12 @@ All notable changes to pineuro will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The Task Display mirror no longer flickers.** The operator-facing mirror strobed for three independent reasons. (1) `ft.Image.gapless_playback` defaults to `False`, which "briefly shows nothing" whenever the image provider changes — and the mirror assigns a fresh base64 data URI ~15 times a second, so the widget blanked between every frame; it is now `True`, holding the previous frame until the next one has decoded. (2) The dead vector-mirror path (`get_mirror_state()` / `_emit_mirror_state()`, plus the ball/gauge/RIT-triggered-ball overrides) emitted a visual-state dict **every frame at ~60 Hz** through the same callback as the screenshots. In the task subprocess that callback is a `maxsize=1` latest-wins slot, so roughly three of every four screenshots were evicted before they could be sent — and what did arrive was discarded by the GUI anyway, since `TaskMirror` only renders `type == "screenshot"`. RIT Triggered Ball and RIT Experience Sampling were the only tasks still emitting it; the whole path is removed. (3) The feedback monitoring panel built its mirror unsized, so the container collapsed during each decode gap and reflowed the surrounding row; it now takes the same fixed dimensions as the localizer panel. Adds a test file for `TaskMirror`, which previously had none.
+
 ## [0.11.2] - 2026-06-04
 
 ### Breaking
