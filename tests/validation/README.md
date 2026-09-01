@@ -14,9 +14,13 @@ science), and asserts that pineuro recovers the ground truth **exactly**.
 > **Test pineuro's deterministic workflow exactly; never assert on a third-party
 > optimizer's recovery accuracy.**
 
-Every recorded metric is exact: an equality (`==`), a machine-precision bound
-(`< 1e-9` / `1e-12` for floating-point accumulation), an integer-zero count, or
-an exact deterministic boolean invariant. The suite has **no soft floors**.
+Every metric recorded on pineuro-owned computation is exact: an equality (`==`),
+a machine-precision bound (`< 1e-9` / `1e-12` for floating-point accumulation),
+an integer-zero count, or an exact deterministic boolean invariant. There are
+**no soft floors on pineuro's own math**. Exactly two metrics — both correlation
+floors on ANTs' motion output, checking pineuro's `.par` column layout rather
+than ANTs' accuracy — are not exact; they are named and justified under
+[Tolerances](#tolerances).
 
 Concretely:
 
@@ -119,7 +123,8 @@ under test). Generalizes `analysis/weights_bug/murfi_synthetic/generate_syntheti
 
 ## Tolerances
 
-Every recorded metric is **exact** — there are no soft floors. Two patterns:
+Every metric on pineuro-owned computation is **exact**. Three patterns, the third
+covering the suite's only two non-exact criteria:
 
 - **Independent reference** (e.g. `glm_vs_lstsq_max_error < 1e-9`,
   `voxel_efficiency_vs_batch_reference_max_err < 1e-9`, `hrf_max_abs_error < 1e-9`,
@@ -134,6 +139,22 @@ Every recorded metric is **exact** — there are no soft floors. Two patterns:
   `motion_par_translation_dominant_axis == 0`, `motion_variance_decreased == 1`):
   a structural fact — an integer-zero count, an exact equality, or a
   deterministic boolean — that a correct implementation must satisfy exactly.
+- **Optimizer-robustness floor** (`motion_par_translation_ramp_corr >= 0.5`,
+  `motion_par_rotation_ramp_corr >= 0.5`): the **only two** non-exact criteria in
+  the suite, both in [test_motion_correction.py](test_motion_correction.py). Each
+  checks that pineuro places a recovered motion parameter in the correct `.par`
+  column with a consistent sign, by correlating that column against a monotonic
+  injected ramp. An exact bound is not available here: ANTs' per-volume recovery
+  is noisy and intermittently nondeterministic even seeded and single-threaded,
+  and a strict per-bin monotonicity check flaked on it. A correlation over all
+  volumes absorbs that jitter. The floor sits far below what a correct
+  implementation produces — translation tracks its ramp near-perfectly
+  (|r| ~ 1.0), and rotation, the noisier of the two, runs |r| ~ 0.66-0.83 across
+  runs — and far above every failure mode it must catch: a column swap or a
+  sign-scrambling bug leaves the column as near-zero noise, |r| ~ 0.
+  Consistent with the design principle above, this asserts pineuro's column
+  layout and sign, never ANTs' recovery accuracy: no threshold here tightens if
+  ANTs converges better, and none loosens if it converges worse.
 
 The numerical environment: `conftest.py` forces single-threaded ITK and BLAS
 (so float-reduction order is stable for the 1e-9 reference checks), and

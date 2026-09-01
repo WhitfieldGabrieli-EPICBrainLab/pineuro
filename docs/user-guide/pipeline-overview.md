@@ -117,7 +117,7 @@ GLM-localizer and MNI-atlas options, supported atlases, and manual ROI import.
 **Purpose:** Compute moment-to-moment brain activation for feedback.
 
 **What happens:**
-1. **Volume arrives** from scanner
+1. **Volume arrives** from scanner and is read into memory — DICOM pixel data is read directly with pydicom (~15 ms). dcm2niix is **not** used here; it runs only in offline preprocessing, where its ~206 ms per-volume cost would not fit inside a TR.
 2. **Motion extraction** from DICOM headers
 3. **GLM design row** built (task + nuisance regressors)
 4. **Incremental GLM update** using Gentleman's algorithm

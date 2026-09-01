@@ -119,4 +119,11 @@ The Participant Workflow GUI also shows overlay images for each mask, allowing v
 
 ## Tissue Masks
 
-When WM and/or CSF nuisance regressors are enabled in the feedback configuration, tissue probability maps are automatically extracted during mask extraction using ANTsPy tissue segmentation. These are thresholded and eroded to create conservative WM and CSF masks.
+When WM and/or CSF nuisance regressors are enabled in the feedback configuration, tissue masks are created automatically during mask extraction. They come from **template probability priors**, not from a segmentation of the participant's own anatomy:
+
+1. **Fetch priors** — the `MNI152NLin2009cAsym` res-2 WM and CSF probability maps are pulled from templateflow.
+2. **Warp to subject space** — each prior is resampled from MNI into the participant's functional space using the inverse ANTs SyN transform. The transform computed during mask extraction is reused when available; otherwise a fresh MNI registration is run.
+3. **Threshold** — voxels with prior probability >= 0.9 are kept, giving conservative masks well inside each tissue compartment.
+4. **Erode** — 2 voxels, falling back to 1, then to no erosion, whichever first leaves a non-empty mask. CSF is thin at BOLD resolution and does not always survive aggressive erosion; the fallback is logged when it is used.
+
+An empty mask after thresholding raises an error, since it usually indicates poor MNI registration of the BOLD reference.

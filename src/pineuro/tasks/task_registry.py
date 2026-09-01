@@ -368,9 +368,14 @@ class TaskMetadata:
         post_run_questions: List of slider questions to display after each run.
             Questions can be conditional on run type or position.
         design_type: GLM design type for the pipeline runner. Determines how
-            task regressors are computed. Options:
+            task regressors are computed. These two options are exhaustive;
+            ``designs.design_for_metadata`` raises on anything else:
             - "block": HRF-convolved boxcar (baseline → active). Default.
             - "nuisance_only": No task regressors (nuisance-only model).
+            Event-related paradigms run under "nuisance_only": the online GLM
+            does not model event onsets, since the design matrix is built
+            before the run starts. Event-related *localizers* are modelled
+            offline via ``mask_extraction_task``.
         compute_max_run_seconds: Optional. Callable that, given the task's
             parameter dict, returns the worst-case duration of a single run
             in seconds. Used by the pipeline runner to override the

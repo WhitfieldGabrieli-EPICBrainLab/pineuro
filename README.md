@@ -31,7 +31,7 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 **Requires Python 3.10 or 3.11** (`>=3.10,<3.12`). All dependencies are pure pip; no external tools required.
 
 ```bash
-git clone https://github.com/marlvan/pineuro.git
+git clone https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro.git
 cd pineuro
 pip install -e .
 ```
@@ -63,7 +63,7 @@ If you use pineuro in your research, please cite:
 
 ```
 Vandewouw, M. M. (2026). pineuro: Python for Individualized Neurofeedback.
-https://github.com/marlvan/pineuro
+https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro
 ```
 
 ## License

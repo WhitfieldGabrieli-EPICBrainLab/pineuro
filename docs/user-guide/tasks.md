@@ -16,19 +16,17 @@ A brain-o-meter (analog gauge dial) where needle position reflects differential 
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| `use_transfer_runs` | False | Include transfer runs (1 before feedback, 1 after) |
 | `block_durations` | `30,90,60,...` | Comma-separated block durations in seconds |
 | `conditions` | `wander,focus` | Alternating condition names |
-| `swap_labels` | False | Enable label position swapping |
-| `label_swap_after_block` | 3 | Swap every N blocks (0 = disabled) |
+| `swap_labels` | False | Start with Wandering on the left rather than the right (counterbalancing) |
+| `label_swap_after_block` | 3 | Swap labels every N blocks (0 = disabled) |
 | `score_factor` | 3.0 | Needle movement degrees per unit differential |
 | `warmup_duration` | 2.0 | Feedback-off warmup at the start of each block |
 | `button_press_duration` | 2.0 | Duration of button-press catch trials |
 | `button_key` | `1` | Response key for catch trials |
-| `baseline_duration` | 30.0 | Pre-feedback baseline rest period (seconds) |
-| `focus_network` | `Cont` | Network driving the "Focused" label |
-| `wander_network` | `Default` | Network driving the "Wandering" label |
 
-**Networks required:** 2
+**Networks required:** 2 — assigned to the `focus_network` role (drives the "Focused" label, e.g. ContA) and the `wander_network` role (drives "Wandering", e.g. DefaultA). Network roles are assigned in the Study Editor, not set as task parameters.
 
 ### Ball Task
 
@@ -45,6 +43,7 @@ A dual-network game where a white ball moves between two target circles. The bal
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| `use_transfer_runs` | True | Include transfer runs (1 before feedback, 1 after) |
 | `initial_scale_factor` | 10.0 | Ball movement speed (larger = more movement) |
 | `scale_adjust_factor` | 0.25 | Adaptive difficulty adjustment per run |
 | `min_hits_threshold` | 3 | Below this → increase speed |
@@ -56,7 +55,7 @@ A dual-network game where a white ball moves between two target circles. The bal
 
 **Post-run questions:** 7 questions about mindfulness practice, ball movement correspondence, and self-regulation ability.
 
-**Networks required:** 2
+**Networks required:** 2 — the `top_network` and `bottom_network` roles. The ball moves up when `top_network` is more active.
 
 ### Thermometer Task
 
@@ -87,23 +86,60 @@ A block-design audio task with thermometer feedback. Participants listen to voic
 | `right_button` | `2` | Rating scale right |
 | `confirm_button` | `3` | Rating scale confirm |
 
-**Networks required:** 1
+Also accepts `use_transfer_runs` (default False).
+
+**Networks required:** 1 — the `target_mask` role.
 
 ## RIT (Rumination Induction Task) Tasks
 
 Three specialized tasks for studying rumination.
 
-### RIT Localizer
+### Trigger Conditions (shared)
 
-A rumination localizer task where participants view personal keywords and rate how much they ruminate about each one. Used to identify brain networks involved in rumination.
-
-**Paradigm:** 9-stage trial protocol with keyword presentation, rumination induction, and 1–5 rating scales. Produces BIDS events TSV output.
+RIT Experience Sampling and RIT Triggered Ball both monitor a network's activation and fire a discrete episode when trigger conditions are met. Four condition gates can be enabled independently and combined with `trigger_logic` (`all` = AND, `any` = OR). The defaults reproduce the original hardcoded behavior — activation above baseline AND a rising slope.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `keywords_file` | — | Path to participant-specific keywords file |
-| `n_trials` | 10 | Number of keyword trials |
-| `rating_duration` | 6.0 | Duration for each rating scale |
+| `activation_contrast` | `positive` | `positive` fires above the threshold, `negative` below |
+| `trigger_logic` | `all` | `all` = every enabled gate must hold, `any` = at least one |
+| `consecutive_volumes` | 3 | Window length: trending volumes required (strict) or regression window (slope) |
+| `use_activation_condition` | True | Gate on current activation vs `activation_threshold` |
+| `activation_threshold` | 0.0 | Level for the activation and count gates. 0 = at baseline |
+| `use_trend_condition` | True | Gate on the trend over the window |
+| `trend_method` | `slope` | `slope` = least-squares slope sign (tolerant of single blips), `strict` = monotonic across all volumes |
+| `activation_trend` | `increasing` | Direction the trend gate requires |
+| `slope_threshold` | 0.0 | Slope method only; 0 = any rise/fall |
+| `use_mean_condition` | False | Gate on mean activation across the window |
+| `mean_threshold` | 0.0 | Mean-activation threshold |
+| `use_count_condition` | False | Gate on how many in-window volumes pass `activation_threshold` |
+| `count_min` | 3 | Minimum passing volumes for the count gate |
+| `min_prompt_interval` | 30.0 | Cooldown — minimum seconds between episodes |
+| `timeout_duration` | 60.0 | Seconds without a trigger before a forced episode |
+
+A cross-parameter validator rejects configurations with no gate enabled, and `count_min` greater than `consecutive_volumes`.
+
+### RIT Localizer
+
+A rumination localizer where participants recall personal memories cued by their own keywords, then alternate between ruminating on and being distracted from each one. Used to identify the rumination network.
+
+**Paradigm:** Per trial — memory prompt with keyword, detailed reflection, then rumination and distraction prompts, with jittered rest between. Ratings use 1–5 scales. Produces a BIDS events TSV.
+
+**Default contrast:** `rumination_network = rumination - distraction`
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `keywords_dir` | — | Directory of per-participant keyword files (auto-matched by participant ID) |
+| `memory_display_duration` | 5.0 | Memory prompt + keyword display (seconds) |
+| `reflection_duration` | 25.0 | Detailed memory reflection |
+| `rumination_duration` | 30.0 | Rumination and distraction prompts |
+| `rating_timeout` | 5.0 | Maximum time for each rating response |
+| `rest_min` | 10.0 | Minimum rest/fixation jitter |
+| `rest_max` | 15.0 | Maximum rest/fixation jitter |
+| `n_trials_per_run` | 4 | Trials per run |
+| `total_runs` | 2 | Total RIT runs across the whole study; the keywords file must contain exactly this many memory passes |
+| `left_key` | `1` | Move rating left |
+| `right_key` | `2` | Move rating right |
+| `confirm_key` | `0` | Confirm rating |
 
 **Networks required:** 0 (localizer only)
 
@@ -111,28 +147,38 @@ A rumination localizer task where participants view personal keywords and rate h
 
 An activation-triggered experience sampling task. Monitors real-time brain activation and presents experience sampling probes (sadness + focus ratings) when activation exceeds a threshold.
 
-**Trigger logic:** Activation threshold with trend detection and cooldown period to avoid over-sampling. Phases: baseline → monitoring → prompt.
+**Trigger logic:** See [Trigger Conditions](#trigger-conditions-shared) above. Phases: baseline → monitoring → prompt.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `trigger_threshold` | 1.5 | Activation z-score to trigger a probe |
-| `cooldown_duration` | 30.0 | Minimum seconds between probes |
+| `rating_timeout` | 15.0 | Maximum time for each rating response |
+| `left_key` | `1` | Move rating left |
+| `right_key` | `2` | Move rating right |
+| `confirm_key` | `0` | Confirm rating |
 
-**Networks required:** 1
+**Networks required:** 1 — the `target_network` role.
 
 ### RIT Triggered Ball
 
-A 3-network feedback task combining rumination detection with the ball game. When the trigger network exceeds a threshold, a ball feedback episode begins using the other two networks.
+A feedback task combining rumination detection with the ball game. When the trigger network meets the trigger conditions, a ball feedback episode begins.
 
-**Display:** Ball moves based on differential activation of top and bottom networks (like BallTask), but episodes are triggered by the third network crossing a threshold.
+**Display:** During an episode the ball moves in one of two modes, set by `movement_mode`:
+
+- **`single`** (default) — one network's signed activation drives the ball. This is the trigger network itself unless a `movement_network` is assigned. `movement_direction` sets the polarity: `positive_down` (default) moves the ball down as rumination increases; `positive_up` flips it.
+- **`dual`** — the ball moves on the difference between the `top_network` and `bottom_network` activations, like the Ball task.
+
+**Trigger logic:** See [Trigger Conditions](#trigger-conditions-shared) above.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `trigger_threshold` | 1.5 | Trigger network z-score to start an episode |
+| `movement_mode` | `single` | `single` = one network's signed activation, `dual` = difference between two |
+| `movement_direction` | `positive_down` | Single mode only: which way positive activation moves the ball |
 | `episode_duration` | 30.0 | Duration of each ball episode |
-| `timeout_duration` | 60.0 | Max wait before forced episode |
+| `scale_factor` | 10.0 | Ball movement speed (larger = faster) |
+| `circle_shrink_factor` | 0.9 | Circle radius multiplier after a hit (1.0 = no shrink) |
+| `reset_ball_each_episode` | True | Reset ball position and circles at each episode start |
 
-**Networks required:** 3 (trigger, top, bottom)
+**Networks required:** 1 — the `trigger_network` role. Three further roles are **optional** and shown only when relevant: `movement_network` (single mode, overrides which network drives the ball) and `top_network` / `bottom_network` (dual mode).
 
 ## Built-In Localizer Tasks
 
@@ -143,6 +189,8 @@ Fixation-cross display for resting-state data collection (`task_id: rest`, BIDS 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `duration` | 200.0 | Display duration in seconds |
+
+**Networks required:** 0 (localizer only)
 
 ### Self/Other Task
 
@@ -160,6 +208,8 @@ Voice localizer for STG (superior temporal gyrus) ROI identification. Participan
 | `response_keys` | `1,2` | Yes/No response buttons |
 
 **Default contrast:** STG_self = self - other
+
+**Networks required:** 0 (localizer only)
 
 ## Transfer Runs
 
@@ -194,7 +244,7 @@ Each task produces standardized output:
 pineuro uses a plugin system for task registration. To create a custom task:
 
 1. Extend `BaseTask` from `pineuro.tasks.base`
-2. Define `TaskMetadata` with parameters, network requirements, and descriptions
+2. Define `TaskMetadata` with parameters, network requirements, and descriptions — including `design_type`, which selects the real-time GLM task regressor (see [Supported Task Designs](feedback-tasks.md#supported-task-designs); event-related paradigms run under `nuisance_only`, since the online GLM cannot model event onsets)
 3. Register with `@pineuro_task` decorator or `register_task()` function
 
 Custom tasks automatically appear in the Study Editor's Feedback tab dropdown and receive real-time activations via the coordinator callback system. See `CONTRIBUTING.md` for details.

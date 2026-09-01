@@ -2150,7 +2150,7 @@ class PipelineRunner:
             get_condition_for_participant,
             load_randomization,
         )
-        from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
+        from pineuro.tasks.designs import design_for_metadata
         from pineuro.tasks.state import TaskState
         from pineuro.tasks.task_registry import get_task_metadata
 
@@ -2412,11 +2412,7 @@ class PipelineRunner:
         # Use per-run TR, fall back to scan config
         tr = _fb("tr", 1.2)
         metadata = get_task_metadata(feedback_task_type)
-        design: NuisanceOnlyDesign | BlockDesign
-        if metadata.design_type == "nuisance_only":
-            design = NuisanceOnlyDesign()
-        else:  # "block" (default)
-            design = BlockDesign(n_baseline)
+        design = design_for_metadata(metadata, n_baseline)
         task_regressor = design.compute_regressors(n_volumes, tr)
 
         # Determine sham condition and build complete mask list

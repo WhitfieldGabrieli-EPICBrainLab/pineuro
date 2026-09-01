@@ -73,6 +73,7 @@ MY_TASK_METADATA = TaskMetadata(
     ],
     n_networks=1,           # number of brain-network masks the task needs
     roles={"feedback"},     # "feedback", "localizer", or both
+    design_type="block",    # "block" (HRF-convolved boxcar) or "nuisance_only"
 )
 
 @pineuro_task(MY_TASK_METADATA)
@@ -109,6 +110,23 @@ The `@pineuro_task` decorator registers both the metadata and the class. To make
 real-time feedback), subclass `BaseLocalizerTask` and implement `setup()` +
 `run_paradigm()` instead. See the project `CONTRIBUTING.md` ("Adding a task") for the
 full checklist.
+
+### Choosing a `design_type`
+
+`design_type` selects the task regressor in the real-time GLM, and `designs.py`'s
+`design_for_metadata()` is the single place it is interpreted — it raises on any other
+value rather than silently defaulting.
+
+| Value | Task column(s) |
+|-------|----------------|
+| `block` (default) | One HRF-convolved boxcar: 0 through baseline, on afterwards |
+| `nuisance_only` | None; the model is intercept + drift + motion (+ WM/CSF) |
+
+These two are exhaustive. Event-related paradigms run under `nuisance_only` — the online
+GLM does not model event onsets, since the design matrix is built before the run starts
+from `n_baseline`, `n_volumes`, and `tr` alone. That also covers onsets not knowable in
+advance, such as the RIT tasks' brain-state-triggered episodes. Events are still logged
+in full, and event-related *localizers* are modelled offline via `mask_extraction_task`.
 
 ## Architecture
 

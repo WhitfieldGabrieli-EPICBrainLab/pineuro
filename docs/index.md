@@ -38,5 +38,5 @@ The library is designed for:
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/marlvan/pineuro/issues)
+- **Issues**: [GitHub Issues](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/issues)
 - **Questions**: Open a discussion on GitHub

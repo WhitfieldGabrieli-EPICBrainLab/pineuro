@@ -78,7 +78,8 @@ After baseline, the deviation is frozen to prevent drift during feedback.
 Dependencies
 ------------
 External:
-    - dcm2niix (optional): For DICOM-to-NIfTI conversion during real-time
+    - None. Real-time volumes are read directly with pydicom; dcm2niix is
+      used only by the offline preprocessing pipeline (``pineuro.utils``).
 
 Python:
     - numpy : Array operations and linear algebra
@@ -2327,8 +2328,9 @@ def get_slot_run_info(
 # 1. **Volume Watching**: Monitors a directory for incoming files using
 #    filesystem events (watchdog) plus periodic polling for reliability.
 #
-# 2. **DICOM Handling**: Converts DICOMs to NIfTI on-the-fly using dcm2niix.
-#    Extracts motion parameters from DICOM headers for GLM nuisance modeling.
+# 2. **DICOM Handling**: Reads DICOM pixel data directly with pydicom (~15ms),
+#    bypassing dcm2niix (~206ms) so the read fits inside a TR. Extracts motion
+#    parameters from DICOM headers for GLM nuisance modeling.
 #
 # 3. **Processing Coordination**: Feeds volumes to FeedbackEstimator, collects
 #    activations, and makes them available to display tasks.
@@ -2349,9 +2351,9 @@ def get_slot_run_info(
 class NeurofeedbackCoordinator:
     """Coordinates real-time neurofeedback by watching for volume files.
 
-    Monitors a directory for incoming volume files (DICOM or NIfTI), converts
-    them to NIfTI if needed, processes through FeedbackEstimator, and logs
-    results to CSV.
+    Monitors a directory for incoming volume files (DICOM or NIfTI), reads each
+    one into memory, processes it through FeedbackEstimator, and logs results to
+    CSV.
 
     **Timing Model:**
 
@@ -2366,7 +2368,9 @@ class NeurofeedbackCoordinator:
 
     For NIfTI input files (.nii, .nii.gz), a JSON sidecar should be present
     alongside each volume containing motion parameters (ImageComments field)
-    and TR (RepetitionTime field). The dcm2niix conversion step is skipped.
+    and TR (RepetitionTime field). NIfTI volumes are copied through rather than
+    read with pydicom, and motion comes from the sidecar instead of the DICOM
+    header.
 
     Parameters
     ----------
@@ -2407,8 +2411,8 @@ class NeurofeedbackCoordinator:
     Notes
     -----
     Uses watchdog for efficient filesystem event detection. Each new volume
-    triggers processing through FeedbackEstimator (with dcm2niix conversion
-    for DICOM input). Results are logged to CSV after each volume.
+    triggers processing through FeedbackEstimator (reading DICOM input directly
+    with pydicom). Results are logged to CSV after each volume.
 
     Task regressors should be pre-computed and passed to the constructor.
     If not provided, a nuisance-only model is used (intercept + drift + motion).
@@ -2655,7 +2659,7 @@ class NeurofeedbackCoordinator:
 
         # Timing diagnostics
         self._timing_stats: dict[str, list[float]] = {
-            "dcm2niix_ms": [],
+            "volume_read_ms": [],
             "glm_ms": [],
             "registration_ms": [],
             "estimator_ms": [],
@@ -3187,7 +3191,7 @@ class NeurofeedbackCoordinator:
         volume_num = self.n_processed + 1
         output_name = f"vol_{volume_num:04d}"
 
-        dcm2niix_start = time.monotonic()
+        volume_read_start = time.monotonic()
 
         # In-memory data from DICOM read (None for NIfTI input)
         vol_data_mem: NDArray[np.float64] | None = None
@@ -3242,7 +3246,7 @@ class NeurofeedbackCoordinator:
                 logger.error(f"Failed to read DICOM {volume_path}: {e}")
                 return
 
-        dcm2niix_duration = (time.monotonic() - dcm2niix_start) * 1000  # ms
+        volume_read_duration = (time.monotonic() - volume_read_start) * 1000  # ms
 
         # Process through estimator (timed for diagnostics)
         glm_start = time.monotonic()
@@ -3368,7 +3372,7 @@ class NeurofeedbackCoordinator:
         total_duration = (time.monotonic() - process_start) * 1000  # ms
         queue_depth = self._get_queue_depth()
 
-        self._timing_stats["dcm2niix_ms"].append(dcm2niix_duration)
+        self._timing_stats["volume_read_ms"].append(volume_read_duration)
         self._timing_stats["glm_ms"].append(glm_duration)
         self._timing_stats["registration_ms"].append(_reg_ms)
         self._timing_stats["estimator_ms"].append(_est_ms)
@@ -3468,7 +3472,7 @@ class NeurofeedbackCoordinator:
         if self._csv_file is not None:
             self._csv_file.flush()
 
-        # Log concise timing: proc = dcm2niix+GLM for this volume; drift = (elapsed - expected)
+        # Log concise timing: proc = volume read + GLM for this volume; drift = (elapsed - expected)
         status = "BASELINE" if is_baseline else "ACTIVE"
         activation_str = "  ".join(f"{name}={activations[name]:+.3f}" for name in self.mask_names)
         if self._differential_name and self._differential_name in activations:
@@ -3593,7 +3597,7 @@ class NeurofeedbackCoordinator:
             return
 
         total_ms = np.array(self._timing_stats["total_ms"])
-        dcm2niix_ms = np.array(self._timing_stats["dcm2niix_ms"])
+        volume_read_ms = np.array(self._timing_stats["volume_read_ms"])
         glm_ms = np.array(self._timing_stats["glm_ms"])
         queue_depth = np.array(self._timing_stats["queue_depth"])
 
@@ -3609,8 +3613,8 @@ class NeurofeedbackCoordinator:
             f"Total processing:  mean={total_ms.mean():.1f}ms, std={total_ms.std():.1f}ms, max={total_ms.max():.1f}ms"
         )
         logger.info(
-            f"  dcm2niix:        mean={dcm2niix_ms.mean():.1f}ms, "
-            f"std={dcm2niix_ms.std():.1f}ms, max={dcm2niix_ms.max():.1f}ms"
+            f"  Volume read:     mean={volume_read_ms.mean():.1f}ms, "
+            f"std={volume_read_ms.std():.1f}ms, max={volume_read_ms.max():.1f}ms"
         )
         logger.info(
             f"  GLM update:      mean={glm_ms.mean():.1f}ms, std={glm_ms.std():.1f}ms, max={glm_ms.max():.1f}ms"

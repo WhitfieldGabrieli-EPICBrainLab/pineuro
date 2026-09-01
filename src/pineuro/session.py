@@ -2585,10 +2585,16 @@ def _compute_regressors_for_task(
 
     Returns
     -------
-    numpy.ndarray or None
-        Task regressors, or None for nuisance-only designs
+    numpy.ndarray, shape (n_volumes, n_task_regressors)
+        Task regressors. Nuisance-only designs return a ``(n_volumes, 0)``
+        array, which the estimator treats as no task columns.
+
+    Raises
+    ------
+    ValueError
+        If the task's ``design_type`` is not recognized.
     """
-    from .utils import compute_boxcar_task_regressor
+    from .tasks.designs import design_for_metadata
 
     if run_config is None:
         if not config.feedback_runs:
@@ -2598,19 +2604,10 @@ def _compute_regressors_for_task(
     n_volumes = run_config.n_volumes
     tr = run_config.tr
 
-    if metadata.design_type == "nuisance_only":
-        return None
-    elif metadata.design_type == "block":
-        regressors = compute_boxcar_task_regressor(
-            n_baseline=n_baseline,
-            n_volumes=n_volumes,
-            tr=tr,
-        )
-        logger.info(f"Computed boxcar task regressor (baseline={n_baseline}, volumes={n_volumes})")
-        return regressors
-    else:
-        logger.warning(f"Unknown design_type '{metadata.design_type}', using no task regressors")
-        return None
+    design = design_for_metadata(metadata, n_baseline)
+    regressors = design.compute_regressors(n_volumes, tr)
+    logger.info(f"Task design: {design!r} -> {regressors.shape[1]} task regressor(s) over {n_volumes} volumes")
+    return regressors
 
 
 def _resolve_mask_names(config: SessionConfig, metadata: Any) -> list[str]:

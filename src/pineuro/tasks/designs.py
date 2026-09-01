@@ -4,11 +4,24 @@ This module provides abstractions for defining task designs that can be
 used with FeedbackEstimator. Designs specify how to compute task regressors
 from timing information.
 
+A task's ``TaskMetadata.design_type`` selects which design it gets;
+``design_for_metadata`` is the single mapping from that field to a design, used
+by both the session runner and the GUI pipeline runner. The two values below are
+exhaustive. Event-related paradigms run under ``nuisance_only``: the online GLM
+does not model event onsets, since the design matrix is built before the run
+starts. Event-related *localizers* are modelled offline via
+``mask_extraction_task``, which fits a nilearn first-level model from a BIDS
+events file.
+
 Classes
 -------
 TaskDesign : Abstract base class for task designs
 BlockDesign : Block design with baseline and active periods
 NuisanceOnlyDesign : No task regressors (resting state)
+
+Functions
+---------
+design_for_metadata : Map a task's ``design_type`` to its TaskDesign
 
 Examples
 --------
@@ -19,6 +32,7 @@ Examples
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -27,7 +41,7 @@ from numpy.typing import NDArray
 class TaskDesign(ABC):
     """Abstract base class for task designs.
 
-    Subclasses implement specific experimental designs (block, event-related, etc.)
+    Subclasses implement specific experimental designs (block, nuisance-only)
     and provide methods to compute task regressors for GLM modeling.
 
     This abstraction allows FeedbackEstimator to work with different task
@@ -176,113 +190,44 @@ class NuisanceOnlyDesign(TaskDesign):
         return "NuisanceOnlyDesign()"
 
 
-class EventRelatedDesign(TaskDesign):
-    """Event-related design with discrete event onsets.
+# Exhaustive mapping of TaskMetadata.design_type -> design. Both the session
+# runner and the GUI pipeline runner dispatch through here, so a task cannot get
+# a different GLM depending on which one launched it.
+DESIGN_TYPES = ("block", "nuisance_only")
 
-    Creates HRF-convolved regressors for events occurring at specific times.
-    Supports multiple event types (conditions) with separate regressors.
+
+def design_for_metadata(metadata: Any, n_baseline: int) -> TaskDesign:
+    """Map a task's ``design_type`` to the design that builds its regressors.
 
     Parameters
     ----------
-    event_onsets : dict[str, list[float]]
-        Dictionary mapping condition names to lists of onset times (in seconds)
-    event_durations : dict[str, float], optional
-        Dictionary mapping condition names to event durations (in seconds).
-        If not provided, events are modeled as impulses (duration=0).
+    metadata : TaskMetadata
+        Task metadata; only ``design_type`` is read.
+    n_baseline : int
+        Number of baseline volumes, used by ``block`` designs.
 
-    Examples
-    --------
-    >>> # Two conditions with events at different times
-    >>> design = EventRelatedDesign(
-    ...     event_onsets={
-    ...         'target': [10.0, 30.0, 50.0],  # Target events at 10s, 30s, 50s
-    ...         'distractor': [20.0, 40.0],    # Distractor events
-    ...     },
-    ...     event_durations={'target': 2.0, 'distractor': 1.0}
-    ... )
-    >>> regressors = design.compute_regressors(n_volumes=100, tr=1.2)
-    >>> print(regressors.shape)  # (100, 2) - one column per condition
+    Returns
+    -------
+    TaskDesign
+        ``BlockDesign`` for ``"block"``, ``NuisanceOnlyDesign`` for
+        ``"nuisance_only"``.
+
+    Raises
+    ------
+    ValueError
+        If ``design_type`` is not one of ``DESIGN_TYPES``. ``design_type`` is set
+        in task code and never in user config, so an unrecognized value is a
+        programming error -- it is raised rather than silently defaulted, which
+        would otherwise fit a task with the wrong GLM.
     """
-
-    def __init__(
-        self,
-        event_onsets: dict[str, list[float]],
-        event_durations: dict[str, float] | None = None,
-    ):
-        self.event_onsets = event_onsets
-        self.event_durations = event_durations or {}
-        self._condition_names = list(event_onsets.keys())
-
-    def compute_regressors(
-        self,
-        n_volumes: int,
-        tr: float,
-    ) -> NDArray[np.float64]:
-        """Compute HRF-convolved event regressors.
-
-        Parameters
-        ----------
-        n_volumes : int
-            Total number of volumes
-        tr : float
-            Repetition time in seconds
-
-        Returns
-        -------
-        NDArray, shape (n_volumes, n_conditions)
-            Regressor matrix with one column per condition
-        """
-        from pineuro.utils import compute_hrf
-
-        n_conditions = len(self._condition_names)
-        if n_conditions == 0:
-            return np.zeros((n_volumes, 0), dtype=np.float64)
-
-        # Compute HRF kernel
-        hrf = compute_hrf(tr)
-
-        # Total time in seconds
-        total_time = n_volumes * tr
-
-        # Build regressor for each condition
-        regressors = np.zeros((n_volumes, n_conditions), dtype=np.float64)
-
-        for i, condition in enumerate(self._condition_names):
-            onsets = self.event_onsets[condition]
-            duration = self.event_durations.get(condition, 0.0)
-
-            # Create stimulus function at TR resolution
-            stim = np.zeros(n_volumes, dtype=np.float64)
-
-            for onset in onsets:
-                if onset >= total_time:
-                    continue
-
-                # Convert onset to volume index
-                start_vol = int(onset / tr)
-                if duration > 0:
-                    end_vol = min(int((onset + duration) / tr) + 1, n_volumes)
-                    stim[start_vol:end_vol] = 1.0
-                else:
-                    # Impulse event
-                    if start_vol < n_volumes:
-                        stim[start_vol] = 1.0
-
-            # Convolve with HRF
-            convolved = np.convolve(stim, hrf, mode="full")[:n_volumes]
-
-            # Normalize
-            if np.max(np.abs(convolved)) > 0:
-                convolved = convolved / np.max(np.abs(convolved))
-
-            regressors[:, i] = convolved
-
-        return regressors
-
-    @property
-    def n_regressors(self) -> int:
-        return len(self._condition_names)
-
-    def __repr__(self) -> str:
-        conditions = ", ".join(self._condition_names)
-        return f"EventRelatedDesign(conditions=[{conditions}])"
+    design_type = metadata.design_type
+    if design_type == "nuisance_only":
+        return NuisanceOnlyDesign()
+    if design_type == "block":
+        return BlockDesign(n_baseline)
+    raise ValueError(
+        f"Unknown design_type {design_type!r} on task "
+        f"{getattr(metadata, 'task_id', '<unknown>')!r}; expected one of {DESIGN_TYPES}. "
+        "Event-related paradigms run under 'nuisance_only' -- the online GLM cannot "
+        "model event onsets, which are not known when the design matrix is built."
+    )

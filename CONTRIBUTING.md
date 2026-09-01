@@ -7,7 +7,7 @@ Thank you for your interest in contributing to pineuro! This guide covers how to
 Clone the repo and install it in editable mode with the dev tools. Use **Python 3.10 or 3.11** (`requires-python = ">=3.10,<3.12"`):
 
 ```bash
-git clone https://github.com/marlvan/pineuro.git
+git clone https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro.git
 cd pineuro
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
@@ -33,7 +33,7 @@ Because the install is **editable**, your code changes are picked up on the next
 
 Always work on a branch off `main`; never commit to `main` directly. There's no enforced naming convention — `yourname/topic`, `fix/...`, or `feat/...` all work.
 
-**Lab collaborators (push access to `marlvan/pineuro`)** — clone once (see [Getting Started](#getting-started)), then branch off an up-to-date `main`:
+**Lab collaborators (push access to `WhitfieldGabrieli-EPICBrainLab/pineuro`)** — clone once (see [Getting Started](#getting-started)), then branch off an up-to-date `main`:
 
 ```bash
 git switch main && git pull                 # sync the latest main
@@ -45,7 +45,7 @@ git push -u origin yourname/short-description
 **External contributors (no push access)** — work from a fork:
 
 ```bash
-# Fork marlvan/pineuro on GitHub, then:
+# Fork WhitfieldGabrieli-EPICBrainLab/pineuro on GitHub, then:
 git clone https://github.com/<your-username>/pineuro.git
 cd pineuro
 git switch -c short-description
@@ -69,7 +69,7 @@ In Claude Code, the `/check` shortcut runs all five at once. CI additionally bui
 
 ### Opening a pull request
 
-Push your branch, then open a **pull request (PR)** on GitHub — a request to merge your branch into `main`, where it's reviewed and checked by CI before merging. (Lab collaborators open the PR within `marlvan/pineuro`; external contributors open it from their fork → `marlvan/pineuro:main`.) CI runs on every push to the PR branch.
+Push your branch, then open a **pull request (PR)** on GitHub — a request to merge your branch into `main`, where it's reviewed and checked by CI before merging. (Lab collaborators open the PR within `WhitfieldGabrieli-EPICBrainLab/pineuro`; external contributors open it from their fork → `WhitfieldGabrieli-EPICBrainLab/pineuro:main`.) CI runs on every push to the PR branch.
 
 Before requesting review:
 
@@ -143,8 +143,18 @@ MY_TASK_METADATA = TaskMetadata(
     ],
     n_networks=1,           # number of brain-network masks the task needs
     roles={"feedback"},     # "feedback", "localizer", or both
+    design_type="block",    # "block" (HRF-convolved boxcar) or "nuisance_only"
 )
 ```
+
+`design_type` selects the task regressor in the real-time GLM, and the two values are
+exhaustive. Event-related paradigms run under `nuisance_only` — the online GLM does not
+model event onsets, since the design matrix is built before the run starts. See
+[Feedback Tasks](docs/user-guide/feedback-tasks.md#supported-task-designs).
+
+When you rename or add a `TaskParameter`, update the task's table in
+[docs/user-guide/tasks.md](docs/user-guide/tasks.md) in the same change — the tables are
+maintained by hand and there is no test that catches drift.
 
 3. **Implement the class** with the `@pineuro_task` decorator — its `task_id` must match the metadata:
 

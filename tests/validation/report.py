@@ -82,7 +82,7 @@ _STAGE_INFO: dict[str, dict] = {
     "design": {
         "order": 4,
         "name": "Task design regressors",
-        "blurb": "The expected-activation timecourses for block and event-related task designs.",
+        "blurb": "The expected-activation timecourses for block and nuisance-only task designs.",
     },
     "feedback_glm": {
         "order": 5,

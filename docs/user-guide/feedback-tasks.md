@@ -37,12 +37,23 @@ The GLM design matrix includes:
 |-----------|------|-------------|-------------|
 | Task | Signal | Automatic | Task condition regressor(s) |
 | Intercept | Nuisance | Always on | Constant term |
-| Drift | Nuisance | Toggle | 3rd-order polynomial drift |
+| Drift | Nuisance | Toggle | Linear ramp — a single column equal to the volume index |
 | Motion (6 DOF) | Nuisance | Toggle | Translation (x, y, z) + rotation (x, y, z) |
 | White matter mean | Nuisance | Toggle | Mean signal from WM mask |
 | CSF mean | Nuisance | Toggle | Mean signal from CSF mask |
 
 **Activation computation:** For each volume, the task beta is extracted and the nuisance contribution is subtracted. The result is z-scored against baseline statistics.
+
+### Supported Task Designs
+
+The task regressor takes one of two forms, fixed per task by its `design_type`. This applies to feedback runs; localizer tasks build their design offline from a BIDS events file instead (see [Mask Extraction](mask-extraction.md)).
+
+| `design_type` | Task column(s) | Feedback tasks |
+|---------------|----------------|----------------|
+| `block` | One HRF-convolved boxcar — 0 through baseline, on afterwards | Ball |
+| `nuisance_only` | None; the model is intercept + drift + motion (+ WM/CSF) | Gauge, Thermometer, RIT Experience Sampling, RIT Triggered Ball |
+
+Event-related paradigms run under `nuisance_only` — the online GLM does not model event onsets, since the design matrix is built before the run starts. Events are still logged to the BIDS events TSV at full precision, and event-related **localizers** are modelled in full: `mask_extraction_task` fits a nilearn first-level model from a BIDS events TSV with arbitrary contrast expressions. See [Mask Extraction](mask-extraction.md).
 
 ### Baseline Period
 
@@ -57,12 +68,12 @@ After baseline, activation values are normalized relative to baseline statistics
 
 Each nuisance regressor can be independently enabled/disabled:
 
-- **Drift** — Removes slow signal drift (scanner heating, physiological low-frequency oscillation)
+- **Drift** — Removes slow signal drift (scanner heating, physiological low-frequency oscillation). A single linear term, not a polynomial basis set.
 - **Motion (6 DOF)** — Removes signal correlated with head movement. Automatically disabled when motion correction mode is `none`.
 - **White Matter** — Removes global signal from white matter (requires WM tissue mask from mask extraction)
 - **CSF** — Removes CSF signal fluctuations (requires CSF tissue mask)
 
-WM and CSF regressors require tissue masks, which are automatically extracted during the mask extraction step when these regressors are enabled.
+WM and CSF regressors require tissue masks, which are automatically extracted during the mask extraction step when these regressors are enabled. The masks come from MNI template tissue probability priors warped into the participant's functional space, then thresholded and eroded — see [Tissue Masks](mask-extraction.md#tissue-masks).
 
 ## Spatial Smoothing
 

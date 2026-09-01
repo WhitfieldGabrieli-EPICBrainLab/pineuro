@@ -274,6 +274,65 @@ class TestFeedbackRunConfig:
 
 
 # =============================================================================
+# _compute_regressors_for_task
+# =============================================================================
+
+
+class TestComputeRegressorsForTask:
+    """The session runner's design dispatch.
+
+    Shares ``designs.design_for_metadata`` with the GUI pipeline runner, so both
+    produce the same design matrix for a given task. See
+    tests/tasks/test_designs.py for the mapping itself.
+    """
+
+    def test_block_task_gets_one_task_column(self, tmp_path):
+        from pineuro.session import _compute_regressors_for_task
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        config = _make_config(tmp_path)
+        run_config = config.feedback_runs[0]
+        regressors = _compute_regressors_for_task(get_task_metadata("ball"), config, run_config)
+
+        assert regressors.shape == (run_config.n_volumes, 1)
+        # Baseline volumes carry no task signal.
+        assert regressors[0, 0] == 0.0
+
+    def test_nuisance_only_task_gets_no_task_columns(self, tmp_path):
+        """Nuisance-only returns a (n_volumes, 0) array, not None.
+
+        FeedbackEstimator treats both as zero task columns; the array keeps the
+        return type uniform and matches what the GUI has always passed.
+        """
+        from pineuro.session import _compute_regressors_for_task
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        config = _make_config(tmp_path)
+        run_config = config.feedback_runs[0]
+        regressors = _compute_regressors_for_task(get_task_metadata("gauge"), config, run_config)
+
+        assert regressors.shape == (run_config.n_volumes, 0)
+
+    def test_matches_the_gui_dispatch(self, tmp_path):
+        """Both runners must build the same design for the same task."""
+        from pineuro.session import _compute_regressors_for_task
+        from pineuro.tasks.designs import design_for_metadata
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        config = _make_config(tmp_path)
+        run_config = config.feedback_runs[0]
+
+        for task_id in ("ball", "gauge"):
+            metadata = get_task_metadata(task_id)
+            from_session = _compute_regressors_for_task(metadata, config, run_config)
+            from_gui = design_for_metadata(metadata, run_config.n_baseline).compute_regressors(
+                run_config.n_volumes, run_config.tr
+            )
+            assert from_session.shape == from_gui.shape, task_id
+            assert (from_session == from_gui).all(), task_id
+
+
+# =============================================================================
 # reset_task_state
 # =============================================================================
 

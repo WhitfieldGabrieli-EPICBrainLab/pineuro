@@ -13,7 +13,7 @@ import pytest
 from scipy.stats import gamma
 
 from pineuro.feedback import IncrementalGLM, _combine_roi
-from pineuro.tasks.designs import BlockDesign, EventRelatedDesign, NuisanceOnlyDesign
+from pineuro.tasks.designs import BlockDesign, NuisanceOnlyDesign
 from pineuro.tasks.utils import ActivationNormalizer, ActivationSmoother
 from pineuro.utils import compute_boxcar_task_regressor, compute_hrf
 
@@ -157,41 +157,6 @@ def test_nuisance_only_design_is_empty():
     """NuisanceOnlyDesign produces a (n_volumes, 0) regressor matrix."""
     design = NuisanceOnlyDesign().compute_regressors(n_volumes=100, tr=1.0)
     assert design.shape == (100, 0)
-
-
-def test_event_design_recovers_onset(record):
-    """An event regressor peaks exactly one HRF lag (5 s) after the event onset."""
-    tr, n_volumes, onset = 1.0, 60, 20.0
-    design = EventRelatedDesign({"cond": [onset]})
-    reg = design.compute_regressors(n_volumes, tr)
-    assert reg.shape == (n_volumes, 1)
-    # lag = peak_vol * tr - onset — an integer sample index times the TR, minus the
-    # onset; all exactly representable, so the HRF lag is deterministically 5.0 s.
-    peak_vol = int(np.argmax(reg[:, 0]))
-    lag_s = peak_vol * tr - onset
-    assert (
-        record(
-            "design",
-            "event_hrf_lag_s",
-            lag_s,
-            threshold=5.0,
-            op="==",
-            units="s",
-            description=(
-                "The gap between an event and the peak of its modelled response. The HRF delays the response by 5 s."
-            ),
-        )
-        == 5.0
-    )
-    assert reg[:, 0].max() == 1.0  # EventRelatedDesign divides by the peak: max/max == 1
-
-
-def test_event_design_multi_condition():
-    """EventRelatedDesign yields one column per condition, each localised."""
-    design = EventRelatedDesign({"a": [10.0], "b": [35.0]})
-    reg = design.compute_regressors(n_volumes=60, tr=1.0)
-    assert reg.shape == (60, 2)
-    assert int(np.argmax(reg[:, 0])) < int(np.argmax(reg[:, 1]))  # a precedes b
 
 
 # =============================================================================

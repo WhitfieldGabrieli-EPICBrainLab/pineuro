@@ -26,7 +26,7 @@ source pineuro_env/bin/activate  # Linux/macOS
 # pineuro_env\Scripts\activate   # Windows
 
 # Clone and install pineuro (all dependencies included)
-git clone https://github.com/marlvan/pineuro.git
+git clone https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro.git
 cd pineuro
 pip install -e .
 ```
@@ -51,7 +51,7 @@ For contributing to pineuro:
 
 ```bash
 # Clone repository
-git clone https://github.com/marlvan/pineuro.git
+git clone https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro.git
 cd pineuro
 
 # Create environment

@@ -103,7 +103,6 @@ def test_tasks_lazy_names_resolve():
         ActivationNormalizer,
         ActivationSmoother,
         BlockDesign,
-        EventRelatedDesign,
         NuisanceOnlyDesign,
         TaskDesign,
     )
@@ -112,7 +111,6 @@ def test_tasks_lazy_names_resolve():
         TaskDesign,
         BlockDesign,
         NuisanceOnlyDesign,
-        EventRelatedDesign,
         ActivationSmoother,
         ActivationNormalizer,
     ):

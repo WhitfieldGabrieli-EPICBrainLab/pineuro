@@ -56,10 +56,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/marlvan/pineuro"
-Documentation = "https://github.com/marlvan/pineuro/tree/main/docs"
-Issues = "https://github.com/marlvan/pineuro/issues"
-Changelog = "https://github.com/marlvan/pineuro/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro"
+Documentation = "https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/tree/main/docs"
+Issues = "https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/issues"
+Changelog = "https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["build", "mypy>=1.10", "pytest>=8.0", "ruff>=0.9.0", "types-PyYAML"]

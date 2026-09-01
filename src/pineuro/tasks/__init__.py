@@ -18,7 +18,6 @@ Task Designs
 TaskDesign : Abstract base class for GLM task designs
 BlockDesign : Block design with baseline and active periods
 NuisanceOnlyDesign : No task regressors (resting state)
-EventRelatedDesign : Event-related design with discrete onsets
 
 Task Registry
 -------------
@@ -206,7 +205,6 @@ _LAZY_SUBMODULE_NAMES: dict[str, tuple[str, str]] = {
     "TaskDesign": (".designs", "TaskDesign"),
     "BlockDesign": (".designs", "BlockDesign"),
     "NuisanceOnlyDesign": (".designs", "NuisanceOnlyDesign"),
-    "EventRelatedDesign": (".designs", "EventRelatedDesign"),
     "ActivationNormalizer": (".utils", "ActivationNormalizer"),
     "ActivationSmoother": (".utils", "ActivationSmoother"),
 }
@@ -251,7 +249,6 @@ __all__ = [
     "TaskDesign",
     "BlockDesign",
     "NuisanceOnlyDesign",
-    "EventRelatedDesign",
     # Task registry
     "TaskMetadata",
     "TaskParameter",
