@@ -15,4 +15,4 @@ tests/validation/_report/
 sourcedata/
 *.egg-info/
 dist/
-PAPER_PLAN.md
+src/pineuro/tasks/demo*
