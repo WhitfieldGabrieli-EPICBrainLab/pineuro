@@ -1088,9 +1088,9 @@ class RITTask(BaseLocalizerTask):
                 "unrelated topics as a distraction.\n\n"
                 "After each period, you will rate how unpleasant the topic felt \n"
                 "and how focused you were on your feelings.\n\n"
-                f"Use index finger to move left, "
-                f"middle finger to move right,\n"
-                f"and thumb to confirm your rating.\n\n"
+                "Use index finger to move left, "
+                "middle finger to move right,\n"
+                "and thumb to confirm your rating.\n\n"
                 "Press any button to begin."
             ],
             advance_keys=advance_keys,

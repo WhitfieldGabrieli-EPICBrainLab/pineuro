@@ -822,9 +822,9 @@ class RITExperienceSamplingTask(BaseTask):
                 "In this task, you will see a fixation cross (+).\n\n"
                 "From time to time, you will be asked to rate\n"
                 "how you are feeling.\n\n"
-                f"Use index finger to move left, "
-                f"middle finger to move right,\n"
-                f"and thumb to confirm.\n\n"
+                "Use index finger to move left, "
+                "middle finger to move right,\n"
+                "and thumb to confirm.\n\n"
                 "Press any button to begin."
             ],
             advance_keys=advance_keys,
