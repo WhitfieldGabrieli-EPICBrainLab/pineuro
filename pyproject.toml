@@ -62,7 +62,11 @@ Issues = "https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/issues"
 Changelog = "https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-dev = ["build", "mypy>=1.10", "pytest>=8.0", "ruff>=0.9.0", "types-PyYAML"]
+# ruff and mypy are exact-pinned so the checks CI runs match a local
+# `pip install -e ".[dev]"`: a new release can change their output on unchanged
+# code (ruff 0.17 formats code blocks in Markdown files; 0.15 did not). Upgrade them
+# deliberately, together with the ruff install in .github/workflows/ci.yml.
+dev = ["build", "mypy==1.19.1", "pytest>=8.0", "ruff==0.15.2", "types-PyYAML"]
 
 [project.scripts]
 pineuro-gui = "pineuro.gui.app:main"

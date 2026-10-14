@@ -22,7 +22,8 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - run: pip install "ruff>=0.9.0"
+      # Same ruff as the dev extra in pyproject.toml; keep the two in sync.
+      - run: pip install "ruff==0.15.2"
 
       - run: ruff check .
 
