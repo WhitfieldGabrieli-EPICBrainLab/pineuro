@@ -210,8 +210,8 @@ class TestActivationOverlay:
 
 class TestFeedbackReportTriggeredDurations:
     def _feedback_dir(self, tmp_path, sample_feedbacklog, task, with_events=True):
-        prefix = f"sub-01_ses-01_task-{task}_run-01"
-        sample_feedbacklog(n_volumes=50, mask_names=["DMN"], name=f"{prefix}_attempt-01_feedbacklog.tsv")
+        prefix = f"sub-01_ses-01_task-{task}_run-01_attempt-01"
+        sample_feedbacklog(n_volumes=50, mask_names=["DMN"], name=f"{prefix}_feedbacklog.tsv")
         if with_events:
             _write_events_tsv(tmp_path / f"{prefix}_events.tsv", _SAMPLE_EVENT_ROWS)
         return tmp_path

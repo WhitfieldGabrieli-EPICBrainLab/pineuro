@@ -3635,7 +3635,7 @@ def generate_feedback_report(
             report_spec = None
         triggered_episodes: list[dict[str, Any]] = []
         if report_spec is not None:
-            events_file = feedback_dir / f"{bids_prefix}_task-{task}_run-{run:02d}_events.tsv"
+            events_file = feedback_dir / f"{bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_events.tsv"
             triggered_episodes = _summarize_triggered_events(events_file, report_spec.non_episode_types)
 
         timeseries_out = output_dir / "activation_timeseries.png"

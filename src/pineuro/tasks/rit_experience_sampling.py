@@ -326,7 +326,7 @@ class RITExperienceSamplingTask(BaseTask):
         # Separate dedup counter for trigger checks (history managed in _update_data)
         self._last_trigger_checked_volume: int = 0
 
-        # Per-volume psychopylog for live monitoring
+        # Output prefix for this run attempt (events TSV + per-volume psychopylog for live monitoring)
         prefix = make_bids_run_prefix(
             coordinator.subject,
             coordinator.session,
@@ -334,6 +334,7 @@ class RITExperienceSamplingTask(BaseTask):
             coordinator.run_number,
             attempt=coordinator.attempt,
         )
+        self._bids_run_prefix = prefix
         self._psychopy_log_path = Path(coordinator.output_dir) / f"{prefix}_psychopylog.tsv"
         self._psychopy_log_file: Any = None
         self._psychopy_log_writer: Any = None
@@ -770,13 +771,9 @@ class RITExperienceSamplingTask(BaseTask):
             logger.warning("No output_dir on coordinator, cannot save events TSV")
             return
 
-        output_dir = Path(output_dir)
-        subject = getattr(self.coordinator, "subject", "unknown")
-        session = getattr(self.coordinator, "session", "ses-01")
-        run_number = getattr(self.coordinator, "run_number", 1)
-        run_str = f"run-{run_number:02d}"
-
-        path = output_dir / f"{subject}_{session}_task-{self.task_id}_{run_str}_events.tsv"
+        # Same run/attempt prefix as the feedback log, so a re-attempt or a transfer
+        # run (task entity "<task>transfer") never overwrites another run's events.
+        path = Path(output_dir) / f"{self._bids_run_prefix}_events.tsv"
 
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(

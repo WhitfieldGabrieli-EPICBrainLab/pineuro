@@ -4199,7 +4199,7 @@ class ParticipantWorkflowScreen:
         except (KeyError, ValueError):
             report_spec = None
         if report_spec is not None:
-            events_file = output_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_events.tsv"
+            events_file = output_dir / f"{self._bids_prefix}_task-{task}_run-{run:02d}_attempt-{attempt:02d}_events.tsv"
             triggered_episodes = qc._summarize_triggered_events(events_file, report_spec.non_episode_types)
 
         try:

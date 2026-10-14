@@ -721,3 +721,44 @@ class TestRunEndsWithTheScan:
         task.run()
 
         assert seen_at_cleanup == [100]
+
+
+class TestTruncatedEpisodeRecording:
+    def test_cleanup_records_truncated_episode_in_attempt_named_events(self, mock_coordinator, tmp_path, monkeypatch):
+        import csv
+        from unittest.mock import MagicMock
+
+        from pineuro.tasks.base import BaseTask
+        from pineuro.tasks.rit_triggered_ball import _PHASE_BALL_EPISODE, RITTriggeredBallTask
+
+        monkeypatch.setattr(BaseTask, "cleanup", lambda self: None)  # skip window / task-state teardown
+        coord = mock_coordinator(
+            mask_names=["RIT"],
+            session="ses-01",
+            output_dir=str(tmp_path),
+            task="rittriggeredballtransfer",
+            attempt=2,
+            n_volumes=100,
+        )
+        coord.n_processed = 100
+        task = RITTriggeredBallTask(coord, movement_mode="single")
+        task._phase = _PHASE_BALL_EPISODE
+        task._task_clock = MagicMock(getTime=MagicMock(return_value=12.0))
+        task._episode_onset = 4.0
+        task._episode_type = "triggered"
+        task._episode_volume = 95
+        task._episode_activation = 0.5
+        task._episode_number = 3
+        task._episode_hits = [1, 2]
+
+        task.cleanup()
+
+        # Task entity + attempt in the name: transfer runs and re-attempts no longer overwrite each other.
+        events_path = tmp_path / "sub-01_ses-01_task-rittriggeredballtransfer_run-01_attempt-02_events.tsv"
+        with open(events_path, encoding="utf-8") as f:
+            rows = list(csv.DictReader(f, delimiter="\t"))
+        truncated = [r for r in rows if r["trial_type"] == "ball_triggered_incomplete"]
+        assert len(truncated) == 1
+        assert float(truncated[0]["duration"]) == 8.0
+        assert truncated[0]["hits_total"] == "3"
+        assert task.get_run_results()["n_episodes_incomplete"] == 1

@@ -641,3 +641,20 @@ class TestTriggerConditionValidation:
                     "use_count_condition": False,
                 }
             )
+
+
+class TestEventsFileNaming:
+    def test_events_prefix_carries_task_entity_and_attempt(self, mock_coordinator, tmp_path):
+        from pineuro.tasks.rit_experience_sampling import RITExperienceSamplingTask
+
+        coord = mock_coordinator(
+            mask_names=["RIT"],
+            session="ses-01",
+            output_dir=str(tmp_path),
+            task="ritexperiencesamplingtransfer",
+            attempt=3,
+        )
+        task = RITExperienceSamplingTask(coord)
+
+        # Same prefix as the feedback log: re-attempts and transfer runs get their own events file.
+        assert task._bids_run_prefix == "sub-01_ses-01_task-ritexperiencesamplingtransfer_run-01_attempt-03"
