@@ -1250,7 +1250,7 @@ def spatial_correlation(
     overwrite: bool = False,
 ) -> pd.DataFrame:
     """
-    Spatially coreralte a NIfTI file with a parcellation using FSL's fslcc.
+    Spatially correlate a NIfTI file with a parcellation (computed with numpy).
 
     Parameters
     ----------

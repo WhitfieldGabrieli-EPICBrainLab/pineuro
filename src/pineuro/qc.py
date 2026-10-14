@@ -719,7 +719,7 @@ def plot_motion_timeseries(motion_par_path: Path, out_path: Path, title: str | N
     Parameters
     ----------
     motion_par_path : Path
-        Path to mcflirt .par file with motion parameters
+        Path to mcflirt-format .par file with motion parameters (written by ANTsPy motion correction)
     out_path : Path
         Path to save the PNG
     title : str, optional
@@ -783,7 +783,7 @@ def plot_motion_framewise_displacement(
     Parameters
     ----------
     motion_par_path : Path
-        Path to mcflirt .par file
+        Path to mcflirt-format .par file (written by ANTsPy motion correction)
     out_path : Path
         Path to save the PNG
     threshold : float, default=0.5
@@ -1032,7 +1032,7 @@ def generate_preprocessing_report(
     _brain_dir = preprocessing_dir / "03_brain_extraction"
     coreg_dir = preprocessing_dir / "04_coregistered"
 
-    # Find motion parameter files (.par files from mcflirt -plots)
+    # Find motion parameter files (mcflirt-format .par files written by ANTsPy motion correction)
     par_files = sorted(glob(str(mcf_dir / "*.par")))
 
     # Find brain mask and reference

@@ -5,8 +5,9 @@ This module provides the foundational utilities used throughout the pineuro
 library. It centralizes external command execution, ensuring consistent
 error handling, logging, and overwrite behavior across all pipeline stages.
 
-The key design principle is that ALL external commands (FSL, dcm2niix, etc.)
-route through run_command(), giving a single point of control for:
+The key design principle is that ALL external commands (currently dcm2niix,
+installed with pineuro as a pip dependency) route through run_command(), giving a
+single point of control for:
 - Input/output validation
 - Overwrite logic (skip if outputs exist)
 - Performance timing
@@ -79,7 +80,7 @@ Python:
 
 Notes
 -----
-**ANTs vs FSL for Registration:**
+**ANTsPy vs the ANTs command line for registration:**
 Registration functions use ANTsPy (Python bindings) for speed and to avoid
 spawning subprocesses. This provides ~2x speedup compared to shell-based
 ANTs calls while maintaining identical results.
@@ -250,8 +251,8 @@ def Timer(name: str, category: str = "general"):
 def check_platform_requirements() -> list[str]:
     """Check platform requirements and return list of warnings/errors.
 
-    This function checks for required external tools (FSL, dcm2niix) and
-    platform-specific limitations that may affect pineuro functionality.
+    This function checks that dcm2niix (a pip dependency of pineuro) is on PATH,
+    and for platform-specific limitations that may affect pineuro functionality.
 
     Returns
     -------
@@ -276,9 +277,10 @@ def check_platform_requirements() -> list[str]:
     # Check dcm2niix availability (required for DICOM conversion)
     if shutil.which("dcm2niix") is None:
         warnings.append(
-            "dcm2niix not found in PATH. DICOM conversion requires dcm2niix. "
-            "Install via: apt install dcm2niix (Linux), brew install dcm2niix (macOS), "
-            "or winget install dcm2niix (Windows)"
+            "dcm2niix not found in PATH. DICOM conversion requires dcm2niix, which is "
+            "installed with pineuro as a pip dependency: run pineuro from its Python "
+            "environment (so that environment's scripts directory is on PATH), or "
+            "reinstall it with `pip install dcm2niix`."
         )
 
     # Platform-specific warnings
@@ -698,10 +700,10 @@ def parse_siemens_motion_comment(comments: str) -> NDArray[np.float64] | None:
 
 
 class CommandNotFoundError(Exception):
-    """Raised when an FSL command is not installed or found in PATH."""
+    """Raised when an external command is not installed or found in PATH."""
 
 
-def _check_command_installation(cmd: Union[str, Path] = "fsl") -> None:
+def _check_command_installation(cmd: Union[str, Path] = "dcm2niix") -> None:
     """
     Check if command is installed and available in PATH.
 
@@ -1308,19 +1310,19 @@ def parallel_run_command(jobs: list[dict], n_jobs: int = -1, timing_category: st
     --------
     >>> jobs = [
     ...     {
-    ...         'cmd_name': 'mcflirt',
-    ...         'cmd': ['mcflirt', '-in', 'run1.nii.gz', '-out', 'run1_mc.nii.gz'],
-    ...         'description': 'Motion correction run 1',
-    ...         'inputs': 'run1.nii.gz',
-    ...         'outputs': 'run1_mc.nii.gz',
+    ...         'cmd_name': 'dcm2niix',
+    ...         'cmd': ['dcm2niix', '-z', 'y', '-o', 'nifti', '-f', 'run1', 'dicom/run1'],
+    ...         'description': 'DICOM to NIfTI conversion run 1',
+    ...         'inputs': 'dicom/run1',
+    ...         'outputs': 'nifti/run1.nii.gz',
     ...         'overwrite': False
     ...     },
     ...     {
-    ...         'cmd_name': 'mcflirt',
-    ...         'cmd': ['mcflirt', '-in', 'run2.nii.gz', '-out', 'run2_mc.nii.gz'],
-    ...         'description': 'Motion correction run 2',
-    ...         'inputs': 'run2.nii.gz',
-    ...         'outputs': 'run2_mc.nii.gz',
+    ...         'cmd_name': 'dcm2niix',
+    ...         'cmd': ['dcm2niix', '-z', 'y', '-o', 'nifti', '-f', 'run2', 'dicom/run2'],
+    ...         'description': 'DICOM to NIfTI conversion run 2',
+    ...         'inputs': 'dicom/run2',
+    ...         'outputs': 'nifti/run2.nii.gz',
     ...         'overwrite': False
     ...     }
     ... ]
