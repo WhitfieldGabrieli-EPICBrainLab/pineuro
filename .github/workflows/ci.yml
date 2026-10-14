@@ -17,9 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Python 3.10, the version mypy targets ([tool.mypy] python_version): a newer
+      # interpreter installs stubs that do not support that target (numpy 2.3 needs
+      # 3.11, and its ndarray.copy() then types as Any), failing mypy on unchanged code.
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
           cache: pip
 
       # Same ruff as the dev extra in pyproject.toml; keep the two in sync.
@@ -38,7 +41,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: wx-wheels
-          key: wxpython-wheel-${{ runner.os }}-py3.11-v1
+          key: wxpython-wheel-${{ runner.os }}-py3.10-v1
       - name: Download wxPython wheel (Linux)
         if: steps.wx-cache.outputs.cache-hit != 'true'
         run: >-
@@ -54,7 +57,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: wx-wheels
-          key: wxpython-wheel-${{ runner.os }}-py3.11-v1
+          key: wxpython-wheel-${{ runner.os }}-py3.10-v1
 
       - run: pip install -e ".[dev]"
 

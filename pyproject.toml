@@ -135,6 +135,7 @@ addopts = "-m 'not validation'"
 # ---------------------------------------------------------------------------
 
 [tool.mypy]
+# Keep in step with the Python of the lint-and-typecheck job in .github/workflows/ci.yml.
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
