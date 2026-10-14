@@ -349,6 +349,16 @@ class TestBuildSessionConfigReuse:
         cfg = self._study().build_session_config(1, "sub-07", "ses-02")
         assert cfg["localizers"][0]["reuse_from_session"] == "ses-01"
 
+    def test_build_raises_on_mask_name_collision(self):
+        # Hand-edited YAML: two localizers producing the same mask name would overwrite
+        # each other in 03_masks and coregister with the wrong transform.
+        study = self._study()
+        study.session_config["sessions"][0]["localizers"].append(
+            {"id": "rit2", "type": "rit", "contrasts": {"Trigger": "e>f"}}
+        )
+        with pytest.raises(ValueError, match="'Trigger' is produced by both"):
+            study.build_session_config(0, "sub-07", "ses-01")
+
     def test_build_ok_fresh_session_realtime_off(self):
         # A same-session (no reuse) session is unaffected by realtime being off.
         study = self._study()

@@ -367,7 +367,9 @@ def localizer_mask_names(loc: dict[str, Any]) -> list[str]:
     Mirrors :attr:`pineuro.session.LocalizerConfig.mask_names` for the GUI's raw
     dict configs: networks for rest, ``manual_mask_names`` (or names derived from
     ``manual_mask_paths``) for manual, contrast keys (plus ``_reverse`` variants
-    when enabled) for task localizers.
+    when enabled) for task localizers. A task localizer with no ``contrasts`` uses
+    its task's registered ``default_contrasts``, exactly as mask extraction does
+    (``PipelineRunner._run_localizer_extraction``).
     """
     loc_type = loc.get("type", "rest")
     if loc_type == "rest":
@@ -385,10 +387,21 @@ def localizer_mask_names(loc: dict[str, Any]) -> list[str]:
                     break
             derived.append(stem)
         return derived
-    names = list(loc.get("contrasts", {}).keys())
+    contrasts = loc.get("contrasts", {}) or _default_contrasts(loc_type)
+    names = list(contrasts.keys())
     if loc.get("include_reverse_contrasts", False):
-        names += [f"{k}_reverse" for k in loc.get("contrasts", {})]
+        names += [f"{k}_reverse" for k in contrasts]
     return names
+
+
+def _default_contrasts(task_id: str) -> dict[str, str]:
+    """A task localizer's registered default contrasts, or ``{}`` for an unknown task."""
+    from pineuro.tasks.task_registry import get_task_metadata
+
+    try:
+        return dict(get_task_metadata(task_id).default_contrasts or {})
+    except ValueError:  # unregistered task id
+        return {}
 
 
 def localizer_is_reused(loc: dict[str, Any]) -> bool:
@@ -639,6 +652,57 @@ def reuse_realtime_error(
         f'coregistration to align them to this session. Enable "Realtime reference" '
         f"on the Reference tab (a realtime reference scan source will then also be needed)."
     )
+
+
+def mask_name_collision_error(sessions: list[dict[str, Any]], session_index: int) -> str | None:
+    """Error if two sources in session ``session_index`` would claim the same mask name.
+
+    Every fresh localizer's thresholded masks are copied into one shared ``03_masks``
+    directory keyed by mask name, and coregistration selects each localizer's files by
+    exact name or ``{name}_`` prefix, writing outputs named only by mask name. So within
+    a session: two fresh localizers must not produce the same name (the second silently
+    overwrites the first, which is then coregistered with the wrong localizer's
+    transform); names from different localizers must not extend one another as
+    ``{name}_...`` (one localizer's prefix match picks up the other's mask); and a mask a
+    feedback run sources from an earlier session must not also be produced fresh here
+    (both resolve to the same coregistered file). Returns None when names are unambiguous.
+    """
+    if not (0 <= session_index < len(sessions)):
+        return None
+    session = sessions[session_index]
+    where = f"Session {session_index + 1}"
+
+    produced: list[tuple[str, str]] = []  # (mask name, producing localizer label)
+    for i, loc in enumerate(session.get("localizers", [])):
+        if localizer_is_reused(loc):
+            continue
+        label = f"localizer {i + 1} ({loc.get('id') or loc.get('type', 'rest')})"
+        produced.extend((name, label) for name in localizer_mask_names(loc))
+
+    for j, (name_a, loc_a) in enumerate(produced):
+        for name_b, loc_b in produced[j + 1 :]:
+            if loc_a == loc_b:
+                continue
+            if name_a == name_b:
+                return f"{where}: mask '{name_a}' is produced by both {loc_a} and {loc_b}; rename one of them"
+            if name_a.startswith(f"{name_b}_") or name_b.startswith(f"{name_a}_"):
+                short, long = sorted((name_a, name_b), key=len)
+                return (
+                    f"{where}: masks '{short}' and '{long}' come from different localizers ({loc_a} and "
+                    f"{loc_b}); a mask name must not begin with another localizer's mask name followed by '_'"
+                )
+
+    fresh = dict(produced)
+    for frc in session.get("feedback_runs", []):
+        sources = frc.get("mask_sources", {}) or {}
+        for name in sorted(frc_referenced_masks(frc)):
+            source = sources.get(name, "")
+            if source and name in fresh:
+                return (
+                    f"{where}: mask '{name}' is sourced from {source} but is also produced by {fresh[name]} "
+                    f"in this session; rename one of them"
+                )
+    return None
 
 
 def tissue_required_in_session(sessions: list[dict[str, Any]], session_index: int) -> bool:

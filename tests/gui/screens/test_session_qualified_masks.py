@@ -135,3 +135,28 @@ class TestValidateSessions:
         ]
         err = self._validate(sessions)
         assert err is not None and "sourced from both" in err
+
+    def test_same_mask_name_from_two_localizers_rejected(self):
+        # Both localizers would write DefaultA into the shared 03_masks directory.
+        sessions = [
+            {
+                "localizers": [
+                    {"id": "rest", "type": "rest", "networks": ["DefaultA"]},
+                    {"id": "rest2", "type": "rest", "networks": ["DefaultA", "ContA"]},
+                ],
+                "feedback_runs": [{"network_assignment": {"focus_network": "ContA"}}],
+            }
+        ]
+        err = self._validate(sessions)
+        assert err is not None and "'DefaultA' is produced by both" in err
+
+    def test_reused_mask_also_produced_fresh_rejected(self):
+        sessions = [
+            {"localizers": [{"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}}], "feedback_runs": []},
+            {
+                "localizers": [{"id": "rit2", "type": "rit", "contrasts": {"Trigger": "a>b"}}],
+                "feedback_runs": [{"network_assignment": {"t": "Trigger"}, "mask_sources": {"Trigger": "ses-01"}}],
+            },
+        ]
+        err = self._validate(sessions)
+        assert err is not None and "sourced from ses-01 but is also produced" in err

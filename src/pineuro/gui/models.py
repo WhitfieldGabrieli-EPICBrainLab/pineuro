@@ -62,6 +62,7 @@ from pathlib import Path
 from pineuro.gui.utils import (
     frc_referenced_masks,
     localizer_mask_names,
+    mask_name_collision_error,
     reuse_realtime_error,
     synthesize_reused_localizers,
     tissue_required_in_session,
@@ -241,6 +242,12 @@ class StudyConfig:
         )
         if reuse_error:
             raise ValueError(reuse_error)
+
+        # Two sources claiming one mask name would overwrite each other in the shared
+        # 03_masks directory and coregister with the wrong transform; reject it here too.
+        collision_error = mask_name_collision_error(sessions, session_index)
+        if collision_error:
+            raise ValueError(collision_error)
 
         # Whether this session must extract WM/CSF tissue masks: its own feedback or
         # any later session reusing its masks needs nuisance regressors. Consumed by

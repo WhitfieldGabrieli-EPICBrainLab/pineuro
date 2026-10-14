@@ -16,6 +16,7 @@ from pineuro.gui.utils import (
     localizer_is_reused,
     localizer_mask_names,
     localizer_producing,
+    mask_name_collision_error,
     pick_directory,
     pick_file,
     pick_save_file,
@@ -53,6 +54,18 @@ class TestLocalizerReuseHelpers:
             "L_amyg",
             "R_amyg",
         ]
+
+    def test_mask_names_task_falls_back_to_default_contrasts(self):
+        # Mask extraction uses the task's registered default contrasts when none are set,
+        # so the names it produces must be reported too.
+        assert localizer_mask_names({"type": "rit"}) == ["rumination_network"]
+        assert localizer_mask_names({"type": "rit", "include_reverse_contrasts": True}) == [
+            "rumination_network",
+            "rumination_network_reverse",
+        ]
+
+    def test_mask_names_unknown_task_without_contrasts(self):
+        assert localizer_mask_names({"type": "not_a_registered_task"}) == []
 
     def test_is_reused(self):
         assert localizer_is_reused({"reuse_from_session": "ses-01"}) is True
@@ -276,6 +289,109 @@ class TestCrossSessionReuseHelpers:
     def test_tissue_not_required(self):
         sessions = [{"localizers": [{"type": "rest", "networks": ["X"]}], "feedback_runs": [{"glm": {}}]}]
         assert tissue_required_in_session(sessions, 0) is False
+
+
+# =============================================================================
+# Mask-name collisions within a session
+# =============================================================================
+
+
+class TestMaskNameCollisionError:
+    def test_distinct_names_ok(self):
+        sessions = [
+            {
+                "localizers": [
+                    {"id": "rest", "type": "rest", "networks": ["DefaultA", "ContA"]},
+                    {"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}},
+                ],
+                "feedback_runs": [],
+            }
+        ]
+        assert mask_name_collision_error(sessions, 0) is None
+
+    def test_same_name_from_two_localizers(self):
+        sessions = [
+            {
+                "localizers": [
+                    {"id": "rest", "type": "rest", "networks": ["DefaultA"]},
+                    {"id": "rest2", "type": "rest", "networks": ["DefaultA"]},
+                ],
+                "feedback_runs": [],
+            }
+        ]
+        err = mask_name_collision_error(sessions, 0)
+        assert err is not None
+        assert "'DefaultA' is produced by both localizer 1 (rest) and localizer 2 (rest2)" in err
+
+    def test_one_localizer_may_produce_prefixed_variants(self):
+        # A task localizer's own "X" and "X_reverse" share a source and never collide.
+        sessions = [
+            {
+                "localizers": [
+                    {"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}, "include_reverse_contrasts": True}
+                ],
+                "feedback_runs": [],
+            }
+        ]
+        assert mask_name_collision_error(sessions, 0) is None
+
+    def test_prefix_overlap_across_localizers(self):
+        # Coregistration also matches "{name}_*", so localizer 1's "Trigger" would pick up
+        # localizer 2's "Trigger_left".
+        sessions = [
+            {
+                "localizers": [
+                    {"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}},
+                    {"id": "manual", "type": "manual", "manual_mask_names": ["Trigger_left"]},
+                ],
+                "feedback_runs": [],
+            }
+        ]
+        err = mask_name_collision_error(sessions, 0)
+        assert err is not None
+        assert "'Trigger' and 'Trigger_left' come from different localizers" in err
+
+    def test_default_contrast_names_count(self):
+        # An rit localizer without explicit contrasts produces its default mask name.
+        sessions = [
+            {
+                "localizers": [
+                    {"id": "rit", "type": "rit"},
+                    {"id": "manual", "type": "manual", "manual_mask_names": ["rumination_network"]},
+                ],
+                "feedback_runs": [],
+            }
+        ]
+        err = mask_name_collision_error(sessions, 0)
+        assert err is not None and "'rumination_network' is produced by both" in err
+
+    def test_reused_mask_also_produced_fresh(self):
+        sessions = [
+            {"localizers": [{"id": "rit", "type": "rit", "contrasts": {"Trigger": "a>b"}}], "feedback_runs": []},
+            {
+                "localizers": [{"id": "rit2", "type": "rit", "contrasts": {"Trigger": "a>b"}}],
+                "feedback_runs": [{"network_assignment": {"t": "Trigger"}, "mask_sources": {"Trigger": "ses-01"}}],
+            },
+        ]
+        err = mask_name_collision_error(sessions, 1)
+        assert err is not None
+        assert "'Trigger' is sourced from ses-01 but is also produced by localizer 1 (rit2)" in err
+
+    def test_reused_localizer_entries_are_skipped(self):
+        # Reused localizers write nothing to this session's 03_masks.
+        sessions = [
+            {
+                "localizers": [
+                    {"id": "rest", "type": "rest", "networks": ["DefaultA"], "reuse_from_session": "ses-01"},
+                    {"id": "rest2", "type": "rest", "networks": ["DefaultA"]},
+                ],
+                "feedback_runs": [],
+            }
+        ]
+        assert mask_name_collision_error(sessions, 0) is None
+
+    def test_out_of_range_session(self):
+        assert mask_name_collision_error([], 0) is None
 
 
 # =============================================================================

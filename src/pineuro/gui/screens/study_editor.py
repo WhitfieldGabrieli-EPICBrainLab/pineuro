@@ -21,6 +21,7 @@ from ..utils import (
     frc_referenced_masks,
     localizer_is_reused,
     localizer_mask_names,
+    mask_name_collision_error,
     resolve_use_transfer_runs,
     reuse_realtime_error,
 )
@@ -1819,8 +1820,10 @@ class StudyEditorScreen:
         mask a feedback run uses must be produced by a fresh localizer in the chosen
         source session (this session for an unqualified mask, or the earlier session
         recorded in its ``mask_sources``); a mask name must not be sourced from two
-        different sessions within one session; and cross-session reuse requires the
-        realtime reference (``realtime_enabled``) to coregister source-session masks.
+        different sessions within one session; no two sources in a session may claim
+        the same mask name (``mask_name_collision_error``); and cross-session reuse
+        requires the realtime reference (``realtime_enabled``) to coregister
+        source-session masks.
         """
         if not sessions:
             return "At least one session is required"
@@ -1865,6 +1868,10 @@ class StudyEditorScreen:
                         )
                     if name not in _fresh_names(sessions[src_num - 1]):
                         return f"Session {idx + 1}: mask '{name}' is not produced by {source}"
+
+            collision_error = mask_name_collision_error(sessions, idx)
+            if collision_error:
+                return collision_error
 
             reuse_error = reuse_realtime_error(sessions, idx, realtime_enabled)
             if reuse_error:
