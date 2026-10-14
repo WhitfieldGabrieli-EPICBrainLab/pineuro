@@ -642,3 +642,32 @@ class TestRITTaskStatePersistence:
         assert len(task._memories) == 4
         assert len({m["pass"] for m in task._memories}) == 1
         assert any("missing" in msg.lower() for msg in caplog.messages)
+
+
+# =============================================================================
+# RIT instructions — key names
+# =============================================================================
+
+
+class TestRITInstructionKeyNames:
+    LABELS = {"left_key_label": "index finger", "right_key_label": "middle finger", "confirm_key_label": "thumb"}
+
+    def test_label_parameters_default_blank(self):
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        params = {p.key: p for p in get_task_metadata("rit").parameters}
+        for key in self.LABELS:
+            assert params[key].type == "str"
+            assert params[key].default == ""
+
+    def test_blank_labels_name_the_keys(self, tmp_path):
+        from pineuro.tasks.factory import create_localizer_task
+
+        task = create_localizer_task("rit", tmp_path, "sub-01", "ses-01", {"left_key": "3"}, run=1, attempt=1)
+        assert task._key_names() == ("button 3", "button 2", "button 0")
+
+    def test_study_labels_replace_key_names(self, tmp_path):
+        from pineuro.tasks.factory import create_localizer_task
+
+        task = create_localizer_task("rit", tmp_path, "sub-01", "ses-01", self.LABELS, run=1, attempt=1)
+        assert task._key_names() == ("index finger", "middle finger", "thumb")

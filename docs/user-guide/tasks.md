@@ -140,12 +140,15 @@ A rumination localizer where participants recall personal memories cued by their
 | `left_key` | `1` | Move rating left |
 | `right_key` | `2` | Move rating right |
 | `confirm_key` | `0` | Confirm rating |
+| `left_key_label` | — | How the instructions name the left key (e.g. `index finger`); blank shows "button <left_key>" |
+| `right_key_label` | — | How the instructions name the right key (e.g. `middle finger`); blank shows "button <right_key>" |
+| `confirm_key_label` | — | How the instructions name the confirm key (e.g. `thumb`); blank shows "button <confirm_key>" |
 
 **Networks required:** 0 (localizer only)
 
 ### RIT Experience Sampling
 
-An activation-triggered experience sampling task. Monitors real-time brain activation and presents experience sampling probes (sadness + focus ratings) when activation exceeds a threshold.
+An activation-triggered experience sampling task. Monitors real-time brain activation and presents experience sampling probes (unpleasantness + focus ratings) when activation exceeds a threshold.
 
 **Trigger logic:** See [Trigger Conditions](#trigger-conditions-shared) above. Phases: baseline → monitoring → prompt.
 
@@ -155,6 +158,9 @@ An activation-triggered experience sampling task. Monitors real-time brain activ
 | `left_key` | `1` | Move rating left |
 | `right_key` | `2` | Move rating right |
 | `confirm_key` | `0` | Confirm rating |
+| `left_key_label` | — | How the instructions name the left key (e.g. `index finger`); blank shows "button <left_key>" |
+| `right_key_label` | — | How the instructions name the right key (e.g. `middle finger`); blank shows "button <right_key>" |
+| `confirm_key_label` | — | How the instructions name the confirm key (e.g. `thumb`); blank shows "button <confirm_key>" |
 
 **Networks required:** 1 — the `target_network` role.
 

@@ -27,11 +27,11 @@ study-configuration choices.
     1. Memory prompt + keyword (5s)
     2. Reflection: "Think about this memory in detail" (25s)
     3. Rumination prompt (30s)
-    4. unpleasantness rating 1-5 (up to 5s)
+    4. Unpleasantness rating 1-5 (up to 5s)
     5. Focus-on-feelings rating 1-5 (up to 5s)
     6. Rest/fixation (10-15s jittered)
     7. Distraction prompt (30s)
-    8. unpleasantness rating 1-5 (up to 5s)
+    8. Unpleasantness rating 1-5 (up to 5s)
     9. Focus-on-feelings rating 1-5 (up to 5s)
 - Total run duration: ~8 minutes
 
@@ -222,6 +222,27 @@ RIT_METADATA = TaskMetadata(
             hint="Key for confirming rating selection",
         ),
         TaskParameter(
+            key="left_key_label",
+            label="Left Key Name in Instructions",
+            type="str",
+            default="",
+            hint="e.g. 'index finger'; blank shows 'button <Left Key>'",
+        ),
+        TaskParameter(
+            key="right_key_label",
+            label="Right Key Name in Instructions",
+            type="str",
+            default="",
+            hint="e.g. 'middle finger'; blank shows 'button <Right Key>'",
+        ),
+        TaskParameter(
+            key="confirm_key_label",
+            label="Confirm Key Name in Instructions",
+            type="str",
+            default="",
+            hint="e.g. 'thumb'; blank shows 'button <Confirm Key>'",
+        ),
+        TaskParameter(
             key="n_trials_per_run",
             label="Trials Per Run",
             type="int",
@@ -290,6 +311,9 @@ class RITTask(BaseLocalizerTask):
         Maximum rest jitter duration (default: 15.0s).
     left_key, right_key, confirm_key : str
         Keys for rating scale navigation.
+    left_key_label, right_key_label, confirm_key_label : str
+        How the instructions name those keys (e.g. "index finger"); blank
+        names them "button <key>".
     n_trials_per_run : int
         Number of trials per run (default: 4).
     total_runs : int
@@ -320,6 +344,9 @@ class RITTask(BaseLocalizerTask):
         left_key: str = "1",
         right_key: str = "2",
         confirm_key: str = "0",
+        left_key_label: str = "",
+        right_key_label: str = "",
+        confirm_key_label: str = "",
         n_trials_per_run: int = 4,
         total_runs: int = 2,
         keywords_file: Union[str, Path] | None = None,
@@ -345,6 +372,9 @@ class RITTask(BaseLocalizerTask):
         self.left_key = left_key
         self.right_key = right_key
         self.confirm_key = confirm_key
+        self.left_key_label = left_key_label
+        self.right_key_label = right_key_label
+        self.confirm_key_label = confirm_key_label
         self.n_trials_per_run = n_trials_per_run
         self.total_runs = total_runs
 
@@ -880,7 +910,7 @@ class RITTask(BaseLocalizerTask):
             prompt=rumination_prompt,
         )
 
-        # 4. unpleasantness rating (post-rumination)
+        # 4. Unpleasantness rating (post-rumination)
         onset = self._experiment_clock.getTime()
         rating, rt = self._run_rating(
             "How unpleasant did it feel to think about the topic?",
@@ -931,7 +961,7 @@ class RITTask(BaseLocalizerTask):
             prompt=distraction_prompt,
         )
 
-        # 8. unpleasantness rating (post-distraction)
+        # 8. Unpleasantness rating (post-distraction)
         onset = self._experiment_clock.getTime()
         rating, rt = self._run_rating(
             "How unpleasant did it feel to think about the topic?",
@@ -1076,23 +1106,36 @@ class RITTask(BaseLocalizerTask):
         self._scale_left_x = scale_left_x
         self._tick_spacing = tick_spacing
 
+    def _key_names(self) -> tuple[str, str, str]:
+        """How the instructions name the left, right, and confirm keys.
+
+        A study can name them for its button box (e.g. "index finger"); a blank
+        label falls back to "button <key>".
+        """
+        return (
+            self.left_key_label or f"button {self.left_key}",
+            self.right_key_label or f"button {self.right_key}",
+            self.confirm_key_label or f"button {self.confirm_key}",
+        )
+
     def run_paradigm(self) -> None:
         """Execute the RIT localizer paradigm."""
         from psychopy import core
 
         task_keys = [self.left_key, self.right_key, self.confirm_key]
         advance_keys = list(set(task_keys + ["space", "return"]))
+        left, right, confirm = self._key_names()
         self.show_instructions(
             [
                 "In this task, you will be asked to think about\n"
                 "memories from your past.\n\n"
                 "You will also be asked to think about\n"
                 "unrelated topics as a distraction.\n\n"
-                "After each period, you will rate how unpleasant the topic felt \n"
+                "After each period, you will rate how unpleasant the topic felt\n"
                 "and how focused you were on your feelings.\n\n"
-                "Use index finger to move left, "
-                "middle finger to move right,\n"
-                "and thumb to confirm your rating.\n\n"
+                f"Use {left} to move left, "
+                f"{right} to move right,\n"
+                f"and {confirm} to confirm your rating.\n\n"
                 "Press any button to begin."
             ],
             advance_keys=advance_keys,

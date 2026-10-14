@@ -203,6 +203,9 @@ class RITExperienceSamplingTask(BaseTask):
         Maximum seconds for each rating response.
     left_key, right_key, confirm_key : str
         Scanner button mappings for the rating scale.
+    left_key_label, right_key_label, confirm_key_label : str
+        How the instructions name those keys (e.g. "index finger"); blank
+        names them "button <key>".
     feedback_mode : bool
         True for feedback runs, False for transfer runs.
     task_state : TaskState, optional
@@ -236,6 +239,9 @@ class RITExperienceSamplingTask(BaseTask):
         left_key: str = "1",
         right_key: str = "2",
         confirm_key: str = "0",
+        left_key_label: str = "",
+        right_key_label: str = "",
+        confirm_key_label: str = "",
         feedback_mode: bool = True,
         task_state: TaskState | None = None,
         presenter_monitor: str = "right",
@@ -284,6 +290,9 @@ class RITExperienceSamplingTask(BaseTask):
         self.left_key = left_key
         self.right_key = right_key
         self.confirm_key = confirm_key
+        self.left_key_label = left_key_label
+        self.right_key_label = right_key_label
+        self.confirm_key_label = confirm_key_label
 
         # Trigger state
         self._trigger_state = TriggerState()
@@ -792,6 +801,18 @@ class RITExperienceSamplingTask(BaseTask):
     # Lifecycle — uses base class run()
     # =========================================================================
 
+    def _key_names(self) -> tuple[str, str, str]:
+        """How the instructions name the left, right, and confirm keys.
+
+        A study can name them for its button box (e.g. "index finger"); a blank
+        label falls back to "button <key>".
+        """
+        return (
+            self.left_key_label or f"button {self.left_key}",
+            self.right_key_label or f"button {self.right_key}",
+            self.confirm_key_label or f"button {self.confirm_key}",
+        )
+
     def setup(self) -> None:
         """Initialize PsychoPy window, stimuli, instructions, and trigger."""
         from psychopy import core
@@ -814,14 +835,15 @@ class RITExperienceSamplingTask(BaseTask):
         # Show task instructions
         task_keys = [self.left_key, self.right_key, self.confirm_key]
         advance_keys = list(set(task_keys + ["space", "return"]))
+        left, right, confirm = self._key_names()
         self.show_instructions(
             [
                 "In this task, you will see a fixation cross (+).\n\n"
                 "From time to time, you will be asked to rate\n"
                 "how you are feeling.\n\n"
-                "Use index finger to move left, "
-                "middle finger to move right,\n"
-                "and thumb to confirm.\n\n"
+                f"Use {left} to move left, "
+                f"{right} to move right,\n"
+                f"and {confirm} to confirm.\n\n"
                 "Press any button to begin."
             ],
             advance_keys=advance_keys,
@@ -1089,7 +1111,9 @@ class RITExperienceSamplingTask(BaseTask):
                 focus_rt=focus[1] if focus[1] is not None else "n/a",
                 prompt_number=self._prompt_number,
             )
-            logger.info(f"Prompt #{self._prompt_number} incomplete (run ended): unpleasantness={unpleasantness[0]}, focus={focus[0]}")
+            logger.info(
+                f"Prompt #{self._prompt_number} incomplete (run ended): unpleasantness={unpleasantness[0]}, focus={focus[0]}"
+            )
 
         logger.info(
             f"RITExperienceSamplingTask cleanup: "
@@ -1347,6 +1371,27 @@ RIT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
             type="str",
             default="0",
             hint="Scanner button for confirming rating",
+        ),
+        TaskParameter(
+            key="left_key_label",
+            label="Left Key Name in Instructions",
+            type="str",
+            default="",
+            hint="e.g. 'index finger'; blank shows 'button <Left Key>'",
+        ),
+        TaskParameter(
+            key="right_key_label",
+            label="Right Key Name in Instructions",
+            type="str",
+            default="",
+            hint="e.g. 'middle finger'; blank shows 'button <Right Key>'",
+        ),
+        TaskParameter(
+            key="confirm_key_label",
+            label="Confirm Key Name in Instructions",
+            type="str",
+            default="",
+            hint="e.g. 'thumb'; blank shows 'button <Confirm Key>'",
         ),
     ],
     cross_parameter_validator=_validate_rit_trigger_conditions,

@@ -658,3 +658,37 @@ class TestEventsFileNaming:
 
         # Same prefix as the feedback log: re-attempts and transfer runs get their own events file.
         assert task._bids_run_prefix == "sub-01_ses-01_task-ritexperiencesamplingtransfer_run-01_attempt-03"
+
+
+# =============================================================================
+# Instructions — key names
+# =============================================================================
+
+
+class TestInstructionKeyNames:
+    LABELS = {"left_key_label": "index finger", "right_key_label": "middle finger", "confirm_key_label": "thumb"}
+
+    @staticmethod
+    def _make_task(mock_coordinator, tmp_path, config):
+        from pineuro.tasks.factory import create_task
+
+        coord = mock_coordinator(
+            mask_names=["RIT"], session="ses-01", output_dir=str(tmp_path), task="ritexperiencesampling"
+        )
+        return create_task("ritexperiencesampling", coord, config, output_dir=str(tmp_path))
+
+    def test_label_parameters_default_blank(self):
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        params = {p.key: p for p in get_task_metadata("ritexperiencesampling").parameters}
+        for key in self.LABELS:
+            assert params[key].type == "str"
+            assert params[key].default == ""
+
+    def test_blank_labels_name_the_keys(self, mock_coordinator, tmp_path):
+        task = self._make_task(mock_coordinator, tmp_path, {"left_key": "3"})
+        assert task._key_names() == ("button 3", "button 2", "button 0")
+
+    def test_study_labels_replace_key_names(self, mock_coordinator, tmp_path):
+        task = self._make_task(mock_coordinator, tmp_path, self.LABELS)
+        assert task._key_names() == ("index finger", "middle finger", "thumb")
