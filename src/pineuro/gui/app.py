@@ -73,6 +73,7 @@ from typing import TYPE_CHECKING
 import flet as ft
 
 from . import styles as st
+from .components.disk_space_bar import DiskSpaceBar
 from .config_manager import ConfigManager
 from .models import StudyConfig
 from .utils import validate_participant_id
@@ -118,6 +119,13 @@ class PyrtnfApp:
         self.page.theme_mode = ft.ThemeMode.LIGHT
         self.page.theme = st.theme()
 
+        # CONN-style free-disk-space readout. It lives on the root view, so the
+        # page.controls.clear() screen swaps leave it in place; each screen tells
+        # it which paths to report.
+        self.disk_space_bar = DiskSpaceBar(self.page)
+        self.page.bottom_appbar = self.disk_space_bar.control
+        self.disk_space_bar.start()
+
         logger.info("pineuro GUI initialized")
 
     def _discover_task_plugins(self):
@@ -138,6 +146,7 @@ class PyrtnfApp:
     def show_study_manager(self):
         """Show the study manager screen."""
         logger.info("Navigating to Study Manager")
+        self.disk_space_bar.watch(self.config_manager.study_data_roots())
 
         # Clear current content
         self.page.controls.clear()
@@ -578,6 +587,10 @@ class PyrtnfApp:
             self.current_study = self.config_manager.load_study(study_name)
         else:
             self.current_study = None
+        if self.current_study is not None:
+            data_root = (self.current_study.session_config.get("paths") or {}).get("base_dir")
+            if data_root:
+                self.disk_space_bar.watch([data_root])
 
         # Clear current content
         self.page.controls.clear()
@@ -631,6 +644,7 @@ class PyrtnfApp:
             session_id=session_id,
             session_metadata=session_metadata,
             on_back=lambda: self.show_study_manager(),
+            disk_space_bar=self.disk_space_bar,
         )
 
         # Add workflow UI

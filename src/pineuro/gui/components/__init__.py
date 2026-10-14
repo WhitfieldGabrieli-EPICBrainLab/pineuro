@@ -45,6 +45,12 @@ Collection Progress
 CollectionProgressPanel : DICOM/NIfTI collection display
     Shows progress during volume collection with file counts.
 
+Disk Space
+----------
+DiskSpaceBar : Free-disk-space readout at the bottom of the window
+    Free space on the volumes the current screen writes to, flagged when
+    below the projected size of one more session.
+
 Dialogs
 -------
 RunSelectionDialog : Feedback run selection
@@ -84,6 +90,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ActivationPlot": (".activation_plot", "ActivationPlot"),
     "BaseDialog": (".base_dialog", "BaseDialog"),
     "CollectionProgressPanel": (".collection_progress", "CollectionProgressPanel"),
+    "DiskSpaceBar": (".disk_space_bar", "DiskSpaceBar"),
     "FeedbackLogPoller": (".csv_poller", "FeedbackLogPoller"),
     "FeedbackMonitor": (".csv_poller", "FeedbackMonitor"),
     "FeedbackSummaryData": (".feedback_summary", "FeedbackSummaryData"),
@@ -123,6 +130,7 @@ __all__ = [
     "QCReportManager",
     "open_qc_report",
     "CollectionProgressPanel",
+    "DiskSpaceBar",
     "UnifiedAttemptDialog",
     "RunGroup",
     "MaskSelectionDialog",

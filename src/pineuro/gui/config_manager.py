@@ -242,6 +242,24 @@ class ConfigManager:
         studies.sort(key=lambda s: s.modified, reverse=True)
         return studies
 
+    def study_data_roots(self) -> list[Path]:
+        """Data root (``paths.base_dir``) of every saved study, for disk-space reporting.
+
+        Reads only that key from each YAML, so it adds no per-study load (or log
+        line) to every Study Manager visit; unreadable files are skipped.
+        """
+        roots: list[Path] = []
+        for yaml_file in sorted(self.studies_dir.glob("*.yaml")):
+            try:
+                with open(yaml_file) as f:
+                    data = yaml.safe_load(f) or {}
+            except (OSError, yaml.YAMLError):
+                continue
+            base_dir = (data.get("paths") or {}).get("base_dir")
+            if base_dir:
+                roots.append(Path(base_dir))
+        return roots
+
     def load_study(self, study_name: str) -> StudyConfig | None:
         """Load a study configuration by name.
 

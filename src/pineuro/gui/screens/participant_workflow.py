@@ -20,6 +20,7 @@ to be resumed after interruption.
 
 import contextlib
 import logging
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
@@ -33,10 +34,13 @@ if TYPE_CHECKING:
 # are deferred to method bodies to avoid loading numpy/nibabel/scipy at import time.
 import flet as ft
 
+from pineuro.storage import DiskSpace, disk_space, format_bytes, largest_session_size, low_space_reason
+
 from .. import styles as st
 from ..components.activation_plot import ActivationPlot
 from ..components.collection_progress import CollectionProgressPanel
 from ..components.csv_poller import FeedbackMonitor
+from ..components.disk_space_bar import DiskSpaceBar
 from ..components.mask_selection_dialog import MaskReviewInfo, MaskSelectionDialog
 from ..components.pipeline_runner import PipelineRunner
 from ..components.qc_plots import DVARSPlot, FDPlot, TSNRPlot
@@ -149,6 +153,7 @@ class ParticipantWorkflowScreen:
         session_id: str,
         session_metadata: Optional["SessionMetadata"] = None,
         on_back=None,
+        disk_space_bar: DiskSpaceBar | None = None,
     ):
         """Initialize the participant workflow screen.
 
@@ -160,6 +165,7 @@ class ParticipantWorkflowScreen:
             session_id: Session identifier (e.g., "ses-01").
             session_metadata: SessionMetadata for new sessions. None when continuing existing session.
             on_back: Callback when back button is clicked
+            disk_space_bar: The app's free-disk-space bar, pointed at this session's volumes
         """
         self.page = page
         self.config_manager = config_manager
@@ -168,6 +174,10 @@ class ParticipantWorkflowScreen:
         self._bids_prefix = f"{participant_id}_{session_id}"
         self.session_metadata = session_metadata
         self.on_back_callback = on_back
+        self._disk_space_bar = disk_space_bar
+        # Size of the largest previous session of this study: the projected disk
+        # need of this one. None until estimated (or when there is no prior session).
+        self._projected_session_bytes: int | None = None
 
         # Build this session's flattened runtime config from the study's protocol.
         # The study config carries an ordered ``sessions`` list; this session's
@@ -297,6 +307,52 @@ class ParticipantWorkflowScreen:
 
         # Last failed step (for error recovery panel)
         self._last_failed_step: str | None = None
+
+        self._start_storage_watch()
+
+    # =========================================================================
+    # Disk space
+    # =========================================================================
+
+    def _storage_paths(self) -> list[Path]:
+        """Paths whose volumes this session writes to: the data root, plus the scanner folder in real-time mode.
+
+        May touch a network mount (the scanner's DICOM folder), so call it off the UI thread.
+        """
+        config = self.study_config.session_config
+        paths = [self._participant_base_dir]
+        if not config.get("simulator", {}).get("enabled", True):
+            dicom_dir = (config.get("scanner") or {}).get("dicom_dir")
+            if dicom_dir and Path(dicom_dir).is_dir():
+                paths.append(Path(dicom_dir))
+        return paths
+
+    def _start_storage_watch(self) -> None:
+        """Point the disk-space bar at this session, and estimate its disk need off the UI thread.
+
+        The estimate is the size of the largest previous session of the study,
+        which the bar and the pre-acquisition check compare free space against.
+        """
+        if self._disk_space_bar is not None:
+            self._disk_space_bar.watch([self._participant_base_dir])
+
+        session_dir = self._participant_base_dir
+        study_root = session_dir.parent.parent  # <study root>/<participant>/<session>
+
+        def _estimate() -> None:
+            try:
+                projected = largest_session_size(study_root, exclude=session_dir)
+                paths = self._storage_paths()
+            except Exception:
+                logger.exception("Could not estimate this session's disk-space need")
+                return
+            self._projected_session_bytes = projected
+            if projected is not None:
+                logger.info(f"Largest previous session of this study: {format_bytes(projected)}")
+            if self._disk_space_bar is not None:
+                self._disk_space_bar.watch(paths, projected_session_bytes=projected)
+
+        threading.Thread(target=_estimate, name="session-size-estimate", daemon=True).start()
 
     def _check_qc_approval(self, approval_type: str) -> bool:
         """Check if masks have been approved.
@@ -5648,9 +5704,90 @@ class ParticipantWorkflowScreen:
             self._continue_preview_start(step_id, overwrite=False)
 
         if scanner_touching:
-            self._preflight_scanner_connection(_after_preflight)
+            self._preflight_disk_space(lambda: self._preflight_scanner_connection(_after_preflight))
         else:
             _after_preflight()
+
+    def _preflight_disk_space(self, on_proceed: Callable[[], None]) -> None:
+        """Before an acquisition, warn if free space is below this session's projected need.
+
+        The need is the size of the largest previous session of the study (see
+        ``_start_storage_watch``); with no previous session, or before the
+        estimate is ready, there is nothing to compare against and the check is
+        silent. On low space, shows a warning with Proceed Anyway / Cancel.
+        """
+        projected = self._projected_session_bytes
+        if projected is None:
+            on_proceed()
+            return
+        session_dir = self._participant_base_dir
+
+        def _check() -> None:
+            space = disk_space(session_dir)
+            reason = low_space_reason(space, projected) if space is not None else None
+
+            async def _apply() -> None:
+                if space is None or reason is None:
+                    on_proceed()
+                else:
+                    self._show_low_disk_space_dialog(space, reason, on_proceed)
+
+            try:
+                self.page.run_task(_apply)
+            except Exception as e:
+                logger.error(f"Failed to apply disk space check: {e}")
+
+        self.page.run_thread(_check)
+
+    def _show_low_disk_space_dialog(self, space: DiskSpace, reason: str, on_proceed: Callable[[], None]) -> None:
+        """Warn that free space is below one session's projected need; Cancel or Proceed Anyway."""
+        dialog = ft.AlertDialog(modal=True)
+
+        def _close() -> None:
+            dialog.open = False
+            with contextlib.suppress(Exception):
+                self.page.update()
+
+        def _on_cancel(e):
+            _close()
+
+        def _on_proceed_anyway(e):
+            _close()
+            on_proceed()
+
+        dialog.title = ft.Row(
+            [
+                ft.Icon(ft.Icons.WARNING, color=st.WARNING),
+                ft.Text("Low Disk Space", weight=ft.FontWeight.BOLD),
+            ],
+            spacing=st.GAP_SM,
+        )
+        dialog.content = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        f"Only {format_bytes(space.free)} is free on the volume holding {space.path}, {reason}.",
+                        size=st.BODY,
+                    ),
+                    st.caption("If the disk fills during the run, incoming volumes cannot be saved."),
+                    ft.Container(height=st.GAP_MD),
+                    ft.Text("Proceed anyway?", size=st.BODY, weight=ft.FontWeight.BOLD),
+                ],
+                spacing=st.GAP_SM,
+                tight=True,
+            ),
+            width=st.DIALOG_MD,
+        )
+        dialog.actions = [
+            ft.TextButton("Cancel", on_click=_on_cancel),
+            ft.FilledButton("Proceed Anyway", on_click=_on_proceed_anyway),
+        ]
+        dialog.actions_alignment = ft.MainAxisAlignment.END
+
+        self.page.overlay.append(dialog)
+        dialog.open = True
+        with contextlib.suppress(Exception):
+            self.page.update()
 
     def _preflight_scanner_connection(self, on_proceed: Callable[[], None]):
         """Run a quick scanner connection test before starting a scanner-touching run.
@@ -5995,6 +6132,10 @@ class ParticipantWorkflowScreen:
         """
         # Capture current step ID before it gets cleared
         completed_step_id = self._current_step_id
+
+        # The step has just written its outputs: re-read free disk space now.
+        if self._disk_space_bar is not None:
+            self._disk_space_bar.refresh()
 
         # This callback runs in the background thread
         # We need to schedule the UI update on the main thread

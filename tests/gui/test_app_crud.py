@@ -13,7 +13,7 @@ rather than rendered widgets.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import flet as ft
 import pytest
@@ -59,6 +59,7 @@ def app(mock_flet_page, manager) -> PyrtnfApp:
     instance.page = mock_flet_page
     instance.config_manager = manager
     instance.current_study = None
+    instance.disk_space_bar = MagicMock()  # _setup_page (bypassed) creates the real one
     return instance
 
 
@@ -293,6 +294,15 @@ class TestShowStudyEditor:
         assert app.current_study is not None
         assert app.current_study.metadata.name == "Alpha"
         assert app.current_study.metadata.description == "desc-A"
+
+    def test_editing_points_disk_space_bar_at_the_study_data_root(self, app, manager):
+        manager.save_study(_make_study(name="Alpha", session_config=_session_config(base_dir="/data/alpha")))
+
+        with patch("pineuro.gui.screens.study_editor.StudyEditorScreen") as Screen:
+            Screen.return_value.build.return_value = ft.Text("stub")
+            app.show_study_editor("Alpha")
+
+        app.disk_space_bar.watch.assert_called_once_with(["/data/alpha"])
 
     def test_new_study_clears_current_study(self, app, manager):
         app.current_study = _make_study(name="Stale")
