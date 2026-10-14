@@ -3606,13 +3606,13 @@ class ParticipantWorkflowScreen:
                 return
             try:
                 if result.overall_ok:
-                    self._scanner_status_icon.name = ft.Icons.CHECK_CIRCLE
+                    self._scanner_status_icon.icon = ft.Icons.CHECK_CIRCLE
                     self._scanner_status_icon.color = st.SUCCESS
                     self._scanner_status_text.value = "Connection OK"
                     self._scanner_status_text.color = st.SUCCESS
                     self._scanner_status_text.italic = False
                 else:
-                    self._scanner_status_icon.name = ft.Icons.ERROR
+                    self._scanner_status_icon.icon = ft.Icons.ERROR
                     self._scanner_status_icon.color = st.ERROR
                     self._scanner_status_text.value = "Issues detected"
                     self._scanner_status_text.color = st.ERROR
@@ -5841,12 +5841,12 @@ class ParticipantWorkflowScreen:
             if icon is None or text is None:
                 return
             if ok:
-                icon.name = ft.Icons.CHECK_CIRCLE
+                icon.icon = ft.Icons.CHECK_CIRCLE
                 icon.color = st.SUCCESS
                 text.value = "Connection OK"
                 text.color = st.SUCCESS
             else:
-                icon.name = ft.Icons.ERROR
+                icon.icon = ft.Icons.ERROR
                 icon.color = st.ERROR
                 text.value = "Issues detected"
                 text.color = st.ERROR
