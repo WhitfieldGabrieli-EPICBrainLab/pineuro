@@ -13,10 +13,14 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Hint appended to permission errors on the watch directory.
+_RUN_AS_SCANNER_ACCOUNT = "pineuro must run under the account the scanner writes as (the BOLD Dot Add-In's User Name)"
 
 
 @dataclass
@@ -31,12 +35,14 @@ class ConnectionTestResult:
     dir_empty: bool = True
     dir_file_count: int = 0
     dir_detail: str = ""
+    # Why pineuro's account cannot read the scanner's files ("" when no problem is found).
+    account_detail: str = ""
 
     @property
     def overall_ok(self) -> bool:
-        """True if all critical checks passed (ping passed/skipped AND dir exists AND writable)."""
+        """True if all critical checks passed (ping passed/skipped, dir exists and is writable, right account)."""
         ping_passed = self.ping_ok is not False
-        return ping_passed and self.dir_exists and self.dir_writable
+        return ping_passed and self.dir_exists and self.dir_writable and not self.account_detail
 
 
 def ping_scanner(ip_address: str, timeout: float = 3.0) -> tuple[bool, float | None, str]:
@@ -112,10 +118,17 @@ def check_watch_directory(watch_dir: str | Path) -> tuple[bool, bool, bool, int,
     """
     watch_dir = Path(watch_dir)
 
-    if not watch_dir.exists():
+    try:
+        exists = watch_dir.exists()
+        is_dir = watch_dir.is_dir()
+    except PermissionError:
+        # e.g. the folder sits inside another account's home folder
+        return False, False, True, 0, f"Cannot access {watch_dir} (permission denied); {_RUN_AS_SCANNER_ACCOUNT}"
+
+    if not exists:
         return False, False, True, 0, f"Directory does not exist: {watch_dir}"
 
-    if not watch_dir.is_dir():
+    if not is_dir:
         return False, False, True, 0, f"Path is not a directory: {watch_dir}"
 
     writable = os.access(watch_dir, os.W_OK)
@@ -124,7 +137,13 @@ def check_watch_directory(watch_dir: str | Path) -> tuple[bool, bool, bool, int,
         files = [f for f in watch_dir.iterdir() if f.is_file()]
         file_count = len(files)
     except PermissionError:
-        return True, False, True, 0, f"Cannot list directory (permission denied): {watch_dir}"
+        return (
+            True,
+            False,
+            True,
+            0,
+            f"Cannot list directory (permission denied): {watch_dir}; {_RUN_AS_SCANNER_ACCOUNT}",
+        )
 
     is_empty = file_count == 0
 
@@ -138,7 +157,7 @@ def check_watch_directory(watch_dir: str | Path) -> tuple[bool, bool, bool, int,
     if writable:
         parts.append("Writable: yes")
     else:
-        parts.append("Writable: NO (check permissions)")
+        parts.append(f"Writable: NO (check permissions; {_RUN_AS_SCANNER_ACCOUNT})")
     if is_empty and not subdirs:
         parts.append("Empty: yes (ready for new session)")
     elif subdirs:
@@ -149,6 +168,84 @@ def check_watch_directory(watch_dir: str | Path) -> tuple[bool, bool, bool, int,
         parts.append(f"Contains {file_count} file(s) (may need clearing)")
 
     return True, writable, is_empty, file_count, "; ".join(parts)
+
+
+def watch_dir_account_issue(
+    watch_dir: str | Path,
+    *,
+    current_uid: int | None = None,
+    stat: Callable[[Path], os.stat_result] = os.stat,
+) -> str:
+    """Explain why pineuro's account cannot read the scanner's files, or return "".
+
+    The Siemens BOLD Dot Add-In writes each DICOM as the account named in its
+    User Name, readable by that account only, so pineuro must run under that
+    same account. On macOS and Linux the account the scanner writes as is read
+    from the newest entry in the watch folder (earlier sequences' subfolders),
+    else from the folder itself, or from the parent folder that hides it. A
+    root-owned folder says nothing about the scanner's account, and Windows
+    ownership works differently, so both give "".
+
+    Parameters
+    ----------
+    watch_dir : str or Path
+        The scanner's DICOM watch directory.
+    current_uid : int, optional
+        Account to compare against; defaults to the account running pineuro.
+    stat : callable, optional
+        ``os.stat`` replacement (tests).
+    """
+    if current_uid is None:
+        if sys.platform == "win32":
+            return ""
+        current_uid = os.getuid()
+    owner = _scanner_account_uid(Path(watch_dir), stat)
+    if owner is None or owner == current_uid:
+        return ""
+    theirs, mine = _account_name(owner), _account_name(current_uid)
+    return (
+        f"The scanner folder belongs to the account '{theirs}', but pineuro is running as '{mine}'. "
+        f"The scanner's files are readable only by '{theirs}': log in as '{theirs}' and start pineuro "
+        f"from that account."
+    )
+
+
+def _scanner_account_uid(path: Path, stat: Callable[[Path], os.stat_result]) -> int | None:
+    """User id the scanner writes as, judged from the watch folder (None if it cannot be told)."""
+    newest: os.stat_result | None = None
+    try:
+        entries = list(path.iterdir())
+    except OSError:
+        entries = []
+    for entry in entries:
+        try:
+            st = stat(entry)
+        except OSError:
+            continue
+        if newest is None or st.st_mtime > newest.st_mtime:
+            newest = st
+    if newest is not None:
+        return newest.st_uid
+    for candidate in (path, *path.parents):
+        try:
+            uid = stat(candidate).st_uid
+        except PermissionError:
+            continue  # hidden inside another account's folder: that folder's owner is the answer
+        except OSError:
+            return None  # missing: nothing to say about accounts
+        return None if uid == 0 else uid
+    return None
+
+
+def _account_name(uid: int) -> str:
+    if sys.platform != "win32":
+        import pwd  # POSIX only
+
+        try:
+            return pwd.getpwuid(uid).pw_name
+        except KeyError:
+            pass
+    return str(uid)
 
 
 def test_scanner_connection(
@@ -186,6 +283,7 @@ def test_scanner_connection(
         result.dir_file_count,
         result.dir_detail,
     ) = check_watch_directory(watch_dir)
+    result.account_detail = watch_dir_account_issue(watch_dir)
 
     return result
 

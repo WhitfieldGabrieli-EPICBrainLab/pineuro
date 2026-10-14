@@ -1,5 +1,8 @@
 """Tests for pineuro.scanner_setup."""
 
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from pineuro.scanner_setup import (
@@ -10,6 +13,7 @@ from pineuro.scanner_setup import (
     get_setup_instructions,
     ping_scanner,
     test_scanner_connection,
+    watch_dir_account_issue,
 )
 
 
@@ -92,6 +96,82 @@ class TestCheckWatchDirectory:
         assert "1 subfolder(s)" in detail
         assert "1 top-level file(s)" in detail
 
+    def test_inaccessible_folder_is_reported_not_raised(self, tmp_path, monkeypatch):
+        # e.g. the share lives in another account's home folder: stat itself is denied
+        watch = tmp_path / "rt-mgh" / "BOLD_DICOM"
+        real_exists = Path.exists
+
+        def exists(self):
+            if self == watch:
+                raise PermissionError("denied")
+            return real_exists(self)
+
+        monkeypatch.setattr(Path, "exists", exists)
+        found, writable, _, _, detail = check_watch_directory(watch)
+
+        assert (found, writable) == (False, False)
+        assert "permission denied" in detail
+        assert "account the scanner writes as" in detail
+
+
+class TestWatchDirAccountIssue:
+    """pineuro must run as the account the scanner writes as (the BOLD Dot Add-In's User Name)."""
+
+    NAMES = {501: "rt-mgh", 502: "jiahe"}
+
+    @staticmethod
+    def _fake_stat(table):
+        """``os.stat`` stand-in: maps a path's name to (uid, mtime), or to an exception to raise."""
+
+        def _stat(path):
+            entry = table.get(Path(path).name)
+            if entry is None:
+                raise FileNotFoundError(path)
+            if isinstance(entry, Exception):
+                raise entry
+            uid, mtime = entry
+            return SimpleNamespace(st_uid=uid, st_mtime=mtime)
+
+        return _stat
+
+    def test_newest_sequence_folder_decides_the_account(self, tmp_path, monkeypatch):
+        watch = tmp_path / "BOLD_DICOM"
+        (watch / "seq_old").mkdir(parents=True)
+        (watch / "seq_new").mkdir()
+        monkeypatch.setattr("pineuro.scanner_setup._account_name", self.NAMES.get)
+        stat = self._fake_stat({"seq_old": (502, 1.0), "seq_new": (501, 2.0), "BOLD_DICOM": (502, 0.0)})
+
+        issue = watch_dir_account_issue(watch, current_uid=502, stat=stat)
+
+        assert "belongs to the account 'rt-mgh'" in issue
+        assert "running as 'jiahe'" in issue
+
+    def test_no_issue_when_running_as_the_scanner_account(self, tmp_path):
+        watch = tmp_path / "BOLD_DICOM"
+        watch.mkdir()
+        stat = self._fake_stat({"BOLD_DICOM": (501, 0.0)})
+        assert watch_dir_account_issue(watch, current_uid=501, stat=stat) == ""
+
+    def test_folder_hidden_in_another_account_names_that_account(self, tmp_path, monkeypatch):
+        watch = tmp_path / "rt-mgh" / "BOLD_DICOM"
+        monkeypatch.setattr("pineuro.scanner_setup._account_name", self.NAMES.get)
+        stat = self._fake_stat({"BOLD_DICOM": PermissionError("denied"), "rt-mgh": (501, 0.0)})
+
+        issue = watch_dir_account_issue(watch, current_uid=502, stat=stat)
+
+        assert "belongs to the account 'rt-mgh'" in issue
+
+    def test_root_owned_or_missing_folder_says_nothing(self, tmp_path):
+        watch = tmp_path / "BOLD_DICOM"
+        watch.mkdir()
+        assert watch_dir_account_issue(watch, current_uid=501, stat=self._fake_stat({"BOLD_DICOM": (0, 0.0)})) == ""
+        assert watch_dir_account_issue(tmp_path / "missing", current_uid=501, stat=self._fake_stat({})) == ""
+
+    def test_not_checked_on_windows(self, tmp_path, monkeypatch):
+        # Windows has no POSIX account ids, and its ownership works differently
+        monkeypatch.setattr(sys, "platform", "win32")
+        assert watch_dir_account_issue(tmp_path) == ""
+
 
 class TestPingScanner:
     @patch("pineuro.scanner_setup.subprocess.run")
@@ -152,6 +232,10 @@ class TestConnectionTestResult:
 
     def test_overall_fail_not_writable(self):
         r = ConnectionTestResult(ping_ok=True, dir_exists=True, dir_writable=False)
+        assert r.overall_ok is False
+
+    def test_overall_fail_wrong_account(self):
+        r = ConnectionTestResult(ping_ok=True, dir_exists=True, dir_writable=True, account_detail="wrong account")
         assert r.overall_ok is False
 
     def test_defaults(self):

@@ -6080,6 +6080,17 @@ class ParticipantWorkflowScreen:
                         ft.Container(height=6),
                         _row(_ping_icon(), "Network Ping", ping_detail),
                         _row(_dir_icon(), "Watch Directory", dir_detail),
+                        *(
+                            [
+                                _row(
+                                    ft.Icon(ft.Icons.ERROR, color=st.ERROR, size=st.ICON_MD),
+                                    "Account",
+                                    result.account_detail,
+                                )
+                            ]
+                            if result.account_detail
+                            else []
+                        ),
                         ft.Container(height=st.GAP_MD),
                         ft.Text(
                             "Proceed anyway?",

@@ -104,7 +104,7 @@ After setting up the SMB share, configure the scanner to export DICOMs. Open the
 - **User Name**: `WORKGROUP\<username>`
 - **Password**: the dedicated user's password
 
-> **Important — run pineuro as the same user (all platforms).** The scanner writes each DICOM to the share owned by the **User Name** configured above, granting read/write/execute permission to that account only. pineuro must therefore be launched while logged in as that same dedicated user — on Windows, macOS, and Linux alike. If pineuro runs under any other account, it will not be able to read the incoming DICOMs even though the files arrive in the share.
+> **Important — run pineuro as the same user (all platforms).** The scanner writes each DICOM to the share owned by the **User Name** configured above, granting read/write/execute permission to that account only. pineuro must therefore be launched while logged in as that same dedicated user — on Windows, macOS, and Linux alike. If pineuro runs under any other account, it will not be able to read the incoming DICOMs even though the files arrive in the share. On macOS and Linux, the scanner connection check (run before each acquisition, and from the Scanner Connection test) names both accounts when they differ.
 
 **macOS only**: Before running BOLD sequences, open a Command Prompt on the scanner console (Ctrl+Esc > Advanced User > Command Prompt) and run:
 

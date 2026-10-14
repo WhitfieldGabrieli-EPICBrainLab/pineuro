@@ -33,6 +33,17 @@ pip install -e .
 
 All dependencies — including dcm2niix, ANTsPy, PsychoPy, and nilearn — are installed automatically via pip. No external tools are required.
 
+## Running at the Scanner
+
+If the scanner sends DICOMs to this computer through the Siemens BOLD Dot Add-In, log in to
+the account named in the add-in's **User Name** (the account that owns the shared folder) and
+run pineuro from that account, every session. The scanner's files are readable only by that
+account, so under any other login pineuro cannot read the incoming DICOMs even though they
+appear in the folder. The scanner connection check (run before each acquisition) warns when
+pineuro is running under a different account. See
+[Network Testing → Scanner-Side Configuration](../user-guide/network-testing.md#scanner-side-configuration-siemens-bold-dot-add-in)
+for the full setup.
+
 ## Dependencies
 
 All Python dependencies are installed automatically:

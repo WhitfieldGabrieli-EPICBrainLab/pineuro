@@ -43,6 +43,7 @@ class ScannerConnectionDialog:
         self._dir_status = ft.Container(
             content=self._build_checking_row("Watch Directory"),
         )
+        self._account_status = ft.Container()  # filled only when the account check finds a problem
         self._overall_status = ft.Container()
 
         ip_display = self.scanner_ip if self.scanner_ip else "not configured"
@@ -72,6 +73,7 @@ class ScannerConnectionDialog:
                         ft.Container(height=st.GAP_MD),
                         self._ping_status,
                         self._dir_status,
+                        self._account_status,
                         ft.Container(height=st.GAP_MD),
                         self._overall_status,
                     ],
@@ -147,6 +149,12 @@ class ScannerConnectionDialog:
             color = st.ERROR
 
         self._dir_status.content = self._build_result_row("Watch Directory", result.dir_detail, icon, color)
+
+        # Account: pineuro must run as the account the scanner writes as (checked on macOS/Linux)
+        if result.account_detail:
+            self._account_status.content = self._build_result_row(
+                "Account", result.account_detail, ft.Icons.ERROR, st.ERROR
+            )
 
         # Overall banner
         if result.overall_ok:
