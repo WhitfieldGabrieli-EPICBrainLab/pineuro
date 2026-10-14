@@ -1014,6 +1014,7 @@ class RITExperienceSamplingTask(BaseTask):
         self._rating_clock = core.Clock()
         self._rating_timer = core.CountdownTimer(self.rating_timeout)
         event.clearEvents("keyboard")
+        self._reset_poll_state()
 
     def _advance_rating(self) -> None:
         """Move to the next rating scale, or finish the prompt."""

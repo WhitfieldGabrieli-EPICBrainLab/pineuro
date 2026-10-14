@@ -25,7 +25,13 @@ pineuro uses position-based matching between screeninfo (which detects monitors 
 
 ### macOS
 
-Monitor enumeration by position matches between screeninfo and pyglet. No special handling needed.
+Monitor enumeration by position matches between screeninfo and pyglet.
+
+#### Scanner triggers and button presses while the control monitor is focused
+
+During a run the operator works in the control-monitor GUI, so the participant's stimulus window is usually unfocused, and macOS delivers key presses only to the focused app. Whenever pineuro waits for a scanner trigger or a participant response (instructions, ratings, sliders, catch trials), it therefore also reads global key state through Quartz (`CGEventSourceKeyState`, installed with PsychoPy), so the button box works without clicking on the stimulus screen.
+
+macOS may require **Input Monitoring** permission for this. At task start pineuro logs `Unfocused-key poll backend=quartz (input_monitoring_access=...)`. If it reports `False` and presses are missed while the stimulus window is unfocused, open **System Settings → Privacy & Security → Input Monitoring**, enable the app you launch pineuro from (Terminal, iTerm, or your IDE), and restart that app.
 
 ### Linux
 

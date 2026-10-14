@@ -331,6 +331,7 @@ class BaseTask(TaskBase):
 
         # Initialize slider position at center
         event.clearEvents("keyboard")
+        self._reset_poll_state()
         center = (scale_min + scale_max) // 2
         slider.markerPos = center
 

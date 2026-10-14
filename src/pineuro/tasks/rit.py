@@ -771,8 +771,10 @@ class RITTask(BaseLocalizerTask):
         rt = None
 
         event.clearEvents("keyboard")
+        self._reset_poll_state()
 
         while timer.getTime() > 0 and self._running:
+            self._inject_keys_if_unfocused([self.left_key, self.right_key, self.confirm_key, "return"])
             keys = event.getKeys(
                 keyList=[
                     self.left_key,

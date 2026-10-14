@@ -499,12 +499,14 @@ class SelfOtherTask(BaseLocalizerTask):
         self.win.flip()
 
         event.clearEvents("keyboard")
+        self._reset_poll_state()
         response_clock = core.Clock()
         response = ""
         rt = ""
 
         timer = core.CountdownTimer(self.question_duration)
         while timer.getTime() > 0 and self._running:
+            self._inject_keys_if_unfocused(self.response_keys)
             keys = event.getKeys(keyList=self.response_keys + ["escape"])
             if "escape" in keys:
                 raise KeyboardInterrupt("Escaped during question")

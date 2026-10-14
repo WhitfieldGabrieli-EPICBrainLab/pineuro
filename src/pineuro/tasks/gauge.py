@@ -576,6 +576,7 @@ class GaugeTask(BaseTask):
         response = "n/a"
         response_time = "n/a"
 
+        self._reset_poll_state()
         clock = core.Clock()
         while clock.getTime() < self.button_press_duration and self._running:
             if self.coordinator.is_complete():
@@ -594,6 +595,7 @@ class GaugeTask(BaseTask):
             self._log_frame()
 
             # Check for button press
+            self._inject_keys_if_unfocused([self.button_key])
             keys = event.getKeys(keyList=[self.button_key], timeStamped=clock)
             if keys and response == "n/a":
                 response = keys[0][0]

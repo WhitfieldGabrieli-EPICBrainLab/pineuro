@@ -123,14 +123,16 @@ class TaskBase(ABC):  # noqa: B024
     # =========================================================================
     # When the PsychoPy window lacks OS focus, pyglet doesn't receive keyboard
     # events.  These helpers poll global key state via platform-native APIs and
-    # inject presses into PsychoPy's event buffer.  Only called from specific
-    # waiting loops (trigger, instructions, slider) — never during the main
-    # task loop.
+    # inject presses into PsychoPy's event buffer.  Only called from loops that
+    # wait for a scanner trigger or a participant response (trigger,
+    # instructions, sliders, ratings, catch trials) — never from the continuous
+    # feedback display loops.
     #
     # Windows uses GetAsyncKeyState via ctypes; Linux/Xorg uses XQueryKeymap via
     # python-xlib; Linux/Wayland reads /dev/input via evdev (XQueryKeymap is
     # starved of events for unfocused XWayland windows); macOS uses
-    # CGEventSourceKeyState via pyobjc-framework-Quartz (ships with PsychoPy).
+    # CGEventSourceKeyState via pyobjc-framework-Quartz (ships with PsychoPy),
+    # which may require Input Monitoring access for the launching app.
 
     # Windows virtual-key codes
     _PSYCHOPY_TO_VK: dict[str, int] = {
@@ -196,7 +198,11 @@ class TaskBase(ABC):  # noqa: B024
     _evdev_devices: list[Any]
     _evdev_codes: dict[str, int]
     _evdev_disabled: bool
-    # Set once, the first time the Linux poll backend is chosen (diagnostics).
+    # Quartz poll state, lazily populated by _ensure_quartz (same convention).
+    _quartz_key_state: Callable[[int, int], bool]
+    _quartz_state_id: int
+    _quartz_disabled: bool
+    # Set once, the first time the Linux/macOS poll backend is chosen (diagnostics).
     _poll_backend_logged: bool
 
     # macOS ANSI virtual keycodes
@@ -329,16 +335,12 @@ class TaskBase(ABC):  # noqa: B024
         return held
 
     def _snapshot_quartz(self) -> set[str]:
-        try:
-            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedTaskState
-        except ImportError:
+        if not self._ensure_quartz():
             return set()
         held: set[str] = set()
         for name in self._SNAPSHOT_KEYS:
             vk = self._PSYCHOPY_TO_MAC_VK.get(name)
-            if vk is None:
-                continue
-            if CGEventSourceKeyState(kCGEventSourceStateCombinedTaskState, vk):
+            if vk is not None and self._quartz_key_down(vk):
                 held.add(name)
         return held
 
@@ -379,6 +381,9 @@ class TaskBase(ABC):  # noqa: B024
             else:
                 self._poll_keys_x11(key_names)
         elif sys.platform == "darwin":
+            if not getattr(self, "_poll_backend_logged", False):
+                self._log_quartz_backend()
+                self._poll_backend_logged = True
             self._poll_keys_quartz(key_names)
 
     # -- Windows ---------------------------------------------------------------
@@ -604,34 +609,93 @@ class TaskBase(ABC):  # noqa: B024
 
     # -- macOS (Quartz) --------------------------------------------------------
 
+    def _ensure_quartz(self) -> bool:
+        """Lazily resolve Quartz's global key-state query for polling on macOS.
+
+        ``CGEventSourceKeyState`` on the combined session state table reports a
+        key as down regardless of which app holds keyboard focus. Quartz
+        (pyobjc-framework-Quartz) ships with PsychoPy on macOS. If it cannot be
+        imported, this logs once and disables polling, so a missing backend shows
+        up in the session log instead of failing silently.
+
+        Returns True if polling is available.
+        """
+        if getattr(self, "_quartz_disabled", False):
+            return False
+        if hasattr(self, "_quartz_key_state"):
+            return True
+        try:
+            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedSessionState
+        except ImportError as exc:
+            logger.error(
+                "Quartz is not importable (%s) -- unfocused key polling is disabled on macOS "
+                "(scanner triggers and button presses are only received while the task window "
+                "has focus). Reinstall dependencies with 'pip install -e .'.",
+                exc,
+            )
+            self._quartz_disabled = True
+            return False
+        self._quartz_key_state = CGEventSourceKeyState
+        self._quartz_state_id = kCGEventSourceStateCombinedSessionState
+        return True
+
+    def _quartz_key_down(self, vk: int) -> bool:
+        return bool(self._quartz_key_state(self._quartz_state_id, vk))
+
+    def _log_quartz_backend(self) -> None:
+        """Log once per task whether macOS unfocused-key polling is live.
+
+        ``CGPreflightListenEventAccess`` (macOS 10.15+) reports whether the
+        process holds Input Monitoring access, which macOS may require before it
+        reports keys typed into other apps.
+        """
+        if not self._ensure_quartz():
+            return  # _ensure_quartz already logged why
+        access: bool | None = None
+        with contextlib.suppress(Exception):
+            from Quartz import CGPreflightListenEventAccess
+
+            access = bool(CGPreflightListenEventAccess())
+        logger.info("Unfocused-key poll backend=quartz (input_monitoring_access=%s)", access)
+        if access is False:
+            logger.warning(
+                "macOS reports no Input Monitoring access for this process. If button presses or "
+                "scanner triggers are missed while the task window is unfocused, allow the app that "
+                "launches pineuro (e.g. Terminal) under System Settings > Privacy & Security > "
+                "Input Monitoring, then restart it."
+            )
+
     def _poll_keys_quartz(self, key_names: list[str]) -> None:
         """Poll global key state on macOS via CGEventSourceKeyState."""
-        try:
-            from AppKit import NSApplication
-            from Quartz import CGEventSourceKeyState, kCGEventSourceStateCombinedTaskState
-        except ImportError:
-            return
-
         from psychopy import core
         from psychopy import event as psychopy_event
 
-        try:
-            app = NSApplication.sharedApplication()
-            if app.keyWindow() is self.win.winHandle._window:
-                return
-        except Exception:
+        if not self._ensure_quartz():
             return
 
+        held = {
+            name
+            for name in key_names
+            if name != "escape" and (vk := self._PSYCHOPY_TO_MAC_VK.get(name)) is not None and self._quartz_key_down(vk)
+        }
+
+        # Dedup against the focused (pyglet) path, as in _poll_keys_evdev: read
+        # the key state first, then pump our window so any press it received as
+        # the key window is already in _keyBuffer, and inject only the presses
+        # pyglet did NOT deliver. No focus query is needed, and nothing is
+        # injected twice (a rating marker never moves two steps per press).
+        with contextlib.suppress(Exception):
+            self.win.winHandle.dispatch_events()
+        already = {k[0] for k in psychopy_event._keyBuffer}
+
         for name in key_names:
-            if name == "escape":
+            if name == "escape" or name not in self._PSYCHOPY_TO_MAC_VK:
                 continue
-            vk = self._PSYCHOPY_TO_MAC_VK.get(name)
-            if vk is None:
-                continue
-            pressed = CGEventSourceKeyState(kCGEventSourceStateCombinedTaskState, vk)
+            pressed = name in held
             if pressed and name not in self._poll_prev:
-                psychopy_event._keyBuffer.append((name, 0, core.getTime()))
-                self._last_inject_source = "poll_quartz"
+                if name not in already:
+                    psychopy_event._keyBuffer.append((name, 0, core.getTime()))
+                    self._last_inject_source = "poll_quartz"
                 self._poll_prev.add(name)
             elif not pressed:
                 self._poll_prev.discard(name)

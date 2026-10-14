@@ -680,11 +680,13 @@ class ThermometerTask(BaseTask):
         rt = None
 
         event.clearEvents("keyboard")
+        self._reset_poll_state()
 
         while timer.getTime() > 0 and self._running:
             if hasattr(self, "coordinator") and self.coordinator.was_stopped():
                 raise KeyboardInterrupt("Stopped by user")
 
+            self._inject_keys_if_unfocused([self.left_button, self.right_button, self.confirm_button, "return"])
             keys = event.getKeys(
                 keyList=[self.left_button, self.right_button, self.confirm_button, "return", "escape"],
                 timeStamped=clock,

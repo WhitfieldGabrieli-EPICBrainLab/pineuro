@@ -5,6 +5,7 @@ default and normalizes the user-facing symbol ``=`` to PsychoPy's event name
 ``equal`` (what ``event.getKeys`` and the VK/keysym maps use). Leaf tasks no
 longer declare ``trigger_keys`` — they inherit this via ``**kwargs`` through
 ``BaseTask``, which is the contract a third-party task plugin also relies on.
+Unfocused key polling is covered in ``test_key_polling.py``.
 """
 
 import threading
