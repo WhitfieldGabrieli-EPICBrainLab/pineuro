@@ -17,6 +17,14 @@ The editor has study-wide tabs (**Study**, **Display**, **Sham**) and a per-sess
 - **Name / Description** — shown on the study card.
 - **Base data directory** — root for participant data. Each participant/session is written
   to `base_dir/sub-XX/ses-XX/`.
+- **Backup** — optionally copy each session folder to `<backup folder>/sub-XX/ses-XX/`
+  after every step, when you leave the session, and on **Back Up Now** (Session Utilities).
+  It never runs during an acquisition (a pass in progress pauses when a step starts and
+  resumes afterwards), copies only new or changed files, and never deletes anything in the
+  backup. `tmp/` is never copied; raw DICOM copies in `collection/` are included unless you
+  turn that off. The backup folder must exist, so an unplugged drive is reported rather than
+  silently written to the local disk. DICOM headers can identify participants: use approved
+  storage. The bar at the bottom of the window shows the last backup's outcome.
 - **Example Participant ID** — previews the directory structure.
 - **Simulator** — enable offline replay; set the localizer/collection and feedback speeds,
   the trigger mode, and a source mapping file (see [Simulation Mode](simulation-mode.md)).
@@ -75,7 +83,8 @@ See [Feedback Tasks](feedback-tasks.md) for the feedback computation details.
 ## Study File Format
 
 Studies are stored as YAML in `~/.pineuro/studies/{name}.yaml`. Study-wide/environment
-blocks (`paths`, `simulator`, `scanner`, `reference`, `sham`, `display`) live at the top
+blocks (`paths`, `simulator`, `scanner`, `reference`, `sham`, `display`, and the optional
+`backup: {enabled, destination, include_dicoms}`) live at the top
 level; the per-session protocol lives under a `sessions:` list, where each entry has its
 own `localizers` and `feedback_runs`. Studies can be manually edited if needed, though the
 GUI is the primary interface.

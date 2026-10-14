@@ -11,6 +11,7 @@ from collections.abc import Callable
 
 import flet as ft
 
+from pineuro.backup import BACKUP_DEFAULTS, validate_backup_config
 from pineuro.tasks.task_registry import get_task_metadata, list_available_tasks
 
 from .. import styles as st
@@ -385,6 +386,23 @@ class StudyEditorScreen:
             label="Base data directory",
             value=config["paths"]["base_dir"],
             hint_text="Root directory for participant data (e.g., /data/pineuro)",
+        )
+
+        # Session backup (study-wide top-level ``backup`` block; see pineuro.backup)
+        backup_cfg = {**BACKUP_DEFAULTS, **(config.get("backup") or {})}
+        self.backup_enabled_checkbox = ft.Checkbox(
+            label="Back up each session automatically",
+            value=bool(backup_cfg["enabled"]),
+            on_change=self._on_backup_enabled_changed,
+        )
+        self.backup_destination_field = ft.TextField(
+            label="Backup folder",
+            value=str(backup_cfg["destination"]),
+            hint_text="Approved storage, e.g. an encrypted external drive or the lab share",
+        )
+        self.backup_include_dicoms_checkbox = ft.Checkbox(
+            label="Include raw DICOMs (collection/)",
+            value=bool(backup_cfg["include_dicoms"]),
         )
 
         # Simulator source mode toggle
@@ -1092,6 +1110,15 @@ class StudyEditorScreen:
                     st.caption("All processed data, masks, and feedback output will be saved under this directory."),
                     st.browse_row(self.base_dir_field, self._create_browse_button(self.base_dir_field)),
                     ft.Divider(),
+                    st.section("Backup"),
+                    st.caption(
+                        "Copies each session folder to <backup folder>/<participant>/<session> after every step "
+                        "and when you leave the session, never during an acquisition. Files are only added or "
+                        "updated, never deleted. DICOM headers can identify participants, so choose approved storage."
+                    ),
+                    self.backup_enabled_checkbox,
+                    self._backup_options_column(),
+                    ft.Divider(),
                     st.section("Reference Scans"),
                     st.caption(
                         "Short scans used for spatial registration. Can be re-collected at any time during the session."
@@ -1414,6 +1441,23 @@ class StudyEditorScreen:
         self.reference_initial_n_volumes_field.visible = self.reference_initial_enabled_checkbox.value
         self.reference_realtime_n_volumes_field.visible = self.reference_realtime_enabled_checkbox.value
         self._sync_paths_tab_visibility()
+        with contextlib.suppress(Exception):
+            self.page.update()
+
+    def _backup_options_column(self) -> ft.Column:
+        """Backup folder + DICOM option, shown only while backup is enabled."""
+        self._backup_options = ft.Column(
+            [
+                st.browse_row(self.backup_destination_field, self._create_browse_button(self.backup_destination_field)),
+                self.backup_include_dicoms_checkbox,
+            ],
+            spacing=st.GAP_SM,
+            visible=bool(self.backup_enabled_checkbox.value),
+        )
+        return self._backup_options
+
+    def _on_backup_enabled_changed(self, e):
+        self._backup_options.visible = bool(self.backup_enabled_checkbox.value)
         with contextlib.suppress(Exception):
             self.page.update()
 
@@ -1859,6 +1903,14 @@ class StudyEditorScreen:
             self.page.update()
             return False
 
+        backup_error = validate_backup_config(config.get("backup") or {}, config["paths"]["base_dir"])
+        if backup_error:
+            _snack = ft.SnackBar(ft.Text(backup_error), bgcolor=st.ERROR_BG)
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return False
+
         try:
             path = self.config_manager.save_study(self.study_config, overwrite=True)
         except Exception as ex:
@@ -2050,6 +2102,16 @@ class StudyEditorScreen:
         # Paths
         config["paths"]["example_participant_id"] = self.example_participant_id_field.value.strip() or "sub-001"
         config["paths"]["base_dir"] = self.base_dir_field.value.strip() or "/data/pineuro"
+
+        # Backup: written only once set (or already present), so an untouched
+        # study does not gain a block -- and a spurious "unsaved changes" prompt.
+        backup = {
+            "enabled": bool(self.backup_enabled_checkbox.value),
+            "destination": (self.backup_destination_field.value or "").strip(),
+            "include_dicoms": bool(self.backup_include_dicoms_checkbox.value),
+        }
+        if "backup" in config or backup != BACKUP_DEFAULTS:
+            config["backup"] = backup
 
         config.pop("study", None)
 

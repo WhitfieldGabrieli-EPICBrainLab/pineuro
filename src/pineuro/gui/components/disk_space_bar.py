@@ -65,6 +65,7 @@ class DiskSpaceBar:
         self._lock = threading.Lock()
         self._paths: list[Path] = []
         self._projected: int | None = None
+        self._status: tuple[str, bool] | None = None  # (text, is_warning), e.g. the last backup's outcome
         self._icon = ft.Icon(ft.Icons.STORAGE, size=st.ICON_SM, color=st.MUTED)
         self._text = ft.Text(
             "Free disk space: checking…",
@@ -99,6 +100,12 @@ class DiskSpaceBar:
             self._projected = projected_session_bytes
         self.refresh()
 
+    def set_status(self, text: str | None, warning: bool = False) -> None:
+        """Show *text* (e.g. the last backup's outcome) after the free-space figures; None clears it."""
+        with self._lock:
+            self._status = (text, warning) if text else None
+        self.refresh()
+
     def refresh(self) -> None:
         """Re-read free space now instead of at the next periodic refresh (thread-safe)."""
         self._wake.set()
@@ -116,13 +123,16 @@ class DiskSpaceBar:
         while not self._stopped.is_set():
             self._wake.clear()
             with self._lock:
-                paths, projected = list(self._paths), self._projected
+                paths, projected, status = list(self._paths), self._projected, self._status
             if paths:  # nothing to report until a screen has called watch()
                 try:
                     text, warning = summarize(paths, projected)
                 except Exception:
                     logger.exception("Disk space refresh failed")
                 else:
+                    if status is not None:
+                        text = f"{text}   |   {status[0]}"
+                        warning = warning or status[1]
                     self._publish(text, warning)
             self._wake.wait(self.REFRESH_SECONDS)
 

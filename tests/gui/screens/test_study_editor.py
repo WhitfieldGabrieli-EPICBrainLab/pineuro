@@ -181,3 +181,40 @@ def test_type_change_to_other_task_keeps_default_two_runs():
     editor._on_localizer_type_changed(0, None)
     assert editor._localizer_configs[0]["type"] == "selfother"
     assert editor._localizer_configs[0]["n_runs"] == 2
+
+
+# ----------------------------------------------------------------------
+# Backup settings
+# ----------------------------------------------------------------------
+
+
+def test_untouched_study_gains_no_backup_block():
+    # Writing defaults would make every existing study look edited ("unsaved changes").
+    editor = _make_editor([_session([_rest_loc()], [])])
+    editor.build()  # creates the tab builders the form sync reads
+    editor._update_study_from_form()
+    assert "backup" not in editor.study_config.session_config
+
+
+def test_enabling_backup_writes_the_block():
+    editor = _make_editor([_session([_rest_loc()], [])])
+    editor.build()
+    editor.backup_enabled_checkbox.value = True
+    editor.backup_destination_field.value = "  /Volumes/LabBackup  "
+    editor._update_study_from_form()
+    assert editor.study_config.session_config["backup"] == {
+        "enabled": True,
+        "destination": "/Volumes/LabBackup",
+        "include_dicoms": True,
+    }
+
+
+def test_save_refuses_enabled_backup_without_a_folder():
+    editor = _make_editor([_session([_rest_loc()], [])])
+    editor.build()
+    editor.page = MagicMock()  # snackbar plumbing only
+    editor.backup_enabled_checkbox.value = True
+    editor.backup_destination_field.value = ""
+
+    assert editor._save_study() is False
+    editor.config_manager.save_study.assert_not_called()

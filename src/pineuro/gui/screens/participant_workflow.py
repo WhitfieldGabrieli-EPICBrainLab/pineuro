@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 # are deferred to method bodies to avoid loading numpy/nibabel/scipy at import time.
 import flet as ft
 
+from pineuro.backup import BACKUP_DEFAULTS, BackupResult, mirror_session, read_manifest
 from pineuro.storage import DiskSpace, disk_space, format_bytes, largest_session_size, low_space_reason
 
 from .. import styles as st
@@ -178,6 +179,12 @@ class ParticipantWorkflowScreen:
         # Size of the largest previous session of this study: the projected disk
         # need of this one. None until estimated (or when there is no prior session).
         self._projected_session_bytes: int | None = None
+        # Session backup (see _start_backup): one background pass at a time.
+        self._backup_lock = threading.Lock()
+        self._backup_thread: threading.Thread | None = None
+        self._backup_stop: threading.Event | None = None
+        self._backup_requested_again = False  # a trigger arrived while a pass was running
+        self._last_step_finished_at: datetime | None = None
 
         # Build this session's flattened runtime config from the study's protocol.
         # The study config carries an ordered ``sessions`` list; this session's
@@ -353,6 +360,111 @@ class ParticipantWorkflowScreen:
                 self._disk_space_bar.watch(paths, projected_session_bytes=projected)
 
         threading.Thread(target=_estimate, name="session-size-estimate", daemon=True).start()
+
+    # =========================================================================
+    # Session backup
+    # =========================================================================
+
+    def _backup_settings(self) -> dict[str, Any]:
+        return {**BACKUP_DEFAULTS, **(self.study_config.session_config.get("backup") or {})}
+
+    def _start_backup(self, reason: str) -> None:
+        """Mirror this session to the study's backup folder on a background thread.
+
+        Never runs during an acquisition: it is skipped while a step is running,
+        and a pass in progress is stopped when a step starts (``_stop_backup``);
+        copying is incremental, so the next pass picks up where it left off.
+        """
+        settings = self._backup_settings()
+        if not settings["enabled"] or not str(settings["destination"]).strip() or self._is_running:
+            return
+        with self._backup_lock:
+            if self._backup_thread is not None and self._backup_thread.is_alive():
+                self._backup_requested_again = True
+                return
+            stop_event = threading.Event()
+            self._backup_stop = stop_event
+            self._backup_thread = threading.Thread(
+                target=self._run_backup,
+                args=(settings, reason, stop_event),
+                name="session-backup",
+                daemon=True,
+            )
+            self._backup_thread.start()
+
+    def _stop_backup(self) -> None:
+        """Interrupt a backup pass at its next file (an acquisition is starting)."""
+        with self._backup_lock:
+            if self._backup_stop is not None:
+                self._backup_stop.set()
+            self._backup_requested_again = False
+
+    def _run_backup(self, settings: dict[str, Any], reason: str, stop_event: threading.Event) -> None:
+        label = f"{self.participant_id}/{self.session_id}"
+        while True:
+            logger.info(f"Backing up {label} to {settings['destination']} ({reason})")
+            self._set_backup_status(f"Backing up {label}…")
+            result = mirror_session(
+                self._participant_base_dir,
+                settings["destination"],
+                include_dicoms=bool(settings["include_dicoms"]),
+                stop_event=stop_event,
+            )
+            self._report_backup(result, label)
+            with self._backup_lock:
+                again = self._backup_requested_again and not stop_event.is_set()
+                self._backup_requested_again = False
+                if not again:
+                    self._backup_thread = None
+                    return
+            reason = "files changed during the previous pass"
+
+    def _report_backup(self, result: BackupResult, label: str) -> None:
+        if result.stopped:
+            logger.info(f"Backup of {label} paused for an acquisition; it resumes after the step")
+            self._set_backup_status(f"Backup of {label} paused during acquisition")
+        elif result.errors:
+            more = f" (+{len(result.errors) - 1} more)" if len(result.errors) > 1 else ""
+            logger.error(
+                f"Backup of {label} to {result.destination} had {len(result.errors)} error(s):\n"
+                + "\n".join(result.errors[:20])
+            )
+            self._set_backup_status(f"Backup of {label} failed: {result.errors[0]}{more}", warning=True)
+        else:
+            logger.info(
+                f"Backed up {label} to {result.destination}: {result.copied} file(s) copied "
+                f"({format_bytes(result.bytes_copied)}), {result.skipped} unchanged"
+            )
+            changed = f"{result.copied} file(s) copied" if result.copied else "up to date"
+            self._set_backup_status(f"Backup of {label}: {changed} at {datetime.now():%H:%M}")
+
+    def _set_backup_status(self, text: str, warning: bool = False) -> None:
+        if self._disk_space_bar is not None:
+            self._disk_space_bar.set_status(text, warning)
+
+    def _cleanup_backup_note(self) -> tuple[str, bool] | None:
+        """What the backup holds of this session, for the cleanup preview: (text, is_warning)."""
+        settings = self._backup_settings()
+        if not settings["enabled"]:
+            return None
+        if not settings["include_dicoms"]:
+            return (
+                "Raw DICOMs are not part of this study's backup, so deleting collection/ removes the only "
+                "copy on this computer.",
+                True,
+            )
+        manifest = read_manifest(self._participant_base_dir, settings["destination"])
+        finished: datetime | None = None
+        if manifest and manifest.get("complete"):
+            with contextlib.suppress(TypeError, ValueError):
+                finished = datetime.fromisoformat(str(manifest.get("finished")))
+        if finished is None or (self._last_step_finished_at is not None and finished < self._last_step_finished_at):
+            return (
+                "This session has not been fully backed up since its last step. "
+                "Use Back Up Now first if you need a copy of these files.",
+                True,
+            )
+        return f"Backed up to {settings['destination']} at {finished:%Y-%m-%d %H:%M}.", False
 
     def _check_qc_approval(self, approval_type: str) -> bool:
         """Check if masks have been approved.
@@ -3735,17 +3847,46 @@ class ParticipantWorkflowScreen:
             ),
             padding=ft.Padding.only(left=10),
         )
+        utilities: list[ft.Control] = [cleanup_button]
+
+        backup_settings = self._backup_settings()
+        if backup_settings["enabled"]:
+            utilities.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(ft.Icons.BACKUP, color=st.ACCENT, size=st.ICON_MD),
+                            ft.TextButton(
+                                "Back Up Now",
+                                on_click=lambda e: self._on_backup_now_clicked(),
+                                disabled=self._is_running,
+                            ),
+                            ft.Text(str(backup_settings["destination"]), size=st.CAPTION, color=st.MUTED),
+                        ],
+                        spacing=st.GAP_XS,
+                    ),
+                    padding=ft.Padding.only(left=10),
+                )
+            )
 
         return ft.ExpansionPanel(
             header=ft.ListTile(
                 title=ft.Text("Session Utilities", weight=ft.FontWeight.BOLD),
             ),
             content=ft.Column(
-                [cleanup_button],
+                utilities,
                 spacing=st.GAP_SM,
             ),
             expanded=False,
         )
+
+    def _on_backup_now_clicked(self):
+        """Start a backup pass right away (Session Utilities)."""
+        self._start_backup("requested from Session Utilities")
+        _snack = ft.SnackBar(ft.Text("Backup started; its progress is shown in the bar at the bottom of the window."))
+        _snack.open = True
+        self.page.overlay.append(_snack)
+        self.page.update()
 
     def _on_cleanup_clicked(self):
         """Handle click on cleanup step - show preview panel."""
@@ -3875,6 +4016,27 @@ class ParticipantWorkflowScreen:
                     )
                 )
 
+            # What the backup holds, so raw DICOMs are not deleted unknowingly.
+            backup_note_controls: list[ft.Control] = []
+            backup_note = self._cleanup_backup_note() if cleanup_info["collection_exists"] else None
+            if backup_note is not None:
+                note_text, note_is_warning = backup_note
+                backup_note_controls = [
+                    ft.Container(height=st.GAP_SM),
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.BACKUP, color=st.WARNING if note_is_warning else st.INFO),
+                                ft.Text(note_text, color=st.WARNING_FG if note_is_warning else None, expand=True),
+                            ],
+                            spacing=st.GAP_SM,
+                        ),
+                        padding=st.GAP_MD,
+                        bgcolor=st.WARNING_BG if note_is_warning else st.INFO_BG,
+                        border_radius=5,
+                    ),
+                ]
+
             content = ft.Container(
                 content=ft.Column(
                     [
@@ -3913,6 +4075,7 @@ class ParticipantWorkflowScreen:
                             bgcolor=st.WARNING_BG,
                             border_radius=5,
                         ),
+                        *backup_note_controls,
                         ft.Container(height=st.GAP_LG),
                         ft.Row(
                             [
@@ -6059,6 +6222,7 @@ class ParticipantWorkflowScreen:
         """
         # Set running state and lock UI
         self._is_running = True
+        self._stop_backup()  # never copy during an acquisition; the next pass resumes
         self._update_ui_lock_state()
 
         # Update step status to running
@@ -6142,11 +6306,16 @@ class ParticipantWorkflowScreen:
         async def update_ui():
             # Clear running state and unlock UI
             self._is_running = False
+            self._last_step_finished_at = datetime.now()
 
             stopped_by_user = not success and result_message and "stopped by user" in result_message
 
             if success:
                 self._add_log(f"[SUCCESS] {result_message}")
+                # Back up what the step just wrote (a background pass; a no-op when
+                # backup is off). A stopped run waits for its Keep/Discard choice and
+                # is picked up by the next pass.
+                self._start_backup(f"after {completed_step_id}")
             elif stopped_by_user:
                 self._add_log(f"[INFO] {result_message}")
             else:
@@ -7833,6 +8002,9 @@ class ParticipantWorkflowScreen:
         # Ignore clicks while running
         if self._is_running:
             return
+
+        # One last pass so the backup also holds the end of the session log.
+        self._start_backup("leaving the session")
 
         if self.on_back_callback:
             self.on_back_callback()
