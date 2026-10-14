@@ -663,3 +663,61 @@ class TestTriggerConditionValidation:
                     "use_count_condition": False,
                 }
             )
+
+
+class TestRunEndsWithTheScan:
+    """Regression: the task kept a ball episode running for up to 30 s after the last volume."""
+
+    @staticmethod
+    def _task_for_run(mock_coordinator, *, frames_before_complete):
+        from unittest.mock import MagicMock
+
+        from pineuro.tasks.rit_triggered_ball import RITTriggeredBallTask
+
+        task = RITTriggeredBallTask.__new__(RITTriggeredBallTask)
+        coord = mock_coordinator(n_volumes=100)
+        coord.n_processed = 100
+        coord.is_complete.side_effect = [False] * frames_before_complete + [True] * 100
+        task.coordinator = coord
+        task.frame_duration = 0.0
+        task._all_activations = [{"volume": 100}]
+        task.setup = MagicMock()
+        task.cleanup = MagicMock()
+        task.get_latest_data = MagicMock(return_value={})
+        task.update = MagicMock()
+        return task
+
+    def test_run_returns_at_the_last_volume_even_mid_episode(self, mock_coordinator):
+        import threading
+
+        from pineuro.tasks.rit_triggered_ball import _PHASE_BALL_EPISODE
+
+        task = self._task_for_run(mock_coordinator, frames_before_complete=2)
+        # An episode is in progress when the scan ends.
+        task.update.side_effect = lambda data: setattr(task, "_phase", _PHASE_BALL_EPISODE)
+
+        runner = threading.Thread(target=task.run, daemon=True)
+        runner.start()
+        runner.join(timeout=5.0)
+
+        assert not runner.is_alive(), "run() kept going after the last volume"
+        assert task.update.call_count == 2  # no extra update on the final volume, no tail loop
+        task.cleanup.assert_called_once()  # which records the truncated episode
+
+    def test_waits_for_the_final_activation_before_cleanup(self, mock_coordinator):
+        import threading
+        import time
+
+        task = self._task_for_run(mock_coordinator, frames_before_complete=0)
+        task._all_activations = [{"volume": 99}]
+        seen_at_cleanup: list[int] = []
+        task.cleanup.side_effect = lambda: seen_at_cleanup.append(task._all_activations[-1]["volume"])
+
+        def late_callback():  # is_complete() flips just before the last volume's callback lands
+            time.sleep(0.05)
+            task._all_activations.append({"volume": 100})
+
+        threading.Thread(target=late_callback, daemon=True).start()
+        task.run()
+
+        assert seen_at_cleanup == [100]

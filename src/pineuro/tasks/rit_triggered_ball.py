@@ -357,6 +357,7 @@ class RITTriggeredBallTask(BaseTask):
 
         # Episode counter
         self._episode_number = 0
+        self._n_episodes_incomplete = 0  # 0 or 1: an episode cut short by the end of the run
         self._total_hits = [0, 0]  # Cumulative across all episodes
 
         # Task clock (set in setup)
@@ -948,7 +949,14 @@ class RITTriggeredBallTask(BaseTask):
         self._phase = _PHASE_BASELINE
 
     def run(self):
-        """Main task loop — lets participant finish ball episode before stopping."""
+        """Main task loop; the task ends with the scan.
+
+        The loop exits as soon as the coordinator has processed every expected
+        volume. An episode still in progress is truncated there and recorded as
+        ``ball_<type>_incomplete`` by :meth:`cleanup`: after the last volume no
+        brain data drives the ball, so carrying on would only show movement, and
+        score hits, that the participant's activity did not produce.
+        """
         self._running = True
 
         try:
@@ -963,26 +971,29 @@ class RITTriggeredBallTask(BaseTask):
                 if elapsed < self.frame_duration:
                     time.sleep(self.frame_duration - elapsed)
 
-            # Process final data
-            data = self.get_latest_data()
-            self.update(data)
-
-            # Let ball episode finish if active
-            if self._phase == _PHASE_BALL_EPISODE:
-                logger.info("Run complete — waiting for ball episode to finish")
-                while self._running and self._phase == _PHASE_BALL_EPISODE:
-                    frame_start = time.time()
-                    data = self.get_latest_data()
-                    self.update(data)
-                    elapsed = time.time() - frame_start
-                    if elapsed < self.frame_duration:
-                        time.sleep(self.frame_duration - elapsed)
+            self._await_final_activation()
 
         except KeyboardInterrupt:
             pass
         finally:
             self._running = False
             self.cleanup()
+
+    def _await_final_activation(self, timeout: float = 0.5) -> None:
+        """Give the coordinator's last activation callback a moment to land.
+
+        ``coordinator.is_complete()`` turns True as soon as the final volume is
+        counted, a moment before that volume's callback appends it to
+        ``_all_activations``; without this wait, cleanup could write the events
+        file one row short. Bounded, because in intermittent mode the final
+        volumes may never be delivered.
+        """
+        target = getattr(self.coordinator, "n_processed", 0)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._all_activations and self._all_activations[-1]["volume"] >= target:
+                return
+            time.sleep(0.01)
 
     def update(self, data: dict) -> None:
         """Frame-by-frame update — state machine drives display."""
@@ -1147,6 +1158,7 @@ class RITTriggeredBallTask(BaseTask):
         results = super().get_run_results()
         results["n_episodes_triggered"] = self._trigger_state.n_episodes_triggered
         results["n_episodes_timeout"] = self._trigger_state.n_episodes_timeout
+        results["n_episodes_incomplete"] = self._n_episodes_incomplete
         results["n_episodes_total"] = self._episode_number
         results["total_hits"] = list(self._total_hits)
         return results
@@ -1169,9 +1181,13 @@ class RITTriggeredBallTask(BaseTask):
                 hits_bottom=self._episode_hits[1],
                 hits_total=sum(self._episode_hits),
             )
+            self._n_episodes_incomplete = 1
+            n_processed = getattr(self.coordinator, "n_processed", "?")
+            n_volumes = getattr(self.coordinator, "n_volumes", "?")
             logger.info(
-                f"Episode #{self._episode_number} incomplete (run ended): "
-                f"hits=[{self._episode_hits[0]}, {self._episode_hits[1]}]"
+                f"Episode #{self._episode_number} incomplete: run ended after {n_processed}/{n_volumes} volumes, "
+                f"{duration:.1f}s into the {self.episode_duration:g}s episode "
+                f"(hits=[{self._episode_hits[0]}, {self._episode_hits[1]}])"
             )
 
         logger.info(

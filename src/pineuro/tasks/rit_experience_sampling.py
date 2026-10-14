@@ -152,10 +152,10 @@ _RATINGS = [
 class RITExperienceSamplingTask(BaseTask):
     """RIT experience sampling neurofeedback task.
 
-    Uses the base class run()/update() loop.  All display logic lives in
-    update(), which is called every frame by the base class at refresh_rate Hz.
+    All display logic lives in update(), called every frame at refresh_rate Hz.
     A simple state machine (_phase) drives the three task phases: baseline,
-    monitoring, and prompt (rating scales).
+    monitoring, and prompt (rating scales). run() overrides the base loop only
+    to let the participant finish a prompt that is open when the scan ends.
 
     Parameters
     ----------
