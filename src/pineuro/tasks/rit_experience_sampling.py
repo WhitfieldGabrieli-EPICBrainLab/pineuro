@@ -3,7 +3,7 @@
 Summary
 -------
 Monitors BOLD activation in a rumination network and triggers experience
-sampling prompts (sadness and focus ratings) when configurable threshold,
+sampling prompts (unpleasantness and focus ratings) when configurable threshold,
 trend, and cooldown conditions are met.  Timeout prompts fire if no
 trigger occurs within a configurable window.
 
@@ -15,7 +15,7 @@ Task Flow (per run)
 4. Monitoring loop:
    a. Show fixation cross, poll coordinator for new volumes
    b. On each new volume: check trigger conditions
-   c. If triggered or timed out: show two rating scales (sadness, focus)
+   c. If triggered or timed out: show two rating scales (unpleasantness, focus)
    d. Return to monitoring
 5. Save BIDS events TSV (includes per-TR activation rows)
 
@@ -144,7 +144,7 @@ _PHASE_PROMPT = "prompt"
 
 # Rating definitions: (question, left_label, right_label)
 _RATINGS = [
-    ("How sad do you feel right now?", "Not sad", "Very sad"),
+    ("How unpleasant are your current feelings?", "Not unpleasant", "Very unpleasant"),
     ("How focused are you on your feelings?", "Not focused", "Very focused"),
 ]
 
@@ -720,8 +720,8 @@ class RITExperienceSamplingTask(BaseTask):
         "trial_type",
         "volume",
         "activation",
-        "sadness_rating",
-        "sadness_rt",
+        "unpleasantness_rating",
+        "unpleasantness_rt",
         "focus_rating",
         "focus_rt",
         "prompt_number",
@@ -822,9 +822,9 @@ class RITExperienceSamplingTask(BaseTask):
                 "In this task, you will see a fixation cross (+).\n\n"
                 "From time to time, you will be asked to rate\n"
                 "how you are feeling.\n\n"
-                f"Use button {self.left_key} to move left, "
-                f"button {self.right_key} to move right,\n"
-                f"and button {self.confirm_key} to confirm.\n\n"
+                f"Use index finger to move left, "
+                f"middle finger to move right,\n"
+                f"and thumb to confirm.\n\n"
                 "Press any button to begin."
             ],
             advance_keys=advance_keys,
@@ -990,7 +990,7 @@ class RITExperienceSamplingTask(BaseTask):
     # =========================================================================
 
     def _begin_prompt(self, prompt_type: str, volume: int, activation: float) -> None:
-        """Start a new prompt sequence (sadness + focus ratings)."""
+        """Start a new prompt sequence (unpleasantness + focus ratings)."""
         logger.info(f"Prompt #{self._prompt_number + 1} ({prompt_type}) at vol={volume}")
         self._prompt_number += 1
         self._prompt_onset = self._task_clock.getTime()
@@ -1030,7 +1030,7 @@ class RITExperienceSamplingTask(BaseTask):
         """Record completed prompt and return to monitoring."""
         duration = self._task_clock.getTime() - self._prompt_onset
 
-        sadness = self._rating_responses[0] if len(self._rating_responses) > 0 else (None, None)
+        unpleasantness = self._rating_responses[0] if len(self._rating_responses) > 0 else (None, None)
         focus = self._rating_responses[1] if len(self._rating_responses) > 1 else (None, None)
 
         self._record_event(
@@ -1039,8 +1039,8 @@ class RITExperienceSamplingTask(BaseTask):
             f"prompt_{self._prompt_type}",
             volume=self._prompt_volume,
             activation=round(self._prompt_activation, 4),
-            sadness_rating=sadness[0] if sadness[0] is not None else "n/a",
-            sadness_rt=sadness[1] if sadness[1] is not None else "n/a",
+            unpleasantness_rating=unpleasantness[0] if unpleasantness[0] is not None else "n/a",
+            unpleasantness_rt=unpleasantness[1] if unpleasantness[1] is not None else "n/a",
             focus_rating=focus[0] if focus[0] is not None else "n/a",
             focus_rt=focus[1] if focus[1] is not None else "n/a",
             prompt_number=self._prompt_number,
@@ -1057,7 +1057,7 @@ class RITExperienceSamplingTask(BaseTask):
         self._trigger_state.activation_history.clear()
         self._trigger_state.volume_history.clear()
 
-        logger.info(f"Prompt #{self._prompt_number} complete: sadness={sadness[0]}, focus={focus[0]}")
+        logger.info(f"Prompt #{self._prompt_number} complete: unpleasantness={unpleasantness[0]}, focus={focus[0]}")
 
         self._phase = _PHASE_MONITORING
 
@@ -1079,7 +1079,7 @@ class RITExperienceSamplingTask(BaseTask):
         # Normal run completion waits for the prompt to finish via run().
         if self._phase == _PHASE_PROMPT:
             duration = self._task_clock.getTime() - self._prompt_onset if self._task_clock else 0.0
-            sadness = self._rating_responses[0] if len(self._rating_responses) > 0 else (None, None)
+            unpleasantness = self._rating_responses[0] if len(self._rating_responses) > 0 else (None, None)
             focus = self._rating_responses[1] if len(self._rating_responses) > 1 else (None, None)
 
             self._record_event(
@@ -1088,13 +1088,13 @@ class RITExperienceSamplingTask(BaseTask):
                 f"prompt_{self._prompt_type}_incomplete",
                 volume=self._prompt_volume,
                 activation=round(self._prompt_activation, 4),
-                sadness_rating=sadness[0] if sadness[0] is not None else "n/a",
-                sadness_rt=sadness[1] if sadness[1] is not None else "n/a",
+                unpleasantness_rating=unpleasantness[0] if unpleasantness[0] is not None else "n/a",
+                unpleasantness_rt=unpleasantness[1] if unpleasantness[1] is not None else "n/a",
                 focus_rating=focus[0] if focus[0] is not None else "n/a",
                 focus_rt=focus[1] if focus[1] is not None else "n/a",
                 prompt_number=self._prompt_number,
             )
-            logger.info(f"Prompt #{self._prompt_number} incomplete (run ended): sadness={sadness[0]}, focus={focus[0]}")
+            logger.info(f"Prompt #{self._prompt_number} incomplete (run ended): unpleasantness={unpleasantness[0]}, focus={focus[0]}")
 
         logger.info(
             f"RITExperienceSamplingTask cleanup: "
@@ -1183,7 +1183,7 @@ RIT_EXPERIENCE_SAMPLING_METADATA = TaskMetadata(
     display_name="RIT Experience Sampling",
     description=(
         "Triggered experience sampling: monitors rumination network activation "
-        "and prompts sadness/focus ratings when threshold + trend conditions are met"
+        "and prompts unpleasantness/focus ratings when threshold + trend conditions are met"
     ),
     n_networks=1,
     network_roles=[
