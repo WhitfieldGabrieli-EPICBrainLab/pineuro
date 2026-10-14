@@ -148,9 +148,8 @@ from pineuro.utils import (
 )
 
 if TYPE_CHECKING:
-    import multiprocessing.synchronize
-
     from pineuro.collection_qc import CollectionQCMonitor
+    from pineuro.tasks.subprocess_runner import SharedFlag
 
 # --- Module Logger ---
 # Use __name__ to create a logger hierarchy (pineuro.preprocessing)
@@ -1162,7 +1161,7 @@ def collect_volumes(
     progress_callback: Callable[[int, int, float, Path], None] | None = None,
     stop_event: threading.Event | None = None,
     trigger_event: threading.Event | None = None,
-    task_done_event: "threading.Event | multiprocessing.synchronize.Event | None" = None,
+    task_done_event: "threading.Event | SharedFlag | None" = None,
     qc_monitor: "CollectionQCMonitor | None" = None,
 ) -> Path:
     """
@@ -1204,8 +1203,9 @@ def collect_volumes(
         Use this to update progress displays during collection.
     stop_event : threading.Event, optional
         Event to signal early termination. If set, collection stops gracefully.
-    task_done_event : threading.Event, optional
-        Event set when a concurrent localizer task finishes its paradigm.
+    task_done_event : threading.Event or SharedFlag, optional
+        Set when a concurrent localizer task finishes its paradigm (only
+        ``is_set()`` is used; the GUI passes a cross-process ``SharedFlag``).
         Collection drains any remaining queued volumes, then stops gracefully.
         Used for variable-duration tasks where the exact volume count is not
         known in advance.
@@ -1571,9 +1571,15 @@ def collect_volumes(
         if qc_monitor is not None:
             qc_monitor.close()
 
-        # Stop filesystem watcher
+        # Stop filesystem watcher. Bounded: its handler may still be waiting for a
+        # half-written file to stabilize (up to ~10 s per file, see
+        # _wait_for_stable_file), and watchdog's threads are daemons, so a slow
+        # watcher is abandoned rather than holding up the end of collection.
+        observer_join_timeout = 15.0
         observer.stop()
-        observer.join()
+        observer.join(timeout=observer_join_timeout)
+        if observer.is_alive():
+            logger.warning(f"File watcher did not stop within {observer_join_timeout:.0f}s; continuing without it")
 
         # Wait for simulator thread (if running) to complete
         if simulator_thread is not None:

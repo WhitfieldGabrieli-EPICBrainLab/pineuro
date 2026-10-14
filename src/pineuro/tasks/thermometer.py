@@ -1228,10 +1228,6 @@ class ThermometerTask(BaseTask):
         # Let base class handle window close and gl_info reset
         super().cleanup()
 
-    def stop(self):
-        """Signal task to stop."""
-        self._running = False
-
 
 # =============================================================================
 # Task Metadata and Registration

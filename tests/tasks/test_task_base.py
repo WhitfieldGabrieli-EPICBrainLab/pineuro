@@ -1,4 +1,4 @@
-"""Tests for pineuro.tasks.task_base — scanner trigger-key resolution.
+"""Tests for pineuro.tasks.task_base — scanner trigger-key resolution and simulator shutdown.
 
 `TaskBase` is the single place trigger keys are resolved: it applies the shared
 default and normalizes the user-facing symbol ``=`` to PsychoPy's event name
@@ -6,6 +6,8 @@ default and normalizes the user-facing symbol ``=`` to PsychoPy's event name
 longer declare ``trigger_keys`` — they inherit this via ``**kwargs`` through
 ``BaseTask``, which is the contract a third-party task plugin also relies on.
 """
+
+import threading
 
 
 class TestTaskBaseTriggerKeys:
@@ -66,3 +68,41 @@ class TestTriggerKeysInheritedViaKwargs:
     def test_default_applied_when_not_supplied(self, mock_coordinator):
         task = self._stub_task_cls()(coordinator=mock_coordinator())
         assert task.trigger_keys == ["t", "+", "5", "equal"]
+
+
+class _TriggerWaitingSimulator:
+    """Simulator stand-in that blocks, like a manual-trigger wait, until request_stop()."""
+
+    clear_target = False
+
+    def __init__(self):
+        self._stop = threading.Event()
+        self.trigger_event = None
+        self.trigger_key = None
+        self.start_time = None
+
+    def copy_volumes_iter(self):
+        while not self._stop.wait(0.01):
+            pass
+        yield from ()
+
+    def request_stop(self):
+        self._stop.set()
+
+
+class TestSimulatorShutdown:
+    """A stop before the scanner trigger used to leave the simulator thread waiting forever."""
+
+    def test_stop_releases_a_simulator_waiting_for_its_trigger(self):
+        from pineuro.tasks.task_base import TaskBase
+
+        task = TaskBase(simulator=_TriggerWaitingSimulator())
+        task._running = True
+        task._start_simulator_thread()
+        # Daemon: it can never keep the task subprocess alive after the task ends.
+        assert task._simulator_thread.daemon
+
+        task.stop()
+        task._simulator_thread.join(timeout=2.0)
+
+        assert not task._simulator_thread.is_alive()

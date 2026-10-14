@@ -1305,13 +1305,23 @@ class TaskBase(ABC):  # noqa: B024
             except Exception as e:
                 logger.exception(f"Simulator thread error: {e}")
 
+        # Daemon, so it can never keep the task process alive after the task ends:
+        # a non-daemon thread still waiting for a manual trigger blocked the task
+        # subprocess's exit until the GUI terminated it.
         self._simulator_thread = threading.Thread(
             target=_run_simulator,
-            daemon=False,
+            daemon=True,
             name="SimulatorThread",
         )
         self._simulator_thread.start()
         logger.info("Simulator thread started")
+
+    def _stop_simulator(self) -> None:
+        """Ask a running simulator to stop copying (and to stop waiting for a trigger)."""
+        request_stop = getattr(self._simulator, "request_stop", None)
+        if request_stop is not None:
+            with contextlib.suppress(Exception):
+                request_stop()
 
     # =========================================================================
     # Lifecycle
@@ -1320,6 +1330,7 @@ class TaskBase(ABC):  # noqa: B024
     def stop(self) -> None:
         """Signal task to stop."""
         self._running = False
+        self._stop_simulator()
 
     # =========================================================================
     # Task state recording (shared by feedback and localizer tasks)
@@ -1362,8 +1373,10 @@ class TaskBase(ABC):  # noqa: B024
         and resets pyglet GL state. Subclasses should call super().cleanup()
         at the end of their own cleanup.
         """
-        # Wait for simulator thread to complete if it exists
+        # Stop and wait for the simulator thread if it is still running: the task
+        # is over, so it must not copy further volumes or keep waiting for a trigger.
         if self._simulator_thread is not None and self._simulator_thread.is_alive():
+            self._stop_simulator()
             logger.info("Waiting for simulator thread to complete...")
             self._simulator_thread.join(timeout=5.0)
             if self._simulator_thread.is_alive():

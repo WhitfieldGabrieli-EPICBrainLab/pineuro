@@ -8,7 +8,9 @@ import contextlib
 import logging
 import math
 import multiprocessing
+import sys
 import threading
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,28 @@ _MP_CONTEXT = multiprocessing.get_context("spawn")
 # Grace period (seconds) after a stop is requested before a still-running task
 # subprocess is forcibly terminated. Generous so post-run questions can finish.
 _GRACEFUL_STOP_TIMEOUT = 60.0
+
+# A healthy task subprocess exits within a second or two of finishing its work.
+# If teardown is still running after this many seconds, every thread's stack is
+# written to the session log so a stall can be diagnosed from the log alone.
+_TEARDOWN_STACK_DUMP_AFTER = 20.0
+
+
+def _log_thread_stacks(reason: str) -> None:
+    """Log the current stack of every thread in this process (stall diagnostics)."""
+    names = {t.ident: t.name for t in threading.enumerate()}
+    parts = [f"{reason}; thread stacks follow."]
+    for ident, frame in sys._current_frames().items():
+        parts.append(f"--- thread {names.get(ident, ident)} ---\n{''.join(traceback.format_stack(frame))}")
+    logger.warning("\n".join(parts))
+
+
+def _arm_stack_dump(reason: str, delay: float = _TEARDOWN_STACK_DUMP_AFTER) -> threading.Timer:
+    """Start a daemon timer that logs all thread stacks after *delay* seconds unless cancelled."""
+    timer = threading.Timer(delay, _log_thread_stacks, args=(reason,))
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 def _loc(config: dict, idx: int = 0) -> dict:
@@ -132,9 +156,14 @@ class PipelineRunner:
         # These track the live child and its IPC handles so stop() can signal it
         # and the worker thread can drain its messages.
         self._current_process: Any = None  # multiprocessing.Process for the active step
-        self._child_stop_event: Any = None  # mp Event: parent -> child stop request
-        self._child_show_questions: Any = None  # mp Value('b'): show post-run questions on stop
+        # Lock-free flags, never multiprocessing.Event/Value -- see SharedFlag.
+        self._child_stop_event: Any = None  # SharedFlag: parent -> child stop request
+        self._child_show_questions: Any = None  # RawValue('b'): show post-run questions on stop
         self._msg_queue: Any = None  # mp Queue: child -> parent messages
+        # Set by the message reader when the child reports DONE (its last act), so
+        # teardown can bound how long a finished child may take to exit.
+        self._child_done = threading.Event()
+        self._child_done_at: float | None = None  # time.monotonic() when DONE arrived
         self._child_result: dict[str, Any] | None = None
         self._child_error: tuple[str, str] | None = None  # (exc_type_name, traceback)
         self._child_has_post_run_questions: bool = False  # last value reported by the child
@@ -257,14 +286,16 @@ class PipelineRunner:
         progress / mirror / log / result / error messages back over a queue.
         Returns ``(process, reader_thread)``.
         """
-        from pineuro.tasks.subprocess_runner import run_step_in_subprocess
+        from pineuro.tasks.subprocess_runner import SharedFlag, run_step_in_subprocess
 
-        self._child_stop_event = _MP_CONTEXT.Event()
-        self._child_show_questions = _MP_CONTEXT.Value("b", False)
+        self._child_stop_event = SharedFlag(_MP_CONTEXT)
+        self._child_show_questions = _MP_CONTEXT.RawValue("b", 0)
         self._msg_queue = _MP_CONTEXT.Queue()
         self._child_result = None
         self._child_error = None
         self._child_has_post_run_questions = False
+        self._child_done = threading.Event()
+        self._child_done_at = None
 
         proc = _MP_CONTEXT.Process(
             target=run_step_in_subprocess,
@@ -282,7 +313,7 @@ class PipelineRunner:
             self._current_process = proc
         reader = threading.Thread(
             target=self._drain_child_messages,
-            args=(proc, self._msg_queue),
+            args=(proc, self._msg_queue, self._child_done),
             name="child-msg-reader",
             daemon=True,
         )
@@ -291,9 +322,16 @@ class PipelineRunner:
         logger.info(f"Dispatched {payload.kind} task to subprocess (pid={proc.pid})")
         return proc, reader
 
-    def _drain_child_messages(self, proc: Any, msg_queue: Any) -> None:
-        """Route child -> parent messages until DONE (or the child dies)."""
+    def _drain_child_messages(self, proc: Any, msg_queue: Any, done_event: threading.Event) -> None:
+        """Route child -> parent messages until the child process has exited.
+
+        Draining continues after DONE (the child's last message): anything still
+        in flight, such as a mirror frame queued just before DONE, must be read or
+        the child's queue feeder thread cannot flush and the child cannot exit.
+        For the same reason a failing handler is logged instead of ending the loop.
+        """
         import queue as _queue
+        import time
 
         from pineuro.tasks.subprocess_runner import (
             MSG_DONE,
@@ -305,47 +343,70 @@ class PipelineRunner:
             MSG_RESULT,
         )
 
+        done = False
         while True:
             try:
                 msg = msg_queue.get(timeout=0.5)
             except _queue.Empty:
                 if not proc.is_alive():
-                    break  # child exited without DONE (hard crash) — stop draining
+                    break  # child exited (after DONE, or a hard crash) — nothing more is coming
                 continue
             except (EOFError, OSError):
                 break
             tag = msg[0]
             if tag == MSG_DONE:
-                break
-            if tag == MSG_PROGRESS:
-                self._emit_progress(msg[1])
-            elif tag == MSG_MIRROR:
-                cb = self._task_mirror_callback
-                if cb is not None:
-                    with contextlib.suppress(Exception):
-                        cb(msg[1])
-            elif tag == MSG_LOG:
-                _, levelno, name, message = msg
-                logging.getLogger(name).log(levelno, message)
-            elif tag == MSG_RESULT:
-                self._child_result = msg[1]
-            elif tag == MSG_ERROR:
-                self._child_error = (msg[1], msg[2])
-            elif tag == MSG_POST_RUN_QUESTIONS:
-                self._child_has_post_run_questions = bool(msg[1])
+                done = True
+                if done_event is self._child_done:  # ignore a reader left over from an earlier step
+                    self._child_done_at = time.monotonic()
+                done_event.set()
+                continue
+            if done:
+                continue  # late traffic after DONE: drain it, don't act on it
+            try:
+                if tag == MSG_PROGRESS:
+                    self._emit_progress(msg[1])
+                elif tag == MSG_MIRROR:
+                    cb = self._task_mirror_callback
+                    if cb is not None:
+                        with contextlib.suppress(Exception):
+                            cb(msg[1])
+                elif tag == MSG_LOG:
+                    _, levelno, name, message = msg
+                    logging.getLogger(name).log(levelno, message)
+                elif tag == MSG_RESULT:
+                    self._child_result = msg[1]
+                elif tag == MSG_ERROR:
+                    self._child_error = (msg[1], msg[2])
+                elif tag == MSG_POST_RUN_QUESTIONS:
+                    self._child_has_post_run_questions = bool(msg[1])
+            except Exception:
+                logger.exception(f"Error handling task subprocess message {tag!r}")
 
     def _finish_task_step(self, proc: Any, reader: threading.Thread, *, force_timeout: float | None = None) -> None:
         """Join the child + drain thread after the step finishes.
 
         For feedback ``force_timeout`` is None: the run takes as long as it takes
-        and a stop arms a watchdog (see :meth:`stop`) to terminate an overrun. For
-        the localizer the caller passes a timeout because collection has already
-        ended and the child should wrap up promptly once signalled.
+        and a stop arms a watchdog (see :meth:`stop`) to terminate an overrun, but
+        once the child reports DONE it has nothing left to do and gets the grace
+        period to exit. For the localizer the caller passes a timeout because
+        collection has already ended and the child should wrap up promptly once
+        signalled. Every wait here is bounded: a child that will not exit is
+        terminated, then killed, then abandoned with an error, so the step always
+        completes.
         """
+        import time
+
         if force_timeout is None:
-            proc.join()
+            # Feedback: wait out the run itself, i.e. until the child reports DONE or dies.
+            while proc.is_alive() and not self._child_done.wait(timeout=1.0):
+                pass
+            exit_timeout = _GRACEFUL_STOP_TIMEOUT
         else:
-            proc.join(timeout=force_timeout)
+            exit_timeout = force_timeout
+
+        stack_dump = _arm_stack_dump("Task subprocess teardown is taking unusually long")
+        try:
+            proc.join(timeout=exit_timeout)
             if proc.is_alive():
                 logger.warning("Task subprocess did not exit in time; terminating")
                 with contextlib.suppress(Exception):
@@ -354,15 +415,26 @@ class PipelineRunner:
             if proc.is_alive():
                 with contextlib.suppress(Exception):
                     proc.kill()
-                proc.join()
-        reader.join(timeout=10)
-        with self._task_lock:
-            self._current_process = None
-            self._child_stop_event = None
-            self._child_show_questions = None
-            if self._stop_watchdog is not None:
-                self._stop_watchdog.cancel()
-                self._stop_watchdog = None
+                proc.join(timeout=5)
+            if proc.is_alive():
+                logger.error(f"Task subprocess (pid={proc.pid}) did not exit after being killed; abandoning it")
+            elif self._child_done_at is not None:
+                elapsed = time.monotonic() - self._child_done_at
+                logger.info(f"Task subprocess exited (exit code {proc.exitcode}) {elapsed:.1f}s after reporting done")
+            else:
+                logger.info(f"Task subprocess exited (exit code {proc.exitcode}) without reporting done")
+            reader.join(timeout=10)
+            if reader.is_alive():
+                logger.warning("Task message reader still running after the subprocess exited; abandoning it")
+        finally:
+            stack_dump.cancel()
+            with self._task_lock:
+                self._current_process = None
+                self._child_stop_event = None
+                self._child_show_questions = None
+                if self._stop_watchdog is not None:
+                    self._stop_watchdog.cancel()
+                    self._stop_watchdog = None
 
     def _escalate_child_stop(self, proc: Any) -> None:
         """Force-terminate the specific subprocess if it overran the stop grace period.
@@ -493,12 +565,15 @@ class PipelineRunner:
         # Signal the active task subprocess to stop. Its in-child stop bridge calls
         # coordinator.stop(show_questions=...) + task.stop() — the cross-process
         # equivalent of the old in-process stop. The show-questions flag is set
-        # BEFORE the stop event so the child reads the right value; a watchdog
-        # force-terminates the child if it overruns the grace period.
+        # BEFORE the stop flag so the child reads the right value; a watchdog
+        # force-terminates the child if it overruns the grace period. Both are
+        # lock-free shared memory (see SharedFlag), so this click handler — which
+        # runs on the Flet event loop — cannot block, even if the child has just
+        # exited.
         if proc is not None and proc.is_alive() and child_stop is not None:
             logger.info("Stopping task subprocess")
             if child_show_q is not None:
-                child_show_q.value = bool(show_questions)
+                child_show_q.value = 1 if show_questions else 0
             child_stop.set()
             watchdog = threading.Timer(_GRACEFUL_STOP_TIMEOUT, self._escalate_child_stop, args=(proc,))
             with self._task_lock:
@@ -830,7 +905,7 @@ class PipelineRunner:
         # The localizer PsychoPy task + its simulator run in a CHILD process (one
         # window per process). collect_volumes stays here in the parent and reads
         # the DICOMs the child's simulator writes to watch_dir on disk.
-        from pineuro.tasks.subprocess_runner import LocalizerStepPayload
+        from pineuro.tasks.subprocess_runner import LocalizerStepPayload, SharedFlag
         from pineuro.tasks.task_registry import get_task_metadata
 
         actual_task_id = task_name if is_task_localizer else "rest"
@@ -874,11 +949,11 @@ class PipelineRunner:
             simulator_trigger_mode=sim_trigger_mode,
         )
 
-        # Event set (in the child) when the localizer paradigm finishes; passed
+        # Flag set (in the child) when the localizer paradigm finishes; passed
         # straight into collect_volumes so it drains + stops for variable-duration
         # tasks. trigger_event is dropped — collect_volumes' first-volume fallback
         # supplies the elapsed-timer start.
-        task_done_event = _MP_CONTEXT.Event()
+        task_done_event = SharedFlag(_MP_CONTEXT)
         proc, reader = self._spawn_task_step(payload, task_done_event=task_done_event)
 
         # Create QC monitor for real-time motion/quality metrics during collection
@@ -917,7 +992,9 @@ class PipelineRunner:
             self._emit_progress(f"Collected {actual_count} volumes to {output_dir}")
         finally:
             # Collection is done: tell the child task to finish (if it hasn't yet)
-            # and join the subprocess.
+            # and join the subprocess. The child has usually exited on its own by
+            # now; setting a SharedFlag is safe either way (a multiprocessing.Event
+            # here deadlocked the GUI whenever it had).
             if self._child_stop_event is not None:
                 self._child_stop_event.set()
             self._finish_task_step(proc, reader, force_timeout=_GRACEFUL_STOP_TIMEOUT)

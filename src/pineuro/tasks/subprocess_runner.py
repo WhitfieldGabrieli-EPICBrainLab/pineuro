@@ -151,20 +151,50 @@ class _MirrorForwarder:
             self._slot.put_nowait(self._STOP)
 
 
-class _StopBridge:
-    """Bridge the cross-process stop Event to the in-child coordinator/task.
+class SharedFlag:
+    """A cross-process boolean on a lock-free shared byte, for parent <-> child signalling.
 
-    The parent sets ``stop_event`` (and ``show_questions_value`` beforehand); this
-    thread translates that into the same ``coordinator.stop(...)`` / ``task.stop()``
-    calls the in-process stop path used to make.
+    Used instead of ``multiprocessing.Event``, which is unsafe with a child that
+    can exit on its own: ``Event.set()`` waits for every process blocked in
+    ``Event.wait()`` to acknowledge its wake-up, so once a waiting child has
+    exited (or been killed), ``set()`` blocks forever while holding the Event's
+    lock. That deadlocked the GUI after localizer runs that ended on their own.
+    A ``RawValue`` has neither a lock nor waiter bookkeeping, so setting or
+    reading it can never block; waiters poll :meth:`is_set` instead.
+
+    Exposes the ``set()`` / ``is_set()`` subset of the Event API that callers,
+    including :func:`pineuro.preprocessing.collect_volumes`, use.
     """
 
-    def __init__(self, stop_event: Any, show_questions_value: Any) -> None:
-        self._stop_event = stop_event
+    def __init__(self, ctx: Any) -> None:
+        self._value = ctx.RawValue("b", 0)
+
+    def set(self) -> None:
+        self._value.value = 1
+
+    def is_set(self) -> bool:
+        return bool(self._value.value)
+
+
+class _StopBridge:
+    """Bridge the cross-process stop flag to the in-child coordinator/task.
+
+    The parent sets ``stop_flag`` (and ``show_questions_value`` beforehand); this
+    thread translates that into the same ``coordinator.stop(...)`` / ``task.stop()``
+    calls the in-process stop path used to make. It polls the flag rather than
+    blocking on it, so the parent never waits on this thread (see
+    :class:`SharedFlag`); :meth:`close` ends the polling when the step is over.
+    """
+
+    _POLL_INTERVAL = 0.05  # seconds; far below a perceptible stop latency
+
+    def __init__(self, stop_flag: Any, show_questions_value: Any) -> None:
+        self._stop_flag = stop_flag
         self._show_q = show_questions_value
         self._coordinator: Any = None
         self._task: Any = None
         self._bound = threading.Event()
+        self._closed = threading.Event()
         self._thread = threading.Thread(target=self._wait, name="child-stop-bridge", daemon=True)
         self._thread.start()
 
@@ -173,8 +203,14 @@ class _StopBridge:
         self._task = task
         self._bound.set()
 
+    def close(self) -> None:
+        """Stop polling: the step has finished, so a late stop has nothing to act on."""
+        self._closed.set()
+
     def _wait(self) -> None:
-        self._stop_event.wait()
+        while not self._stop_flag.is_set():
+            if self._closed.wait(self._POLL_INTERVAL):
+                return
         # A stop may arrive before the coordinator/task exist; give bind() a moment.
         self._bound.wait(timeout=10.0)
         show_q = bool(self._show_q.value) if self._show_q is not None else False
@@ -341,13 +377,13 @@ def run_step_in_subprocess(
     msg_queue
         ``multiprocessing`` Queue for child -> parent messages (see ``MSG_*``).
     stop_event
-        ``multiprocessing`` Event set by the parent to request a stop.
+        :class:`SharedFlag` set by the parent to request a stop.
     show_questions_value
-        ``multiprocessing`` Value('b') the parent sets before ``stop_event`` to
-        request post-run questions on a feedback stop.
+        ``multiprocessing`` ``RawValue('b')`` the parent sets before
+        ``stop_event`` to request post-run questions on a feedback stop.
     task_done_event
-        ``multiprocessing`` Event the localizer child sets when its paradigm
-        finishes (ignored for feedback).
+        :class:`SharedFlag` the localizer child sets when its paradigm finishes
+        (ignored for feedback).
     """
 
     def send(tag: str, *args: Any) -> None:
@@ -383,6 +419,7 @@ def run_step_in_subprocess(
     except Exception as exc:  # forward ANY failure (incl. the 0-volume guard) to the parent
         send(MSG_ERROR, type(exc).__name__, traceback.format_exc())
     finally:
+        stop_bridge.close()
         # Backstop: always release the parent's collect_volumes, even if the
         # localizer child crashed during setup before task.run() could set it —
         # otherwise the parent would wait forever for volumes that never arrive.

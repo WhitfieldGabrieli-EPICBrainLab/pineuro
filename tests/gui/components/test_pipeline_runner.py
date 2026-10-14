@@ -1,6 +1,8 @@
 """Tests for pineuro.gui.components.pipeline_runner pure helpers."""
 
+import queue
 import threading
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -113,3 +115,128 @@ class TestEscalateChildStop:
         runner._escalate_child_stop(proc)
 
         assert proc.terminated is False
+
+
+class _NeverExitingProcess:
+    """A child that ignores terminate/kill; every join() must carry a timeout."""
+
+    pid = 4242
+    exitcode = None
+
+    def __init__(self):
+        self.terminated = False
+        self.killed = False
+
+    def is_alive(self) -> bool:
+        return True
+
+    def join(self, timeout=None) -> None:
+        assert timeout is not None, "unbounded join on a child that never exits"
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class _ExitedProcess:
+    exitcode = 0
+
+    def is_alive(self) -> bool:
+        return False
+
+    def join(self, timeout=None) -> None:
+        pass
+
+
+def _finished_thread() -> threading.Thread:
+    thread = threading.Thread(target=lambda: None)
+    thread.start()
+    thread.join()
+    return thread
+
+
+def _teardown_runner() -> PipelineRunner:
+    runner = PipelineRunner.__new__(PipelineRunner)
+    runner._task_lock = threading.Lock()
+    runner._child_done = threading.Event()
+    runner._child_done_at = None
+    runner._stop_watchdog = None
+    runner._current_process = None
+    runner._child_stop_event = None
+    runner._child_show_questions = None
+    runner._child_result = None
+    runner._child_error = None
+    runner._child_has_post_run_questions = False
+    runner._task_mirror_callback = None
+    return runner
+
+
+class TestFinishTaskStepIsBounded:
+    """A task subprocess that won't exit must never hang the step (or the GUI)."""
+
+    def test_localizer_teardown_escalates_and_returns(self, caplog):
+        runner = _teardown_runner()
+        proc = _NeverExitingProcess()
+        runner._current_process = proc
+
+        runner._finish_task_step(proc, _finished_thread(), force_timeout=0.01)
+
+        assert proc.terminated and proc.killed
+        assert runner._current_process is None
+        assert "abandoning it" in caplog.text
+
+    def test_feedback_child_that_reported_done_gets_only_the_grace_period(self, monkeypatch):
+        monkeypatch.setattr("pineuro.gui.components.pipeline_runner._GRACEFUL_STOP_TIMEOUT", 0.01)
+        runner = _teardown_runner()
+        runner._child_done.set()  # the reader saw DONE: the run itself is over
+        proc = _NeverExitingProcess()
+
+        runner._finish_task_step(proc, _finished_thread())
+
+        assert proc.terminated and proc.killed
+
+    def test_clean_exit_is_logged_relative_to_done(self, caplog):
+        runner = _teardown_runner()
+        runner._child_done_at = 0.0
+
+        with caplog.at_level("INFO", logger="pineuro.gui.components.pipeline_runner"):
+            runner._finish_task_step(_ExitedProcess(), _finished_thread(), force_timeout=0.01)
+
+        assert "Task subprocess exited (exit code 0)" in caplog.text
+
+
+class TestDrainChildMessages:
+    def test_keeps_draining_after_done_without_acting_on_late_messages(self):
+        from pineuro.tasks import subprocess_runner as sr
+
+        runner = _teardown_runner()
+        frames: list = []
+        runner._task_mirror_callback = frames.append
+        q: queue.Queue = queue.Queue()
+        q.put((sr.MSG_RESULT, {"events_path": "/x"}))
+        q.put((sr.MSG_DONE,))
+        q.put((sr.MSG_MIRROR, {"type": "screenshot"}))  # still in flight when DONE arrived
+
+        runner._drain_child_messages(_ExitedProcess(), q, runner._child_done)
+
+        assert q.empty()  # read, so the child's queue feeder could flush and exit
+        assert frames == []  # but not acted on
+        assert runner._child_result == {"events_path": "/x"}
+        assert runner._child_done.is_set() and runner._child_done_at is not None
+
+    def test_failing_handler_is_logged_not_fatal(self, caplog):
+        from pineuro.tasks import subprocess_runner as sr
+
+        runner = _teardown_runner()
+        runner._emit_progress = MagicMock(side_effect=RuntimeError("UI gone"))
+        q: queue.Queue = queue.Queue()
+        q.put((sr.MSG_PROGRESS, "hello"))
+        q.put((sr.MSG_RESULT, {"ok": True}))
+        q.put((sr.MSG_DONE,))
+
+        runner._drain_child_messages(_ExitedProcess(), q, runner._child_done)
+
+        assert runner._child_result == {"ok": True}
+        assert "Error handling task subprocess message" in caplog.text

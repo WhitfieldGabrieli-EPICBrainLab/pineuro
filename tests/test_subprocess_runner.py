@@ -3,8 +3,11 @@
 The child entrypoint is exercised IN-PROCESS (not spawned) with stubbed
 coordinator/task/factory so we can assert the IPC message protocol, the stop
 bridge, and the mirror forwarder without a real PsychoPy window or scanner.
+The one exception spawns a real child: the stop-signal deadlock it guards
+against needs a waiter inside a process that has already exited.
 """
 
+import multiprocessing
 import pickle
 import queue
 import threading
@@ -238,6 +241,64 @@ def test_stop_bridge_stops_coordinator_and_task():
 
     assert coord.stopped_with is True  # show_questions value propagated
     assert task.stopped is True
+
+
+def test_stop_bridge_acts_on_shared_flag():
+    flag = sr.SharedFlag(multiprocessing.get_context("spawn"))
+    bridge = _StopBridge(flag, _Value(False))
+    task = _StubTask()
+    bridge.bind(task=task)
+
+    flag.set()
+    deadline = time.time() + 2.0
+    while time.time() < deadline and not task.stopped:
+        time.sleep(0.01)
+
+    assert task.stopped is True
+
+
+def test_stop_bridge_close_ends_polling_without_acting():
+    flag = sr.SharedFlag(multiprocessing.get_context("spawn"))
+    bridge = _StopBridge(flag, _Value(False))
+    task = _StubTask()
+    bridge.bind(task=task)
+
+    bridge.close()
+    bridge._thread.join(timeout=2.0)
+
+    assert not bridge._thread.is_alive()
+    flag.set()  # a stop after the step finished has nothing to act on
+    time.sleep(0.1)
+    assert task.stopped is False
+
+
+def test_parent_stop_signal_does_not_block_after_child_exits():
+    """Regression: the parent's stop signal hung forever once the child had exited.
+
+    With a multiprocessing.Event, the child's stop-bridge thread registered as a
+    waiter for the whole run; after a localizer child ended on its own, the
+    parent's Event.set() waited forever for that dead waiter, so the step never
+    finished and the GUI had to be restarted.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    flag = sr.SharedFlag(ctx)
+    child_code = (
+        "import time\n"
+        "from pineuro.tasks.subprocess_runner import _StopBridge\n"
+        "_StopBridge(flag, None)\n"  # polls the flag on a daemon thread, as in a real task child
+        "time.sleep(0.3)\n"
+    )
+    child = ctx.Process(target=exec, args=(child_code, {"flag": flag}))
+    child.start()
+    child.join(timeout=60)
+    assert child.exitcode == 0
+
+    setter = threading.Thread(target=flag.set, daemon=True)
+    setter.start()
+    setter.join(timeout=2.0)
+
+    assert not setter.is_alive(), "setting the stop flag blocked after the child exited"
+    assert flag.is_set()
 
 
 # ---------------------------------------------------------------------------
