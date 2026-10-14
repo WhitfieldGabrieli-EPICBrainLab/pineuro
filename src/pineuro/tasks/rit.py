@@ -5,7 +5,7 @@ Summary
 -------
 Block design task where participants alternate between rumination and
 distraction phases, each preceded by a personalized memory prompt and
-followed by sadness/focus ratings. Used to define participant-specific
+followed by unpleasantness/focus ratings. Used to define participant-specific
 rumination network ROIs via the contrast "rumination > distraction" in
 the GLM-based mask extraction pipeline.
 
@@ -27,11 +27,11 @@ study-configuration choices.
     1. Memory prompt + keyword (5s)
     2. Reflection: "Think about this memory in detail" (25s)
     3. Rumination prompt (30s)
-    4. Sadness rating 1-5 (up to 5s)
+    4. unpleasantness rating 1-5 (up to 5s)
     5. Focus-on-feelings rating 1-5 (up to 5s)
     6. Rest/fixation (10-15s jittered)
     7. Distraction prompt (30s)
-    8. Sadness rating 1-5 (up to 5s)
+    8. unpleasantness rating 1-5 (up to 5s)
     9. Focus-on-feelings rating 1-5 (up to 5s)
 - Total run duration: ~8 minutes
 
@@ -258,7 +258,7 @@ class RITTask(BaseLocalizerTask):
     """Rumination Induction Task (RIT) localizer task.
 
     Alternates rumination and distraction blocks around personalized
-    memory prompts, with sadness/focus ratings after each block. Outputs
+    memory prompts, with unpleasantness/focus ratings after each block. Outputs
     BIDS events TSV for GLM analysis (rumination - distraction contrast).
 
     Parameters
@@ -880,18 +880,18 @@ class RITTask(BaseLocalizerTask):
             prompt=rumination_prompt,
         )
 
-        # 4. Sadness rating (post-rumination)
+        # 4. unpleasantness rating (post-rumination)
         onset = self._experiment_clock.getTime()
         rating, rt = self._run_rating(
-            "How sad do you feel right now?",
-            "Not sad",
-            "Very sad",
+            "How unpleasant did it feel to think about the topic?",
+            "Not at all",
+            "Extremely",
         )
         actual_dur = self._experiment_clock.getTime() - onset
         self.record_event(
             onset,
             actual_dur,
-            "rating_sadness_post_rumination",
+            "rating_unpleasantness_post_rumination",
             trial=trial_num,
             response=rating,
             response_time=rt,
@@ -900,9 +900,9 @@ class RITTask(BaseLocalizerTask):
         # 5. Focus-on-feelings rating (post-rumination)
         onset = self._experiment_clock.getTime()
         rating, rt = self._run_rating(
-            "How focused are you on your feelings?",
-            "Not focused",
-            "Very focused",
+            "How focused were you on your feelings?",
+            "Not at all",
+            "Extremely",
         )
         actual_dur = self._experiment_clock.getTime() - onset
         self.record_event(
@@ -931,18 +931,18 @@ class RITTask(BaseLocalizerTask):
             prompt=distraction_prompt,
         )
 
-        # 8. Sadness rating (post-distraction)
+        # 8. unpleasantness rating (post-distraction)
         onset = self._experiment_clock.getTime()
         rating, rt = self._run_rating(
-            "How sad do you feel right now?",
-            "Not sad",
-            "Very sad",
+            "How unpleasant did it feel to think about the topic?",
+            "Not at all",
+            "Extremely",
         )
         actual_dur = self._experiment_clock.getTime() - onset
         self.record_event(
             onset,
             actual_dur,
-            "rating_sadness_post_distraction",
+            "rating_unpleasantness_post_distraction",
             trial=trial_num,
             response=rating,
             response_time=rt,
@@ -951,9 +951,9 @@ class RITTask(BaseLocalizerTask):
         # 9. Focus-on-feelings rating (post-distraction)
         onset = self._experiment_clock.getTime()
         rating, rt = self._run_rating(
-            "How focused are you on your feelings?",
-            "Not focused",
-            "Very focused",
+            "How focused were you on your feelings?",
+            "Not at all",
+            "Extremely",
         )
         actual_dur = self._experiment_clock.getTime() - onset
         self.record_event(
@@ -1088,11 +1088,11 @@ class RITTask(BaseLocalizerTask):
                 "memories from your past.\n\n"
                 "You will also be asked to think about\n"
                 "unrelated topics as a distraction.\n\n"
-                "After each period, you will rate how sad you feel\n"
-                "and how focused you are on your feelings.\n\n"
-                f"Use button {self.left_key} to move left, "
-                f"button {self.right_key} to move right,\n"
-                f"and button {self.confirm_key} to confirm your rating.\n\n"
+                "After each period, you will rate how unpleasant the topic felt \n"
+                "and how focused you were on your feelings.\n\n"
+                "Use index finger to move left, "
+                "middle finger to move right,\n"
+                "and thumb to confirm your rating.\n\n"
                 "Press any button to begin."
             ],
             advance_keys=advance_keys,
