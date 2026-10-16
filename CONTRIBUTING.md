@@ -238,12 +238,9 @@ The GUI picks up the new atlas in its dropdown automatically from `ATLAS_SOURCES
 
 ## Versioning
 
-pineuro follows [Semantic Versioning](https://semver.org/). While at **0.x** (pre-1.0), the API is under active development and may change between minor versions without deprecation warnings — standard semver for initial development.
+pineuro follows [Semantic Versioning](https://semver.org/). Since **1.0.0**, a breaking change requires a major version bump, with a deprecation period for removed API; new features bump the minor version and bug fixes the patch. During initial development (0.x), breaking changes bumped only the minor version.
 
-- **0.x.y**: breaking changes bump the minor (x); bug fixes bump the patch (y).
-- **1.0.0+**: breaking changes require a major bump, with deprecation periods for removed API.
-
-`version` in `pyproject.toml` is the single source of truth for the package — `pineuro.__version__` is read from the installed metadata at runtime, so there's nothing to hand-edit there. The GUI app carries its own independent `__version__` in `src/pineuro/gui/__init__.py`; bump that only when the GUI app version changes.
+`version` in `pyproject.toml` is the single source of truth for the package — `pineuro.__version__` is read from the installed metadata at runtime, so there's nothing else to edit.
 
 ## License
 
