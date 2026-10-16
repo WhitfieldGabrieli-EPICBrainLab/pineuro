@@ -126,6 +126,7 @@ class CollectionProgressPanel:
             height=st.DICOM_PREVIEW,
             fit=ft.BoxFit.CONTAIN,
             visible=False,  # Hidden until first image
+            gapless_playback=True,  # Keep the last slice up while the next decodes (no flicker)
         )
 
         # Placeholder shown before first volume

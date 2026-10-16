@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`pineuro.gui.__version__` is removed.** It was hardcoded to `0.2.0`, never updated, and read by nothing; the version is `pineuro.__version__`, which comes from the installed package metadata.
 
+### Fixed
+
+- **The live brain-slice preview no longer flickers during acquisition.** Each volume's slice replaced the preview image, and Flet's `ft.Image` shows nothing while a new image source decodes (`gapless_playback` defaults to `False`), so the white page flashed between every two slices. Both previews, the Brain Slice in the localizer monitoring panel and the collection progress panel, now keep the previous slice on screen until the next one has decoded, as the Task Display mirror already did.
+
 ## [0.12.0] - 2026-10-14
 
 ### Breaking

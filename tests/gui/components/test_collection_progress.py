@@ -2,7 +2,8 @@
 
 The CollectionProgressPanel itself is a Flet UI builder whose body is hard to
 unit-test without extensive Flet mocking. We cover (1) the dicom_to_base64_png
-graceful-failure path, and (2) _estimate_time_remaining math (no Flet involved).
+graceful-failure path, (2) _estimate_time_remaining math (no Flet involved), and
+(3) the slice preview's gapless playback (construction only; no page attached).
 """
 
 import pytest
@@ -65,3 +66,15 @@ class TestEstimateTimeRemaining:
         panel = self._panel(n_volumes=100, tr=0.0, volumes_collected=10, elapsed=5.0)
         # rate = 10/5 = 2/s; remaining = 90 → 45s
         assert panel._estimate_time_remaining() == pytest.approx(45.0)
+
+
+class TestBuild:
+    def test_slice_preview_keeps_last_frame_between_volumes(self):
+        """Regression guard: Flet's default (``gapless_playback=False``) blanks the image
+        on every new ``src``, so each volume's slice flashed against the white page.
+        """
+        from pineuro.gui.components.collection_progress import CollectionProgressPanel
+
+        panel = CollectionProgressPanel(n_volumes=10)
+        panel.build()
+        assert panel._image.gapless_playback is True

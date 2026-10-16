@@ -7340,6 +7340,7 @@ class ParticipantWorkflowScreen:
             height=st.TASK_MIRROR_H,
             fit=ft.BoxFit.CONTAIN,
             visible=False,
+            gapless_playback=True,  # Keep the last slice up while the next decodes (no flicker)
         )
         self._slice_placeholder = ft.Container(
             content=ft.Column(

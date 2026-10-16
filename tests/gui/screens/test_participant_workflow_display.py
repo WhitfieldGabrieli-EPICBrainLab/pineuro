@@ -1,6 +1,8 @@
-"""Tests for participant workflow pipeline-panel display helpers."""
+"""Tests for participant workflow display: pipeline-panel helpers and the live monitoring panel."""
 
-from pineuro.gui.screens.participant_workflow import _format_threshold_summary
+from types import SimpleNamespace
+
+from pineuro.gui.screens.participant_workflow import ParticipantWorkflowScreen, _format_threshold_summary
 
 
 def test_threshold_summary_top_n():
@@ -45,3 +47,15 @@ def test_threshold_summary_cluster_extent_no_cap():
     )
     assert summary == "Cluster extent: stat ≥ 2.0, min 50 vox"
     assert "cap" not in summary
+
+
+def test_localizer_brain_slice_keeps_last_frame_between_volumes():
+    """Regression guard: Flet's default (``gapless_playback=False``) blanks the image on
+    every new ``src``, so each volume's slice flashed against the white page.
+
+    ``__init__`` builds the live layout, so the panel is built on a bare instance.
+    """
+    screen = ParticipantWorkflowScreen.__new__(ParticipantWorkflowScreen)
+    screen.study_config = SimpleNamespace(session_config={"localizers": [{"type": "rest"}]})
+    screen._build_localizer_monitoring_panel("localizer_0_run_1", n_volumes=10)
+    assert screen._slice_image.gapless_playback is True
