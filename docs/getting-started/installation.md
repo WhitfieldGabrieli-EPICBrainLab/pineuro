@@ -20,18 +20,31 @@ This guide covers installing pineuro and its dependencies.
 ## Quick Install
 
 ```bash
-# Create virtual environment
+# Create a virtual environment (Python 3.10 or 3.11)
 python -m venv pineuro_env
 source pineuro_env/bin/activate  # Linux/macOS
 # pineuro_env\Scripts\activate   # Windows
 
-# Clone and install pineuro (all dependencies included)
-git clone https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro.git
-cd pineuro
-pip install -e .
+# Install pineuro from PyPI (all dependencies included)
+pip install pineuro
 ```
 
 All dependencies — including dcm2niix, ANTsPy, PsychoPy, and nilearn — are installed automatically via pip. No external tools are required.
+
+**Linux:** install wxPython (required by PsychoPy) before pineuro. PyPI has no Linux wheels for it, so pip would otherwise build it from source, which takes a long time and needs the GTK development headers. Prebuilt wheels are published per distribution at [extras.wxpython.org](https://extras.wxpython.org/wxPython4/extras/linux/); for example, on Ubuntu 24.04:
+
+```bash
+pip install -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxPython
+```
+
+To work on pineuro itself, install from a clone instead (see [Development Installation](#development-installation)).
+
+## Updating
+
+- **Installed from PyPI:** `pip install --upgrade pineuro`
+- **Installed from a clone:** `git pull`, then run `pip install -e .` again. An editable install records its version when it is installed, so without the reinstall pineuro keeps reporting (and saving with each session) the old version.
+
+Restart pineuro after updating; a window left open keeps running the old code.
 
 ## Running at the Scanner
 

@@ -10,7 +10,7 @@ This replicates the exact same path a real Siemens scanner uses: files pushed ov
 - **Sender machine** (any platform) — stands in for the scanner, runs the simulator
 - An ethernet cable connecting the two machines directly (or both on the same network)
 - Pre-collected DICOMs from a previous session (e.g., a public neurofeedback dataset, or DICOMs from a previous MURFI session)
-- pineuro installed on both machines (`pip install -e .`)
+- pineuro installed on both machines (`pip install pineuro`; see [Installation](../getting-started/installation.md))
 
 ## Step 1: Connect the Machines
 

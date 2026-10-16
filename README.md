@@ -31,12 +31,10 @@ A Python library for real-time fMRI neurofeedback research. pineuro provides a c
 **Requires Python 3.10 or 3.11** (`>=3.10,<3.12`). All dependencies are pure pip; no external tools required.
 
 ```bash
-git clone https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro.git
-cd pineuro
-pip install -e .
+pip install pineuro
 ```
 
-See the [Installation Guide](docs/getting-started/installation.md) for platform-specific notes and troubleshooting.
+See the [Installation Guide](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/getting-started/installation.md) for platform-specific notes (on Linux, install wxPython first), installing from source, and troubleshooting.
 
 ## GUI
 
@@ -44,18 +42,18 @@ See the [Installation Guide](docs/getting-started/installation.md) for platform-
 pineuro-gui
 ```
 
-The desktop GUI provides study configuration, participant workflows, live activation plots, and QC reports. See the [First Session Tutorial](docs/getting-started/first-session.md) for a complete walkthrough.
+The desktop GUI provides study configuration, participant workflows, live activation plots, and QC reports. See the [First Session Tutorial](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/getting-started/first-session.md) for a complete walkthrough.
 
 ## Documentation
 
 **Getting started**
-- [Installation](docs/getting-started/installation.md): Setup and dependencies
-- [Quick Start](docs/getting-started/quickstart.md): GUI quick start (with an API snippet)
-- [First Session](docs/getting-started/first-session.md): End-to-end GUI walkthrough
+- [Installation](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/getting-started/installation.md): Setup and dependencies
+- [Quick Start](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/getting-started/quickstart.md): GUI quick start (with an API snippet)
+- [First Session](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/getting-started/first-session.md): End-to-end GUI walkthrough
 
-**User guide**: [Full index](docs/index.md)
+**User guide**: [Full index](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/index.md)
 
-[Pipeline Overview](docs/user-guide/pipeline-overview.md) · [Study Configuration](docs/user-guide/study-configuration.md) · [Preprocessing](docs/user-guide/preprocessing.md) · [Mask Extraction](docs/user-guide/mask-extraction.md) · [Feedback Tasks](docs/user-guide/feedback-tasks.md) · [Tasks](docs/user-guide/tasks.md) · [Sham & Blinding](docs/user-guide/sham-and-blinding.md) · [Multi-Session](docs/user-guide/multi-session.md) · [Display Setup](docs/user-guide/display-setup.md) · [Simulation Mode](docs/user-guide/simulation-mode.md) · [QC Reports](docs/user-guide/qc-reports.md) · [Network Testing](docs/user-guide/network-testing.md)
+[Pipeline Overview](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/pipeline-overview.md) · [Study Configuration](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/study-configuration.md) · [Preprocessing](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/preprocessing.md) · [Mask Extraction](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/mask-extraction.md) · [Feedback Tasks](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/feedback-tasks.md) · [Tasks](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/tasks.md) · [Sham & Blinding](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/sham-and-blinding.md) · [Multi-Session](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/multi-session.md) · [Display Setup](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/display-setup.md) · [Simulation Mode](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/simulation-mode.md) · [QC Reports](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/qc-reports.md) · [Network Testing](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/docs/user-guide/network-testing.md)
 
 ## Citation
 
@@ -68,5 +66,5 @@ https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+Apache License 2.0. See [LICENSE](https://github.com/WhitfieldGabrieli-EPICBrainLab/pineuro/blob/main/LICENSE) for details.
 
