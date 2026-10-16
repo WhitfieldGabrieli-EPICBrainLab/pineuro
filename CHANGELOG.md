@@ -5,11 +5,11 @@ All notable changes to pineuro will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-10-16
 
 ### Changed
 
-- **The `dev` extra pins ruff and mypy exactly.** `ruff==0.15.2` and `mypy==1.19.1` (and the same ruff in CI) replace `>=` floors, so a new release of either can no longer fail CI on unchanged code, as ruff 0.17 did by also formatting code blocks in Markdown files. Upgrading them is now a deliberate change, as it already is for antspyx and nilearn.
+- **The `dev` extra pins ruff and mypy exactly, and CI type-checks on Python 3.10.** `ruff==0.15.2` and `mypy==1.19.1` (and the same ruff in CI) replace `>=` floors, so a new release of either can no longer fail CI on unchanged code, as ruff 0.17 did by also formatting code blocks in Markdown files. Upgrading them is now a deliberate change, as it already is for antspyx and nilearn. CI's type-check job also moves from Python 3.11 to 3.10, the version mypy targets: on 3.11 it installed numpy 2.3, whose stubs do not support a 3.10 target, and mypy flagged a spurious `Any` return.
 
 ### Removed
 
