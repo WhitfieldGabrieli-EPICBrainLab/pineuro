@@ -5,7 +5,9 @@ specific deterministic contracts:
 
 - ``generate_randomization`` with a fixed seed produces a deterministic
   assignment; the structural invariants (correct count of each condition,
-  no duplicates, replay matching constraints) are exact.
+  no duplicates, replay matching constraints) are exact. Replay matching must
+  respect scan order and be one to one: each sham participant replays a
+  different real participant earlier in the list.
 - ``load_randomization`` round-trips a TSV verbatim; every field a writer wrote
   comes back as the literal value (modulo NaN handling for empty cells).
 - ``get_condition_for_participant`` is a pure dict lookup with a
@@ -95,6 +97,58 @@ def test_generate_replay_every_sham_has_matched_participant():
     for _, row in sham_rows.iterrows():
         assert row["matched_participant"] in real_ids
         assert row["matched_session"] == "ses-01"
+
+
+@pytest.mark.parametrize("slots", [False, True])
+def test_generate_replay_matches_only_earlier_real_participants(slots):
+    """Each sham participant replays a real participant earlier in the list.
+
+    Participants (or slots) are scanned in list order, so a later real participant's
+    feedbacklog does not exist yet when the sham participant is scanned.
+    """
+    ids = [f"{i:03d}" for i in range(1, 41)]
+    id_col, match_col = ("slot", "matched_slot") if slots else ("subject_id", "matched_participant")
+    for seed in range(20):
+        df = generate_randomization(participant_ids=ids, n_sham=20, method="replay", seed=seed, slots=slots)
+        position = {pid: k for k, pid in enumerate(df[id_col])}
+        real = set(df.loc[df["condition"] == "real", id_col])
+        for _, row in df[df["condition"] == "sham"].iterrows():
+            assert row[match_col] in real
+            assert position[row[match_col]] < position[row[id_col]]
+
+
+@pytest.mark.parametrize("slots", [False, True])
+@pytest.mark.parametrize(("n_total", "n_sham"), [(40, 20), (30, 10)])
+def test_generate_replay_pairs_one_to_one(slots, n_total, n_sham):
+    """No real participant is replayed to more than one sham participant."""
+    ids = [f"{i:03d}" for i in range(1, n_total + 1)]
+    match_col = "matched_slot" if slots else "matched_participant"
+    for seed in range(20):
+        df = generate_randomization(participant_ids=ids, n_sham=n_sham, method="replay", seed=seed, slots=slots)
+        matches = df.loc[df["condition"] == "sham", match_col].tolist()
+        assert len(matches) == n_sham
+        assert len(set(matches)) == n_sham
+
+
+def test_generate_replay_pairs_earliest_unpaired_real_participant():
+    """Walking the list, each sham participant replays the earliest real participant not yet paired."""
+    ids = [f"sub-{i:02d}" for i in range(1, 31)]
+    for seed in range(20):
+        df = generate_randomization(participant_ids=ids, n_sham=15, method="replay", seed=seed)
+        unpaired: list[str] = []
+        for _, row in df.iterrows():
+            if row["condition"] == "real":
+                unpaired.append(row["subject_id"])
+                continue
+            assert row["matched_participant"] == unpaired.pop(0)
+
+
+def test_generate_replay_rejects_more_sham_than_real():
+    """One-to-one replay needs at least as many real as sham participants."""
+    ids = [f"sub-{i:02d}" for i in range(1, 41)]
+    generate_randomization(participant_ids=ids, n_sham=20, method="replay", seed=0)  # 20/20 is allowed
+    with pytest.raises(ValueError, match="at most 20"):
+        generate_randomization(participant_ids=ids, n_sham=21, method="replay", seed=0)
 
 
 def test_generate_simple_method_leaves_matched_columns_empty():

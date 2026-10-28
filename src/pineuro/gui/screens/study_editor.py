@@ -334,7 +334,7 @@ class StudyEditorScreen:
         self.sham_randomization_file_field = ft.TextField(
             label="Randomization File",
             value=sham_cfg.get("randomization_file", ""),
-            hint_text="TSV: subject_id, condition (real/sham), matched_participant, matched_session",
+            hint_text="TSV: [slot,] subject_id, condition (real/sham), matched_participant, matched_session",
         )
         self.sham_randomization_row = st.browse_row(
             self.sham_randomization_file_field,
@@ -1583,6 +1583,24 @@ class StudyEditorScreen:
 
     def _on_generate_randomization(self, e):
         """Open a dialog to generate a study-wide randomization file."""
+
+        def on_ids_select(e):
+            # A slot list leaves subject IDs blank; each is filled at the participant's first session.
+            use_slots = ids_dropdown.value == "slots"
+            prefix_field.visible = not use_slots
+            n_participants_field.label = "Number of slots" if use_slots else "Number of participants"
+            dialog.update()
+
+        ids_dropdown = ft.Dropdown(
+            label="Participant IDs",
+            width=200,
+            options=[
+                ft.dropdown.Option(key="prefix", text="From prefix"),
+                ft.dropdown.Option(key="slots", text="Slots (assigned at first session)"),
+            ],
+            value="prefix",
+            on_select=on_ids_select,
+        )
         prefix_field = ft.TextField(
             label="Participant ID prefix",
             value="sub-",
@@ -1618,7 +1636,7 @@ class StudyEditorScreen:
             title=ft.Text("Generate Randomization File"),
             content=ft.Container(
                 content=ft.Column(
-                    [prefix_field, n_participants_field, n_sham_field, method_dropdown, seed_field],
+                    [ids_dropdown, prefix_field, n_participants_field, n_sham_field, method_dropdown, seed_field],
                     tight=True,
                     spacing=st.GAP_SM,
                 ),
@@ -1627,8 +1645,9 @@ class StudyEditorScreen:
         )
 
         def generate(e):
+            use_slots = ids_dropdown.value == "slots"
             prefix = prefix_field.value.strip()
-            if not prefix:
+            if not use_slots and not prefix:
                 prefix_field.error_text = "Required"
                 prefix_field.update()
                 return
@@ -1643,12 +1662,17 @@ class StudyEditorScreen:
                 return
             n_participants_field.error_text = None
 
+            # Replay pairs each sham participant with a different real one, so at most half are sham.
+            replay = method_dropdown.value == "replay"
+            max_sham = n_total // 2 if replay else n_total - 1
             try:
                 n_sham = int(n_sham_field.value)
-                if n_sham < 1 or n_sham >= n_total:
+                if n_sham < 1 or n_sham > max_sham:
                     raise ValueError
             except (TypeError, ValueError):
-                n_sham_field.error_text = f"Must be between 1 and {n_total - 1}"
+                n_sham_field.error_text = f"Must be between 1 and {max_sham}" + (
+                    " (replay pairs each sham with a different real participant)" if replay else ""
+                )
                 n_sham_field.update()
                 return
             n_sham_field.error_text = None
@@ -1674,13 +1698,18 @@ class StudyEditorScreen:
 
             from pineuro.sham import generate_randomization
 
-            participant_ids = [f"{prefix}{i:02d}" for i in range(1, n_total + 1)]
+            if use_slots:
+                width = max(3, len(str(n_total)))
+                participant_ids = [f"{i:0{width}d}" for i in range(1, n_total + 1)]
+            else:
+                participant_ids = [f"{prefix}{i:02d}" for i in range(1, n_total + 1)]
             generate_randomization(
                 participant_ids=participant_ids,
                 n_sham=n_sham,
                 method=method_dropdown.value,
                 output_path=save_path,
                 seed=seed_val,
+                slots=use_slots,
             )
 
             self.sham_randomization_file_field.value = save_path

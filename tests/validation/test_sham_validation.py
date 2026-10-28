@@ -12,7 +12,9 @@ disable the Start/Create buttons). These tests pin: with sham enabled it rejects
 an unlisted participant and a missing/unconfigured randomization file, accepts a
 listed one, and stays silent when sham is disabled. A reconciliation test keeps
 ``get_condition_for_participant``'s permissive default documented and explains
-why callers in a sham study must check membership first.
+why callers in a sham study must check membership first. For a slot list, the
+gate instead lets a new participant's first session assign them the next unused
+slot, and each participant must then receive exactly that slot's condition.
 
 Expected values follow directly from the rtCHR config shape and the documented
 gate contract -- nothing is recomputed from pineuro's implementation.
@@ -25,8 +27,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from pineuro.gui.components.session_selection_dialog import validate_session_start
-from pineuro.sham import get_condition_for_participant, load_randomization
+from pineuro.gui.components.session_selection_dialog import pending_slot_assignment, validate_session_start
+from pineuro.sham import assign_next_slot, get_condition_for_participant, load_randomization
 
 pytestmark = pytest.mark.validation
 
@@ -130,3 +132,48 @@ def test_lookup_default_is_why_callers_must_check_membership():
     """
     info = get_condition_for_participant({}, "rtchr001")
     assert info["condition"] == "real"
+
+
+# =============================================================================
+# Slot lists -- allocation by scan order, not by study ID
+# =============================================================================
+
+
+def _write_slot_list(path):
+    """Write a new pre-allocated list (no subject_id column yet): 001 real, 002 sham replaying 001, 003 real."""
+    pd.DataFrame(
+        {
+            "slot": ["001", "002", "003"],
+            "condition": ["real", "sham", "real"],
+            "matched_slot": ["", "001", ""],
+        }
+    ).to_csv(path, sep="\t", index=False)
+    return path
+
+
+def test_slot_assignment_gives_each_id_its_slots_condition(tmp_path):
+    """Gapped study IDs, assigned in scan order, receive the slots' pre-allocated conditions."""
+    rand = _write_slot_list(tmp_path / "slots.tsv")
+    cfg = _study_config(rand)
+    scanned = ["sub-charms255", "sub-charms270", "sub-charms271"]
+    for pid in scanned:
+        assert validate_session_start(cfg, pid, 0, tmp_path) == []
+        assert pending_slot_assignment(cfg, pid) is not None
+        assign_next_slot(rand, pid)
+
+    randomization = load_randomization(rand)
+    conditions = [get_condition_for_participant(randomization, pid)["condition"] for pid in scanned]
+    assert conditions == ["real", "sham", "real"]
+    # The sham participant replays whoever took slot 001.
+    assert randomization["sub-charms270"]["matched_participant"] == "sub-charms255"
+
+
+def test_assigned_participant_is_not_reassigned(tmp_path):
+    """Once assigned, a participant is listed: no pending slot, and a second assignment is refused."""
+    rand = _write_slot_list(tmp_path / "slots.tsv")
+    cfg = _study_config(rand)
+    assert assign_next_slot(rand, "sub-charms255") == "001"
+    assert pending_slot_assignment(cfg, "sub-charms255") is None
+    with pytest.raises(ValueError, match="already listed"):
+        assign_next_slot(rand, "sub-charms255")
+    assert load_randomization(rand)["sub-charms255"]["condition"] == "real"

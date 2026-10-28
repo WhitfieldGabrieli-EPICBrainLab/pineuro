@@ -2,11 +2,14 @@
 
 import queue
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from pineuro.gui.components.pipeline_runner import PipelineRunner, _select_sham_task_mask_names
+from pineuro.gui.components.pipeline_runner import PipelineRunner, _select_sham_task_mask_names, _study_root
+from pineuro.gui.models import StudyConfig, StudyMetadata
+from pineuro.sham import find_feedbacklog_for_replay
 
 
 class _FakeProcess:
@@ -332,3 +335,25 @@ class TestBrainMaskParams:
         params = brain_mask_params(self.LOC, tmp_path, "sub-01", "ses-01")
         assert params["brain_mask_threshold_fraction"] == expected_fraction
         assert params["brain_mask_cleanup"] == (4 if adjusted else 2)
+
+
+class TestStudyRoot:
+    def test_is_the_study_dir_above_the_session_dir(self, tmp_path):
+        study = StudyConfig(
+            metadata=StudyMetadata(name="S"),
+            session_config={
+                "paths": {"base_dir": str(tmp_path)},
+                "sessions": [{"localizers": [], "feedback_runs": []}],
+            },
+        )
+        base_dir = Path(study.build_session_config(0, "sub-02", "ses-01")["paths"]["base_dir"])
+        assert _study_root(base_dir) == tmp_path
+
+    def test_replay_finds_another_participants_feedbacklog(self, tmp_path):
+        # Regression: replay searched <study>/sub-02/sub-01/ses-01/... instead of <study>/sub-01/ses-01/...
+        output_dir = tmp_path / "sub-01" / "ses-01" / "feedback" / "02_feedback_output"
+        output_dir.mkdir(parents=True)
+        log = output_dir / "sub-01_ses-01_task-ball_run-01_attempt-01_feedbacklog.tsv"
+        log.write_text("volume\tDefaultA\n1\t0.1\n")
+        base_dir = tmp_path / "sub-02" / "ses-01"
+        assert find_feedbacklog_for_replay(_study_root(base_dir), "sub-01", "ses-01", task="ball", run=1) == log

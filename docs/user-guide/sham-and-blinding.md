@@ -25,7 +25,7 @@ Sham participants receive feedback derived from a different brain network than t
 
 Sham participants receive a replay of another participant's activation timeseries. The feedback display looks identical to real feedback but is not driven by the current participant's brain activity.
 
-Replay requires specifying a matched participant (whose data to replay) in the randomization file.
+Replay requires specifying a matched participant (whose data to replay) in the randomization file. A generated replay list pairs each sham participant with a different real participant scanned earlier, the earliest one not yet paired, so at most half of the list can be sham.
 
 ## Blind Operator Mode
 
@@ -55,10 +55,30 @@ sub-04	sham	sub-03
 | `matched_participant` | For replay | Whose data to replay |
 | `matched_session` | No | Which session (defaults to same session number) |
 | `notes` | No | Free-text notes |
+| `slot` | No | Makes the file a slot list (see below) |
+| `matched_slot` | No | In a slot list, the slot whose participant is replayed |
+| `assigned_at` | No | Written by pineuro when it assigns a slot |
 
 The randomization file is configured in the Study Editor sham section.
 
-When sham is enabled, membership in this file is enforced: the session start is hard-blocked if the randomization file is missing/unconfigured, or if the participant's ID is not listed in it. This prevents an unlisted participant from silently defaulting the whole study to real feedback. (A runtime guard backs up the dialog-time check.)
+When sham is enabled, membership in this file is enforced: the session start is hard-blocked if the randomization file is missing/unconfigured, or if the participant's ID is not listed in it. This prevents an unlisted participant from silently defaulting the whole study to real feedback. (A runtime guard backs up the dialog-time check.) A slot list is the exception, as described below.
+
+### Slot Lists
+
+A study can pre-allocate its randomization as numbered slots and assign participants to them in the order they are scanned. Give the file a `slot` column. A new list needs no `subject_id` column; pineuro adds it at the first assignment, and a blank `subject_id` marks an unused slot. Study IDs can then have gaps, for example from participants who withdraw before scanning, without unbalancing the list.
+
+```
+slot	subject_id	condition	matched_slot	assigned_at
+001	sub-charms255	real		2026-10-30T09:12:04
+002	sub-charms270	sham	001	2026-11-02T14:40:51
+003		real
+```
+
+When a participant with no data starts their first session and is not yet listed, the Start dialog names the slot they will receive, and **Assign Slot and Start** writes their ID and an `assigned_at` time into the first unused slot in file order. The dialog never shows the condition. Slots are assigned only at a participant's first session, so an unlisted ID at a later session is still blocked as a likely typo, and a new participant is blocked once every slot is assigned. pineuro does not undo an assignment; correcting one means editing the file.
+
+For replay, `matched_slot` names the earlier slot whose participant is replayed, and pineuro resolves it to the participant assigned to that slot. The **Generate Randomization** dialog creates a slot list when **Participant IDs** is set to **Slots**.
+
+The file lists every slot's condition, so in blind mode keep it where operators do not open it.
 
 ## How Logging Works
 

@@ -254,6 +254,9 @@ class ShamConfig:
         Columns: subject_id, condition, matched_participant, matched_session, notes
         For 'replay' delivery: matched_participant specifies which participant's
         feedbacklog to replay from (looked up in the study's base_dir).
+        A file with a ``slot`` column is a pre-allocated slot list: a new participant
+        is assigned the next unused slot at their first session, and replay matches
+        are given by ``matched_slot`` (see :func:`pineuro.sham.assign_next_slot`).
     """
 
     enabled: bool = False

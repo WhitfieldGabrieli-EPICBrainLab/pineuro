@@ -37,6 +37,63 @@ def _session_number_from_id(session_id: str) -> int:
     return 1
 
 
+def _unlisted_participant_errors(rand_path: Path, participant_id: str, session_index: int) -> list[str]:
+    """Errors for a sham-study participant who is not in the randomization file.
+
+    A slot list (a ``slot`` column) assigns a new participant to its next unused
+    slot when their first session starts, so that case is not an error.
+    """
+    from pineuro.sham import next_unassigned_slot
+
+    try:
+        free_slot = next_unassigned_slot(rand_path)
+    except ValueError:  # no slot column: participants are listed directly
+        return [
+            f"Participant '{participant_id}' is not listed in the randomization file "
+            f"({rand_path.name}). Sham is enabled study-wide, so an unlisted participant "
+            f"cannot be assigned a condition — check for a typo or add them to the file."
+        ]
+    if free_slot is None:
+        return [
+            f"Participant '{participant_id}' is not listed in the randomization file "
+            f"({rand_path.name}), and every slot in it is assigned. Check for a typo in the "
+            f"participant ID or add slots to the file."
+        ]
+    if session_index > 0:
+        return [
+            f"Participant '{participant_id}' is not listed in the randomization file "
+            f"({rand_path.name}). A slot is assigned only at a participant's first session, "
+            f"so check for a typo in the participant ID."
+        ]
+    return []
+
+
+def pending_slot_assignment(study_config: StudyConfig | None, participant_id: str) -> tuple[Path, str] | None:
+    """The randomization slot a participant's first session would assign them to.
+
+    Returns ``(randomization_file, slot)`` when sham is enabled, the randomization
+    file is a slot list with an unused slot, and the participant is not listed in
+    it yet; otherwise ``None``.
+    """
+    if study_config is None:
+        return None
+    sham_cfg = study_config.session_config.get("sham", {}) or {}
+    rand_file = sham_cfg.get("randomization_file")
+    if not sham_cfg.get("enabled", False) or not rand_file:
+        return None
+
+    from pineuro.sham import load_randomization, next_unassigned_slot
+
+    rand_path = Path(rand_file)
+    try:
+        if participant_id in load_randomization(rand_path):
+            return None
+        slot = next_unassigned_slot(rand_path)
+    except (OSError, ValueError):  # unreadable, or not a slot list (validate_session_start reports it)
+        return None
+    return None if slot is None else (rand_path, slot)
+
+
 def validate_session_start(
     study_config: StudyConfig | None,
     participant_id: str,
@@ -64,7 +121,8 @@ def validate_session_start(
     # Sham gate: when sham is enabled study-wide, the participant must appear in the
     # randomization file. Otherwise no condition can be assigned and the run would
     # silently default to "real" (the original bug). This mirrors the runtime guard in
-    # pipeline_runner so the operator gets the error before the session starts.
+    # pipeline_runner so the operator gets the error before the session starts. A slot
+    # list instead assigns an unlisted participant a slot as their first session starts.
     sham_cfg = study_config.session_config.get("sham", {}) or {}
     if sham_cfg.get("enabled", False):
         rand_file = sham_cfg.get("randomization_file")
@@ -83,11 +141,7 @@ def validate_session_start(
                     errors.append(f"Sham is enabled but the randomization file could not be read: {exc}")
                 else:
                     if participant_id not in randomization:
-                        errors.append(
-                            f"Participant '{participant_id}' is not listed in the randomization file "
-                            f"({rand_path.name}). Sham is enabled study-wide, so an unlisted participant "
-                            f"cannot be assigned a condition — check for a typo or add them to the file."
-                        )
+                        errors.extend(_unlisted_participant_errors(rand_path, participant_id, session_index))
 
     sessions = study_config.session_config.get("sessions") or []
     if not 0 <= session_index < len(sessions):
@@ -177,6 +231,8 @@ class SessionSelectionDialog:
         """Show dialog for a new participant without existing data (starts ses-01)."""
         default_session_id = "ses-01"
         errors = validate_session_start(self.study_config, self.participant_id, 0, self.base_dir)
+        # Never shows the slot's condition, so the assignment keeps the operator blind.
+        pending_slot = None if errors else pending_slot_assignment(self.study_config, self.participant_id)
 
         body: list[ft.Control] = [
             ft.Text(f"Participant: {self.participant_id}", size=st.SUBSECTION, weight=ft.FontWeight.BOLD),
@@ -184,9 +240,38 @@ class SessionSelectionDialog:
             ft.Text("No existing data found for this participant.", size=st.CAPTION, color=st.MUTED),
             ft.Text(f"A new session ({default_session_id}) will be created.", size=st.CAPTION),
         ]
+        if pending_slot is not None:
+            rand_path, slot = pending_slot
+            body.append(
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.INFO_OUTLINE, color=st.INFO, size=st.ICON_SM),
+                        ft.Text(
+                            f"{self.participant_id} is not yet in the randomization list. Starting assigns "
+                            f"them to the next unused slot ({slot}), recorded in {rand_path.name}.",
+                            size=st.CAPTION,
+                            expand=True,
+                        ),
+                    ],
+                    spacing=st.GAP_SM,
+                )
+            )
         body.extend(self._error_controls(errors))
+        assign_error = ft.Text("", size=st.CAPTION, color=st.ERROR, visible=False)
+        body.append(assign_error)
 
         def start_new(e):
+            if pending_slot is not None:
+                from pineuro.sham import assign_next_slot
+
+                try:
+                    assign_next_slot(pending_slot[0], self.participant_id)
+                except Exception as exc:  # e.g. the file is open in another program
+                    logger.error(f"Randomization slot assignment failed: {exc}")
+                    assign_error.value = f"Could not assign a randomization slot: {exc}"
+                    assign_error.visible = True
+                    assign_error.update()
+                    return
             self.page.pop_dialog()
             self.on_select(default_session_id, self._make_session_metadata(default_session_id, 1, ""))
 
@@ -199,7 +284,7 @@ class SessionSelectionDialog:
             actions=[
                 ft.TextButton("Cancel", on_click=cancel),
                 ft.FilledButton(
-                    "Start",
+                    "Start" if pending_slot is None else "Assign Slot and Start",
                     icon=ft.Icons.PLAY_ARROW,
                     on_click=start_new,
                     disabled=bool(errors),

@@ -988,7 +988,10 @@ class FeedbackTabBuilder:
             content=ft.Column(
                 [
                     st.subsection("Replay Configuration"),
-                    st.caption("Replay mode uses the matched_participant column from the study randomization file."),
+                    st.caption(
+                        "Replay mode uses the matched_participant column (matched_slot in a slot list) "
+                        "from the study randomization file."
+                    ),
                 ],
                 spacing=st.GAP_MD,
             ),

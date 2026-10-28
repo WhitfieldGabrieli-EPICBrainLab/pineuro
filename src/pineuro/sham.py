@@ -22,6 +22,7 @@ Components
 - ShamActivationProvider: Base class for sham activation sources
 - ReplayActivationProvider: Replays activations from another participant's feedbacklog
 - load_randomization(): Load subject -> condition assignments from TSV
+- next_unassigned_slot() / assign_next_slot(): Fill a pre-allocated slot list
 - find_feedbacklog_for_replay(): Locate matched participant's feedbacklog.tsv
 - get_condition_for_participant(): Look up condition assignment
 
@@ -40,10 +41,27 @@ Example:
     sub-02        sham         sub-01                 ses-01           Replay sub-01 data
     sub-03        real
     sub-04        sham                                                 Alt masks (no match)
+
+Slot lists
+----------
+A file with a ``slot`` column is a pre-allocated list whose participants are
+assigned as they are scanned. A row with a blank subject_id is an unused slot
+(a new list has no subject_id column at all); assign_next_slot() writes a
+participant into the first one (in file order) and records ``assigned_at``. For replay, ``matched_slot`` names the slot whose
+participant is replayed and is resolved to that participant's subject_id.
+
+Example:
+    slot    subject_id       condition    matched_slot    assigned_at
+    001     sub-charms255    real                         2026-10-30T09:12:04
+    002     sub-charms270    sham         001             2026-11-02T14:40:51
+    003                      real
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
+from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -158,8 +176,115 @@ class ReplayActivationProvider(ShamActivationProvider):
 
 
 def _nan_to_str(val) -> str | None:
-    """Convert a pandas value to str, treating NaN as None."""
-    return None if pd.isna(val) else str(val)
+    """Convert a pandas value to str, treating NaN and blank cells as None."""
+    return None if pd.isna(val) or not str(val).strip() else str(val)
+
+
+def _randomization_sep(file_path: Path) -> str:
+    """Field separator for a randomization file, from its extension."""
+    return "\t" if file_path.suffix.lower() in (".tsv", ".txt") else ","
+
+
+def _read_randomization_verbatim(file_path: Path) -> pd.DataFrame:
+    """Read a randomization file with every cell as a string and blanks as ``""``."""
+    if not file_path.exists():
+        raise FileNotFoundError(f"Randomization file not found: {file_path}")
+    df = pd.read_csv(file_path, sep=_randomization_sep(file_path), dtype=str, keep_default_na=False)
+    if "subject_id" not in df.columns:
+        if "slot" not in df.columns:
+            raise ValueError("Randomization file must have 'subject_id' column")
+        # A new slot list has no subject_id column until its first participant is assigned
+        df.insert(df.columns.get_loc("slot") + 1, "subject_id", "")
+    return df
+
+
+def next_unassigned_slot(file_path: Path) -> str | None:
+    """Return the slot the next new participant would be assigned to.
+
+    Slots fill in file order, so this is the first row whose subject_id is blank.
+
+    Parameters
+    ----------
+    file_path : Path
+        Path to randomization file (TSV or CSV)
+
+    Returns
+    -------
+    str or None
+        The slot, or None if every slot is assigned.
+
+    Raises
+    ------
+    FileNotFoundError
+        If file_path does not exist
+    ValueError
+        If the file has no ``slot`` column (participants are listed directly)
+    """
+    file_path = Path(file_path)
+    df = _read_randomization_verbatim(file_path)
+    if "slot" not in df.columns:
+        raise ValueError(f"Randomization file {file_path.name} has no 'slot' column")
+    free = df.index[df["subject_id"].str.strip() == ""]
+    return str(df.at[free[0], "slot"]) if len(free) else None
+
+
+def assign_next_slot(file_path: Path, participant_id: str) -> str:
+    """Assign a participant to the next unused slot of a pre-allocated randomization list.
+
+    Writes the participant's ID and an ``assigned_at`` timestamp into the first
+    row (in file order) whose subject_id is blank, so the file records the slot ->
+    participant mapping. Every other cell is kept verbatim, and the file is
+    replaced atomically. The condition is neither logged nor returned, so the
+    assignment does not unblind the operator.
+
+    Parameters
+    ----------
+    file_path : Path
+        Path to randomization file (TSV or CSV) with a ``slot`` column
+    participant_id : str
+        Participant identifier to assign (e.g., "sub-charms270")
+
+    Returns
+    -------
+    str
+        The assigned slot
+
+    Raises
+    ------
+    FileNotFoundError
+        If file_path does not exist
+    ValueError
+        If the file has no ``slot`` column, the participant is already listed,
+        or every slot is assigned
+    """
+    file_path = Path(file_path)
+    df = _read_randomization_verbatim(file_path)
+    if "slot" not in df.columns:
+        raise ValueError(f"Randomization file {file_path.name} has no 'slot' column")
+
+    subject_ids = df["subject_id"].str.strip()
+    if (subject_ids == participant_id).any():
+        raise ValueError(f"Participant {participant_id} is already listed in {file_path.name}")
+    free = df.index[subject_ids == ""]
+    if not len(free):
+        raise ValueError(f"All {len(df)} slots in {file_path.name} are assigned")
+
+    row = free[0]
+    slot = str(df.at[row, "slot"])
+    df.at[row, "subject_id"] = participant_id
+    if "assigned_at" not in df.columns:
+        df["assigned_at"] = ""
+    df.at[row, "assigned_at"] = datetime.now().isoformat(timespec="seconds")
+
+    partial = file_path.with_name(file_path.name + ".partial")
+    try:
+        df.to_csv(partial, sep=_randomization_sep(file_path), index=False)
+        os.replace(partial, file_path)
+    finally:
+        partial.unlink(missing_ok=True)
+
+    logger.info(f"Assigned {participant_id} to randomization slot {slot} in {file_path}")
+    return slot
 
 
 def load_randomization(file_path: Path) -> dict[str, dict]:
@@ -188,37 +313,61 @@ def load_randomization(file_path: Path) -> dict[str, dict]:
             ...
         }
 
+        In a slot list (a ``slot`` column), unused slots (blank subject_id) are
+        left out, and a ``matched_slot`` is resolved to the subject_id assigned to
+        that slot (None while the slot is unused). An explicit
+        matched_participant takes precedence over matched_slot.
+
     Raises
     ------
     FileNotFoundError
         If file_path does not exist
     ValueError
-        If required columns are missing or condition values are invalid
+        If required columns are missing, condition values are invalid, or a
+        slot is blank or duplicated
     """
     file_path = Path(file_path)
 
     if not file_path.exists():
         raise FileNotFoundError(f"Randomization file not found: {file_path}")
 
-    # Determine separator from extension
-    sep = "\t" if file_path.suffix.lower() in (".tsv", ".txt") else ","
-    df = pd.read_csv(file_path, sep=sep)
+    # Read every cell as a string so IDs stay verbatim ("001" would otherwise load as 1)
+    df = pd.read_csv(file_path, sep=_randomization_sep(file_path), dtype=str)
 
     # Validate required columns
     if "subject_id" not in df.columns:
-        raise ValueError("Randomization file must have 'subject_id' column")
+        if "slot" not in df.columns:
+            raise ValueError("Randomization file must have 'subject_id' column")
+        df["subject_id"] = None  # a new slot list: no participant assigned yet
     if "condition" not in df.columns:
         raise ValueError("Randomization file must have 'condition' column")
 
+    slot_subjects: dict[str, str | None] = {}
+    if "slot" in df.columns:
+        slots = [_nan_to_str(s) or "" for s in df["slot"]]
+        if "" in slots:
+            raise ValueError("Randomization file has a row with a blank 'slot'")
+        duplicates = sorted({s for s in slots if slots.count(s) > 1})
+        if duplicates:
+            raise ValueError(f"Randomization file has duplicate slots: {duplicates}")
+        slot_subjects = {s: _nan_to_str(sid) for s, sid in zip(slots, df["subject_id"], strict=True)}
+
     result = {}
     for _, row in df.iterrows():
-        subject_id = str(row["subject_id"])
+        subject_id = _nan_to_str(row["subject_id"])
         condition = str(row["condition"]).lower()
 
         if condition not in ("real", "sham"):
-            raise ValueError(f"Invalid condition '{condition}' for {subject_id}. Must be 'real' or 'sham'")
+            label = subject_id or f"slot {row.get('slot')}"
+            raise ValueError(f"Invalid condition '{condition}' for {label}. Must be 'real' or 'sham'")
+
+        if subject_id is None:
+            continue  # unused slot
 
         matched_participant = _nan_to_str(row.get("matched_participant"))
+        matched_slot = _nan_to_str(row.get("matched_slot"))
+        if matched_participant is None and matched_slot is not None:
+            matched_participant = slot_subjects.get(matched_slot)
         matched_session = _nan_to_str(row.get("matched_session"))
 
         result[subject_id] = {
@@ -238,6 +387,7 @@ def generate_randomization(
     matched_session: str | None = None,
     output_path: Path | None = None,
     seed: int | None = None,
+    slots: bool = False,
 ) -> pd.DataFrame:
     """Generate a randomization file assigning participants to real/sham conditions.
 
@@ -250,14 +400,18 @@ def generate_randomization(
         Participant identifiers (e.g., ["sub-01", "sub-02", ..., "sub-20"])
     n_sham : int
         Number of participants to assign to the sham condition.
-        Must be > 0 and < len(participant_ids).
+        Must be > 0 and < len(participant_ids), and at most
+        len(participant_ids) // 2 for method="replay".
     method : str
         Assignment method:
         - "simple": Random real/sham assignment with no replay matching.
-        - "replay": Random assignment plus automatic sham→real participant
-          matching for feedbacklog replay (round-robin if more sham than real).
-          The first participant (participant_ids[0]) is always assigned "real"
-          since replay requires prior data to exist.
+        - "replay": Random assignment plus one-to-one sham→real participant
+          matching for feedbacklog replay. Participants are assumed to be
+          scanned in list order, so the assignment is drawn uniformly from the
+          orders in which every sham participant has a real participant
+          earlier in the list, and each sham participant is matched to the
+          earliest earlier real participant not yet matched. The first
+          participant (participant_ids[0]) is therefore always "real".
     matched_session : str, optional
         Session ID to populate the matched_session column for replay participants.
         Ignored when method="simple".
@@ -265,12 +419,19 @@ def generate_randomization(
         If provided, write the randomization table to this path as TSV.
     seed : int, optional
         Random seed for reproducible assignments.
+    slots : bool
+        If True, ``participant_ids`` are the slots of a pre-allocated list whose
+        participants are assigned as they are scanned (``assign_next_slot()``).
+        The table then has a ``slot`` column and no subject_id column, and
+        replay matches go in ``matched_slot`` instead of ``matched_participant``.
 
     Returns
     -------
     pd.DataFrame
         Randomization table with columns: subject_id, condition,
-        matched_participant, matched_session, notes.
+        matched_participant, matched_session, notes. With ``slots``: slot,
+        condition, plus matched_slot for replay and matched_session when it
+        is given (subject_id is added at the first assignment).
 
     Raises
     ------
@@ -287,46 +448,64 @@ def generate_randomization(
         )
     if len(set(participant_ids)) != len(participant_ids):
         raise ValueError("participant_ids contains duplicates")
+    if method == "replay" and n_sham > len(participant_ids) // 2:
+        raise ValueError(
+            f"method='replay' pairs each sham participant with a different real participant, "
+            f"so n_sham can be at most {len(participant_ids) // 2} (got {n_sham})"
+        )
 
     rng = np.random.default_rng(seed)
 
     # --- Shuffle and assign conditions ---
-    indices = np.arange(len(participant_ids))
-    rng.shuffle(indices)
+    # For replay, participants are scanned in list order and each sham participant
+    # replays a different, earlier real participant, so every prefix of the list needs
+    # at least as many real as sham participants. Redrawing until that holds samples
+    # uniformly from the valid orders (and makes participant_ids[0] real).
+    while True:
+        indices = np.arange(len(participant_ids))
+        rng.shuffle(indices)
 
-    conditions = ["real"] * len(participant_ids)
-    for i in range(n_sham):
-        conditions[indices[i]] = "sham"
+        conditions = ["real"] * len(participant_ids)
+        for i in range(n_sham):
+            conditions[indices[i]] = "sham"
 
-    # First participant must be real for replay (no prior data to replay from)
-    if method == "replay" and conditions[0] == "sham":
-        first_real = next(i for i in range(len(conditions)) if conditions[i] == "real")
-        conditions[0], conditions[first_real] = conditions[first_real], conditions[0]
+        if method != "replay" or np.cumsum([1 if c == "real" else -1 for c in conditions]).min() >= 0:
+            break
 
     # --- Build matched_participant column for replay method ---
     matched_participants: list[str | None] = [None] * len(participant_ids)
     matched_sessions: list[str | None] = [None] * len(participant_ids)
 
     if method == "replay":
-        real_ids = [participant_ids[i] for i in range(len(participant_ids)) if conditions[i] == "real"]
-        sham_indices = [i for i in range(len(participant_ids)) if conditions[i] == "sham"]
-
-        # Round-robin match sham → real
-        for j, sham_idx in enumerate(sham_indices):
-            matched_participants[sham_idx] = real_ids[j % len(real_ids)]
+        # Each sham participant replays the earliest earlier real participant not yet paired.
+        unpaired: deque[int] = deque()
+        for i, condition in enumerate(conditions):
+            if condition == "real":
+                unpaired.append(i)
+                continue
+            matched_participants[i] = participant_ids[unpaired.popleft()]
             if matched_session:
-                matched_sessions[sham_idx] = matched_session
+                matched_sessions[i] = matched_session
 
     # --- Build DataFrame ---
-    df = pd.DataFrame(
-        {
-            "subject_id": participant_ids,
-            "condition": conditions,
-            "matched_participant": matched_participants,
-            "matched_session": matched_sessions,
-            "notes": [""] * len(participant_ids),
-        }
-    )
+    if slots:
+        # Only columns that carry values: assign_next_slot() adds subject_id at the first assignment.
+        columns: dict[str, list] = {"slot": participant_ids, "condition": conditions}
+        if method == "replay":
+            columns["matched_slot"] = matched_participants
+            if matched_session:
+                columns["matched_session"] = matched_sessions
+        df = pd.DataFrame(columns)
+    else:
+        df = pd.DataFrame(
+            {
+                "subject_id": participant_ids,
+                "condition": conditions,
+                "matched_participant": matched_participants,
+                "matched_session": matched_sessions,
+                "notes": [""] * len(participant_ids),
+            }
+        )
 
     # --- Write TSV if path provided ---
     if output_path is not None:

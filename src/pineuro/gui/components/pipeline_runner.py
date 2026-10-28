@@ -170,6 +170,11 @@ def build_task_extraction_params(
     return params
 
 
+def _study_root(base_dir: Path) -> Path:
+    """Study root for a participant-session ``base_dir`` (``<study>/<participant>/<session>``)."""
+    return base_dir.parent.parent
+
+
 def _select_sham_task_mask_names(
     sham_mask_names: list[str],
     real_mask_names: list[str],
@@ -1950,7 +1955,7 @@ class PipelineRunner:
         from ..utils import has_fresh_localizer
 
         localizers = config.get("localizers", [])
-        study_base_dir = base_dir.parent.parent  # study root (holds reuse source sessions)
+        study_base_dir = _study_root(base_dir)  # holds reuse source sessions
 
         # Run-number rule: an all-reused session collects only the realtime reference
         # (run-01); any other session has an initial reference (run-01) so realtime is
@@ -2587,7 +2592,8 @@ class PipelineRunner:
                             if not matched_participant:
                                 raise ValueError(
                                     f"Sham participant {self.participant_id} has replay mode "
-                                    f"but no matched_participant in randomization file"
+                                    f"but no matched_participant in randomization file "
+                                    f"(or its matched_slot has not been assigned yet)"
                                 )
 
                             if self._is_blind_mode():
@@ -2603,12 +2609,10 @@ class PipelineRunner:
                                 )
 
                             try:
-                                # base_dir is participant-specific (e.g., /data/sub-02)
-                                # For replay, we need the study base dir (e.g., /data)
-                                # to find other participants' feedbacklogs
-                                study_base_dir = base_dir.parent
+                                # Replay reads another participant's feedbacklog, which lives
+                                # under the study root, not this participant-session base_dir.
                                 feedbacklog_path = find_feedbacklog_for_replay(
-                                    source_dir=study_base_dir,
+                                    source_dir=_study_root(base_dir),
                                     matched_participant=matched_participant,
                                     matched_session=matched_session or self.session_id,
                                     task=task_entity,
