@@ -7,6 +7,7 @@ matplotlib.use("Agg")  # Non-interactive backend for testing
 
 import nibabel as nib
 import numpy as np
+import pytest
 
 # =============================================================================
 # summarize_mask
@@ -256,3 +257,37 @@ class TestFeedbackReportTriggeredDurations:
         html = report.read_text()
         assert "Duration (s)" not in html
         assert "Triggered Prompt Durations" not in html
+
+
+class TestPlotBrainMaskReview:
+    def _mean(self, tmp_path):
+        mean = tmp_path / "mean.nii.gz"
+        nib.save(nib.Nifti1Image(np.random.default_rng(0).random((12, 12, 10)) * 100, np.eye(4)), mean)
+        return mean
+
+    def test_mask_from_file_or_array(self, tmp_path):
+        from pineuro.qc import plot_brain_mask_review
+
+        mean = self._mean(tmp_path)
+        mask = np.zeros((12, 12, 10))
+        mask[3:9, 3:9, 2:8] = 1
+        mask_file = tmp_path / "mask.nii.gz"
+        nib.save(nib.Nifti1Image(mask, np.eye(4)), mask_file)
+
+        plot_brain_mask_review(mean, mask_file, tmp_path / "from_file.png", n_slices=3, title="Brain mask")
+        plot_brain_mask_review(mean, mask.astype(bool), tmp_path / "from_array.png", n_slices=3)
+        assert (tmp_path / "from_file.png").stat().st_size > 0
+        assert (tmp_path / "from_array.png").stat().st_size > 0
+
+    def test_empty_mask_still_plots(self, tmp_path):
+        from pineuro.qc import plot_brain_mask_review
+
+        out = tmp_path / "empty.png"
+        plot_brain_mask_review(self._mean(tmp_path), np.zeros((12, 12, 10)), out)
+        assert out.exists()
+
+    def test_shape_mismatch_raises(self, tmp_path):
+        from pineuro.qc import plot_brain_mask_review
+
+        with pytest.raises(ValueError, match="Shape mismatch"):
+            plot_brain_mask_review(self._mean(tmp_path), np.zeros((5, 5, 5)), tmp_path / "x.png")

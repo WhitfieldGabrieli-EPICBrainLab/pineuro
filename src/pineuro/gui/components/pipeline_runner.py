@@ -59,6 +59,117 @@ def _loc(config: dict, idx: int = 0) -> dict:
     return locs[idx] if idx < len(locs) else {}
 
 
+def resolve_task_contrasts(loc: dict[str, Any]) -> dict[str, str]:
+    """A task localizer's contrasts, or its task's registered default contrasts if it sets none."""
+    contrasts = dict(loc.get("contrasts") or {})
+    if not contrasts:
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        with contextlib.suppress(KeyError):
+            contrasts = dict(get_task_metadata(loc.get("type", "")).default_contrasts or {})
+    return contrasts
+
+
+def resolve_events_file(base_dir: Path, loc_type: str) -> Path:
+    """The latest events TSV the localizer task wrote for ``loc_type``."""
+    events_dir = Path(base_dir) / "preprocessing"
+    events_glob = sorted(events_dir.glob(f"*_task-{loc_type}_*_events.tsv"))
+    if not events_glob:
+        raise FileNotFoundError(
+            f"No events file found in {events_dir} for task '{loc_type}'. "
+            f"Run the localizer task first to generate the events TSV."
+        )
+    return events_glob[-1]
+
+
+def brain_mask_params(
+    loc: dict[str, Any], preprocessing_dir: Path, participant_id: str, session_id: str
+) -> dict[str, Any]:
+    """Brain-mask keyword arguments for ``preprocessing()`` for one localizer.
+
+    The operator's choice for this participant (recorded by
+    ``recompute_brain_mask``) if there is one, else the localizer's study
+    defaults (``preprocessing:`` block), else pineuro's defaults.
+    """
+    from pineuro.preprocessing import recorded_brain_mask_params
+
+    from .mask_invalidation import localizer_task_name
+
+    study = loc.get("preprocessing", {}) or {}
+    recorded = recorded_brain_mask_params(preprocessing_dir, participant_id, session_id, localizer_task_name(loc)) or {}
+    return {
+        "brain_mask_threshold_fraction": recorded.get(
+            "threshold_fraction", study.get("brain_mask_threshold_fraction", 0.5)
+        ),
+        "brain_mask_cleanup": recorded.get("cleanup", study.get("brain_mask_cleanup", 2)),
+    }
+
+
+def build_task_extraction_params(
+    config: dict[str, Any],
+    loc_idx: int,
+    participant_id: str,
+    session_id: str,
+    *,
+    overwrite: bool,
+    events_file: str | Path | None = None,
+) -> dict[str, Any]:
+    """The ``mask_extraction_task`` keyword arguments for a task localizer, as the pipeline runs it.
+
+    Shared by both extraction steps and by the task-mask review, which re-derives
+    masks with the same parameters and rewrites ``reproduce_masks.py`` with them.
+    Includes the participant's saved per-mask overrides (``mask_overrides.json``)
+    when there are any. ``events_file`` defaults to :func:`resolve_events_file`.
+    """
+    from pineuro.mask_extraction import load_mask_overrides
+
+    from .mask_invalidation import extraction_root, localizer_task_name
+
+    base_dir = Path(config["paths"]["base_dir"])
+    loc = _loc(config, loc_idx)
+    loc_type = loc.get("type", "rest")
+    task_name = localizer_task_name(loc)
+    extraction = loc.get("extraction", {})
+    preprocessing_dir = base_dir / "preprocessing"
+    prefix = f"{participant_id}_{session_id}"
+    root_dir = extraction_root(base_dir, config, loc_idx)
+    if events_file is None:
+        events_file = resolve_events_file(base_dir, loc_type)
+
+    params: dict[str, Any] = {
+        "participant_id": participant_id,
+        "session_id": session_id,
+        "root_dir": root_dir,
+        "input_file": preprocessing_dir / f"{prefix}_task-{task_name}_preproc.nii.gz",
+        "mask_file": preprocessing_dir / f"{prefix}_task-{task_name}_preproc_mask.nii.gz",
+        "events": str(events_file),
+        "contrasts": resolve_task_contrasts(loc),
+        "tr": loc.get("tr", 1.2),
+        "threshold": extraction.get("threshold", 2000),
+        "threshold_method": extraction.get("threshold_method", "top_n"),
+        "atlas_mask": extraction.get("atlas_mask"),
+        "atlas_source": extraction.get("atlas_source"),
+        "atlas_regions": extraction.get("atlas_regions"),
+        "ref_file": str(preprocessing_dir / f"{prefix}_task-{task_name}_boldref.nii.gz"),
+        "cluster_start_threshold": extraction.get("cluster_start_threshold", 2.0),
+        "cluster_step": extraction.get("cluster_step", 0.1),
+        "cluster_return_all": extraction.get("cluster_return_all", False),
+        "min_cluster_size": extraction.get("min_cluster_size", 50),
+        "max_total_voxels": extraction.get("max_total_voxels"),
+        "include_reverse": loc.get("include_reverse_contrasts", False),
+        "overwrite": overwrite,
+        "smoothing_fwhm": extraction.get("smooth_fwhm", 5.0),
+        "high_pass": extraction.get("highpass", 0.01),
+        "drift_model": loc.get("drift_model", "cosine"),
+        "hrf_model": loc.get("hrf_model", "spm"),
+        "qc_enabled": True,
+    }
+    overrides = load_mask_overrides(root_dir)
+    if overrides:
+        params["mask_overrides"] = overrides
+    return params
+
+
 def _select_sham_task_mask_names(
     sham_mask_names: list[str],
     real_mask_names: list[str],
@@ -1141,6 +1252,7 @@ class PipelineRunner:
             attempt_per_input=attempt_per_input,
             run_per_input=run_per_input,
             stop_event=self._stop_event,
+            **brain_mask_params(_loc(config), preprocessing_dir, self.participant_id, self.session_id),
         )
 
     def _manual_reference_file(self, base_dir: Path, root_dir: Path, loc: dict) -> Path:
@@ -1276,8 +1388,6 @@ class PipelineRunner:
         if loc_type != "rest":
             self._emit_progress("Using task-based (GLM) mask extraction")
 
-            contrasts = loc0.get("contrasts", {})
-
             # Auto-resolve events file from localizer task output
             events_dir = base_dir / "preprocessing"
             events_glob = sorted(events_dir.glob(f"*_task-{loc_type}_*_events.tsv"))
@@ -1305,48 +1415,9 @@ class PipelineRunner:
                     f"Run the localizer task first to generate the events TSV."
                 )
 
-            tr = loc0.get("tr", 1.2)
-            threshold = extraction.get("threshold", 2000)
-            smooth_fwhm = extraction.get("smooth_fwhm", 5.0)
-            highpass = extraction.get("highpass", 0.01)
-            threshold_method = extraction.get("threshold_method", "top_n")
-            atlas_mask_cfg = extraction.get("atlas_mask")
-            atlas_source_cfg = extraction.get("atlas_source")
-            atlas_regions_cfg = extraction.get("atlas_regions")
-            cluster_start_threshold = extraction.get("cluster_start_threshold", 2.0)
-            cluster_step = extraction.get("cluster_step", 0.1)
-            cluster_return_all = extraction.get("cluster_return_all", False)
-            min_cluster_size = extraction.get("min_cluster_size", 50)
-            max_total_voxels = extraction.get("max_total_voxels")
-
-            include_reverse = loc0.get("include_reverse_contrasts", False)
-
-            params = {
-                "participant_id": self.participant_id,
-                "session_id": self.session_id,
-                "root_dir": mask_extraction_dir,
-                "input_file": preproc_file,
-                "mask_file": mask_file,
-                "events": events_file,
-                "contrasts": contrasts,
-                "tr": tr,
-                "threshold": threshold,
-                "threshold_method": threshold_method,
-                "atlas_mask": atlas_mask_cfg,
-                "atlas_source": atlas_source_cfg,
-                "atlas_regions": atlas_regions_cfg,
-                "ref_file": str(ref_file),
-                "cluster_start_threshold": cluster_start_threshold,
-                "cluster_step": cluster_step,
-                "cluster_return_all": cluster_return_all,
-                "min_cluster_size": min_cluster_size,
-                "max_total_voxels": max_total_voxels,
-                "include_reverse": include_reverse,
-                "overwrite": self.overwrite,
-                "smoothing_fwhm": smooth_fwhm,
-                "high_pass": highpass,
-                "qc_enabled": True,
-            }
+            params = build_task_extraction_params(
+                config, 0, self.participant_id, self.session_id, overwrite=self.overwrite, events_file=events_file
+            )
             _mask_files = run_mask_extraction_from_config("task", params, progress_callback=progress_callback)
             self._write_reproduce_script("task", params)
         else:
@@ -1572,6 +1643,7 @@ class PipelineRunner:
             attempt_per_input=attempt_per_input,
             run_per_input=run_per_input,
             stop_event=self._stop_event,
+            **brain_mask_params(loc, preprocessing_dir, self.participant_id, self.session_id),
         )
 
     def _run_localizer_extraction(self, loc_idx: int) -> None:
@@ -1657,59 +1729,12 @@ class PipelineRunner:
         else:
             from pineuro.mask_extraction import run_mask_extraction_from_config
 
-            extraction = loc.get("extraction", {})
-            contrasts = loc.get("contrasts", {})
-            if not contrasts:
-                from pineuro.tasks.task_registry import get_task_metadata
-
-                try:
-                    metadata = get_task_metadata(loc_type)
-                    contrasts = metadata.default_contrasts or {}
-                    if contrasts:
-                        self._emit_progress(f"Using default contrasts from {metadata.display_name}: {contrasts}")
-                except KeyError:
-                    pass
-
-            # Auto-resolve events file
-            events_dir = base_dir / "preprocessing"
-            events_glob = sorted(events_dir.glob(f"*_task-{loc_type}_*_events.tsv"))
-            if events_glob:
-                events_file = str(events_glob[-1])
-                self._emit_progress(f"Found events file: {Path(events_file).name}")
-            else:
-                raise FileNotFoundError(
-                    f"No events file found in {events_dir} for task '{loc_type}'. "
-                    f"Run the localizer task first to generate the events TSV."
-                )
-
-            params = {
-                "participant_id": self.participant_id,
-                "session_id": self.session_id,
-                "root_dir": loc_dir,
-                "input_file": preproc_file,
-                "mask_file": mask_file,
-                "events": events_file,
-                "contrasts": contrasts,
-                "tr": loc.get("tr", 1.2),
-                "threshold": extraction.get("threshold", 2000),
-                "threshold_method": extraction.get("threshold_method", "top_n"),
-                "atlas_mask": extraction.get("atlas_mask"),
-                "atlas_source": extraction.get("atlas_source"),
-                "atlas_regions": extraction.get("atlas_regions"),
-                "ref_file": str(ref_file),
-                "cluster_start_threshold": extraction.get("cluster_start_threshold", 2.0),
-                "cluster_step": extraction.get("cluster_step", 0.1),
-                "cluster_return_all": extraction.get("cluster_return_all", False),
-                "min_cluster_size": extraction.get("min_cluster_size", 50),
-                "max_total_voxels": extraction.get("max_total_voxels"),
-                "include_reverse": loc.get("include_reverse_contrasts", False),
-                "overwrite": self.overwrite,
-                "smoothing_fwhm": extraction.get("smooth_fwhm", 5.0),
-                "high_pass": extraction.get("highpass", 0.01),
-                "drift_model": loc.get("drift_model", "cosine"),
-                "hrf_model": loc.get("hrf_model", "spm"),
-                "qc_enabled": True,
-            }
+            params = build_task_extraction_params(
+                config, loc_idx, self.participant_id, self.session_id, overwrite=self.overwrite
+            )
+            if not loc.get("contrasts") and params["contrasts"]:
+                self._emit_progress(f"Using default contrasts for {loc_type}: {params['contrasts']}")
+            self._emit_progress(f"Found events file: {Path(params['events']).name}")
             mask_files = run_mask_extraction_from_config("task", params, progress_callback=progress_callback)
             self._write_reproduce_script("task", params)
 

@@ -154,7 +154,7 @@ import logging
 import re  # Regex for filename parsing
 import threading  # Cooperative cancellation signal for long-running steps
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Union, cast
 
@@ -1387,6 +1387,8 @@ def _register_atlas_to_subject(
     n_networks: int,
     overwrite: bool = False,
     progress_callback: Callable[[str, str], None] | None = None,
+    *,
+    xfm_prefix: Path | None = None,
 ) -> tuple[Path, list[str], list[str]]:
     """Register a network atlas from MNI space to participant subject space.
 
@@ -1411,6 +1413,12 @@ def _register_atlas_to_subject(
         If True, re-run registration even if outputs exist
     progress_callback : callable, optional
         Callback ``(step, detail)`` for progress updates
+    xfm_prefix : Path, optional
+        Prefix of a subject-to-MNI transform the caller has already computed
+        (for example by :func:`mask_extraction_task`). It is reused as is
+        (``overwrite`` then applies only to the warped atlas); the caller owns
+        its freshness. By default the transform is computed under
+        ``mnireg_dir``.
 
     Returns
     -------
@@ -1432,10 +1440,13 @@ def _register_atlas_to_subject(
     mnireg_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Compute transformation from participant space to MNI space
-    output_prefix = mnireg_dir / f"{ref_file.with_suffix('').stem}_to_MNI_boldref"
+    if xfm_prefix is not None:
+        output_prefix, xfm_overwrite = xfm_prefix, False
+    else:
+        output_prefix, xfm_overwrite = mnireg_dir / f"{ref_file.with_suffix('').stem}_to_MNI_boldref", overwrite
     emit("Computing transforms...")
     _mni_ref_file, sub2mni_fwd_xfm, sub2mni_inv_xfm = compute_xfm_to_mni(
-        input_file=ref_file, output_prefix=output_prefix, overwrite=overwrite
+        input_file=ref_file, output_prefix=output_prefix, overwrite=xfm_overwrite
     )
 
     atlas_display = ATLAS_SOURCES.get(network_atlas, {}).get("display_name", network_atlas)
@@ -2709,6 +2720,8 @@ def cluster_extent_threshold(
         - ``stat_threshold`` : float
         - ``min_cluster_size`` : int
         - ``n_clusters_input`` : int — clusters before size filtering
+        - ``largest_cluster_input`` : int — size of the largest cluster before
+          size filtering (0 if none)
         - ``n_clusters_surviving`` : int — clusters after size filtering
         - ``cluster_sizes`` : list[int] — sizes of surviving clusters (descending)
         - ``total_voxels`` : int — total voxels in the output mask
@@ -2740,6 +2753,7 @@ def cluster_extent_threshold(
             "stat_threshold": stat_threshold,
             "min_cluster_size": min_cluster_size,
             "n_clusters_input": 0,
+            "largest_cluster_input": 0,
             "n_clusters_surviving": 0,
             "cluster_sizes": [],
             "total_voxels": 0,
@@ -2750,6 +2764,7 @@ def cluster_extent_threshold(
     # Label contiguous clusters
     labeled, n_clusters = ndimage_label(above.astype(np.int32))
     sizes = np.bincount(labeled.ravel())[1:]  # skip background (label 0)
+    largest_input = int(sizes.max()) if sizes.size else 0
 
     # Filter by minimum cluster size
     surviving_labels = [i + 1 for i, s in enumerate(sizes) if s >= min_cluster_size]
@@ -2760,6 +2775,7 @@ def cluster_extent_threshold(
             "stat_threshold": stat_threshold,
             "min_cluster_size": min_cluster_size,
             "n_clusters_input": n_clusters,
+            "largest_cluster_input": largest_input,
             "n_clusters_surviving": 0,
             "cluster_sizes": [],
             "total_voxels": 0,
@@ -2800,6 +2816,7 @@ def cluster_extent_threshold(
         "stat_threshold": stat_threshold,
         "min_cluster_size": min_cluster_size,
         "n_clusters_input": n_clusters,
+        "largest_cluster_input": largest_input,
         "n_clusters_surviving": len(final_sizes),
         "cluster_sizes": final_sizes,
         "total_voxels": total_voxels,
@@ -2912,7 +2929,11 @@ class TaskMaskSelection:
     mask_name : str
         User-assigned name for this mask (e.g., "CEN", "DMN")
     source_type : str
-        Always "glm_contrast" for task-based masks
+        ``"glm_contrast"`` for a mask thresholded from the contrast map. A mask
+        replaced at review is ``"atlas_network"`` (a network warped from MNI),
+        ``"mni_file"`` (a user mask warped from MNI), ``"native_file"`` (a user
+        mask already in the participant's BOLD reference space, e.g. an edited
+        copy of the mask), or ``"atlas_roi"`` (the localizer's search atlas itself)
     contrast_definition : str
         The contrast expression (e.g., "nback - rest")
     stat_type : str
@@ -2927,7 +2948,11 @@ class TaskMaskSelection:
         How the mask was thresholded (``"top_n"``, ``"cluster"``, or
         ``"cluster_extent"``)
     selection_reason : str
-        Always "auto" for task-based (no manual selection needed)
+        ``"auto"`` for the study's own thresholding. Operator changes at review
+        are ``"operator_rethreshold"`` (new threshold parameters),
+        ``"fallback_configured"`` (the study's fallback mask),
+        ``"operator_replace"`` (a network or file chosen at review), or
+        ``"atlas_roi"`` (the search atlas)
     atlas_used : str or None
         Atlas name or path used for cluster thresholding, if applicable
     final_cluster_threshold : float or None
@@ -2942,6 +2967,17 @@ class TaskMaskSelection:
         Minimum cluster size used (cluster_extent method only)
     max_total_voxels : int or None
         Maximum total voxels cap used (cluster_extent method only)
+    n_clusters_input : int or None
+        Clusters at the cluster-forming threshold before the size filter
+        (cluster_extent method only)
+    largest_cluster_input : int or None
+        Size of the largest of those clusters (cluster_extent method only)
+    threshold_params : dict or None
+        The thresholding parameters actually used for this mask (None for a
+        replaced mask)
+    source : str or None
+        What a replaced mask came from, e.g. ``"yeo_17:DefaultA"`` or the path
+        of an MNI-space mask file
     """
 
     mask_name: str
@@ -2960,6 +2996,10 @@ class TaskMaskSelection:
     cluster_table: list[dict[str, Any]] | None = None
     min_cluster_size: int | None = None
     max_total_voxels: int | None = None
+    n_clusters_input: int | None = None
+    largest_cluster_input: int | None = None
+    threshold_params: dict[str, Any] | None = None
+    source: str | None = None
 
 
 def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str, TaskMaskSelection]) -> Path:
@@ -2987,6 +3027,493 @@ def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str,
 
     logger.info(f"Saved task mask selections to {output_file}")
     return output_file
+
+
+def load_task_mask_selections(masks_dir: Union[str, Path]) -> dict[str, TaskMaskSelection]:
+    """Load task-based mask selections written by :func:`save_task_mask_selections`.
+
+    Returns an empty dict when the file is missing or is not a task-format file.
+    Unknown keys are ignored, so a file written by a newer pineuro still loads.
+    """
+    selections_file = Path(masks_dir) / "mask_selections.json"
+    if not selections_file.exists():
+        return {}
+    with open(selections_file) as f:
+        data = json.load(f)
+    if not isinstance(data, dict) or data.get("type") != "task":
+        return {}
+    known = {f.name for f in fields(TaskMaskSelection)}
+    return {
+        name: TaskMaskSelection(**{k: v for k, v in entry.items() if k in known})
+        for name, entry in data.get("selections", {}).items()
+    }
+
+
+MASK_OVERRIDES_FILENAME = "mask_overrides.json"
+
+
+def load_mask_overrides(root_dir: Union[str, Path]) -> dict[str, dict[str, Any]]:
+    """Load the per-participant task-mask overrides saved at review.
+
+    Parameters
+    ----------
+    root_dir : str or Path
+        The localizer's mask-extraction root (the ``root_dir`` passed to
+        :func:`mask_extraction_task`).
+
+    Returns
+    -------
+    dict
+        ``{mask_name: override}`` in the ``mask_overrides`` format of
+        :func:`mask_extraction_task`; empty when none are saved.
+    """
+    overrides_file = Path(root_dir) / MASK_OVERRIDES_FILENAME
+    if not overrides_file.exists():
+        return {}
+    with open(overrides_file) as f:
+        data = json.load(f)
+    return dict(data) if isinstance(data, dict) else {}
+
+
+def fallback_override(spec: dict[str, str]) -> dict[str, Any]:
+    """The ``mask_overrides`` entry that applies a study's configured fallback mask.
+
+    ``spec`` is an ``extraction.fallback_masks`` value: ``{"atlas", "network"}``
+    or ``{"file"}``.
+    """
+    if "file" in spec:
+        return {"kind": "mni_file", "file": spec["file"], "selection_reason": "fallback_configured"}
+    return {
+        "kind": "atlas_network",
+        "atlas": spec["atlas"],
+        "network": spec["network"],
+        "selection_reason": "fallback_configured",
+    }
+
+
+def save_mask_overrides(root_dir: Union[str, Path], overrides: dict[str, dict[str, Any]]) -> Path:
+    """Save the per-participant task-mask overrides; an empty dict removes the file."""
+    overrides_file = Path(root_dir) / MASK_OVERRIDES_FILENAME
+    if not overrides:
+        overrides_file.unlink(missing_ok=True)
+        return overrides_file
+    overrides_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(overrides_file, "w") as f:
+        json.dump(overrides, f, indent=2, default=_json_default)
+    logger.info(f"Saved mask overrides to {overrides_file}")
+    return overrides_file
+
+
+# Thresholding parameters each method uses, with the mask_extraction_task defaults.
+_METHOD_PARAM_DEFAULTS: dict[str, Any] = {
+    "threshold": 2000,
+    "cluster_start_threshold": 2.0,
+    "cluster_step": 0.1,
+    "cluster_return_all": False,
+    "min_cluster_size": 50,
+    "max_total_voxels": None,
+}
+
+# Fields a "rethreshold" override may change, per thresholding method. The method
+# itself cannot be changed per mask.
+_RETHRESHOLD_FIELDS: dict[str, tuple[str, ...]] = {
+    "top_n": ("threshold",),
+    "cluster": ("threshold", "cluster_start_threshold", "cluster_step", "cluster_return_all"),
+    "cluster_extent": ("cluster_start_threshold", "min_cluster_size", "max_total_voxels"),
+}
+
+# Override kind -> selection_reason recorded when the override does not name one.
+_OVERRIDE_DEFAULT_REASONS: dict[str, str] = {
+    "rethreshold": "operator_rethreshold",
+    "atlas_network": "operator_replace",
+    "mni_file": "operator_replace",
+    "native_file": "operator_replace",
+    "atlas_roi": "atlas_roi",
+}
+
+
+def _atlas_qc_label(atlas_mask: Union[str, Path] | None, atlas_source: str | None) -> str:
+    """Label used in the ``03_masks/{prefix}_atlas_{label}.nii.gz`` copy of the search atlas."""
+    return Path(atlas_mask).name if atlas_mask is not None else str(atlas_source)
+
+
+def threshold_task_stat_map(
+    stat_data: np.ndarray,
+    *,
+    threshold_method: str,
+    threshold: int = 2000,
+    cluster_start_threshold: float = 2.0,
+    cluster_step: float = 0.1,
+    cluster_return_all: bool = False,
+    min_cluster_size: int = 50,
+    max_total_voxels: int | None = None,
+    atlas_data: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Threshold one GLM contrast map into a binary mask.
+
+    This is the thresholding step of :func:`mask_extraction_task`, shared with
+    :func:`update_task_mask` so that a mask re-thresholded at review is computed
+    exactly as the pipeline computes it. See :func:`mask_extraction_task` for
+    the methods and parameters.
+
+    Returns
+    -------
+    binary_mask : np.ndarray
+        3D uint8 mask.
+    info : dict
+        ``outcome`` (None for top_n), ``n_voxels``, ``n_positive``,
+        ``peak_stat``, ``final_cluster_threshold``, ``n_clusters_found``,
+        ``n_clusters_input``, ``largest_cluster_input`` and
+        ``threshold_params`` (the method and parameter values used).
+    """
+    positive_mask = stat_data > 0
+    n_positive = int(positive_mask.sum())
+    peak_stat = float(np.nanmax(stat_data)) if n_positive > 0 else 0.0
+    info: dict[str, Any] = {
+        "outcome": None,
+        "n_positive": n_positive,
+        "peak_stat": peak_stat,
+        "final_cluster_threshold": None,
+        "n_clusters_found": None,
+        "n_clusters_input": None,
+        "largest_cluster_input": None,
+    }
+
+    if threshold_method == "top_n":
+        if n_positive == 0:
+            binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
+        elif n_positive <= threshold:
+            binary_mask = positive_mask.astype(np.uint8)
+        else:
+            # Standard case: threshold to top N positive voxels
+            flat = stat_data.ravel()
+            positive_indices = np.where(flat > 0)[0]
+            positive_values = flat[positive_indices]
+            top_n = np.argpartition(positive_values, -threshold)[-threshold:]
+            result = np.zeros(flat.shape, dtype=bool)
+            result[positive_indices[top_n]] = True
+            binary_mask = result.astype(np.uint8).reshape(stat_data.shape)
+        info["threshold_params"] = {"threshold_method": "top_n", "threshold": threshold}
+
+    elif threshold_method == "cluster_extent":
+        binary_mask, extent_info = cluster_extent_threshold(
+            stat_data=stat_data,
+            stat_threshold=cluster_start_threshold,
+            min_cluster_size=min_cluster_size,
+            max_total_voxels=max_total_voxels,
+            atlas_data=atlas_data,
+        )
+        info.update(
+            outcome=extent_info["outcome"],
+            final_cluster_threshold=cluster_start_threshold,
+            n_clusters_found=extent_info.get("n_clusters_surviving"),
+            n_clusters_input=extent_info["n_clusters_input"],
+            largest_cluster_input=extent_info["largest_cluster_input"],
+            threshold_params={
+                "threshold_method": "cluster_extent",
+                "cluster_start_threshold": cluster_start_threshold,
+                "min_cluster_size": min_cluster_size,
+                "max_total_voxels": max_total_voxels,
+            },
+        )
+
+    elif threshold_method == "cluster":
+        if atlas_data is None:
+            raise ValueError("threshold_method='cluster' needs atlas_data to define the search region")
+        binary_mask, cluster_info = cluster_threshold_stat_map(
+            stat_data=stat_data,
+            atlas_data=atlas_data,
+            target_n_voxels=threshold,
+            start_threshold=cluster_start_threshold,
+            step=cluster_step,
+            return_all_clusters=cluster_return_all,
+        )
+        outcome = cluster_info["outcome"]
+        if outcome in ("no_clusters_found", "empty_atlas"):
+            # Fallback: top-N on atlas-masked stat data
+            atlas_masked_stat = stat_data * atlas_data
+            atlas_positive = atlas_masked_stat > 0
+            n_atlas_positive = int(atlas_positive.sum())
+            if n_atlas_positive == 0:
+                binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
+            elif n_atlas_positive <= threshold:
+                binary_mask = atlas_positive.astype(np.uint8)
+            else:
+                flat = atlas_masked_stat.ravel()
+                positive_indices = np.where(flat > 0)[0]
+                positive_values = flat[positive_indices]
+                top_n = np.argpartition(positive_values, -threshold)[-threshold:]
+                result = np.zeros(flat.shape, dtype=bool)
+                result[positive_indices[top_n]] = True
+                binary_mask = result.astype(np.uint8).reshape(stat_data.shape)
+            outcome = "fallback_top_n"
+        info.update(
+            outcome=outcome,
+            final_cluster_threshold=cluster_info.get("final_threshold"),
+            n_clusters_found=cluster_info.get("n_clusters_at_final"),
+            threshold_params={
+                "threshold_method": "cluster",
+                "threshold": threshold,
+                "cluster_start_threshold": cluster_start_threshold,
+                "cluster_step": cluster_step,
+                "cluster_return_all": cluster_return_all,
+            },
+        )
+
+    else:
+        raise ValueError(f"threshold_method must be 'top_n', 'cluster', or 'cluster_extent', got '{threshold_method}'")
+
+    info["n_voxels"] = int(binary_mask.sum())
+    return binary_mask, info
+
+
+def _validate_mask_override(mask_name: str, override: dict[str, Any], threshold_method: str) -> None:
+    """Raise ValueError if ``override`` is not a valid ``mask_overrides`` entry."""
+    kind = override.get("kind") if isinstance(override, dict) else None
+    if kind not in _OVERRIDE_DEFAULT_REASONS:
+        raise ValueError(
+            f"Override for '{mask_name}' needs 'kind' set to one of {sorted(_OVERRIDE_DEFAULT_REASONS)}, got {override!r}"
+        )
+    extra = set(override) - {"kind", "selection_reason"}
+    if kind == "rethreshold":
+        allowed = set(_RETHRESHOLD_FIELDS[threshold_method])
+        if not extra or not extra <= allowed:
+            raise ValueError(
+                f"Re-threshold override for '{mask_name}' may set {sorted(allowed)} for "
+                f"threshold_method='{threshold_method}', got {sorted(extra)}"
+            )
+    elif kind == "atlas_network":
+        atlas, network = override.get("atlas"), override.get("network")
+        if extra != {"atlas", "network"} or ATLAS_SOURCES.get(str(atlas), {}).get("type") != "network":
+            raise ValueError(
+                f"Atlas-network override for '{mask_name}' needs a network atlas and a network, got {override!r}"
+            )
+        labels = get_yeo_labels(n_networks=ATLAS_SOURCES[str(atlas)]["n_networks"])
+        if network not in labels:
+            raise ValueError(f"Network '{network}' is not in {atlas}: {labels}")
+    elif kind in ("mni_file", "native_file"):
+        if extra != {"file"} or not override.get("file"):
+            raise ValueError(f"File override for '{mask_name}' needs a 'file', got {override!r}")
+    elif extra:
+        raise ValueError(f"Atlas-ROI override for '{mask_name}' takes no parameters, got {sorted(extra)}")
+
+
+def _replacement_mask(
+    mask_name: str,
+    override: dict[str, Any],
+    stat_img: Nifti1Image,
+    *,
+    atlas_data: np.ndarray | None,
+    atlas_used: str | None,
+    ref_file: Union[str, Path] | None,
+    mnireg_dir: Path,
+    bids_prefix: str,
+    overwrite: bool,
+) -> tuple[np.ndarray, str, str]:
+    """Build a replacement mask on the stat-map grid; return ``(mask, source_type, source)``."""
+    from nilearn.image import resample_to_img
+
+    kind = override["kind"]
+    if kind == "atlas_roi":
+        if atlas_data is None:
+            raise ValueError(f"An atlas-ROI mask for '{mask_name}' needs the localizer's search atlas")
+        return (atlas_data > 0.5).astype(np.uint8), "atlas_roi", f"atlas_roi:{atlas_used}"
+
+    if kind == "native_file":
+        # Already in the participant's space: used as is, on exactly the stat map's grid
+        native_mask = Path(override["file"])
+        if not native_mask.exists():
+            raise FileNotFoundError(f"Participant-space mask not found: {native_mask}")
+        native_img = cast(Nifti1Image, load(native_mask))
+        if native_img.shape[:3] != stat_img.shape[:3] or not np.allclose(native_img.affine, stat_img.affine, atol=1e-3):
+            raise ValueError(
+                f"{native_mask.name} is not on this participant's BOLD reference grid "
+                f"(shape {native_img.shape[:3]} vs {stat_img.shape[:3]}). A participant-space mask must be "
+                "in the localizer's BOLD reference space, e.g. an edited copy of the mask."
+            )
+        return (np.asarray(native_img.dataobj) > 0).astype(np.uint8), "native_file", str(native_mask)
+
+    if ref_file is None:
+        raise ValueError(f"Replacing '{mask_name}' with an MNI-space mask needs ref_file to warp it")
+    ref_file = Path(ref_file)
+    # The subject-to-MNI transform mask_extraction_task computes for cluster labelling
+    xfm_prefix = mnireg_dir / f"{bids_prefix}_to_MNI_boldref"
+
+    if kind == "atlas_network":
+        atlas, network = override["atlas"], override["network"]
+        n_networks = ATLAS_SOURCES[atlas]["n_networks"]
+        # One folder per atlas: the warped parcellation's name does not encode 7 vs 17 networks
+        fallback_dir = mnireg_dir / f"fallback_{atlas}"
+        atlas_subject, _, _ = _register_atlas_to_subject(
+            ref_file, fallback_dir, atlas, n_networks, overwrite=overwrite, xfm_prefix=xfm_prefix
+        )
+        mask_file = extract_yeo_mask_for_network(
+            atlas_subject,
+            network,
+            fallback_dir / f"{bids_prefix}_{network}.nii.gz",
+            n_networks=n_networks,
+            overwrite=overwrite,
+        )
+        source_type, source = "atlas_network", f"{atlas}:{network}"
+    else:  # mni_file
+        mni_mask = Path(override["file"])
+        if not mni_mask.exists():
+            raise FileNotFoundError(f"Fallback mask file not found: {mni_mask}")
+        _mni_ref, _fwd_xfm, inv_xfm = compute_xfm_to_mni(input_file=ref_file, output_prefix=xfm_prefix, overwrite=False)
+        fallback_dir = mnireg_dir / "fallback_file"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        mask_file = fallback_dir / f"{bids_prefix}_{mask_name}.nii.gz"
+        _warp_mask_to_reference(
+            mni_mask,
+            ref_file,
+            inv_xfm,
+            mask_file,
+            fallback_dir / f"{bids_prefix}_{mask_name}_transformed.nii.gz",
+            overwrite=overwrite,
+        )
+        source_type, source = "mni_file", str(mni_mask)
+
+    resampled = resample_to_img(cast(Nifti1Image, load(mask_file)), stat_img, interpolation="nearest")
+    return (resampled.get_fdata() > 0.5).astype(np.uint8), source_type, source
+
+
+def _derive_task_mask(
+    mask_name: str,
+    contrast_expr: str,
+    stat_img: Nifti1Image,
+    *,
+    stat_type: str,
+    threshold_method: str,
+    method_params: dict[str, Any],
+    override: dict[str, Any] | None,
+    atlas_data: np.ndarray | None,
+    atlas_used: str | None,
+    ref_file: Union[str, Path] | None,
+    mnireg_dir: Path,
+    bids_prefix: str,
+    overwrite: bool = False,
+) -> tuple[np.ndarray, TaskMaskSelection, dict[str, Any]]:
+    """Derive one task mask, applying its override if any.
+
+    Used by both :func:`mask_extraction_task` and :func:`update_task_mask`, so the
+    pipeline and the review path cannot compute a mask differently. Returns the
+    mask, its selection record (without the cluster table) and the
+    thresholding info (empty for a replaced mask).
+    """
+    stat_data = stat_img.get_fdata()
+    kind = override["kind"] if override else None
+
+    if kind in (None, "rethreshold"):
+        params = dict(method_params)
+        if override:
+            params.update({k: override[k] for k in _RETHRESHOLD_FIELDS[threshold_method] if k in override})
+        binary_mask, info = threshold_task_stat_map(
+            stat_data, threshold_method=threshold_method, atlas_data=atlas_data, **params
+        )
+        selection = TaskMaskSelection(
+            mask_name=mask_name,
+            contrast_definition=contrast_expr,
+            stat_type=stat_type,
+            peak_stat=info["peak_stat"],
+            n_voxels_above_zero=info["n_positive"],
+            n_voxels_thresholded=info["n_voxels"],
+            threshold_method=threshold_method,
+            selection_reason=override.get("selection_reason", "operator_rethreshold") if override else "auto",
+            atlas_used=atlas_used if threshold_method != "top_n" else None,
+            final_cluster_threshold=info["final_cluster_threshold"],
+            n_clusters_found=info["n_clusters_found"],
+            cluster_outcome=info["outcome"],
+            n_clusters_input=info["n_clusters_input"],
+            largest_cluster_input=info["largest_cluster_input"],
+            threshold_params=info["threshold_params"],
+        )
+        if threshold_method == "cluster_extent":
+            selection.min_cluster_size = params["min_cluster_size"]
+            selection.max_total_voxels = params["max_total_voxels"]
+        return binary_mask, selection, info
+
+    assert override is not None
+    binary_mask, source_type, source = _replacement_mask(
+        mask_name,
+        override,
+        stat_img,
+        atlas_data=atlas_data,
+        atlas_used=atlas_used,
+        ref_file=ref_file,
+        mnireg_dir=mnireg_dir,
+        bids_prefix=bids_prefix,
+        overwrite=overwrite,
+    )
+    n_positive = int((stat_data > 0).sum())
+    selection = TaskMaskSelection(
+        mask_name=mask_name,
+        source_type=source_type,
+        contrast_definition=contrast_expr,
+        stat_type=stat_type,
+        peak_stat=float(np.nanmax(stat_data)) if n_positive > 0 else 0.0,
+        n_voxels_above_zero=n_positive,
+        n_voxels_thresholded=int(binary_mask.sum()),
+        threshold_method=threshold_method,
+        selection_reason=override.get("selection_reason", _OVERRIDE_DEFAULT_REASONS[override["kind"]]),
+        atlas_used=atlas_used if kind == "atlas_roi" else None,
+        source=source,
+    )
+    return binary_mask, selection, {}
+
+
+def _log_threshold_outcome(
+    mask_name: str,
+    contrast_expr: str,
+    info: dict[str, Any],
+    emit_progress: Callable[..., None],
+    step_label: str,
+) -> None:
+    """Log the outcome of :func:`threshold_task_stat_map` for one mask."""
+    params = info["threshold_params"]
+    method = params["threshold_method"]
+    n_kept = info["n_voxels"]
+    outcome = info["outcome"]
+
+    if method == "top_n":
+        if info["n_positive"] == 0:
+            logger.warning(f"No positive voxels in contrast '{mask_name}' ({contrast_expr}). Saving empty mask.")
+        elif info["n_positive"] <= params["threshold"]:
+            logger.warning(
+                f"Contrast '{mask_name}' has only {info['n_positive']} positive voxels "
+                f"(requested {params['threshold']}). Keeping all positive voxels."
+            )
+    elif method == "cluster_extent":
+        start = params["cluster_start_threshold"]
+        if outcome == "success":
+            emit_progress(
+                step_label, f"{mask_name}: {n_kept} voxels ({info['n_clusters_found']} clusters, stat>={start})"
+            )
+        elif outcome == "no_suprathreshold_voxels":
+            logger.warning(f"No voxels above threshold {start} for '{mask_name}'")
+        elif outcome == "no_clusters_survive":
+            logger.warning(
+                f"All {info['n_clusters_input']} clusters below "
+                f"min_cluster_size={params['min_cluster_size']} for '{mask_name}' "
+                f"(largest {info['largest_cluster_input']} voxels)"
+            )
+        elif outcome == "capped":
+            emit_progress(step_label, f"{mask_name}: {n_kept} voxels ({info['n_clusters_found']} clusters, capped)")
+    else:
+        if outcome in ("success", "already_under_target"):
+            emit_progress(
+                step_label,
+                f"{mask_name}: {n_kept} voxels "
+                f"(cluster at z>={info['final_cluster_threshold']:.1f}, "
+                f"{info['n_clusters_found']} clusters)",
+            )
+        elif outcome == "fallback_top_n":
+            logger.warning(f"Cluster thresholding failed for '{mask_name}'. Fell back to top-N within atlas region.")
+            emit_progress(step_label, f"{mask_name}: {outcome} — {n_kept} voxels (fallback)")
+        elif outcome == "max_iterations_reached":
+            logger.warning(
+                f"Cluster thresholding for '{mask_name}' hit max iterations. "
+                f"Using largest cluster ({n_kept} voxels, target was {params['threshold']})."
+            )
 
 
 def mask_extraction_task(
@@ -3019,6 +3546,7 @@ def mask_extraction_task(
     qc_enabled: bool = True,
     qc_dir: Union[str, Path] | None = None,
     progress_callback: Callable[[str, str], None] | None = None,
+    mask_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> list[Path]:
     """
     Run the mask extraction pipeline for task-based fMRI data using GLM contrasts.
@@ -3103,8 +3631,8 @@ def mask_extraction_task(
         (default: 50). Only used when ``threshold_method="cluster_extent"``.
     max_total_voxels : int or None
         Optional safety cap on total mask size. If the total surviving voxels
-        exceed this, only the largest clusters are kept until within the cap.
-        ``None`` (default) disables the cap.
+        exceed this, the highest-stat voxels within the surviving clusters are
+        kept up to the cap. ``None`` (default) disables the cap.
         Only used when ``threshold_method="cluster_extent"``.
     stat_type : str
         Type of statistical map: "t" or "z" (default: "t")
@@ -3130,6 +3658,27 @@ def mask_extraction_task(
         Custom QC output directory. If None, uses {root_dir}/../qc/
     progress_callback : callable or None
         Function(step: str, detail: str) for progress updates
+    mask_overrides : dict or None
+        Per-mask changes recorded when an operator reviews the masks (see
+        :func:`update_task_mask`), keyed by mask name. Each entry has a
+        ``kind`` and an optional ``selection_reason``:
+
+        - ``{"kind": "rethreshold", ...}`` thresholds this mask with other
+          values of the method's own parameters (``threshold`` for top_n;
+          ``threshold``, ``cluster_start_threshold``, ``cluster_step`` and
+          ``cluster_return_all`` for cluster; ``cluster_start_threshold``,
+          ``min_cluster_size`` and ``max_total_voxels`` for cluster_extent).
+        - ``{"kind": "atlas_network", "atlas": "yeo_17", "network": "DefaultA"}``
+          replaces the mask with a whole atlas network warped from MNI space.
+        - ``{"kind": "mni_file", "file": "/path/mask_mni.nii.gz"}`` replaces it
+          with an MNI-space mask file warped to subject space.
+        - ``{"kind": "native_file", "file": "/path/mask.nii.gz"}`` replaces it
+          with a mask already on the participant's BOLD reference grid (e.g. an
+          edited copy of the mask), used as is.
+        - ``{"kind": "atlas_roi"}`` replaces it with the search atlas.
+
+        The MNI-space replacements need ``ref_file``. Overrides naming an
+        unknown mask are ignored with a warning.
 
     Returns
     -------
@@ -3259,6 +3808,24 @@ def mask_extraction_task(
                 "ref_file is required when atlas_source is provided, to register the atlas from MNI to subject space."
             )
 
+    # --- Validate per-mask overrides ---
+    all_mask_names = list(contrasts) + ([f"{name}_reverse" for name in contrasts] if include_reverse else [])
+    overrides: dict[str, dict[str, Any]] = {}
+    for name, override in (mask_overrides or {}).items():
+        if name not in all_mask_names:
+            logger.warning(f"Ignoring override for unknown mask '{name}' (masks: {all_mask_names})")
+            continue
+        _validate_mask_override(name, override, threshold_method)
+        overrides[name] = override
+    override_kinds = {o["kind"] for o in overrides.values()}
+    if override_kinds & {"atlas_network", "mni_file"} and ref_file is None:
+        raise ValueError("ref_file is required to replace a mask with an MNI-space mask")
+    uses_atlas = threshold_method == "cluster" or (
+        threshold_method == "cluster_extent" and (atlas_mask is not None or atlas_source is not None)
+    )
+    if "atlas_roi" in override_kinds and not uses_atlas:
+        raise ValueError("An atlas_roi override needs a search atlas (atlas_mask or atlas_source)")
+
     n_steps = 3  # 01_glm, 02_mnireg, 03_masks
     bids_prefix = f"{participant_id}_{session_id}"
 
@@ -3373,6 +3940,7 @@ def mask_extraction_task(
     mnireg_dir.mkdir(parents=True, exist_ok=True)
 
     atlas_subject_space_data = None  # Set below if cluster/cluster_extent mode
+    atlas_inv_xfm: list[str] | None = None  # Subject<-MNI transform, if computed for the atlas
 
     _has_atlas = any(x is not None for x in (atlas_mask, atlas_source))
     if threshold_method == "cluster" or (threshold_method == "cluster_extent" and _has_atlas):
@@ -3410,6 +3978,7 @@ def mask_extraction_task(
                 output_prefix=xfm_prefix,
                 overwrite=overwrite,
             )
+            atlas_inv_xfm = sub2mni_inv_xfm
 
             # Sub-step: Apply inverse transform (MNI -> subject space)
             atlas_subject_path = mnireg_dir / f"{fetch_label}_to_{bids_prefix}.nii.gz"
@@ -3468,14 +4037,17 @@ def mask_extraction_task(
         if not ho_mni_path.exists() or overwrite:
             save(ho_img, ho_mni_path)
 
-        # Compute MNI <-> subject transforms (fast if cached from cluster step above)
+        # Compute MNI <-> subject transforms, reusing the atlas step's if it ran
         ref_file_path = Path(ref_file)
-        xfm_prefix = mnireg_dir / f"{bids_prefix}_to_MNI_boldref"
-        _mni_ref, _fwd_xfm, inv_xfm = compute_xfm_to_mni(
-            input_file=ref_file_path,
-            output_prefix=xfm_prefix,
-            overwrite=False,  # always reuse cached transforms
-        )
+        if atlas_inv_xfm is not None:
+            inv_xfm = atlas_inv_xfm
+        else:
+            xfm_prefix = mnireg_dir / f"{bids_prefix}_to_MNI_boldref"
+            _mni_ref, _fwd_xfm, inv_xfm = compute_xfm_to_mni(
+                input_file=ref_file_path,
+                output_prefix=xfm_prefix,
+                overwrite=overwrite,
+            )
 
         # Apply inverse transform: MNI -> subject space (nearestNeighbor preserves labels)
         ho_subject_path = mnireg_dir / f"harvard_oxford_cort_to_{bids_prefix}.nii.gz"
@@ -3520,6 +4092,17 @@ def mask_extraction_task(
 
     network_thr_files = []
     selections: dict[str, TaskMaskSelection] = {}
+    previous_selections = load_task_mask_selections(masks_dir)
+    method_params = {
+        "threshold": threshold,
+        "cluster_start_threshold": cluster_start_threshold,
+        "cluster_step": cluster_step,
+        "cluster_return_all": cluster_return_all,
+        "min_cluster_size": min_cluster_size,
+        "max_total_voxels": max_total_voxels,
+    }
+    _atlas_label = atlas_source or atlas_mask
+    atlas_used = str(_atlas_label) if _atlas_label else None
 
     for mask_name, contrast_expr in all_contrasts.items():
         stat_map_path = stat_map_paths[mask_name]
@@ -3532,9 +4115,17 @@ def mask_extraction_task(
             logger.info(f"Thresholded mask exists and overwrite=False: {thr_file.name}")
             network_thr_files.append(thr_file)
 
-            # Still record selection metadata from existing file
             img = cast(Nifti1Image, load(thr_file))
             n_voxels = int(img.get_fdata().sum())
+
+            # Keep the recorded selection, which may hold an operator's override
+            previous = previous_selections.get(mask_name)
+            if previous is not None:
+                previous.n_voxels_thresholded = n_voxels
+                selections[mask_name] = previous
+                continue
+
+            # Without one, still record selection metadata from the existing file
             stat_img = cast(Nifti1Image, load(stat_map_path))
             stat_data = stat_img.get_fdata()
             selections[mask_name] = TaskMaskSelection(
@@ -3557,174 +4148,37 @@ def mask_extraction_task(
         # Copy unthresholded map
         save(Nifti1Image(stat_data, stat_img.affine, stat_img.header), unthr_file)
 
-        positive_mask = stat_data > 0
-        n_positive = int(positive_mask.sum())
-        peak_stat = float(np.nanmax(stat_data)) if n_positive > 0 else 0.0
-
-        if threshold_method == "top_n":
-            # === TOP-N THRESHOLDING (existing logic) ===
-            if n_positive == 0:
-                logger.warning(f"No positive voxels in contrast '{mask_name}' ({contrast_expr}). Saving empty mask.")
-                binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
-                n_kept = 0
-            elif n_positive <= threshold:
-                logger.warning(
-                    f"Contrast '{mask_name}' has only {n_positive} positive voxels "
-                    f"(requested {threshold}). Keeping all positive voxels."
-                )
-                binary_mask = positive_mask.astype(np.uint8)
-                n_kept = n_positive
-            else:
-                # Standard case: threshold to top N positive voxels
-                flat = stat_data.ravel()
-                positive_indices = np.where(flat > 0)[0]
-                if len(positive_indices) <= threshold:
-                    binary_mask = positive_mask.astype(np.uint8)
-                    n_kept = int(binary_mask.sum())
-                else:
-                    positive_values = flat[positive_indices]
-                    top_n = np.argpartition(positive_values, -threshold)[-threshold:]
-                    result = np.zeros(flat.shape, dtype=bool)
-                    result[positive_indices[top_n]] = True
-                    binary_mask = result.astype(np.uint8).reshape(stat_data.shape)
-                    n_kept = int(binary_mask.sum())
-
-            selections[mask_name] = TaskMaskSelection(
-                mask_name=mask_name,
-                contrast_definition=contrast_expr,
-                stat_type=stat_type,
-                peak_stat=peak_stat,
-                n_voxels_above_zero=n_positive,
-                n_voxels_thresholded=n_kept,
-                threshold_method="top_n",
-            )
-
-        elif threshold_method == "cluster_extent":
-            # === CLUSTER-EXTENT THRESHOLDING ===
-            binary_mask, extent_info = cluster_extent_threshold(
-                stat_data=stat_data,
-                stat_threshold=cluster_start_threshold,
-                min_cluster_size=min_cluster_size,
-                max_total_voxels=max_total_voxels,
-                atlas_data=atlas_subject_space_data,
-            )
-            n_kept = int(binary_mask.sum())
-            outcome = extent_info["outcome"]
-
-            if outcome == "success":
-                emit_progress(
-                    step_label,
-                    f"{mask_name}: {n_kept} voxels "
-                    f"({extent_info['n_clusters_surviving']} clusters, "
-                    f"stat>={cluster_start_threshold})",
-                )
-            elif outcome == "no_suprathreshold_voxels":
-                logger.warning(f"No voxels above threshold {cluster_start_threshold} for '{mask_name}'")
-            elif outcome == "no_clusters_survive":
-                logger.warning(
-                    f"All {extent_info['n_clusters_input']} clusters below "
-                    f"min_cluster_size={min_cluster_size} for '{mask_name}'"
-                )
-            elif outcome == "capped":
-                emit_progress(
-                    step_label,
-                    f"{mask_name}: {n_kept} voxels ({extent_info['n_clusters_surviving']} clusters, capped)",
-                )
-
-            if n_kept == 0 and outcome not in ("no_suprathreshold_voxels", "no_clusters_survive"):
-                logger.warning(f"Cluster-extent mask '{mask_name}' is empty (outcome={outcome})")
-
-            _atlas_label = atlas_source or atlas_mask
-            selections[mask_name] = TaskMaskSelection(
-                mask_name=mask_name,
-                contrast_definition=contrast_expr,
-                stat_type=stat_type,
-                peak_stat=peak_stat,
-                n_voxels_above_zero=n_positive,
-                n_voxels_thresholded=n_kept,
-                threshold_method="cluster_extent",
-                atlas_used=str(_atlas_label) if _atlas_label else None,
-                final_cluster_threshold=cluster_start_threshold,
-                n_clusters_found=extent_info.get("n_clusters_surviving"),
-                cluster_outcome=outcome,
-                min_cluster_size=min_cluster_size,
-                max_total_voxels=max_total_voxels,
-            )
-
-        else:
-            # === CLUSTER-BASED THRESHOLDING ===
-            assert atlas_subject_space_data is not None
-
+        if threshold_method == "cluster":
             # Save atlas-masked stat map for QC
-            atlas_masked_stat = stat_data * atlas_subject_space_data
+            assert atlas_subject_space_data is not None
             atlas_masked_file = masks_dir / f"{bids_prefix}_{mask_name}_atlas_masked.nii.gz"
             save(
-                Nifti1Image(atlas_masked_stat, stat_img.affine, stat_img.header),
+                Nifti1Image(stat_data * atlas_subject_space_data, stat_img.affine, stat_img.header),
                 atlas_masked_file,
             )
 
-            binary_mask, cluster_info = cluster_threshold_stat_map(
-                stat_data=stat_data,
-                atlas_data=atlas_subject_space_data,
-                target_n_voxels=threshold,
-                start_threshold=cluster_start_threshold,
-                step=cluster_step,
-                return_all_clusters=cluster_return_all,
-            )
-            n_kept = int(binary_mask.sum())
-            outcome = cluster_info["outcome"]
-
-            if outcome in ("success", "already_under_target"):
-                emit_progress(
-                    step_label,
-                    f"{mask_name}: {n_kept} voxels "
-                    f"(cluster at z>={cluster_info['final_threshold']:.1f}, "
-                    f"{cluster_info['n_clusters_at_final']} clusters)",
-                )
-            elif outcome in ("no_clusters_found", "empty_atlas"):
-                logger.warning(
-                    f"Cluster thresholding failed for '{mask_name}': {outcome}. "
-                    f"Falling back to top-N within atlas region."
-                )
-                # Fallback: top-N on atlas-masked stat data
-                atlas_positive = atlas_masked_stat > 0
-                n_atlas_positive = int(atlas_positive.sum())
-                if n_atlas_positive == 0:
-                    binary_mask = np.zeros(stat_data.shape, dtype=np.uint8)
-                    n_kept = 0
-                elif n_atlas_positive <= threshold:
-                    binary_mask = atlas_positive.astype(np.uint8)
-                    n_kept = n_atlas_positive
-                else:
-                    flat = atlas_masked_stat.ravel()
-                    positive_indices = np.where(flat > 0)[0]
-                    positive_values = flat[positive_indices]
-                    top_n = np.argpartition(positive_values, -threshold)[-threshold:]
-                    result = np.zeros(flat.shape, dtype=bool)
-                    result[positive_indices[top_n]] = True
-                    binary_mask = result.astype(np.uint8).reshape(stat_data.shape)
-                    n_kept = int(binary_mask.sum())
-                outcome = "fallback_top_n"
-                emit_progress(step_label, f"{mask_name}: {outcome} — {n_kept} voxels (fallback)")
-            elif outcome == "max_iterations_reached":
-                logger.warning(
-                    f"Cluster thresholding for '{mask_name}' hit max iterations. "
-                    f"Using largest cluster ({n_kept} voxels, target was {threshold})."
-                )
-
-            selections[mask_name] = TaskMaskSelection(
-                mask_name=mask_name,
-                contrast_definition=contrast_expr,
-                stat_type=stat_type,
-                peak_stat=peak_stat,
-                n_voxels_above_zero=n_positive,
-                n_voxels_thresholded=n_kept,
-                threshold_method="cluster",
-                atlas_used=str(atlas_source or atlas_mask),
-                final_cluster_threshold=cluster_info.get("final_threshold"),
-                n_clusters_found=cluster_info.get("n_clusters_at_final"),
-                cluster_outcome=outcome,
-            )
+        binary_mask, selection, threshold_info = _derive_task_mask(
+            mask_name,
+            contrast_expr,
+            stat_img,
+            stat_type=stat_type,
+            threshold_method=threshold_method,
+            method_params=method_params,
+            override=overrides.get(mask_name),
+            atlas_data=atlas_subject_space_data,
+            atlas_used=atlas_used,
+            ref_file=ref_file,
+            mnireg_dir=mnireg_dir,
+            bids_prefix=bids_prefix,
+            overwrite=overwrite,
+        )
+        selections[mask_name] = selection
+        n_kept = selection.n_voxels_thresholded
+        peak_stat = selection.peak_stat
+        if threshold_info:
+            _log_threshold_outcome(mask_name, contrast_expr, threshold_info, emit_progress, step_label)
+        else:
+            emit_progress(step_label, f"{mask_name}: replaced with {selection.source}")
 
         # Compute cluster table with anatomical labels
         if n_kept > 0:
@@ -3735,7 +4189,7 @@ def mask_extraction_task(
                 atlas_data=ho_subject_data,
                 atlas_labels=ho_labels,
             )
-            selections[mask_name].cluster_table = cluster_table
+            selection.cluster_table = cluster_table
             n_clusters_found = len(cluster_table)
             logger.info(f"{mask_name}: {n_clusters_found} clusters in {n_kept} voxels")
 
@@ -3743,6 +4197,8 @@ def mask_extraction_task(
         network_thr_files.append(thr_file)
 
         emit_progress(step_label, f"{mask_name}: {n_kept} voxels (peak {stat_type}={peak_stat:.2f})")
+        if n_kept == 0:
+            emit_progress(step_label, f"WARNING: {mask_name} is empty (0 voxels)")
 
     # Save selection metadata
     save_task_mask_selections(masks_dir, selections)
@@ -3769,6 +4225,136 @@ def mask_extraction_task(
         emit_progress("QC report", f"Saved to {report_path.name}")
 
     return network_thr_files
+
+
+def _subject_harvard_oxford(
+    mnireg_dir: Path, bids_prefix: str, stat_img: Nifti1Image
+) -> tuple[np.ndarray | None, list[str] | None]:
+    """Load the Harvard-Oxford labels :func:`mask_extraction_task` warped to subject space, if present."""
+    ho_subject_path = mnireg_dir / f"harvard_oxford_cort_to_{bids_prefix}.nii.gz"
+    if not ho_subject_path.exists():
+        return None, None
+    from nilearn import datasets
+    from nilearn.image import resample_to_img
+
+    ho_labels = list(datasets.fetch_atlas_harvard_oxford("cort-maxprob-thr25-2mm").labels)
+    ho_resampled = resample_to_img(cast(Nifti1Image, load(ho_subject_path)), stat_img, interpolation="nearest")
+    return np.round(ho_resampled.get_fdata()).astype(int), ho_labels
+
+
+def _task_mask_from_cache(
+    params: dict[str, Any], mask_name: str, override: dict[str, Any] | None
+) -> tuple[np.ndarray, TaskMaskSelection, Nifti1Image]:
+    """Derive one task mask from the cached GLM outputs; return ``(mask, selection, stat_img)``."""
+    root_dir = Path(params["root_dir"])
+    bids_prefix = f"{params['participant_id']}_{params['session_id']}"
+    stat_type = params.get("stat_type", "t")
+    threshold_method = params.get("threshold_method", "top_n")
+    atlas_mask, atlas_source = params.get("atlas_mask"), params.get("atlas_source")
+
+    contrasts: dict[str, str] = dict(params["contrasts"])
+    if params.get("include_reverse"):
+        contrasts.update({f"{name}_reverse": f"-({expr})" for name, expr in params["contrasts"].items()})
+    if mask_name not in contrasts:
+        raise ValueError(f"Unknown mask '{mask_name}' (masks: {list(contrasts)})")
+    if override is not None:
+        _validate_mask_override(mask_name, override, threshold_method)
+
+    stat_path = root_dir / "01_glm" / f"{bids_prefix}_{mask_name}_{stat_type}map.nii.gz"
+    if not stat_path.exists():
+        raise FileNotFoundError(f"Stat map not found (run mask extraction first): {stat_path}")
+    stat_img = cast(Nifti1Image, load(stat_path))
+
+    atlas_data = None
+    if threshold_method == "cluster" or (threshold_method == "cluster_extent" and (atlas_mask or atlas_source)):
+        atlas_file = root_dir / "03_masks" / f"{bids_prefix}_atlas_{_atlas_qc_label(atlas_mask, atlas_source)}.nii.gz"
+        if not atlas_file.exists():
+            raise FileNotFoundError(f"Search atlas not found (run mask extraction first): {atlas_file}")
+        atlas_data = (cast(Nifti1Image, load(atlas_file)).get_fdata() > 0.5).astype(np.float64)
+
+    _atlas_label = atlas_source or atlas_mask
+    binary_mask, selection, _info = _derive_task_mask(
+        mask_name,
+        contrasts[mask_name],
+        stat_img,
+        stat_type=stat_type,
+        threshold_method=threshold_method,
+        method_params={k: params.get(k, default) for k, default in _METHOD_PARAM_DEFAULTS.items()},
+        override=override,
+        atlas_data=atlas_data,
+        atlas_used=str(_atlas_label) if _atlas_label else None,
+        ref_file=params.get("ref_file"),
+        mnireg_dir=root_dir / "02_mnireg",
+        bids_prefix=bids_prefix,
+    )
+    return binary_mask, selection, stat_img
+
+
+def preview_task_mask(
+    params: dict[str, Any], mask_name: str, override: dict[str, Any] | None
+) -> tuple[Nifti1Image, TaskMaskSelection]:
+    """The mask :func:`update_task_mask` would write, without writing anything.
+
+    Parameters are as for :func:`update_task_mask`.
+
+    Returns
+    -------
+    mask_img : Nifti1Image
+        The previewed binary mask, on the stat map's grid.
+    selection : TaskMaskSelection
+        Its selection record, with an unlabelled cluster table.
+    """
+    binary_mask, selection, stat_img = _task_mask_from_cache(params, mask_name, override)
+    if selection.n_voxels_thresholded > 0:
+        selection.cluster_table = compute_cluster_table(binary_mask, stat_img.get_fdata(), stat_img.affine)
+    return Nifti1Image(binary_mask, stat_img.affine, stat_img.header), selection
+
+
+def update_task_mask(params: dict[str, Any], mask_name: str, override: dict[str, Any] | None) -> TaskMaskSelection:
+    """Re-derive one task mask from the cached GLM outputs, without refitting the GLM.
+
+    The review path for :func:`mask_extraction_task`: it reads the saved stat
+    map (``01_glm``) and search atlas (``03_masks``), applies ``override`` exactly
+    as ``mask_extraction_task(mask_overrides={mask_name: override})`` would, and
+    writes the mask and its ``mask_selections.json`` entry. The caller records
+    the override (see :func:`save_mask_overrides`) so a replay reproduces it.
+    :func:`preview_task_mask` gives the same mask without writing it.
+
+    Parameters
+    ----------
+    params : dict
+        The keyword arguments the localizer's :func:`mask_extraction_task` call
+        used (the ``PARAMS`` of its ``reproduce_masks.py``).
+    mask_name : str
+        The mask to re-derive (a contrast name, or ``"{name}_reverse"``).
+    override : dict or None
+        A ``mask_overrides`` entry, or None to restore the study's parameters.
+
+    Returns
+    -------
+    TaskMaskSelection
+        The selection record of the new mask.
+    """
+    binary_mask, selection, stat_img = _task_mask_from_cache(params, mask_name, override)
+    root_dir = Path(params["root_dir"])
+    bids_prefix = f"{params['participant_id']}_{params['session_id']}"
+    masks_dir = root_dir / "03_masks"
+
+    n_kept = selection.n_voxels_thresholded
+    if n_kept > 0:
+        ho_data, ho_labels = _subject_harvard_oxford(root_dir / "02_mnireg", bids_prefix, stat_img)
+        selection.cluster_table = compute_cluster_table(
+            binary_mask, stat_img.get_fdata(), stat_img.affine, atlas_data=ho_data, atlas_labels=ho_labels
+        )
+    masks_dir.mkdir(parents=True, exist_ok=True)
+    save(
+        Nifti1Image(binary_mask, stat_img.affine, stat_img.header), masks_dir / f"{bids_prefix}_{mask_name}_thr.nii.gz"
+    )
+    selections = load_task_mask_selections(masks_dir)
+    selections[mask_name] = selection
+    save_task_mask_selections(masks_dir, selections)
+    logger.info(f"Updated task mask {mask_name}: {n_kept} voxels ({selection.selection_reason})")
+    return selection
 
 
 # =============================================================================
@@ -3828,6 +4414,41 @@ def run_mask_extraction_from_config(
 # - "native": masks already in functional/EPI space (copied + binarized)
 # - "anat": masks drawn on T1/structural (ANTs Rigid T1→EPI registration)
 # - "mni": masks in MNI152 (ANTs SyN EPI→MNI, inverse applied to masks)
+
+
+def _warp_mask_to_reference(
+    mask_path: Path,
+    ref_file: Union[str, Path],
+    transform_files: list[str],
+    out_file: Path,
+    transformed_file: Path,
+    *,
+    overwrite: bool = False,
+) -> Nifti1Image:
+    """Warp a mask onto ``ref_file``'s grid (nearest neighbour), binarize it, and save it to ``out_file``.
+
+    ``transformed_file`` holds the intermediate warped image and is removed afterwards.
+    """
+    apply_xfm(
+        moving=mask_path,
+        fixed=ref_file,
+        transform_files=transform_files,
+        output_file=transformed_file,
+        interpolator="nearestNeighbor",
+        overwrite=overwrite,
+    )
+
+    # Load transformed mask and binarize
+    img = cast(Nifti1Image, load(transformed_file))
+    data = np.asarray(img.get_fdata())
+
+    binarized = Nifti1Image((data > 0).astype(np.uint8), img.affine, img.header)
+    save(binarized, out_file)
+
+    # Clean up intermediate transformed file
+    if transformed_file.exists() and transformed_file != out_file:
+        transformed_file.unlink()
+    return binarized
 
 
 def import_manual_masks(
@@ -4016,27 +4637,14 @@ def import_manual_masks(
         else:
             # anat or mni: apply registration transform
             assert xfm_files is not None
-
-            transformed_file = masks_dir / f"{bids_prefix}_{mask_name}_transformed.nii.gz"
-            apply_xfm(
-                moving=mask_path,
-                fixed=ref_file,
-                transform_files=xfm_files,
-                output_file=transformed_file,
-                interpolator="nearestNeighbor",
+            _warp_mask_to_reference(
+                mask_path,
+                ref_file,
+                xfm_files,
+                out_file,
+                masks_dir / f"{bids_prefix}_{mask_name}_transformed.nii.gz",
                 overwrite=overwrite,
             )
-
-            # Load transformed mask and binarize
-            img = cast(Nifti1Image, load(transformed_file))
-            data = np.asarray(img.get_fdata())
-
-            binarized = (data > 0).astype(np.uint8)
-            save(Nifti1Image(binarized, img.affine, img.header), out_file)
-
-            # Clean up intermediate transformed file
-            if transformed_file.exists() and transformed_file != out_file:
-                transformed_file.unlink()
 
         n_voxels = int(np.sum(cast(Nifti1Image, nib.load(out_file)).get_fdata() > 0))
         emit_progress(f"Mask {i}/{len(mask_paths)}", f"{mask_name}: {n_voxels} voxels")

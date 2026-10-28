@@ -54,6 +54,9 @@ from . import styles as st
 logger = logging.getLogger(__name__)
 
 
+# File-type filter for NIfTI file pickers (manual and fallback masks).
+NIFTI_FILETYPES = [("NIfTI files", "*.nii *.nii.gz"), ("All Files", "*.*")]
+
 # Yeo network labels
 YEO_7_LABELS = ["Visual", "SomMot", "DorsAttn", "SalVentAttn", "Limbic", "Cont", "Default"]
 
@@ -359,6 +362,18 @@ def feedback_step_for(config: dict[str, Any], step_id: str) -> FeedbackStep | No
         if step.step_id == step_id:
             return step
     return None
+
+
+def mni_atlas_fallback_available(config: dict[str, Any]) -> bool:
+    """Whether the session-wide MNI atlas fallback can stand in for every localizer's masks.
+
+    That fallback writes one mask per atlas network, named after the network, so it
+    fits only rest localizers, whose masks carry network names. Task and manual
+    localizers name their masks otherwise (task masks after their contrasts, which
+    use the per-mask fallback in the task mask review instead).
+    """
+    fresh = [loc for loc in config.get("localizers") or [] if not loc.get("reuse_from_session")]
+    return all(loc.get("type", "rest") == "rest" for loc in fresh)
 
 
 def localizer_mask_names(loc: dict[str, Any]) -> list[str]:

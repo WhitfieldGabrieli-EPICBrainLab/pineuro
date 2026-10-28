@@ -84,6 +84,10 @@ session's for reused ones) to the current reference scan, then applies the trans
 that localizer's masks. All masks for a session therefore end up in the same reference
 space, so the same functional regions are targeted across sessions.
 
+Coregistration uses the source session's masks as they are on disk. If an earlier session's
+masks are changed after a later session coregistered them (for example re-thresholded at
+review), re-run coregistration in the later session so it picks up the change.
+
 ## Validation
 
 A feedback run can only reuse masks from an *earlier* session. The session-selection dialog

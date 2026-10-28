@@ -21,8 +21,7 @@ The default approach for resting-state localizers. Uses Independent Component An
 | `smooth_fwhm` | 5.0 | Spatial smoothing (mm) before ICA |
 | `highpass` | 0.01 | High-pass filter cutoff (Hz) |
 | `lowpass` | None | Low-pass filter cutoff (Hz, disabled by default) |
-| `threshold` | 2000 | Target voxels per mask |
-| `threshold_method` | `top_n` | `top_n` or `cluster` (see below) |
+| `threshold` | 2000 | Target voxels per mask (the top N voxels of the selected component) |
 
 ### Output Structure
 
@@ -66,6 +65,41 @@ When using a task-based localizer (e.g., SelfOther voice localizer), masks are d
 5. Repeat until cluster approximates target size
 
 Cluster thresholding produces more anatomically coherent masks compared to top_n.
+
+**`cluster_extent`** — Classic cluster-extent thresholding:
+1. Keep voxels with t at or above a fixed cluster-forming threshold (`cluster_start_threshold`, default 2.0), optionally only within grey matter ("Restrict to grey matter")
+2. Group them into clusters of face-connected voxels
+3. Drop clusters smaller than `min_cluster_size` (default 50 voxels)
+4. If `max_total_voxels` is set and the surviving clusters are larger, keep only their highest-t voxels up to that cap
+
+The threshold is not lowered automatically. If no cluster reaches the minimum size, the mask is empty; the review below shows this and offers a re-threshold or a fallback mask.
+
+### Reviewing Task Masks
+
+The **Review & Approve Masks** window shows each task mask's overlay, voxel count (read from the mask file) and cluster table. Each mask also offers:
+
+- **Adjust threshold** — edit the localizer's own thresholding parameters for this mask (cluster-forming threshold, minimum cluster size and cap for `cluster_extent`; voxel count for `top_n`; target voxels and start threshold for `cluster`). **Preview** recomputes the mask from the saved GLM map without refitting the GLM and shows it in the overlay with the voxel and cluster counts; **Apply** replaces the mask. While a preview is showing but not applied, Approve is disabled; **Discard preview** (or closing **Adjust threshold**) drops it and shows the current mask again. **Reset to study parameters** undoes it.
+- **Use fallback** — when the study configures a fallback mask for this contrast (below), replace the mask with it.
+- **Replace…** — replace the mask, for this participant only, with an atlas network, an MNI-space mask file, or a mask file in this participant's space (on the localizer's BOLD reference grid, such as a copy of the mask edited by hand in a viewer).
+
+An atlas network or MNI-space file is warped to the participant's space with the boldref's SyN transform; a participant-space file is used as is, and a file on any other grid is refused. A participant-space file is copied into the localizer's `mask_edits/` folder and the record points at the copy, so it stays valid if the original is edited again or moved. The replacement is saved under the contrast's mask name, so feedback uses it without any manual file changes. A mask with 0 voxels is flagged and cannot be approved, since feedback cannot run with it. Any change revokes approval and deletes the coregistered masks, so coregistration runs again. Masks cannot be changed once a feedback run of the session has been completed.
+
+### Fallback Masks
+
+On the Localizer tab of a task localizer, **Fallback Masks (optional)** sets, per contrast, an MNI-space mask the operator can apply at review:
+
+```yaml
+extraction:
+  fallback_masks:
+    rumination_network: {atlas: yeo_17, network: DefaultA}   # an atlas network
+    # or: rumination_network: {file: /path/to/rumination_mni.nii.gz}
+```
+
+The whole network (or the binarized file) is used, as with the ICA pipeline's Yeo fallback. The session-wide **Use MNI Atlas Masks** buttons are shown only when every localizer is a rest localizer, because they produce masks named after atlas networks rather than contrasts.
+
+### Records and Reproduction
+
+`03_masks/mask_selections.json` records, per mask, how it was made: the thresholding parameters used (`threshold_params`), the clusters found before the size filter (`n_clusters_input`, `largest_cluster_input`), and for a changed mask its `selection_reason` (`operator_rethreshold`, `fallback_configured`, `operator_replace` or `atlas_roi`), its `source_type` (`atlas_network`, `mni_file`, `native_file` or `atlas_roi`) and `source` (e.g. `yeo_17:DefaultA` or the file used). The operator's changes are also saved in `mask_overrides.json` next to `reproduce_masks.py`, and the script's `PARAMS` carry them as `mask_overrides`, so replaying the script on a clean tree recomputes the same masks. A re-run of mask extraction for the participant re-applies the saved changes.
 
 ## Manual ROI Import
 

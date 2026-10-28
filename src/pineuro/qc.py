@@ -516,6 +516,24 @@ def select_slices_from_atlas(
     }
 
 
+def _radiological(slice_2d: np.ndarray, plane: str, *, x_negative: bool, y_negative: bool) -> np.ndarray:
+    """Orient a 2D slice for display in radiological convention (see :func:`plot_mask_overlay_tripanel`)."""
+    if plane == "sagittal":
+        # Sagittal view: Y-Z plane (anterior-posterior × inferior-superior)
+        # Standard convention: frontal lobe (anterior) on LEFT side
+        if y_negative:
+            # A orientation: Y decreases left-to-right, anterior already left
+            return slice_2d.T
+        # P orientation: Y increases left-to-right, flip for anterior-left
+        return np.fliplr(slice_2d.T)
+    if x_negative and plane in ["coronal", "axial"]:
+        # L orientation in X: patient's right is on left, need flip
+        # to achieve radiological standard (patient left on viewer right)
+        return np.fliplr(slice_2d.T)
+    # R orientation: already radiological (patient left on right)
+    return slice_2d.T
+
+
 def plot_mask_overlay_tripanel(
     mask_path: Path,
     ref_path: Path,
@@ -657,26 +675,8 @@ def plot_mask_overlay_tripanel(
         # oriented for display. The .T transpose swaps axes for correct
         # aspect ratio, and fliplr() handles left-right orientation.
         # =================================================================
-        if plane == "sagittal":
-            # Sagittal view: Y-Z plane (anterior-posterior × inferior-superior)
-            # Standard convention: frontal lobe (anterior) on LEFT side
-            if y_negative:
-                # A orientation: Y decreases left-to-right, anterior already left
-                base = base.T
-                overlay = overlay.T
-            else:
-                # P orientation: Y increases left-to-right, flip for anterior-left
-                base = np.fliplr(base.T)
-                overlay = np.fliplr(overlay.T)
-        elif x_negative and plane in ["coronal", "axial"]:
-            # L orientation in X: patient's right is on left, need flip
-            # to achieve radiological standard (patient left on viewer right)
-            base = np.fliplr(base.T)
-            overlay = np.fliplr(overlay.T)
-        else:
-            # R orientation: already radiological (patient left on right)
-            base = base.T
-            overlay = overlay.T
+        base = _radiological(base, plane, x_negative=x_negative, y_negative=y_negative)
+        overlay = _radiological(overlay, plane, x_negative=x_negative, y_negative=y_negative)
 
         # --- Draw the overlay with dual-contour technique ---
         # 1. Grayscale anatomical background
@@ -879,6 +879,67 @@ def plot_brain_mask_coverage(mask_path: Path, ref_path: Path, out_path: Path, ti
         title=title or "Brain Mask Coverage",
         cmap="autumn",
     )
+
+
+def plot_brain_mask_review(
+    mean_path: Path,
+    mask: Path | np.ndarray,
+    out_path: Path,
+    *,
+    n_slices: int = 5,
+    title: str | None = None,
+) -> None:
+    """Plot a brain mask's outline on the unmasked mean EPI, several slices per plane.
+
+    For reviewing brain extraction: unlike the masked BOLD reference, the
+    unmasked mean shows both non-brain tissue the mask kept and brain it cut
+    off. Rows are sagittal, coronal and axial (radiological convention), with
+    slices spread evenly within the mask's extent (the whole volume for an
+    empty mask).
+
+    Parameters
+    ----------
+    mean_path : Path
+        Unmasked temporal mean the mask was computed from.
+    mask : Path or np.ndarray
+        The brain mask, as a file or an array on ``mean_path``'s grid.
+    out_path : Path
+        Path to save the PNG.
+    n_slices : int, default=5
+        Slices per plane.
+    title : str, optional
+        Figure title.
+    """
+    mean_img = cast(Nifti1Image, load(mean_path))
+    ref = mean_img.get_fdata()
+    data = cast(Nifti1Image, load(mask)).get_fdata() if isinstance(mask, (str, Path)) else np.asarray(mask)
+    if data.shape != ref.shape:
+        raise ValueError(f"Shape mismatch for brain mask review: mean {ref.shape} vs mask {data.shape}")
+
+    x_negative = mean_img.affine[0, 0] < 0
+    y_negative = mean_img.affine[1, 1] < 0
+    ref_min, ref_max = np.percentile(ref, [2, 98])
+    inside = np.nonzero(data > 0)
+
+    fig, axes = plt.subplots(3, n_slices, figsize=(2.2 * n_slices, 7), constrained_layout=True, squeeze=False)
+    for row, (plane, axis) in enumerate([("sagittal", 0), ("coronal", 1), ("axial", 2)]):
+        lo, hi = (int(inside[axis].min()), int(inside[axis].max())) if inside[0].size else (0, ref.shape[axis] - 1)
+        # Interior points of the extent, so no panel sits on the mask's edge slice
+        for col, idx in enumerate(np.linspace(lo, hi, n_slices + 2)[1:-1].round().astype(int)):
+            ax = axes[row][col]
+            base = _radiological(np.take(ref, idx, axis=axis), plane, x_negative=x_negative, y_negative=y_negative)
+            outline = _radiological(np.take(data, idx, axis=axis), plane, x_negative=x_negative, y_negative=y_negative)
+            ax.imshow(base, cmap="gray", origin="lower", vmin=ref_min, vmax=ref_max)
+            if outline.any():
+                ax.contour(outline > 0, levels=[0.5], colors=["#d62728"], linewidths=1.2)
+            ax.set_axis_off()
+            ax.set_title(f"{plane.capitalize()} {idx}", fontsize=9)
+
+    if title:
+        fig.suptitle(title, fontsize=12)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
 
 
 def plot_registration_overlay(ref_path: Path, moving_path: Path, out_path: Path, title: str | None = None) -> None:
@@ -1110,16 +1171,21 @@ def generate_preprocessing_report(
     else:
         logger.warning(f"No motion parameter files found in {mcf_dir}")
 
-    # Brain mask coverage
-    if mask_file.exists() and ref_file.exists():
+    # Brain mask coverage, on the unmasked run-1 mean when it is recorded (the
+    # masked BOLD reference would hide brain the mask cut off)
+    coverage_bg, coverage_title = ref_file, "Brain Mask on BOLD Reference"
+    from .preprocessing import read_brain_mask_record
+
+    record = read_brain_mask_record(preprocessing_dir, participant_id, session_id, task)
+    if record and (preprocessing_dir / record["source_mean"]).exists():
+        coverage_bg, coverage_title = preprocessing_dir / record["source_mean"], "Brain Mask on Mean EPI"
+    if mask_file.exists() and coverage_bg.exists():
         sections.append({"type": "heading", "content": "Brain Mask Coverage"})
 
         mask_out = output_dir / "brain_mask_coverage.png"
         if overwrite or not mask_out.exists():
             logger.info("Generating brain mask coverage plot")
-            plot_brain_mask_coverage(
-                mask_path=mask_file, ref_path=ref_file, out_path=mask_out, title="Brain Mask on BOLD Reference"
-            )
+            plot_brain_mask_coverage(mask_path=mask_file, ref_path=coverage_bg, out_path=mask_out, title=coverage_title)
 
         sections.append(
             {"type": "single_image", "path": mask_out.relative_to(output_dir).as_posix(), "alt": "Brain mask coverage"}

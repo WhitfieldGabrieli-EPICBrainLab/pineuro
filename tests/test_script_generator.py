@@ -158,6 +158,19 @@ class TestTaskScript:
         assert "Superior Temporal Gyrus" in script
         assert "'min_cluster_size': 40" in script
 
+    def test_mask_overrides_round_trip(self, tmp_path):
+        """Per-mask overrides recorded at review replay exactly from PARAMS."""
+        import ast
+
+        overrides = {
+            "motor": {"kind": "rethreshold", "min_cluster_size": 20, "selection_reason": "operator_rethreshold"},
+            "motor_reverse": {"kind": "atlas_network", "atlas": "yeo_17", "network": "DefaultA"},
+        }
+        script = generate_mask_extraction_script("task", _task_params(tmp_path, mask_overrides=overrides))
+
+        params_block = script.split("PARAMS = ", 1)[1].split("\n\n\ndef ", 1)[0]
+        assert ast.literal_eval(params_block)["mask_overrides"] == overrides
+
 
 # =============================================================================
 # generate_mask_extraction_script — mni / atlas fallback

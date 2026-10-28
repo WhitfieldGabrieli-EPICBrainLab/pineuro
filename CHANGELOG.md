@@ -5,6 +5,25 @@ All notable changes to pineuro will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The brain mask can be reviewed and adjusted after preprocessing.** A Review Brain Mask window opens when preprocessing finishes (and from a button under the step) and shows the mask outline on the unmasked mean EPI in several slices per plane. Its two settings are the intensity threshold (a fraction of the image mean, default 0.5) and the cleanup radius of `ants.get_mask` (default 2 voxels), which were hardcoded. Recompute previews a mask without writing anything; Accept with changed values recomputes only the brain mask, the masked timeseries and the BOLD reference, then deletes and re-runs that localizer's mask extraction and coregistration. Study defaults are set on the Localizer tab (a new optional `preprocessing:` block with `brain_mask_threshold_fraction` and `brain_mask_cleanup`, written only when changed), and `brain_extraction()`, `preprocessing()` and the new `recompute_brain_mask()` / `preview_brain_mask()` take them as keyword arguments. Each participant's values and sources are recorded in `{sub}_{ses}_task-{task}_preproc_mask.json`, and an operator's choice is reused when preprocessing is re-run.
+- **Task (GLM) masks can be re-thresholded at review.** Each mask in Review & Approve Masks has an Adjust threshold panel with the localizer's own method parameters (cluster-forming threshold, minimum cluster size and cap for `cluster_extent`). Preview recomputes the mask from the saved GLM map without refitting the GLM and shows it in the overlay; Apply replaces it. `mask_selections.json` records the parameters used (`threshold_params`), the clusters found before the size filter (`n_clusters_input`, `largest_cluster_input`) and a `selection_reason` of `operator_rethreshold`.
+- **Task localizers can have a fallback mask per contrast.** The Localizer tab's optional Fallback Masks section (`extraction.fallback_masks`) sets an atlas network (e.g. Yeo-17 DefaultA) or an MNI-space mask file per contrast, and the review offers Use fallback, plus Replace… for an atlas network, an MNI-space file, or a mask file already in the participant's space (such as a hand-edited copy of the mask, which is copied into `mask_edits/` so the record stays valid) chosen for one participant. MNI-space replacements are warped to the participant's space, and every replacement is saved under the contrast's mask name, so feedback uses it with no manual file changes.
+- **Operator changes to task masks are reproducible.** They are saved in `mask_overrides.json`, passed to `mask_extraction_task(mask_overrides=...)` and written into `reproduce_masks.py`, so a replay on a clean tree recomputes the same masks; `update_task_mask()` applies one change from the cached GLM outputs.
+
+### Fixed
+
+- **RIT no longer crashes on macOS at the end of the task.** After the task finished, the task process's stop-bridge thread could hold the last reference to the task at interpreter exit, so RIT's text stimuli were freed on that thread with no OpenGL context and the process segfaulted (`glDeleteLists`). The bridge now releases the task on the main thread when the step ends, and RIT deletes its stimuli before the window closes, as the other tasks do. Data were not affected; the crash happened after the events file was written.
+- **A task mask with 0 voxels can no longer be approved.** It was marked complete and approvable, and feedback then failed when it loaded the mask. The review now flags it and blocks approval until it is re-thresholded or replaced.
+- **The session-wide Use MNI Atlas Masks buttons are shown only for rest localizers.** For a task localizer they wrote masks named after atlas networks (`ContA`, `DefaultA`), which feedback could not match to the contrast's mask name.
+- **Use Atlas Mask in the task mask review uses the reviewed localizer and records the change.** It read the first localizer's settings whatever was being reviewed, copied the file without updating `mask_selections.json`, and skipped the shared `03_masks` copy that coregistration reads with several localizers.
+- **Re-running mask extraction with Skip Existing keeps each mask's recorded provenance** instead of overwriting it with a minimal entry.
+- **The Harvard-Oxford cluster labels follow a new BOLD reference.** Their transform to MNI space was always reused, even with Overwrite, so labels could come from a stale registration.
+- **The preprocessing QC report draws the brain mask on the unmasked mean EPI** (it used the masked BOLD reference, which hid brain the mask had cut off), and the brain-extraction docs describe `get_mask` correctly (it does no Otsu thresholding).
+
 ## [1.0.0] - 2026-10-16
 
 ### Added

@@ -140,6 +140,87 @@ class TestLocalizerExtractionConfig:
         with pytest.raises(ValueError, match="threshold_method"):
             LocalizerExtractionConfig(threshold_method="bogus")
 
+    def test_fallback_masks_default_empty(self):
+        assert LocalizerExtractionConfig().fallback_masks == {}
+
+    @pytest.mark.parametrize(
+        "spec",
+        [{"atlas": "yeo_17"}, {"file": "/m.nii.gz", "atlas": "yeo_17"}, "yeo_17:DefaultA", {}],
+    )
+    def test_fallback_mask_structure_rejected(self, spec):
+        with pytest.raises(ValueError, match="fallback_masks"):
+            LocalizerExtractionConfig(fallback_masks={"net": spec})
+
+
+class TestLocalizerPreprocessingConfig:
+    def test_defaults_match_the_pipeline(self):
+        from pineuro.session import LocalizerPreprocessingConfig
+
+        cfg = LocalizerPreprocessingConfig()
+        assert (cfg.brain_mask_threshold_fraction, cfg.brain_mask_cleanup) == (0.5, 2)
+        assert LocalizerConfig().preprocessing == cfg
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"brain_mask_threshold_fraction": 0}, {"brain_mask_cleanup": -1}, {"brain_mask_cleanup": 1.5}],
+    )
+    def test_invalid_values_rejected(self, kwargs):
+        from pineuro.session import LocalizerPreprocessingConfig
+
+        with pytest.raises(ValueError, match="brain_mask"):
+            LocalizerPreprocessingConfig(**kwargs)
+
+    def test_block_unpacked_from_yaml_dict(self, tmp_path):
+        data = {
+            "paths": {"base_dir": str(tmp_path), "participant_id": "sub-01"},
+            "localizers": [
+                {"id": "rest", "type": "rest", "preprocessing": {"brain_mask_threshold_fraction": 0.7}},
+            ],
+            "feedback_runs": [{"task": "ball", "mask_source": "rest"}],
+        }
+        loc = SessionConfig._from_dict(data).localizers[0]
+        assert loc.preprocessing.brain_mask_threshold_fraction == 0.7
+        assert loc.preprocessing.brain_mask_cleanup == 2
+
+
+class TestFallbackMaskValidation:
+    def _config(self, tmp_path, loc_type, fallback_masks):
+        return SessionConfig(
+            paths=PathConfig(base_dir=tmp_path, participant_id="sub-01"),
+            localizers=[
+                LocalizerConfig(
+                    id="loc",
+                    type=loc_type,
+                    contrasts={"rumination_network": "rumination - distraction"},
+                    extraction=LocalizerExtractionConfig(fallback_masks=fallback_masks),
+                )
+            ],
+            feedback_runs=[FeedbackRunConfig()],
+        )
+
+    def test_valid_fallbacks_pass(self, tmp_path):
+        cfg = self._config(
+            tmp_path,
+            "rit",
+            {"rumination_network": {"atlas": "yeo_17", "network": "DefaultA"}},
+        )
+        assert cfg.validate() == []
+        cfg = self._config(tmp_path, "rit", {"rumination_network": {"file": "/group_mask_mni.nii.gz"}})
+        assert cfg.validate() == []
+
+    @pytest.mark.parametrize(
+        ("loc_type", "fallbacks", "message"),
+        [
+            ("rit", {"other": {"atlas": "yeo_17", "network": "DefaultA"}}, "not one of this localizer's masks"),
+            ("rit", {"rumination_network": {"atlas": "harvard_oxford", "network": "DefaultA"}}, "network atlas"),
+            ("rit", {"rumination_network": {"atlas": "yeo_7", "network": "DefaultA"}}, "not in yeo_7"),
+            ("rest", {"DefaultA": {"atlas": "yeo_17", "network": "DefaultA"}}, "task localizers only"),
+        ],
+    )
+    def test_invalid_fallbacks_reported(self, tmp_path, loc_type, fallbacks, message):
+        errors = self._config(tmp_path, loc_type, fallbacks).validate()
+        assert any(message in e for e in errors), errors
+
 
 # =============================================================================
 # FeedbackRunConfig + nested sub-blocks

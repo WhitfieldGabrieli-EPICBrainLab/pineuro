@@ -105,8 +105,9 @@ import shutil  # File operations (copy during DICOM collection)
 import threading  # Multi-threading for volume collection with watchdog
 import time  # Timing for collection timeout and progress tracking
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Union, cast
+from typing import TYPE_CHECKING, Any, Union, cast
 
 import nibabel as nib
 
@@ -403,8 +404,20 @@ def concat(input_files: list[Union[str, Path]], output_file: Union[str, Path], o
 # =============================================================================
 
 
+def _get_brain_mask(img: Any, *, threshold_fraction: float, cleanup: int) -> Any:
+    """ANTs brain mask of a mean EPI (see :func:`brain_extraction` for the parameters)."""
+    import ants
+
+    return ants.get_mask(img, low_thresh=img.numpy().mean() * threshold_fraction, cleanup=cleanup)
+
+
 def brain_extraction(
-    input_file: Union[str, Path], output_dir: Union[str, Path], overwrite: bool = False
+    input_file: Union[str, Path],
+    output_dir: Union[str, Path],
+    overwrite: bool = False,
+    *,
+    threshold_fraction: float = 0.5,
+    cleanup: int = 2,
 ) -> tuple[Path, Path]:
     """
     Perform brain extraction using ANTsPy's get_mask.
@@ -422,7 +435,14 @@ def brain_extraction(
         Directory for output files. Will be created if it doesn't exist.
     overwrite : bool, default=False
         If True, always run and overwrite existing outputs.
-        If False, skip if output files already exist.
+        If False, skip if output files already exist (whatever parameters
+        they were made with).
+    threshold_fraction : float, default=0.5
+        Intensity cut-off as a fraction of the image mean over the whole field
+        of view (air included). Higher values exclude more dim non-brain tissue.
+    cleanup : int, default=2
+        Radius in voxels of the morphological cleanup. Higher values detach
+        more tissue joined to the brain by narrow connections; 0 disables it.
 
     Returns
     -------
@@ -434,9 +454,12 @@ def brain_extraction(
     Notes
     -----
     **Implementation:**
-    Uses ANTsPy's get_mask() which applies Otsu thresholding followed by
-    morphological cleanup operations. This is faster than FSL's bet (~0.5s
-    vs ~1.2s) while achieving ~94% Dice overlap with bet masks.
+    Uses ANTsPy's get_mask(), which keeps voxels from ``threshold_fraction`` ×
+    the image mean up to the image maximum. With ``cleanup`` > 0 it then
+    erodes the mask by ``cleanup`` voxels, keeps the largest connected
+    component, dilates it back by ``cleanup`` voxels and fills holes. This is
+    faster than FSL's bet (~0.5s vs ~1.2s) while achieving ~94% Dice overlap
+    with bet masks.
 
     **Why Use Temporal Mean:**
     The temporal mean of an fMRI run has better SNR than individual volumes,
@@ -470,10 +493,8 @@ def brain_extraction(
         # Load image with ANTs
         img = ants.image_read(str(input_file))
 
-        # Get brain mask using Otsu thresholding + morphological cleanup
-        # low_thresh: use mean * 0.5 as lower threshold (similar to bet's approach)
-        # cleanup: level of morphological cleanup (2 = moderate)
-        mask = ants.get_mask(img, low_thresh=img.numpy().mean() * 0.5, cleanup=2)
+        # Get brain mask: intensity threshold + morphological cleanup
+        mask = _get_brain_mask(img, threshold_fraction=threshold_fraction, cleanup=cleanup)
 
         # Apply mask to get brain-extracted volume
         brain = img * mask
@@ -524,6 +545,8 @@ def preprocessing(
     attempt_per_input: list[int] | None = None,
     run_per_input: list[int] | None = None,
     stop_event: threading.Event | None = None,
+    brain_mask_threshold_fraction: float = 0.5,
+    brain_mask_cleanup: int = 2,
 ) -> tuple[Path, Path, Path]:
     """
     Run the complete preprocessing pipeline for fMRI data.
@@ -582,6 +605,10 @@ def preprocessing(
         :class:`PreprocessingStopped`. ANTs operations are not interrupted
         mid-call, so latency is bounded by a single sub-step (~5-15s). If
         omitted, the pipeline always runs to completion.
+    brain_mask_threshold_fraction, brain_mask_cleanup : float, int
+        Brain-mask parameters (see :func:`brain_extraction`). The values used
+        are recorded in ``{participant}_{session}_task-{task}_preproc_mask.json``;
+        :func:`recompute_brain_mask` changes them for one participant.
 
     Returns
     -------
@@ -912,7 +939,13 @@ def preprocessing(
     check_stop()
     emit_progress("Step 3/4", "Running brain extraction...")
     sub_ref = mean_files[0]  # Run-01 mean serves as the subject reference
-    _, mean_mask = brain_extraction(input_file=sub_ref, output_dir=bet_dir, overwrite=overwrite)
+    _, mean_mask = brain_extraction(
+        input_file=sub_ref,
+        output_dir=bet_dir,
+        overwrite=overwrite,
+        threshold_fraction=brain_mask_threshold_fraction,
+        cleanup=brain_mask_cleanup,
+    )
     emit_progress("Step 3/4", "Complete (brain mask extracted)")
 
     # =========================================================================
@@ -1006,29 +1039,21 @@ def preprocessing(
     # 2. Eroded brain mask (for masking operations)
     # 3. BOLD reference (for registration, overlay visualization)
 
-    # --- Erode Brain Mask ---
-    # bet's mask often includes edge voxels with partial-volume effects.
-    # Erosion by 2 voxels removes these unreliable edge voxels, which
-    # improves GLM estimation by excluding noisy boundary regions.
     emit_progress("Step 4/4", "Eroding and saving brain mask...")
-    mask_file = root_dir / Path(f"{bids_prefix}_task-{task}_preproc_mask.nii.gz")
-    erode_mask(mean_mask, mask_file, overwrite=overwrite)
-
-    # --- Apply Mask to Preprocessed Timeseries ---
-    # Zero out non-brain voxels to reduce file size and exclude them from
-    # downstream analysis. This creates the final analysis-ready 4D file.
-    preproc_file = root_dir / Path(f"{bids_prefix}_task-{task}_preproc.nii.gz")
-    if not preproc_file.exists() or overwrite:
-        apply_mask(input_file=coreg_file, mask_file=mask_file, output_file=preproc_file, overwrite=overwrite)
-
-    # --- Create BOLD Reference ---
-    # The masked mean of run-01 serves as a reference image for:
-    # - Registration to MNI space (mask extraction)
-    # - Overlay visualization (QC reports)
-    # - 2-volume coregistration (feedback tasks)
-    ref_file = root_dir / Path(f"{bids_prefix}_task-{task}_boldref.nii.gz")
-    if not ref_file.exists() or overwrite:
-        apply_mask(input_file=sub_ref, mask_file=mask_file, output_file=ref_file, overwrite=overwrite)
+    preproc_file, mask_file, ref_file = _finalize_brain_mask_outputs(
+        root_dir, bids_prefix, task, mean_mask, sub_ref, Path(coreg_file), overwrite=overwrite
+    )
+    sidecar = _brain_mask_sidecar_path(root_dir, bids_prefix, task)
+    if overwrite or not sidecar.exists():
+        _write_brain_mask_sidecar(
+            root_dir,
+            bids_prefix,
+            task,
+            threshold_fraction=brain_mask_threshold_fraction,
+            cleanup=brain_mask_cleanup,
+            source_mean=sub_ref,
+            source_timeseries=Path(coreg_file),
+        )
 
     emit_progress("Step 4/4", "Complete")
 
@@ -1062,6 +1087,225 @@ def preprocessing(
     # Return Output Paths
     # -------------------------------------------------------------------------
     return preproc_file, mask_file, ref_file
+
+
+_BRAIN_MASK_N_ERODE = 2  # voxel layers removed from the mask edge (partial-volume voxels)
+
+
+def _finalize_brain_mask_outputs(
+    root_dir: Path,
+    bids_prefix: str,
+    task: str,
+    mean_mask: Path,
+    sub_ref: Path,
+    coreg_file: Path,
+    *,
+    overwrite: bool,
+) -> tuple[Path, Path, Path]:
+    """Erode the brain mask and apply it to the timeseries and the run-01 mean.
+
+    Returns ``(preproc_file, mask_file, ref_file)``. Shared by :func:`preprocessing`
+    and :func:`recompute_brain_mask`.
+    """
+    # --- Erode Brain Mask ---
+    # bet's mask often includes edge voxels with partial-volume effects.
+    # Erosion by 2 voxels removes these unreliable edge voxels, which
+    # improves GLM estimation by excluding noisy boundary regions.
+    mask_file = root_dir / Path(f"{bids_prefix}_task-{task}_preproc_mask.nii.gz")
+    erode_mask(mean_mask, mask_file, n_erode=_BRAIN_MASK_N_ERODE, overwrite=overwrite)
+
+    # --- Apply Mask to Preprocessed Timeseries ---
+    # Zero out non-brain voxels to reduce file size and exclude them from
+    # downstream analysis. This creates the final analysis-ready 4D file.
+    preproc_file = root_dir / Path(f"{bids_prefix}_task-{task}_preproc.nii.gz")
+    if not preproc_file.exists() or overwrite:
+        apply_mask(input_file=coreg_file, mask_file=mask_file, output_file=preproc_file, overwrite=overwrite)
+
+    # --- Create BOLD Reference ---
+    # The masked mean of run-01 serves as a reference image for:
+    # - Registration to MNI space (mask extraction)
+    # - Overlay visualization (QC reports)
+    # - 2-volume coregistration (feedback tasks)
+    ref_file = root_dir / Path(f"{bids_prefix}_task-{task}_boldref.nii.gz")
+    if not ref_file.exists() or overwrite:
+        apply_mask(input_file=sub_ref, mask_file=mask_file, output_file=ref_file, overwrite=overwrite)
+
+    return preproc_file, mask_file, ref_file
+
+
+def _brain_mask_sidecar_path(root_dir: Path, bids_prefix: str, task: str) -> Path:
+    return Path(root_dir) / f"{bids_prefix}_task-{task}_preproc_mask.json"
+
+
+def read_brain_mask_record(root_dir: Union[str, Path], participant_id: str, session_id: str, task: str) -> dict | None:
+    """The parameters and sources the participant's brain mask was made with, or None.
+
+    Read from ``{participant}_{session}_task-{task}_preproc_mask.json``, which
+    pineuro writes from 1.1 on: ``threshold_fraction``, ``cleanup``, ``n_erode``,
+    ``source_mean`` and ``source_timeseries`` (relative to ``root_dir``),
+    ``adjusted_by_operator`` and ``created``.
+    """
+    sidecar = _brain_mask_sidecar_path(Path(root_dir), f"{participant_id}_{session_id}", task)
+    if not sidecar.exists():
+        return None
+    with open(sidecar) as f:
+        data = json.load(f)
+    return dict(data) if isinstance(data, dict) else None
+
+
+def _write_brain_mask_sidecar(
+    root_dir: Path,
+    bids_prefix: str,
+    task: str,
+    *,
+    threshold_fraction: float,
+    cleanup: int,
+    source_mean: Path,
+    source_timeseries: Path,
+    adjusted_by_operator: bool | None = None,
+) -> Path:
+    """Record how the brain mask was made. ``adjusted_by_operator=None`` keeps a recorded
+    operator choice when the parameters are unchanged (a re-run with the operator's values)."""
+    sidecar = _brain_mask_sidecar_path(root_dir, bids_prefix, task)
+    if adjusted_by_operator is None:
+        previous: dict = {}
+        if sidecar.exists():
+            with contextlib.suppress(ValueError, OSError):
+                previous = json.loads(sidecar.read_text())
+        unchanged = (previous.get("threshold_fraction"), previous.get("cleanup")) == (threshold_fraction, cleanup)
+        adjusted_by_operator = bool(previous.get("adjusted_by_operator")) and unchanged
+    record = {
+        "method": "ants.get_mask",
+        "threshold_fraction": threshold_fraction,
+        "cleanup": cleanup,
+        "n_erode": _BRAIN_MASK_N_ERODE,
+        "source_mean": Path(source_mean).relative_to(root_dir).as_posix(),
+        "source_timeseries": Path(source_timeseries).relative_to(root_dir).as_posix(),
+        "adjusted_by_operator": adjusted_by_operator,
+        "created": datetime.now().isoformat(timespec="seconds"),
+    }
+    sidecar.write_text(json.dumps(record, indent=2))
+    return sidecar
+
+
+def recorded_brain_mask_params(
+    root_dir: Union[str, Path], participant_id: str, session_id: str, task: str
+) -> dict[str, Any] | None:
+    """The brain-mask parameters an operator chose for this participant, or None.
+
+    A re-run of :func:`preprocessing` for the participant should use these
+    rather than the study's defaults, so the operator's choice persists.
+    """
+    record = read_brain_mask_record(root_dir, participant_id, session_id, task)
+    if not record or not record.get("adjusted_by_operator"):
+        return None
+    return {"threshold_fraction": record["threshold_fraction"], "cleanup": record["cleanup"]}
+
+
+def preview_brain_mask(
+    mean_file: Union[str, Path],
+    *,
+    threshold_fraction: float = 0.5,
+    cleanup: int = 2,
+    n_erode: int = _BRAIN_MASK_N_ERODE,
+) -> np.ndarray:
+    """The eroded brain mask these parameters would give, without writing anything.
+
+    Computed exactly as :func:`preprocessing` computes the final
+    ``_preproc_mask`` (:func:`brain_extraction` then the erosion).
+    """
+    import ants
+
+    from .utils import _erode_binary
+
+    img = ants.image_read(str(mean_file))
+    mask = _get_brain_mask(img, threshold_fraction=threshold_fraction, cleanup=cleanup)
+    return _erode_binary(mask.numpy(), n_erode).astype(np.uint8)
+
+
+def recompute_brain_mask(
+    participant_id: str,
+    session_id: str,
+    task: str,
+    root_dir: Union[str, Path],
+    *,
+    threshold_fraction: float = 0.5,
+    cleanup: int = 2,
+    qc_enabled: bool = True,
+) -> tuple[Path, Path, Path]:
+    """Recompute a participant's brain mask with new parameters, keeping the rest of preprocessing.
+
+    Re-runs only brain extraction, erosion and masking of the timeseries and the
+    BOLD reference, from the sources recorded by :func:`preprocessing`. DICOM
+    conversion, motion correction and coregistration are not repeated. The
+    choice is recorded as the operator's (see :func:`recorded_brain_mask_params`).
+    Everything derived from the old mask (mask extraction, coregistration) is
+    then stale; the caller invalidates it.
+
+    Returns
+    -------
+    tuple[Path, Path, Path]
+        ``(preproc_file, mask_file, ref_file)``, as :func:`preprocessing` returns.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the participant has no brain-mask record (preprocessed with pineuro
+        before 1.1) or its sources are missing; re-run preprocessing instead.
+    """
+    root_dir = Path(root_dir)
+    bids_prefix = f"{participant_id}_{session_id}"
+    record = read_brain_mask_record(root_dir, participant_id, session_id, task)
+    if record is None:
+        raise FileNotFoundError(
+            f"No brain-mask record for {bids_prefix} task-{task} (preprocessed with an earlier pineuro "
+            "version). Re-run preprocessing to adjust the brain mask."
+        )
+    source_mean = root_dir / record["source_mean"]
+    source_timeseries = root_dir / record["source_timeseries"]
+    for path in (source_mean, source_timeseries):
+        if not path.exists():
+            raise FileNotFoundError(f"Brain-mask source not found: {path}. Re-run preprocessing.")
+
+    logger.info(
+        f"Recomputing brain mask for {bids_prefix} task-{task}: fraction={threshold_fraction}, cleanup={cleanup}"
+    )
+    _, mean_mask = brain_extraction(
+        source_mean,
+        root_dir / "03_brain_extraction",
+        overwrite=True,
+        threshold_fraction=threshold_fraction,
+        cleanup=cleanup,
+    )
+    outputs = _finalize_brain_mask_outputs(
+        root_dir, bids_prefix, task, mean_mask, source_mean, source_timeseries, overwrite=True
+    )
+    _write_brain_mask_sidecar(
+        root_dir,
+        bids_prefix,
+        task,
+        threshold_fraction=threshold_fraction,
+        cleanup=cleanup,
+        source_mean=source_mean,
+        source_timeseries=source_timeseries,
+        adjusted_by_operator=True,
+    )
+
+    if qc_enabled:
+        try:
+            from . import qc
+
+            qc.generate_preprocessing_report(
+                preprocessing_dir=root_dir,
+                participant_id=participant_id,
+                session_id=session_id,
+                task=task,
+                overwrite=True,
+            )
+        except Exception as e:
+            # QC failure shouldn't undo a successful recompute
+            logger.warning(f"QC report generation failed: {e}")
+    return outputs
 
 
 # =============================================================================

@@ -240,3 +240,95 @@ class TestDrainChildMessages:
 
         assert runner._child_result == {"ok": True}
         assert "Error handling task subprocess message" in caplog.text
+
+
+class TestBuildTaskExtractionParams:
+    def _config(self, tmp_path, n_localizers=1, **loc_over):
+        loc = {
+            "type": "rit",
+            "id": "rit",
+            "tr": 1.2,
+            "contrasts": {"rumination_network": "rumination - distraction"},
+            "extraction": {"threshold_method": "cluster_extent", "min_cluster_size": 40},
+        }
+        loc.update(loc_over)
+        rest = {"type": "rest", "id": "rest", "networks": ["DefaultA"]}
+        return {"paths": {"base_dir": str(tmp_path)}, "localizers": [loc, rest][:n_localizers]}
+
+    def _events(self, tmp_path):
+        events = tmp_path / "preprocessing" / "sub-01_ses-01_task-rit_run-01_attempt-01_events.tsv"
+        events.parent.mkdir(parents=True)
+        events.write_text("onset\tduration\ttrial_type\n")
+        return events
+
+    def test_single_localizer_params(self, tmp_path):
+        from pineuro.gui.components.pipeline_runner import build_task_extraction_params
+
+        events = self._events(tmp_path)
+        params = build_task_extraction_params(self._config(tmp_path), 0, "sub-01", "ses-01", overwrite=False)
+
+        assert params["root_dir"] == tmp_path / "mask_extraction"
+        assert params["events"] == str(events)
+        assert params["threshold_method"] == "cluster_extent"
+        assert params["min_cluster_size"] == 40
+        assert params["ref_file"].endswith("sub-01_ses-01_task-rit_boldref.nii.gz")
+        assert (params["drift_model"], params["hrf_model"]) == ("cosine", "spm")
+        assert "mask_overrides" not in params
+
+    def test_multi_localizer_root_carries_saved_overrides(self, tmp_path):
+        from pineuro.gui.components.pipeline_runner import build_task_extraction_params
+        from pineuro.mask_extraction import save_mask_overrides
+
+        self._events(tmp_path)
+        overrides = {"rumination_network": {"kind": "rethreshold", "min_cluster_size": 20}}
+        save_mask_overrides(tmp_path / "mask_extraction" / "loc_0_rit", overrides)
+
+        params = build_task_extraction_params(self._config(tmp_path, 2), 0, "sub-01", "ses-01", overwrite=True)
+
+        assert params["root_dir"] == tmp_path / "mask_extraction" / "loc_0_rit"
+        assert params["mask_overrides"] == overrides
+        assert params["overwrite"] is True
+
+    def test_default_contrasts_when_unset(self, tmp_path):
+        from pineuro.gui.components.pipeline_runner import build_task_extraction_params
+        from pineuro.tasks.task_registry import get_task_metadata
+
+        self._events(tmp_path)
+        params = build_task_extraction_params(
+            self._config(tmp_path, contrasts={}), 0, "sub-01", "ses-01", overwrite=False
+        )
+        assert params["contrasts"] == get_task_metadata("rit").default_contrasts
+
+    def test_missing_events_raises(self, tmp_path):
+        from pineuro.gui.components.pipeline_runner import build_task_extraction_params
+
+        with pytest.raises(FileNotFoundError, match="events"):
+            build_task_extraction_params(self._config(tmp_path), 0, "sub-01", "ses-01", overwrite=False)
+
+
+class TestBrainMaskParams:
+    LOC = {"type": "rit", "preprocessing": {"brain_mask_threshold_fraction": 0.6}}
+
+    def test_study_defaults_then_pineuro_defaults(self, tmp_path):
+        from pineuro.gui.components.pipeline_runner import brain_mask_params
+
+        assert brain_mask_params(self.LOC, tmp_path, "sub-01", "ses-01") == {
+            "brain_mask_threshold_fraction": 0.6,
+            "brain_mask_cleanup": 2,
+        }
+        assert brain_mask_params({"type": "rest"}, tmp_path, "sub-01", "ses-01") == {
+            "brain_mask_threshold_fraction": 0.5,
+            "brain_mask_cleanup": 2,
+        }
+
+    @pytest.mark.parametrize(("adjusted", "expected_fraction"), [(True, 0.8), (False, 0.6)])
+    def test_operator_choice_wins(self, tmp_path, adjusted, expected_fraction):
+        import json
+
+        from pineuro.gui.components.pipeline_runner import brain_mask_params
+
+        record = {"threshold_fraction": 0.8, "cleanup": 4, "adjusted_by_operator": adjusted}
+        (tmp_path / "sub-01_ses-01_task-rit_preproc_mask.json").write_text(json.dumps(record))
+        params = brain_mask_params(self.LOC, tmp_path, "sub-01", "ses-01")
+        assert params["brain_mask_threshold_fraction"] == expected_fraction
+        assert params["brain_mask_cleanup"] == (4 if adjusted else 2)

@@ -1,6 +1,7 @@
 """Validation — brain extraction and mask erosion.
 
-brain_extraction runs real ANTsPy Otsu masking (slow); erode_mask is a
+brain_extraction runs real ANTsPy get_mask (an intensity threshold at a
+fraction of the image mean, then morphological cleanup; slow); erode_mask is a
 deterministic scipy binary erosion (fast, exact).
 """
 
@@ -11,7 +12,7 @@ import numpy as np
 import pytest
 from scipy.ndimage import binary_erosion
 
-from pineuro.preprocessing import brain_extraction
+from pineuro.preprocessing import brain_extraction, preview_brain_mask
 from pineuro.utils import erode_mask
 
 from .phantom import bright_box, write_nifti
@@ -29,12 +30,13 @@ def test_brain_extraction_recovers_brain(tmp_path, record):
     convex brain box at 1000.0, unsmoothed, well clear of the volume edges. Two
     consequences make the output deterministic:
 
-    - Otsu thresholding is *unambiguous*: any threshold strictly between 0 and
-      1000 partitions the volume identically into {box} vs {background}.
+    - The threshold (0.5 × the image mean) is *unambiguous*: any threshold
+      strictly between 0 and 1000 partitions the volume identically into
+      {box} vs {background}.
     - ANTs `get_mask(cleanup=2)`'s morphological cascade (erode-2 →
-      largest-component → dilate-1 → fill-holes) on a solid convex box is a
-      deterministic ~1-voxel inward shrink — it cannot push the mask *outside*
-      the box, and removes at most a thin boundary shell.
+      largest-component → dilate-2 → fill-holes) on a solid convex box is a
+      deterministic opening — it cannot push the mask *outside* the box, and
+      removes at most a thin boundary shell.
 
     So a correct brain_extraction yields a mask satisfying the exact sandwich
     ``erosion(brain, 3) ⊆ mask ⊆ brain``. Both violation counts below are
@@ -139,3 +141,111 @@ def test_erode_preserves_affine(tmp_path):
     erode_mask(in_path, out_path, n_erode=1)
     # erode_mask copies the affine; the diag values (2.5, 3.0, 1.0) are float32-exact.
     np.testing.assert_array_equal(nib.load(str(out_path)).affine, affine)
+
+
+_SHAPE = (48, 48, 36)
+
+
+def _phantom_mask(tmp_path, image, **params):
+    in_path = tmp_path / "mean.nii.gz"
+    write_nifti(image, _AFFINE, in_path)
+    _, mask_file = brain_extraction(in_path, tmp_path / "be", **params)
+    return np.asarray(nib.load(str(mask_file)).dataobj) > 0
+
+
+@pytest.mark.slow
+def test_higher_threshold_fraction_excludes_dim_attached_tissue(tmp_path, record):
+    """A dim slab joined to the brain along a whole face is kept at the default
+    fraction and excluded by a fraction whose cut-off lies between the two intensities.
+
+    Brain box at 1000 with a 6-voxel slab at 300 sharing one face. The union is a
+    single convex box, so cleanup (an opening) cannot detach the slab; only the
+    intensity cut-off can. At 0.5 the cut-off (0.5 × the volume mean, about 75)
+    is below 300, so the slab's interior, ``erosion(union, 2) ∩ slab``, must be
+    in the mask. At ``f = (300 + 1000) / (2 × mean)`` the cut-off is 650: the
+    thresholded set is the box alone, and an opening plus hole filling of a box
+    stays inside it, so the slab leak is exactly 0.
+    """
+    image = np.zeros(_SHAPE)
+    image[12:36, 12:36, 8:28] = 1000.0
+    image[36:42, 12:36, 8:28] = 300.0
+    slab = image == 300.0
+    mean = image.mean()
+    assert 0.5 * mean < 300.0  # precondition: the default cut-off keeps the slab
+
+    kept = _phantom_mask(tmp_path / "default", image)
+    union_core = binary_erosion(image > 0, iterations=2)
+    assert not np.any(union_core & slab & ~kept)
+
+    excluded = _phantom_mask(tmp_path / "higher", image, threshold_fraction=(300.0 + 1000.0) / (2 * mean))
+    slab_leak = int(np.sum(excluded & slab))
+    assert (
+        record(
+            "preprocessing",
+            "brain_mask_threshold_slab_leak",
+            slab_leak,
+            threshold=0.0,
+            op="==",
+            description=(
+                "Voxels of a dim attached slab that survive a brain-mask cut-off set between "
+                "the slab and brain intensities. None may survive."
+            ),
+        )
+        == 0.0
+    )
+
+
+@pytest.mark.slow
+def test_higher_cleanup_detaches_tissue_on_a_narrow_neck(tmp_path, record):
+    """A blob as bright as the brain, joined by a 3×3-voxel neck, is kept at
+    cleanup 1 and removed at cleanup 3.
+
+    Brain box 24×24×20, blob 8×8×8, neck 4 voxels long with a 3×3 cross-section,
+    all at 1000. Erosion by 1 leaves the neck's centre line, so the blob stays in
+    the largest component and its 1-voxel-eroded core must be kept. Erosion by 3
+    removes the whole neck (its cross-section is 3 wide), the eroded box is far
+    larger than the eroded blob (8 voxels), and dilating the box's eroded core by
+    3 reaches at most x = 34 while the blob starts at x = 36. So exactly 0 blob
+    voxels remain.
+    """
+    image = np.zeros(_SHAPE)
+    image[8:32, 8:32, 6:26] = 1000.0  # brain
+    image[32:36, 17:20, 14:17] = 1000.0  # neck
+    image[36:44, 14:22, 12:20] = 1000.0  # blob
+    blob = np.zeros(_SHAPE, dtype=bool)
+    blob[36:44, 14:22, 12:20] = True
+
+    kept = _phantom_mask(tmp_path / "c1", image, cleanup=1)
+    assert not np.any(binary_erosion(blob, iterations=1) & ~kept)
+
+    removed = _phantom_mask(tmp_path / "c3", image, cleanup=3)
+    blob_leak = int(np.sum(removed & blob))
+    assert (
+        record(
+            "preprocessing",
+            "brain_mask_cleanup_blob_leak",
+            blob_leak,
+            threshold=0.0,
+            op="==",
+            description=(
+                "Voxels of a bright blob joined to the brain by a 3-voxel-wide neck that survive "
+                "cleanup of radius 3. The neck cannot survive that erosion, so none may."
+            ),
+        )
+        == 0.0
+    )
+
+
+@pytest.mark.slow
+def test_preview_matches_committed_mask(tmp_path):
+    """The review preview is exactly the eroded mask preprocessing commits."""
+    image, _ = bright_box(_SHAPE, intensity=1000.0, smooth_sigma=1.5)
+    in_path = tmp_path / "mean.nii.gz"
+    write_nifti(image, _AFFINE, in_path)
+
+    _, mask_file = brain_extraction(in_path, tmp_path / "be", threshold_fraction=0.8, cleanup=3)
+    committed = tmp_path / "eroded.nii.gz"
+    erode_mask(mask_file, committed, n_erode=2)
+
+    preview = preview_brain_mask(in_path, threshold_fraction=0.8, cleanup=3)
+    np.testing.assert_array_equal(preview > 0, np.asarray(nib.load(str(committed)).dataobj) > 0)

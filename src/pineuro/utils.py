@@ -1917,6 +1917,12 @@ def apply_mask(
     logger.info(f"Output: {output_path}")
 
 
+def _erode_binary(data: np.ndarray, n_erode: int) -> np.ndarray:
+    """Erode a binary array by ``n_erode`` voxel layers with a 6-connected (face-neighbour) element."""
+    structure = generate_binary_structure(3, 1)
+    return np.asarray(binary_erosion(data > 0, structure=structure, iterations=n_erode))
+
+
 def erode_mask(
     input_file: Union[str, Path],
     output_file: Union[str, Path],
@@ -1956,11 +1962,7 @@ def erode_mask(
     img = cast(Nifti1Image, nib.load(str(input_file)))
     data = img.get_fdata() > 0  # Ensure binary
 
-    # 6-connected structuring element (face neighbors only)
-    structure = generate_binary_structure(3, 1)
-
-    # Apply erosion
-    eroded = binary_erosion(data, structure=structure, iterations=n_erode)
+    eroded = _erode_binary(data, n_erode)
 
     # Save
     output_path.parent.mkdir(parents=True, exist_ok=True)

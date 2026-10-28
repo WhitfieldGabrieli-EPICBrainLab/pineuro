@@ -96,7 +96,7 @@ Three substeps run automatically:
 2. **Motion Correction** — Aligns all volumes to a reference using ANTsPy rigid registration
 3. **Brain Extraction** — Creates a brain mask using ANTsPy
 
-This step takes several minutes depending on your hardware.
+This step takes several minutes depending on your hardware. When it finishes, the **Review Brain Mask** window opens: check that the red outline follows the brain, and adjust the intensity threshold or cleanup if it keeps skull or cuts off brain (see [Preprocessing](../user-guide/preprocessing.md#reviewing-the-brain-mask)). Close it to keep the mask.
 
 ### Phase 3: Mask Extraction
 

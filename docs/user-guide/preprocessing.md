@@ -36,7 +36,9 @@ Aligns all volumes to a reference (typically the first volume or temporal mean).
 
 ### Step 3: Brain Extraction (`03_brain_extraction/`)
 
-Creates a binary brain mask using ANTsPy's `get_mask()` with conservative erosion to exclude non-brain voxels.
+Creates a binary brain mask from the temporal mean of the first input with ANTsPy's `get_mask()`. Voxels above the intensity threshold, a fraction of the image mean over the whole field of view (default 0.5), are kept. A morphological cleanup then erodes the mask by the cleanup radius (default 2 voxels), keeps the largest connected piece, grows it back by the same radius and fills holes. The final `_preproc_mask` is eroded by 2 more voxels to drop partial-volume edge voxels.
+
+Raising the intensity threshold excludes more dim non-brain tissue. Raising the cleanup radius detaches tissue joined to the brain by a narrow connection. Both have study defaults on the Localizer tab, and an operator can adjust them for a participant after reviewing the mask (see [Reviewing the Brain Mask](#reviewing-the-brain-mask)).
 
 **Output:**
 - `sub-01_ses-01_task-rest_run-01_attempt-01_mean.nii.gz` — Temporal mean image
@@ -63,10 +65,23 @@ preprocessing/
 ├── 04_coregistered/                            # Only if >1 input
 ├── sub-01_ses-01_task-rest_preproc.nii.gz     # Final masked 4D timeseries
 ├── sub-01_ses-01_task-rest_preproc_mask.nii.gz  # Brain mask
+├── sub-01_ses-01_task-rest_preproc_mask.json    # How the brain mask was made
 ├── sub-01_ses-01_task-rest_boldref.nii.gz     # BOLD reference image
 └── qc/
     └── sub-01_ses-01_task-rest_preprocessing_qc.html
 ```
+
+The `_preproc_mask.json` record (written from pineuro 1.1) holds the brain-mask parameters (`threshold_fraction`, `cleanup`, `n_erode`), the files the mask was made from (`source_mean`, `source_timeseries`, relative to `preprocessing/`), whether an operator adjusted it (`adjusted_by_operator`), and when it was written.
+
+## Reviewing the Brain Mask
+
+After preprocessing completes, the participant workflow opens the **Review Brain Mask** window. It is also available from the **Review Brain Mask** button under the preprocessing step. The window shows the mask outline on the unmasked mean EPI in several slices per plane, so both non-brain tissue the mask kept and brain it cut off are visible.
+
+- Change the intensity threshold or the cleanup radius and click **Recompute** to preview the mask. Nothing is written.
+- **Accept** with changed values asks for confirmation, then recomputes only the brain mask, the masked timeseries and the BOLD reference. DICOM conversion, motion correction and coregistration are not repeated. The localizer's mask extraction results and the coregistered masks are deleted and mask extraction runs again, so the masks need review and approval again, and coregistration runs again.
+- **Close**, or **Accept** with unchanged values, keeps the mask.
+
+The operator's values are recorded in `_preproc_mask.json` and reused if preprocessing is re-run for that participant. Participants preprocessed before pineuro 1.1 have no record; re-run preprocessing with Overwrite to review their mask. The brain mask cannot be changed once a feedback run of the session has been completed.
 
 ## Reference Scans
 
@@ -80,7 +95,7 @@ Both are configured on the Study Editor's **Study** tab. The reference scan (typ
 
 ## Overwrite Behavior
 
-All preprocessing steps default to `overwrite=False`. If output files already exist, the step is skipped. This enables efficient re-runs when only later stages need recomputation.
+All preprocessing steps default to `overwrite=False`. If output files already exist, the step is skipped. This enables efficient re-runs when only later stages need recomputation. Existing outputs are kept whatever parameters they were made with, so changing the brain-mask defaults affects participants preprocessed afterwards (or re-runs with Overwrite); use the brain-mask review to change one participant's mask.
 
 With `overwrite=True`, Step 1 also deletes any prior dcm2niix outputs for the current `(run, attempt)` label before re-running — including the primary file, collision-suffixed variants (`...a.nii.gz`, `...b.nii.gz` that dcm2niix produces under its default `-w 2` behavior), and multi-echo / phase splits (`..._e1.nii.gz`, `..._ph.nii.gz`). This prevents stale files from accumulating across re-runs. Cleanup is scoped to the current label only; siblings (other runs / other attempts) are untouched.
 
@@ -92,5 +107,7 @@ With `overwrite=True`, Step 1 also deletes any prior dcm2niix outputs for the cu
 | Localizer TR | Localizer tab → TR | e.g., `1.4` |
 | Localizer volumes | Localizer tab → Volumes | e.g., `404` |
 | Number of runs | Localizer tab → Runs | e.g., `1` or `2` |
+| Brain mask intensity threshold | Localizer tab → Brain Mask | `preprocessing.brain_mask_threshold_fraction`, × image mean (default `0.5`) |
+| Brain mask cleanup | Localizer tab → Brain Mask | `preprocessing.brain_mask_cleanup`, `0` to `4` voxels (default `2`) |
 | Reference initial | Study tab → Initial Reference | Enable/disable |
 | Reference real-time | Study tab → Real-time Reference | Enable/disable |

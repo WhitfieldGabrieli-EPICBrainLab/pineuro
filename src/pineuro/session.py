@@ -459,7 +459,11 @@ class ReferenceConfig:
 class LocalizerExtractionConfig:
     """Mask-extraction parameters for a single localizer.
 
-    Grouped under ``localizers[*].extraction``.
+    Grouped under ``localizers[*].extraction``. ``fallback_masks`` (task
+    localizers only) names, per mask, an MNI-space mask the operator can use
+    instead of the GLM mask at review: ``{"atlas": "yeo_17", "network":
+    "DefaultA"}`` for an atlas network or ``{"file": "/path/mask_mni.nii.gz"}``
+    for a mask file.
     """
 
     network_atlas: str = "yeo_17"
@@ -477,12 +481,40 @@ class LocalizerExtractionConfig:
     cluster_return_all: bool = False
     min_cluster_size: int = 50
     max_total_voxels: int | None = None
+    fallback_masks: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.threshold_method not in ("top_n", "cluster", "cluster_extent"):
             raise ValueError(
                 f"threshold_method must be 'top_n', 'cluster', or 'cluster_extent', got '{self.threshold_method}'"
             )
+        for name, spec in self.fallback_masks.items():
+            if not isinstance(spec, dict) or set(spec) not in ({"atlas", "network"}, {"file"}):
+                raise ValueError(f"fallback_masks['{name}'] must be {{atlas, network}} or {{file}}, got {spec!r}")
+
+
+@dataclass
+class LocalizerPreprocessingConfig:
+    """Preprocessing parameters for a single localizer (``localizers[*].preprocessing``).
+
+    The brain mask is ``ants.get_mask`` on the run-1 mean (see
+    :func:`pineuro.preprocessing.brain_extraction`): voxels above
+    ``brain_mask_threshold_fraction`` × the image mean are kept, and
+    ``brain_mask_cleanup`` is the radius of the morphological cleanup that
+    detaches tissue joined to the brain by narrow connections (0 disables it).
+    These are the study defaults; an operator can adjust them per participant.
+    """
+
+    brain_mask_threshold_fraction: float = 0.5
+    brain_mask_cleanup: int = 2
+
+    def __post_init__(self) -> None:
+        if not self.brain_mask_threshold_fraction > 0:
+            raise ValueError(
+                f"brain_mask_threshold_fraction must be positive, got {self.brain_mask_threshold_fraction}"
+            )
+        if not isinstance(self.brain_mask_cleanup, int) or self.brain_mask_cleanup < 0:
+            raise ValueError(f"brain_mask_cleanup must be a non-negative integer, got {self.brain_mask_cleanup!r}")
 
 
 @dataclass
@@ -644,6 +676,27 @@ class FeedbackRunConfig:
             )
 
 
+def _fallback_mask_errors(index: int, loc: LocalizerConfig, atlas_sources: dict[str, dict[str, Any]]) -> list[str]:
+    """Validation errors for one localizer's ``extraction.fallback_masks``."""
+    from .utils import get_yeo_labels
+
+    errors = []
+    for name, spec in loc.extraction.fallback_masks.items():
+        where = f"localizers[{index}].extraction.fallback_masks[{name!r}]"
+        if loc.is_rest or loc.is_manual:
+            errors.append(f"{where}: fallback masks apply to task localizers only")
+            continue
+        if name not in loc.mask_names:
+            errors.append(f"{where}: not one of this localizer's masks {loc.mask_names}")
+        if "atlas" in spec:
+            atlas = atlas_sources.get(spec["atlas"], {})
+            if atlas.get("type") != "network":
+                errors.append(f"{where}: atlas must be a network atlas, got {spec['atlas']!r}")
+            elif spec["network"] not in get_yeo_labels(n_networks=atlas["n_networks"]):
+                errors.append(f"{where}: network {spec['network']!r} is not in {spec['atlas']}")
+    return errors
+
+
 @dataclass
 class LocalizerConfig:
     """Configuration for a single localizer run.
@@ -726,7 +779,8 @@ class LocalizerConfig:
     # Rest-specific (ICA): list of Yeo network short names (e.g. ["ContA", "DefaultA"])
     networks: list[str] = field(default_factory=lambda: ["ContA", "DefaultA"])
 
-    # Mask-extraction parameters (grouped)
+    # Preprocessing (brain mask) and mask-extraction parameters (grouped)
+    preprocessing: LocalizerPreprocessingConfig = field(default_factory=LocalizerPreprocessingConfig)
     extraction: LocalizerExtractionConfig = field(default_factory=LocalizerExtractionConfig)
 
     # Real-time QC thresholds applied during collection (fd, dvars, tsnr)
@@ -971,8 +1025,11 @@ class SessionConfig:
 
     @staticmethod
     def _build_localizer(loc_data: dict[str, Any]) -> LocalizerConfig:
-        """Build a LocalizerConfig, unpacking the nested ``extraction:`` and ``qc:`` blocks."""
+        """Build a LocalizerConfig, unpacking the nested ``preprocessing:``, ``extraction:`` and ``qc:`` blocks."""
         loc_data = dict(loc_data)  # don't mutate caller's dict
+        preprocessing_data = loc_data.pop("preprocessing", None)
+        if preprocessing_data:
+            loc_data["preprocessing"] = LocalizerPreprocessingConfig(**preprocessing_data)
         extraction_data = loc_data.pop("extraction", None)
         if extraction_data:
             loc_data["extraction"] = LocalizerExtractionConfig(**extraction_data)
@@ -1061,6 +1118,7 @@ class SessionConfig:
         for i, loc in enumerate(self.localizers):
             if loc.is_rest and loc.extraction.network_atlas not in ATLAS_SOURCES:
                 errors.append(f"localizers[{i}].extraction.network_atlas is invalid: {loc.extraction.network_atlas!r}")
+            errors.extend(_fallback_mask_errors(i, loc, ATLAS_SOURCES))
 
         return errors
 
@@ -1755,7 +1813,7 @@ def run_preprocessing(
     tuple[Path, Path, Path]
         (preproc_file, mask_file, ref_file)
     """
-    from .preprocessing import preprocessing
+    from .preprocessing import preprocessing, recorded_brain_mask_params
 
     logger.info("")
     logger.info("=" * 60)
@@ -1769,6 +1827,13 @@ def run_preprocessing(
         task_type = config.localizers[0].type if config.localizers else "rest"
         task_name = task_type if task_type != "rest" else "rest"
 
+    # Brain-mask parameters: the operator's choice for this participant, else the localizer's
+    loc = next((lc for lc in config.localizers if lc.task_name == task_name), None)
+    study = loc.preprocessing if loc is not None else LocalizerPreprocessingConfig()
+    recorded = recorded_brain_mask_params(
+        str(config.paths.preprocessing_dir), config.paths.participant_id, config.paths.session_id, task_name
+    )
+
     return preprocessing(
         participant_id=config.paths.participant_id,
         session_id=config.paths.session_id,
@@ -1776,6 +1841,8 @@ def run_preprocessing(
         root_dir=str(config.paths.preprocessing_dir),
         input_dicoms=[str(p) for p in rest_dicoms],
         overwrite=overwrite,
+        brain_mask_threshold_fraction=(recorded or {}).get("threshold_fraction", study.brain_mask_threshold_fraction),
+        brain_mask_cleanup=(recorded or {}).get("cleanup", study.brain_mask_cleanup),
     )
 
 
@@ -1836,7 +1903,7 @@ def run_mask_extraction(
             qc_enabled=True,
         )
     elif localizer_type != "rest":
-        from .mask_extraction import mask_extraction_task
+        from .mask_extraction import load_mask_overrides, mask_extraction_task
 
         assert preproc_file is not None and mask_file is not None and ref_file is not None
         logger.info("Using task-based (GLM) mask extraction")
@@ -1867,6 +1934,7 @@ def run_mask_extraction(
             hrf_model=loc.hrf_model,
             include_reverse=loc.include_reverse_contrasts,
             overwrite=overwrite,
+            mask_overrides=load_mask_overrides(str(config.paths.mask_extraction_dir)),
         )
     else:
         from .mask_extraction import mask_extraction_rest
@@ -1984,7 +2052,7 @@ def run_localizer_extraction(
             overwrite=overwrite,
         )
     else:
-        from .mask_extraction import mask_extraction_task
+        from .mask_extraction import load_mask_overrides, mask_extraction_task
 
         logger.info("Using task-based (GLM) mask extraction")
         ex = localizer.extraction
@@ -2015,6 +2083,7 @@ def run_localizer_extraction(
             hrf_model=localizer.hrf_model,
             include_reverse=localizer.include_reverse_contrasts,
             overwrite=overwrite,
+            mask_overrides=load_mask_overrides(loc_dir),
         )
 
     # Copy masks to shared 03_masks/ so resolve_localizer_masks() finds them

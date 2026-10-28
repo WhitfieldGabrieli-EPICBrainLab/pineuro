@@ -9,7 +9,9 @@ pineuro generates HTML quality control reports at each pipeline stage and logs p
 Contains:
 - **Motion parameter timeseries** — 6 DOF (3 translations, 3 rotations) across all volumes
 - **Framewise displacement** — Per-volume FD with 0.5mm threshold line
-- **Brain mask coverage** — Overlay of the brain mask on the mean image to verify skull stripping quality
+- **Brain mask coverage** — Overlay of the brain mask on the unmasked mean image to verify skull stripping quality
+
+The participant workflow's **Review Brain Mask** window shows the same mask in several slices per plane and lets the operator adjust it; its images are saved next to the report as `..._brain_mask_review.png` (and `..._brain_mask_preview.png` for the last preview).
 
 ## Mask Extraction QC
 

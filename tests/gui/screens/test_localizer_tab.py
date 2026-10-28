@@ -391,6 +391,51 @@ class TestCollectConfigTask:
         assert builder.collect_config()["include_reverse_contrasts"] is True
 
 
+class TestFallbackMasks:
+    def test_no_fallback_key_by_default(self):
+        """Saving an unchanged study must not add the key (it would flag a protocol change)."""
+        ex = _builder({"type": "rit", "id": "rit1"}).collect_config()["extraction"]
+        assert "fallback_masks" not in ex
+
+    @pytest.mark.parametrize(
+        "spec",
+        [{"atlas": "yeo_17", "network": "DefaultA"}, {"file": "/masks/rumination_mni.nii.gz"}],
+    )
+    def test_saved_fallback_round_trips(self, spec):
+        config = {"type": "rit", "id": "rit1", "extraction": {"fallback_masks": {"rumination_network": spec}}}
+        ex = _builder(config).collect_config()["extraction"]
+        assert ex["fallback_masks"] == {"rumination_network": spec}
+
+    def test_atlas_fallback_set_in_form(self):
+        builder = _builder({"type": "rit", "id": "rit1"})
+        row = builder._fallback_rows["rumination_network"]
+        row["kind"].value = "atlas"
+        row["atlas"].value = "yeo_17"
+        row["network"].value = "ContA"
+        ex = builder.collect_config()["extraction"]
+        assert ex["fallback_masks"] == {"rumination_network": {"atlas": "yeo_17", "network": "ContA"}}
+
+    def test_incomplete_fallback_is_dropped(self):
+        builder = _builder({"type": "rit", "id": "rit1"})
+        builder._fallback_rows["rumination_network"]["kind"].value = "file"  # no file chosen
+        assert "fallback_masks" not in builder.collect_config()["extraction"]
+
+    def test_reverse_fallback_only_when_reverse_enabled(self):
+        spec = {"atlas": "yeo_17", "network": "DefaultA"}
+        config = {"type": "rit", "id": "rit1", "extraction": {"fallback_masks": {"rumination_network_reverse": spec}}}
+        builder = _builder(config)
+        assert builder._fallback_rows["rumination_network_reverse"]["column"].visible is False
+        assert "fallback_masks" not in builder.collect_config()["extraction"]
+
+        builder.include_reverse_contrasts_checkbox.value = True
+        builder._on_reverse_contrasts_changed(None)
+        assert builder._fallback_rows["rumination_network_reverse"]["column"].visible is True
+        assert builder.collect_config()["extraction"]["fallback_masks"] == {"rumination_network_reverse": spec}
+
+    def test_rest_localizer_has_no_fallback_rows(self):
+        assert _builder({"type": "rest", "id": "rest"})._fallback_rows == {}
+
+
 class TestCollectConfigManual:
     def test_manual_emits_only_four_keys(self):
         out = _builder(
@@ -404,3 +449,23 @@ class TestCollectConfigManual:
         out = _builder({"type": "manual", "manual_mask_names": ["DMN"]}).collect_config()
         assert out["id"] == "manual"
         assert out["manual_mask_space"] == "native"
+
+
+class TestBrainMaskDefaults:
+    @pytest.mark.parametrize("loc_type", ["rest", "rit"])
+    def test_defaults_not_written(self, loc_type):
+        assert "preprocessing" not in _builder({"type": loc_type, "id": "loc"}).collect_config()
+
+    def test_changed_values_written(self):
+        builder = _builder({"type": "rit", "id": "rit1"})
+        builder.brain_mask_fraction_field.value = "0.7"
+        builder.brain_mask_cleanup_dropdown.value = "3"
+        assert builder.collect_config()["preprocessing"] == {
+            "brain_mask_threshold_fraction": 0.7,
+            "brain_mask_cleanup": 3,
+        }
+
+    def test_saved_values_round_trip(self):
+        saved = {"brain_mask_threshold_fraction": 0.6, "brain_mask_cleanup": 4}
+        out = _builder({"type": "rest", "id": "rest", "preprocessing": saved}).collect_config()
+        assert out["preprocessing"] == saved

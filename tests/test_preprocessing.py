@@ -370,6 +370,159 @@ class TestPreprocessingAttemptAwareNaming:
                 attempt_per_input=[1, 2],
             )
 
+    def test_brain_mask_params_pass_through_and_are_recorded(self, tmp_path, monkeypatch):
+        import json
+
+        from pineuro.preprocessing import preprocessing
+
+        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_run-01_attempt-01", "task-rest_run-02_attempt-01"])
+        root_dir = tmp_path / "preproc"
+        root_dir.mkdir()
+        log = self._patch_steps(monkeypatch, root_dir / "01_nifti")
+        seen: dict = {}
+
+        import pineuro.preprocessing as pp
+
+        stub = pp.brain_extraction
+
+        def recording_brain_extraction(input_file, output_dir, **kw):
+            seen.update(kw)
+            return stub(input_file, output_dir, **kw)
+
+        monkeypatch.setattr(pp, "brain_extraction", recording_brain_extraction)
+
+        preprocessing(
+            "sub-01",
+            "ses-01",
+            "rest",
+            root_dir,
+            [str(d) for d in dirs],
+            n_jobs=1,
+            qc_enabled=False,
+            brain_mask_threshold_fraction=0.7,
+            brain_mask_cleanup=3,
+        )
+
+        assert seen["threshold_fraction"] == 0.7
+        assert seen["cleanup"] == 3
+        record = json.loads((root_dir / "sub-01_ses-01_task-rest_preproc_mask.json").read_text())
+        assert record["threshold_fraction"] == 0.7
+        assert record["cleanup"] == 3
+        assert record["n_erode"] == 2
+        assert record["source_mean"] == "03_brain_extraction/sub-01_ses-01_task-rest_run-01_attempt-01_mean.nii.gz"
+        assert record["source_timeseries"] == "04_coregistered/sub-01_ses-01_task-rest.nii.gz"
+        assert record["adjusted_by_operator"] is False
+        assert len(log["brain_extraction"]) == 1
+
+    def test_rerun_with_operator_values_keeps_their_record(self, tmp_path, monkeypatch):
+        import json
+
+        from pineuro.preprocessing import preprocessing, recorded_brain_mask_params
+
+        dirs = self._make_dicom_dirs(tmp_path, ["task-rest_run-01_attempt-01"])
+        root_dir = tmp_path / "preproc"
+        root_dir.mkdir()
+        self._patch_steps(monkeypatch, root_dir / "01_nifti")
+        sidecar = root_dir / "sub-01_ses-01_task-rest_preproc_mask.json"
+        args = ("sub-01", "ses-01", "rest", root_dir, [str(d) for d in dirs])
+
+        preprocessing(*args, n_jobs=1, qc_enabled=False)
+        assert recorded_brain_mask_params(root_dir, "sub-01", "ses-01", "rest") is None
+        record = json.loads(sidecar.read_text())
+        assert (
+            record["source_timeseries"] == "02_motion_correction/sub-01_ses-01_task-rest_run-01_attempt-01_mcf.nii.gz"
+        )
+
+        # An operator's recompute marks the record; a re-run with their values keeps it
+        record.update(threshold_fraction=0.7, cleanup=3, adjusted_by_operator=True)
+        sidecar.write_text(json.dumps(record))
+        preprocessing(
+            *args,
+            n_jobs=1,
+            qc_enabled=False,
+            overwrite=True,
+            brain_mask_threshold_fraction=0.7,
+            brain_mask_cleanup=3,
+        )
+        assert recorded_brain_mask_params(root_dir, "sub-01", "ses-01", "rest") == {
+            "threshold_fraction": 0.7,
+            "cleanup": 3,
+        }
+
+        # Different values replace the operator's choice
+        preprocessing(*args, n_jobs=1, qc_enabled=False, overwrite=True)
+        assert recorded_brain_mask_params(root_dir, "sub-01", "ses-01", "rest") is None
+
+
+class TestRecomputeBrainMask:
+    SHAPE = (10, 10, 10)
+
+    def _tree(self, tmp_path):
+        """A preprocessed tree with real images: run-01 mean, 4D timeseries, and the brain-mask record."""
+        import json
+
+        root = tmp_path / "preprocessing"
+        mean = root / "03_brain_extraction" / "sub-01_ses-01_task-rit_run-01_attempt-01_mean.nii.gz"
+        timeseries = root / "02_motion_correction" / "sub-01_ses-01_task-rit_run-01_attempt-01_mcf.nii.gz"
+        mean.parent.mkdir(parents=True)
+        timeseries.parent.mkdir(parents=True)
+        nib.save(nib.Nifti1Image(np.full(self.SHAPE, 100.0), np.eye(4)), mean)
+        nib.save(nib.Nifti1Image(np.full((*self.SHAPE, 3), 7.0), np.eye(4)), timeseries)
+        record = {
+            "method": "ants.get_mask",
+            "threshold_fraction": 0.5,
+            "cleanup": 2,
+            "n_erode": 2,
+            "source_mean": mean.relative_to(root).as_posix(),
+            "source_timeseries": timeseries.relative_to(root).as_posix(),
+            "adjusted_by_operator": False,
+        }
+        (root / "sub-01_ses-01_task-rit_preproc_mask.json").write_text(json.dumps(record))
+        return root
+
+    def test_recomputes_only_the_mask_steps(self, tmp_path, monkeypatch):
+        import pineuro.preprocessing as pp
+
+        root = self._tree(tmp_path)
+        seen: dict = {}
+
+        def fake_brain_extraction(input_file, output_dir, **kw):
+            # A 6x6x6 cube: erosion by 2 leaves the central 2x2x2
+            seen.update(kw)
+            mask = np.zeros(self.SHAPE)
+            mask[2:8, 2:8, 2:8] = 1
+            mask_file = Path(output_dir) / "mean_brain_mask.nii.gz"
+            nib.save(nib.Nifti1Image(mask, np.eye(4)), mask_file)
+            return mask_file.with_name("mean_brain.nii.gz"), mask_file
+
+        def must_not_run(*_a, **_kw):
+            raise AssertionError("recompute must not repeat conversion, motion correction or coregistration")
+
+        monkeypatch.setattr(pp, "brain_extraction", fake_brain_extraction)
+        for name in ("dicom_to_nifti", "motion_correction", "compute_xfm", "apply_xfm", "concat", "compute_mean"):
+            monkeypatch.setattr(pp, name, must_not_run)
+
+        preproc, mask, ref = pp.recompute_brain_mask(
+            "sub-01", "ses-01", "rit", root, threshold_fraction=0.8, cleanup=4, qc_enabled=False
+        )
+
+        assert seen == {"overwrite": True, "threshold_fraction": 0.8, "cleanup": 4}
+        mask_data = np.asarray(nib.load(mask).get_fdata())
+        assert mask_data.sum() == 8
+        preproc_data = np.asarray(nib.load(preproc).get_fdata())
+        assert preproc_data[..., 0].sum() == 8 * 7.0  # the timeseries is masked with the new mask
+        assert np.asarray(nib.load(ref).get_fdata()).sum() == 8 * 100.0
+        assert pp.recorded_brain_mask_params(root, "sub-01", "ses-01", "rit") == {
+            "threshold_fraction": 0.8,
+            "cleanup": 4,
+        }
+
+    def test_participant_without_record_must_rerun_preprocessing(self, tmp_path):
+        from pineuro.preprocessing import recompute_brain_mask
+
+        with pytest.raises(FileNotFoundError, match="earlier pineuro version"):
+            recompute_brain_mask("sub-01", "ses-01", "rit", tmp_path, threshold_fraction=0.6)
+
 
 # =============================================================================
 # collect_volumes — recursive subfolder watching

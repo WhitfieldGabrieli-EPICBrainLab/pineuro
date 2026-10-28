@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from pineuro.gui.screens.participant_workflow import ParticipantWorkflowScreen, _format_threshold_summary
 
 
@@ -59,3 +61,27 @@ def test_localizer_brain_slice_keeps_last_frame_between_volumes():
     screen.study_config = SimpleNamespace(session_config={"localizers": [{"type": "rest"}]})
     screen._build_localizer_monitoring_panel("localizer_0_run_1", n_volumes=10)
     assert screen._slice_image.gapless_playback is True
+
+
+class TestBrainMaskReviewHelpers:
+    @pytest.mark.parametrize(
+        ("step_id", "expected"),
+        [
+            ("preprocessing", 0),
+            ("localizer_2_preprocessing", 2),
+            ("localizer_1_extraction", None),
+            ("mask_extraction", None),
+            (None, None),
+        ],
+    )
+    def test_preprocessing_localizer_index(self, step_id, expected):
+        from pineuro.gui.screens.participant_workflow import _preprocessing_localizer_index
+
+        assert _preprocessing_localizer_index(step_id) == expected
+
+    def test_brain_mask_summary(self):
+        from pineuro.gui.screens.participant_workflow import _brain_mask_summary
+
+        assert _brain_mask_summary(30000, 0.027) == "30000 voxels (810 mL)"
+        assert _brain_mask_summary(30000, None) == "30000 voxels"
+        assert _brain_mask_summary(None, 0.027) == "voxel count unavailable"

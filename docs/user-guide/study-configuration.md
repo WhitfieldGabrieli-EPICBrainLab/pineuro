@@ -46,11 +46,18 @@ select, remove). For the selected session you define:
 - **Type** — `rest` (resting-state → ICA), a task localizer (e.g. `selfother`, `rit` → GLM),
   or `manual` (import pre-built ROIs).
 - **TR**, **Volumes**, **Runs**, **Motion correction**.
+- **Brain Mask** (the `preprocessing` block, written only when changed): **Intensity
+  threshold** (`brain_mask_threshold_fraction`, × image mean, default 0.5) and **Cleanup**
+  (`brain_mask_cleanup`, 0 to 4 voxels, default 2). These are study defaults; the operator
+  reviews each participant's mask after preprocessing and can adjust it (see
+  [Preprocessing](preprocessing.md#reviewing-the-brain-mask)).
 - **Extraction** (the `extraction` block): **Network atlas** (`yeo_17` default; also Yeo 7,
   Schaefer, Harvard-Oxford, AAL, gray-matter — see [Mask Extraction](mask-extraction.md)),
   **Target networks**, **ICA components** (default 30), **Threshold** (default 2000 voxels),
-  **Threshold method** (`top_n` / `cluster`), **Smoothing FWHM** (default 5.0),
-  **High-pass** (default 0.01 Hz).
+  **Threshold method** (`top_n` / `cluster` / `cluster_extent`), **Smoothing FWHM** (default 5.0),
+  **High-pass** (default 0.01 Hz). Task localizers also have optional **Fallback Masks**
+  (`fallback_masks`): per contrast, an atlas network or an MNI-space mask file the operator
+  can apply at mask review (see [Mask Extraction](mask-extraction.md#fallback-masks)).
 
 ### Feedback (per feedback run)
 

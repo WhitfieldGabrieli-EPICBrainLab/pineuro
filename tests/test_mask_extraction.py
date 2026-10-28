@@ -583,3 +583,442 @@ class TestImportManualMasks:
         assert mock_xfm.called
         assert mock_apply.called
         assert out[0].exists()
+
+
+# =============================================================================
+# mask_extraction_task thresholding on cached GLM stat maps
+#
+# The GLM fit is skipped when every 01_glm stat map exists, so these tests
+# drive the thresholding step directly from a synthetic stat map: a 4x4x4 blob
+# at t=5 (64 voxels), a 2x2x2 blob at t=3 (8 voxels), and weak t=0.5 voxels.
+# =============================================================================
+
+_PREFIX = "sub-01_ses-01"
+
+
+def _task_tree(tmp_path):
+    """Build a mask-extraction root with a cached stat map; return the kwargs for mask_extraction_task."""
+    import pandas as pd
+
+    shape = (12, 12, 12)
+    affine = np.eye(4)
+    stat = np.zeros(shape)
+    stat[1:5, 1:5, 1:5] = 5.0  # big blob: 64 voxels
+    stat[8:10, 8:10, 8:10] = 3.0  # small blob: 8 voxels
+    stat[0, 11, 0] = 0.5
+    stat[11, 0, 11] = 0.5
+
+    root = tmp_path / "mask_extraction"
+    (root / "01_glm").mkdir(parents=True)
+    nib.save(nib.Nifti1Image(stat, affine), root / "01_glm" / f"{_PREFIX}_net_tmap.nii.gz")
+
+    func = tmp_path / "func.nii.gz"
+    nib.save(nib.Nifti1Image(np.zeros((*shape, 3)), affine), func)
+    brain = tmp_path / "brain_mask.nii.gz"
+    nib.save(nib.Nifti1Image(np.ones(shape, dtype=np.uint8), affine), brain)
+    atlas = tmp_path / "atlas.nii.gz"
+    nib.save(nib.Nifti1Image(np.ones(shape, dtype=np.uint8), affine), atlas)
+
+    params = {
+        "participant_id": "sub-01",
+        "session_id": "ses-01",
+        "root_dir": root,
+        "input_file": func,
+        "mask_file": brain,
+        "events": pd.DataFrame({"onset": [0.0, 10.0], "duration": [10.0, 10.0], "trial_type": ["a", "b"]}),
+        "contrasts": {"net": "a - b"},
+        "tr": 1.0,
+        "qc_enabled": False,
+    }
+    return params, stat, atlas
+
+
+def _thr(root):
+    return np.asarray(nib.load(root / "03_masks" / f"{_PREFIX}_net_thr.nii.gz").get_fdata())
+
+
+def _selection(root):
+    import json
+
+    return json.loads((root / "03_masks" / "mask_selections.json").read_text())["selections"]["net"]
+
+
+class TestMaskExtractionTaskThresholding:
+    def test_top_n_keeps_highest_voxels(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        mask_extraction_task(**params, threshold=10, threshold_method="top_n")
+
+        mask = _thr(params["root_dir"])
+        assert mask.sum() == 10
+        assert np.all(stat[mask > 0] == 5.0)
+        sel = _selection(params["root_dir"])
+        assert sel["threshold_method"] == "top_n"
+        assert sel["n_voxels_thresholded"] == 10
+        assert sel["n_voxels_above_zero"] == 64 + 8 + 2
+        assert sel["peak_stat"] == 5.0
+
+    def test_cluster_extent_drops_small_clusters(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        mask_extraction_task(
+            **params, threshold_method="cluster_extent", cluster_start_threshold=2.0, min_cluster_size=20
+        )
+
+        mask = _thr(params["root_dir"])
+        assert mask.sum() == 64
+        assert np.all(stat[mask > 0] == 5.0)
+        sel = _selection(params["root_dir"])
+        assert sel["cluster_outcome"] == "success"
+        assert sel["n_clusters_found"] == 1
+        assert sel["final_cluster_threshold"] == 2.0
+        assert sel["min_cluster_size"] == 20
+
+    def test_cluster_extent_no_cluster_survives(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        mask_extraction_task(**params, threshold_method="cluster_extent", min_cluster_size=100)
+
+        assert _thr(params["root_dir"]).sum() == 0
+        sel = _selection(params["root_dir"])
+        assert sel["cluster_outcome"] == "no_clusters_survive"
+        assert sel["n_voxels_thresholded"] == 0
+        assert sel["n_clusters_found"] == 0
+
+    def test_cluster_extent_cap_keeps_top_voxels(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        mask_extraction_task(**params, threshold_method="cluster_extent", min_cluster_size=5, max_total_voxels=64)
+
+        mask = _thr(params["root_dir"])
+        assert mask.sum() == 64
+        assert np.all(stat[mask > 0] == 5.0)  # the cap keeps the highest-stat voxels
+        assert _selection(params["root_dir"])["cluster_outcome"] == "capped"
+
+    def test_cluster_returns_largest_cluster_within_atlas(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, atlas = _task_tree(tmp_path)
+        mask_extraction_task(**params, threshold=100, threshold_method="cluster", atlas_mask=atlas)
+
+        mask = _thr(params["root_dir"])
+        assert mask.sum() == 64
+        assert np.all(stat[mask > 0] == 5.0)
+        sel = _selection(params["root_dir"])
+        assert sel["threshold_method"] == "cluster"
+        assert sel["atlas_used"] == str(atlas)
+        # A user atlas keeps its file name (extension included) in the saved QC copy
+        assert (params["root_dir"] / "03_masks" / f"{_PREFIX}_atlas_atlas.nii.gz.nii.gz").exists()
+
+    def test_cluster_extent_records_clusters_before_size_filter(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        mask_extraction_task(**params, threshold_method="cluster_extent", min_cluster_size=100)
+
+        sel = _selection(params["root_dir"])
+        assert sel["n_clusters_input"] == 2  # both blobs pass t >= 2.0
+        assert sel["largest_cluster_input"] == 64
+        assert sel["threshold_params"] == {
+            "threshold_method": "cluster_extent",
+            "cluster_start_threshold": 2.0,
+            "min_cluster_size": 100,
+            "max_total_voxels": None,
+        }
+        assert sel["selection_reason"] == "auto"
+
+
+def _write_like(stat_shape):
+    """apply_xfm stand-in that writes an empty image at ``output_file``."""
+
+    def _write(output_file, **_kw):
+        nib.save(nib.Nifti1Image(np.zeros(stat_shape), np.eye(4)), output_file)
+
+    return _write
+
+
+def _harvard_oxford(stat_shape):
+    return MagicMock(maps=nib.Nifti1Image(np.zeros(stat_shape), np.eye(4)), labels=["Background"])
+
+
+class TestTaskMaskOverrides:
+    def test_rethreshold_override_applies_and_is_recorded(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        mask_extraction_task(
+            **params,
+            threshold_method="cluster_extent",
+            min_cluster_size=100,
+            mask_overrides={"net": {"kind": "rethreshold", "min_cluster_size": 5}},
+        )
+
+        assert _thr(params["root_dir"]).sum() == 64 + 8
+        sel = _selection(params["root_dir"])
+        assert sel["selection_reason"] == "operator_rethreshold"
+        assert sel["min_cluster_size"] == 5
+        assert sel["threshold_params"]["min_cluster_size"] == 5
+
+    def test_skip_existing_keeps_recorded_override(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        kwargs = {"threshold_method": "cluster_extent", "min_cluster_size": 100}
+        override = {"net": {"kind": "rethreshold", "min_cluster_size": 5}}
+        mask_extraction_task(**params, **kwargs, mask_overrides=override)
+        mask_extraction_task(**params, **kwargs)  # overwrite=False: the mask on disk is kept
+
+        assert _thr(params["root_dir"]).sum() == 72
+        assert _selection(params["root_dir"])["selection_reason"] == "operator_rethreshold"
+
+    def test_unknown_mask_override_is_ignored(self, tmp_path, caplog):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        mask_extraction_task(
+            **params,
+            threshold_method="cluster_extent",
+            min_cluster_size=20,
+            mask_overrides={"gone": {"kind": "rethreshold", "min_cluster_size": 5}},
+        )
+
+        assert _thr(params["root_dir"]).sum() == 64
+        assert any("unknown mask" in m for m in caplog.messages)
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"kind": "shrink"},
+            {"kind": "rethreshold"},
+            {"kind": "rethreshold", "threshold": 10},  # not a cluster_extent field
+            {"kind": "atlas_network", "atlas": "harvard_oxford", "network": "DefaultA"},
+            {"kind": "atlas_network", "atlas": "yeo_17", "network": "Nope"},
+            {"kind": "mni_file"},
+        ],
+    )
+    def test_invalid_override_raises(self, tmp_path, override):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        with pytest.raises(ValueError):
+            mask_extraction_task(**params, threshold_method="cluster_extent", mask_overrides={"net": override})
+
+    def test_mni_replacement_requires_ref_file(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        with pytest.raises(ValueError, match="ref_file"):
+            mask_extraction_task(
+                **params,
+                threshold_method="cluster_extent",
+                mask_overrides={"net": {"kind": "atlas_network", "atlas": "yeo_17", "network": "DefaultA"}},
+            )
+
+    def test_atlas_roi_override_uses_search_atlas(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, atlas = _task_tree(tmp_path)
+        mask_extraction_task(
+            **params,
+            threshold=100,
+            threshold_method="cluster",
+            atlas_mask=atlas,
+            mask_overrides={"net": {"kind": "atlas_roi"}},
+        )
+
+        assert _thr(params["root_dir"]).sum() == stat.size  # the atlas covers the whole grid
+        sel = _selection(params["root_dir"])
+        assert sel["source_type"] == "atlas_roi"
+        assert sel["selection_reason"] == "atlas_roi"
+
+    def test_atlas_network_override_warps_network(self, tmp_path):
+        from pineuro.mask_extraction import get_yeo_labels, mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        ref = tmp_path / "boldref.nii.gz"
+        nib.save(nib.Nifti1Image(np.ones(stat.shape), np.eye(4)), ref)
+        # A subject-space Yeo-17 parcellation with DefaultA in one slab
+        parcellation = np.zeros(stat.shape)
+        parcellation[6:8, :, :] = get_yeo_labels(n_networks=17).index("DefaultA") + 1
+        warped = tmp_path / "yeo_subject.nii.gz"
+        nib.save(nib.Nifti1Image(parcellation, np.eye(4)), warped)
+
+        with (
+            patch("pineuro.mask_extraction._register_atlas_to_subject", return_value=(warped, [], [])) as reg,
+            patch("pineuro.mask_extraction.compute_xfm_to_mni", return_value=(ref, [], [])),
+            patch("pineuro.mask_extraction.apply_xfm", side_effect=_write_like(stat.shape)),
+            patch("nilearn.datasets.fetch_atlas_harvard_oxford", return_value=_harvard_oxford(stat.shape)),
+        ):
+            mask_extraction_task(
+                **params,
+                ref_file=ref,
+                threshold_method="cluster_extent",
+                mask_overrides={"net": {"kind": "atlas_network", "atlas": "yeo_17", "network": "DefaultA"}},
+            )
+
+        assert reg.call_args.kwargs["xfm_prefix"].name == f"{_PREFIX}_to_MNI_boldref"
+        assert _thr(params["root_dir"]).sum() == 2 * 12 * 12
+        sel = _selection(params["root_dir"])
+        assert sel["source_type"] == "atlas_network"
+        assert sel["source"] == "yeo_17:DefaultA"
+        assert sel["selection_reason"] == "operator_replace"
+
+    def test_mni_file_override_warps_file(self, tmp_path):
+        from pineuro.mask_extraction import update_task_mask
+
+        params, stat, _ = _task_tree(tmp_path)
+        ref = tmp_path / "boldref.nii.gz"
+        nib.save(nib.Nifti1Image(np.ones(stat.shape), np.eye(4)), ref)
+        mni_mask = tmp_path / "group_mask_mni.nii.gz"
+        data = np.zeros(stat.shape)
+        data[0:3, 0:3, 0:3] = 1
+        nib.save(nib.Nifti1Image(data, np.eye(4)), mni_mask)
+
+        def _copy_moving(moving, output_file, **_kw):
+            nib.save(nib.load(moving), output_file)
+
+        with (
+            patch("pineuro.mask_extraction.compute_xfm_to_mni", return_value=(ref, [], ["inv"])),
+            patch("pineuro.mask_extraction.apply_xfm", side_effect=_copy_moving),
+        ):
+            sel = update_task_mask(
+                {**params, "ref_file": ref, "threshold_method": "cluster_extent"},
+                "net",
+                {"kind": "mni_file", "file": str(mni_mask), "selection_reason": "fallback_configured"},
+            )
+
+        assert _thr(params["root_dir"]).sum() == 27
+        assert sel.source_type == "mni_file"
+        assert sel.selection_reason == "fallback_configured"
+        assert _selection(params["root_dir"])["source"] == str(mni_mask)
+
+
+class TestParticipantSpaceReplacement:
+    def test_edited_mask_is_used_as_is_without_ref_file(self, tmp_path):
+        """An edited copy on the participant's grid replaces the mask; no MNI warp, so no ref_file."""
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        edited = np.zeros(stat.shape)
+        edited[1:5, 1:5, 1:3] = 1  # half of the t=5 blob, the rest deleted by hand
+        edited_file = tmp_path / "net_edited.nii.gz"
+        nib.save(nib.Nifti1Image(edited, np.eye(4)), edited_file)
+
+        mask_extraction_task(
+            **params,
+            threshold_method="cluster_extent",
+            mask_overrides={"net": {"kind": "native_file", "file": str(edited_file)}},
+        )
+
+        np.testing.assert_array_equal(_thr(params["root_dir"]), edited)
+        sel = _selection(params["root_dir"])
+        assert sel["source_type"] == "native_file"
+        assert sel["source"] == str(edited_file)
+        assert sel["selection_reason"] == "operator_replace"
+
+    def test_mask_on_another_grid_is_refused(self, tmp_path):
+        from pineuro.mask_extraction import update_task_mask
+
+        params, _, _ = _task_tree(tmp_path)
+        other = tmp_path / "other_grid.nii.gz"
+        nib.save(nib.Nifti1Image(np.ones((8, 8, 8)), np.eye(4)), other)
+
+        with pytest.raises(ValueError, match="BOLD reference grid"):
+            update_task_mask(
+                {**params, "threshold_method": "cluster_extent"}, "net", {"kind": "native_file", "file": str(other)}
+            )
+
+
+class TestUpdateTaskMask:
+    KWARGS = {"threshold_method": "cluster_extent", "min_cluster_size": 20}
+
+    def test_restoring_study_parameters_matches_pipeline(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task, update_task_mask
+
+        params, _, _ = _task_tree(tmp_path)
+        mask_extraction_task(**params, **self.KWARGS)
+        pipeline_mask, pipeline_sel = _thr(params["root_dir"]), _selection(params["root_dir"])
+
+        update_task_mask({**params, **self.KWARGS}, "net", {"kind": "rethreshold", "min_cluster_size": 5})
+        assert _thr(params["root_dir"]).sum() == 72
+        update_task_mask({**params, **self.KWARGS}, "net", None)
+
+        np.testing.assert_array_equal(_thr(params["root_dir"]), pipeline_mask)
+        assert _selection(params["root_dir"]) == pipeline_sel
+
+    def test_preview_writes_nothing_and_matches_update(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task, preview_task_mask, update_task_mask
+
+        params, _, _ = _task_tree(tmp_path)
+        mask_extraction_task(**params, **self.KWARGS)
+        masks_dir = params["root_dir"] / "03_masks"
+        before = {f.name: f.read_bytes() for f in masks_dir.iterdir()}
+        override = {"kind": "rethreshold", "cluster_start_threshold": 4.0}
+
+        mask_img, sel = preview_task_mask({**params, **self.KWARGS}, "net", override)
+
+        assert {f.name: f.read_bytes() for f in masks_dir.iterdir()} == before
+        assert sel.n_voxels_thresholded == 64  # only the t=5 blob passes t >= 4
+        assert sel.n_clusters_found == 1
+        assert sel.cluster_table is not None and sel.cluster_table[0]["n_voxels"] == 64
+        update_task_mask({**params, **self.KWARGS}, "net", override)
+        np.testing.assert_array_equal(np.asarray(mask_img.dataobj), _thr(params["root_dir"]))
+
+    def test_missing_stat_map_raises(self, tmp_path):
+        from pineuro.mask_extraction import update_task_mask
+
+        params, _, _ = _task_tree(tmp_path)
+        (params["root_dir"] / "01_glm" / f"{_PREFIX}_net_tmap.nii.gz").unlink()
+        with pytest.raises(FileNotFoundError, match="run mask extraction first"):
+            update_task_mask({**params, **self.KWARGS}, "net", None)
+
+
+class TestMaskOverridesFile:
+    def test_round_trip_and_empty_removes(self, tmp_path):
+        from pineuro.mask_extraction import load_mask_overrides, save_mask_overrides
+
+        assert load_mask_overrides(tmp_path) == {}
+        overrides = {"net": {"kind": "atlas_network", "atlas": "yeo_17", "network": "DefaultA"}}
+        path = save_mask_overrides(tmp_path, overrides)
+        assert load_mask_overrides(tmp_path) == overrides
+
+        save_mask_overrides(tmp_path, {})
+        assert not path.exists()
+
+
+class TestHarvardOxfordTransform:
+    def test_overwrite_recomputes_labelling_transform(self, tmp_path):
+        """Regression: the labelling transform was always reused, so a new boldref left it stale."""
+        import pandas as pd
+
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        ref = tmp_path / "boldref.nii.gz"
+        nib.save(nib.Nifti1Image(np.ones(stat.shape), np.eye(4)), ref)
+
+        class _FakeGLM:
+            def __init__(self, **_kw):
+                pass
+
+            def fit(self, *_a, **_kw):
+                self.design_matrices_ = [pd.DataFrame({"a": [0.0, 0.0, 0.0]})]
+                return self
+
+            def compute_contrast(self, *_a, **_kw):
+                return nib.Nifti1Image(stat, np.eye(4))
+
+        with (
+            patch("pineuro.mask_extraction.compute_xfm_to_mni", return_value=(ref, [], [])) as xfm,
+            patch("pineuro.mask_extraction.apply_xfm", side_effect=_write_like(stat.shape)),
+            patch("nilearn.datasets.fetch_atlas_harvard_oxford", return_value=_harvard_oxford(stat.shape)),
+            patch("nilearn.glm.first_level.FirstLevelModel", _FakeGLM),
+        ):
+            mask_extraction_task(**params, ref_file=ref, threshold_method="cluster_extent", overwrite=True)
+
+        assert xfm.call_count == 1
+        assert xfm.call_args.kwargs["overwrite"] is True

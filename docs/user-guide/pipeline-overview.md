@@ -59,8 +59,9 @@ preprocessing/
 ├── 04_coregistered/        # Multi-run alignment (if >1 run)
 ├── sub-01_ses-01_task-rest_preproc.nii.gz      # Final masked output
 ├── sub-01_ses-01_task-rest_preproc_mask.nii.gz # Brain mask
+├── sub-01_ses-01_task-rest_preproc_mask.json   # Brain-mask parameters and sources
 ├── sub-01_ses-01_task-rest_boldref.nii.gz      # BOLD reference
-└── qc/                     # QC report
+└── qc/                     # QC report + brain-mask review images
 ```
 
 See [Preprocessing](preprocessing.md) for the full step-by-step breakdown.

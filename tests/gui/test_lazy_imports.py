@@ -40,6 +40,9 @@ _STRICT_MODULES = [
     "pineuro.gui.components.csv_poller",
     "pineuro.gui.components.feedback_summary",
     "pineuro.gui.components.collection_progress",
+    "pineuro.gui.components.mask_invalidation",
+    "pineuro.gui.components.task_mask_tools",
+    "pineuro.gui.components.brain_mask_dialog",
     "pineuro.tasks.task_registry",
 ]
 

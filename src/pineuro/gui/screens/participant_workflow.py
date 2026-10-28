@@ -20,6 +20,7 @@ to be resumed after interruption.
 
 import contextlib
 import logging
+import re
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -70,14 +71,63 @@ from ..utils import (
 
 logger = logging.getLogger(__name__)
 
-# File-type filter for NIfTI file pickers (manual mask configuration).
-NIFTI_FILETYPES = [("NIfTI files", "*.nii *.nii.gz"), ("All Files", "*.*")]
-
 
 def _loc(config: dict, idx: int = 0) -> dict:
     """Return ``config["localizers"][idx]`` as a dict, or ``{}`` if missing."""
     locs = config.get("localizers") or []
     return locs[idx] if idx < len(locs) else {}
+
+
+def _count_mask_voxels(mask_file: Path) -> int | None:
+    """Number of voxels in a mask file, or None if it cannot be read."""
+    try:
+        import nibabel as nib
+        import numpy as np
+
+        img: Any = nib.load(mask_file)
+        return int(np.count_nonzero(np.asarray(img.dataobj) > 0))
+    except Exception as ex:
+        logger.warning(f"Could not count voxels in {mask_file}: {ex}")
+        return None
+
+
+def _preprocessing_localizer_index(step_id: str | None) -> int | None:
+    """The localizer index a preprocessing step belongs to, or None for any other step."""
+    if step_id == "preprocessing":
+        return 0
+    match = re.fullmatch(r"localizer_(\d+)_preprocessing", step_id or "")
+    return int(match.group(1)) if match else None
+
+
+def _brain_mask_summary(n_voxels: int | None, voxel_ml: float | None) -> str:
+    """'N voxels (V mL)' for a brain mask."""
+    if n_voxels is None:
+        return "voxel count unavailable"
+    return f"{n_voxels} voxels ({n_voxels * voxel_ml:.0f} mL)" if voxel_ml else f"{n_voxels} voxels"
+
+
+def _voxel_volume_ml(image_file: Path) -> float | None:
+    """Volume of one voxel of an image, in mL, or None if it cannot be read."""
+    try:
+        import nibabel as nib
+        import numpy as np
+
+        img: Any = nib.load(image_file)
+        return float(np.prod(img.header.get_zooms()[:3])) / 1000.0
+    except Exception:
+        return None
+
+
+def _extraction_values(loc: dict) -> dict:
+    """The study's thresholding values for a localizer, with mask_extraction_task's defaults."""
+    extraction = loc.get("extraction", {}) or {}
+    defaults = {
+        "threshold": 2000,
+        "cluster_start_threshold": 2.0,
+        "min_cluster_size": 50,
+        "max_total_voxels": None,
+    }
+    return {k: extraction.get(k, v) if extraction.get(k) is not None else v for k, v in defaults.items()}
 
 
 def _format_threshold_summary(extraction: dict) -> str:
@@ -1121,6 +1171,33 @@ class ParticipantWorkflowScreen:
         preprocessing_dir = base_dir / "preprocessing"
         ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task}_boldref.nii.gz"
 
+        # Operator changes at review: re-threshold, the study's fallback mask, or a replacement
+        from pineuro.gui.components.task_mask_tools import (
+            TaskMaskAdjustPanel,
+            build_replace_dialog,
+            fallback_label,
+            provenance_label,
+        )
+
+        extraction_cfg = _loc(config, idx).get("extraction", {}) or {}
+        threshold_method = extraction_cfg.get("threshold_method", "top_n")
+        fallbacks = extraction_cfg.get("fallback_masks") or {}
+        locked_reason = self._mask_lock_reason()
+        empty_masks: list[str] = []
+        pending_previews: set[str] = set()  # masks showing a previewed threshold that is not applied
+
+        def _refresh_approve() -> None:
+            """Approve stays disabled while a mask is empty or a previewed threshold is not applied."""
+            approve_button.disabled = bool(empty_masks) or bool(pending_previews)
+            if empty_masks:
+                approve_button.tooltip = f"Empty mask: {', '.join(empty_masks)}"
+            elif pending_previews:
+                approve_button.tooltip = "Apply or discard the previewed threshold first"
+            else:
+                approve_button.tooltip = None
+            with contextlib.suppress(Exception):
+                approve_button.update()
+
         # Find QC report
         qc_report_path = qc_dir / f"{self._bids_prefix}_mask_extraction_qc.html"
         qc_report: Path | None = qc_report_path
@@ -1172,18 +1249,23 @@ class ParticipantWorkflowScreen:
                     )
                 )
 
-            # Get stats from selections
+            # Get stats from selections; the voxel count comes from the mask file itself,
+            # which is what feedback will use
             sel = selections_data.get(mask_name, {})
             parts = []
             contrast = sel.get("contrast_definition", "")
             if contrast:
                 parts.append(f"Contrast: {contrast}")
-            n_vox = sel.get("n_voxels_thresholded")
+            n_vox = _count_mask_voxels(mask_file)
+            if n_vox is None:
+                n_vox = sel.get("n_voxels_thresholded")
             if n_vox is not None:
                 parts.append(f"{n_vox} voxels")
+            if n_vox == 0:
+                empty_masks.append(mask_name)
             peak = sel.get("peak_stat")
             if peak is not None:
-                parts.append(f"peak t = {peak:.2f}")
+                parts.append(f"peak {sel.get('stat_type', 't')} = {peak:.2f}")
             stat_text = "  |  ".join(parts)
 
             # Find overlay image — generate on-demand if missing or stale (mask newer than overlay)
@@ -1309,7 +1391,7 @@ class ParticipantWorkflowScreen:
                         ft.Text(stat_text, size=st.BODY, color=st.MUTED),
                     ],
                 ),
-                ft.Container(
+                overlay_box := ft.Container(
                     content=overlay_content,
                     border=ft.Border.all(1, st.PANEL_BORDER),
                     border_radius=5,
@@ -1318,6 +1400,28 @@ class ParticipantWorkflowScreen:
             ]
             if cluster_table_widget is not None:
                 card_children.append(cluster_table_widget)
+            card_children.extend(
+                self._task_mask_card_controls(
+                    idx,
+                    mask_name,
+                    sel,
+                    empty=n_vox == 0,
+                    overlay_box=overlay_box,
+                    ref_file=ref_file,
+                    overlays_dir=overlays_dir,
+                    pending_previews=pending_previews,
+                    refresh_approval=_refresh_approve,
+                    mask_file=mask_file,
+                    threshold_method=threshold_method,
+                    fallback=fallbacks.get(mask_name),
+                    locked_reason=locked_reason,
+                    close_review=lambda: _close_dialog(dialog),
+                    adjust_panel_cls=TaskMaskAdjustPanel,
+                    build_replace_dialog=build_replace_dialog,
+                    fallback_label=fallback_label,
+                    provenance_label=provenance_label,
+                )
+            )
 
             card = ft.Container(
                 content=ft.Column(card_children, spacing=st.GAP_SM),
@@ -1426,6 +1530,28 @@ class ParticipantWorkflowScreen:
             self.page.update()
 
         def on_approve(e, _loc_idx=loc_idx):
+            if pending_previews:
+                _snack = ft.SnackBar(
+                    ft.Text(
+                        f"A previewed threshold is not applied ({', '.join(sorted(pending_previews))}). "
+                        "Apply it, or click Discard preview to keep the current mask."
+                    ),
+                    bgcolor=st.WARNING,
+                )
+                _snack.open = True
+                self.page.overlay.append(_snack)
+                self.page.update()
+                return
+            still_empty = [f.name for f in mask_files if _count_mask_voxels(f) == 0]
+            if still_empty:
+                _snack = ft.SnackBar(
+                    ft.Text("A mask is empty (0 voxels); re-threshold it or use a fallback first."),
+                    bgcolor=st.WARNING,
+                )
+                _snack.open = True
+                self.page.overlay.append(_snack)
+                self.page.update()
+                return
             self._set_qc_approved("initial", True, loc_idx=_loc_idx)
             loc_label = f" (Localizer {_loc_idx + 1})" if _loc_idx is not None else ""
             self._add_log(f"[SUCCESS] Task masks reviewed and approved{loc_label}")
@@ -1444,11 +1570,12 @@ class ParticipantWorkflowScreen:
             """Stage 2: show atlas region overlay as alternative (like Yeo in ICA)."""
             _close_dialog(dialog)
 
-            extraction = _loc(config).get("extraction", {})
-            atlas_source = extraction.get("atlas_source")
-            threshold_method = extraction.get("threshold_method", "top_n")
+            atlas_source = extraction_cfg.get("atlas_source")
             if threshold_method != "cluster" or not atlas_source:
-                self._add_log("[INFO] Masks rejected — re-run mask extraction with different parameters")
+                self._add_log(
+                    "[INFO] Masks rejected — adjust the threshold or replace a mask in the review "
+                    "window, or re-run mask extraction with different parameters"
+                )
                 return
 
             # Find atlas in subject space
@@ -1479,24 +1606,14 @@ class ParticipantWorkflowScreen:
             # Build Stage 2 dialog: show atlas overlay, offer to use it
             b64_atlas = base64.b64encode(atlas_overlay_png.read_bytes()).decode("utf-8")
 
-            def on_use_atlas(e, _loc_idx=loc_idx):
-                """Replace cluster mask with the full atlas region mask."""
-                import shutil as _shutil
-
+            def on_use_atlas(e):
+                """Replace every cluster mask with the full atlas region mask, then approve."""
                 _close_dialog(stage2_dialog)
-
-                for mask_file in mask_files:
-                    _shutil.copy2(atlas_subject_file, mask_file)
-                    self._add_log(f"[INFO] Replaced {mask_file.name} with atlas region mask")
-
-                self._set_qc_approved("initial", True, loc_idx=_loc_idx)
-                self._add_log("[SUCCESS] Using atlas region mask — approved")
-                self._refresh_step_list()
-                self._update_run_next_button()
-                _snack = ft.SnackBar(ft.Text("Atlas mask applied and approved."), bgcolor=st.SUCCESS)
-                _snack.open = True
-                self.page.overlay.append(_snack)
-                self.page.update()
+                names = [
+                    f.name.replace(".nii.gz", "").replace(f"{self._bids_prefix}_", "").replace("_thr", "")
+                    for f in mask_files
+                ]
+                self._apply_task_mask_changes(idx, {name: {"kind": "atlas_roi"} for name in names}, approve=True)
 
             def on_back(e):
                 _close_dialog(stage2_dialog)
@@ -1647,10 +1764,12 @@ class ParticipantWorkflowScreen:
                     icon=ft.Icons.CLOSE,
                     on_click=on_reject,
                 ),
-                ft.FilledButton(
+                approve_button := ft.FilledButton(
                     "Approve",
                     icon=ft.Icons.CHECK,
                     on_click=on_approve,
+                    disabled=bool(empty_masks),
+                    tooltip=f"Empty mask: {', '.join(empty_masks)}" if empty_masks else None,
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
@@ -1659,6 +1778,586 @@ class ParticipantWorkflowScreen:
         self.page.overlay.append(dialog)
         dialog.open = True
         self.page.update()
+
+    def _brain_mask_review_button(self, step_id: str, loc_idx: int) -> ft.Control | None:
+        """A 'Review Brain Mask' button once the localizer's preprocessing is complete."""
+        if self.step_statuses.get(step_id) != StepStatus.COMPLETE:
+            return None
+        return ft.Container(
+            content=ft.TextButton(
+                "Review Brain Mask",
+                icon=ft.Icons.PSYCHOLOGY,
+                on_click=lambda e, idx=loc_idx: self._show_brain_mask_review_dialog(idx),
+            ),
+            padding=ft.Padding.only(left=10),
+        )
+
+    def _show_brain_mask_review_dialog(self, loc_idx: int = 0) -> None:
+        """Review a localizer's brain mask, and let the operator adjust it for this participant."""
+        from pineuro.gui.components.brain_mask_dialog import BrainMaskReviewDialog
+        from pineuro.gui.components.mask_invalidation import localizer_task_name
+
+        config = self.study_config.session_config
+        preprocessing_dir = Path(config["paths"]["base_dir"]) / "preprocessing"
+        loc = _loc(config, loc_idx)
+        task = localizer_task_name(loc)
+        mask_file = preprocessing_dir / f"{self._bids_prefix}_task-{task}_preproc_mask.nii.gz"
+        qc_dir = preprocessing_dir / "qc"
+        study_cfg = loc.get("preprocessing", {}) or {}
+        study_defaults = (
+            float(study_cfg.get("brain_mask_threshold_fraction", 0.5)),
+            int(study_cfg.get("brain_mask_cleanup", 2)),
+        )
+        multi_label = f" (Localizer {loc_idx + 1})" if len(config.get("localizers", [])) > 1 else ""
+
+        def _load() -> None:
+            error, record, n_voxels, voxel_ml = None, None, None, None
+            review_png = qc_dir / f"{self._bids_prefix}_task-{task}_brain_mask_review.png"
+            try:
+                from pineuro.preprocessing import read_brain_mask_record
+                from pineuro.qc import plot_brain_mask_review
+
+                record = read_brain_mask_record(preprocessing_dir, self.participant_id, self.session_id, task)
+                if record is None:
+                    raise FileNotFoundError(
+                        "This participant was preprocessed with an earlier pineuro version. Re-run "
+                        "preprocessing (Overwrite All) to review and adjust the brain mask."
+                    )
+                mean_file = preprocessing_dir / record["source_mean"]
+                plot_brain_mask_review(mean_file, mask_file, review_png, title=f"Brain mask: task-{task}")
+                n_voxels = _count_mask_voxels(mask_file)
+                voxel_ml = _voxel_volume_ml(mean_file)
+            except Exception as ex:
+                logger.warning(f"Brain mask review unavailable: {ex}")
+                error = str(ex)
+
+            async def _open() -> None:
+                if error is not None or record is None:
+                    _snack = ft.SnackBar(ft.Text(error or "Brain mask not found."), bgcolor=st.WARNING)
+                    _snack.open = True
+                    self.page.overlay.append(_snack)
+                    self.page.update()
+                    return
+                mean_file = preprocessing_dir / record["source_mean"]
+                current = (float(record["threshold_fraction"]), int(record["cleanup"]))
+
+                def _preview(fraction: float, cleanup: int) -> None:
+                    def _work() -> None:
+                        preview_png = qc_dir / f"{self._bids_prefix}_task-{task}_brain_mask_preview.png"
+                        text, failure = None, None
+                        try:
+                            from pineuro.preprocessing import preview_brain_mask
+                            from pineuro.qc import plot_brain_mask_review
+
+                            preview = preview_brain_mask(mean_file, threshold_fraction=fraction, cleanup=cleanup)
+                            plot_brain_mask_review(
+                                mean_file, preview, preview_png, title=f"Preview: {fraction} × mean, cleanup {cleanup}"
+                            )
+                            text = (
+                                f"Preview: {_brain_mask_summary(int(preview.sum()), voxel_ml)}; "
+                                f"current mask {_brain_mask_summary(n_voxels, voxel_ml)}"
+                            )
+                        except Exception as ex:
+                            logger.exception("Brain mask preview failed")
+                            failure = str(ex)
+
+                        async def _show() -> None:
+                            if failure is not None:
+                                dialog.show_error(failure)
+                            else:
+                                dialog.set_preview(preview_png, text or "")
+
+                        self.page.run_task(_show)
+
+                    self.page.run_thread(_work)
+
+                def _accept(fraction: float, cleanup: int) -> None:
+                    if (fraction, cleanup) == current:
+                        self._add_log(f"[INFO] Brain mask accepted{multi_label}: {fraction} × mean, cleanup {cleanup}")
+                        return
+                    self._confirm_brain_mask_recompute(loc_idx, task, fraction, cleanup)
+
+                dialog = BrainMaskReviewDialog(
+                    self.page,
+                    title=f"Review Brain Mask{multi_label}",
+                    image_path=review_png,
+                    voxel_text=f"Brain mask: {_brain_mask_summary(n_voxels, voxel_ml)}",
+                    current=current,
+                    study_defaults=study_defaults,
+                    adjusted=bool(record.get("adjusted_by_operator")),
+                    locked_reason=self._mask_lock_reason(),
+                    on_preview=_preview,
+                    on_accept=_accept,
+                )
+                dialog.show()
+
+            self.page.run_task(_open)
+
+        self.page.run_thread(_load)
+
+    def _confirm_brain_mask_recompute(self, loc_idx: int, task: str, fraction: float, cleanup: int) -> None:
+        """Confirm, then recompute the brain mask and re-run what depends on it."""
+
+        def _cancel(_e: Any) -> None:
+            confirm.open = False
+            self.page.update()
+            self._show_brain_mask_review_dialog(loc_idx)
+
+        def _go(_e: Any) -> None:
+            confirm.open = False
+            self.page.update()
+            self._recompute_brain_mask(loc_idx, task, fraction, cleanup)
+
+        confirm = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Recompute brain mask?"),
+            content=ft.Text(
+                f"This recomputes the task-{task} brain mask ({fraction} × mean, cleanup {cleanup}), "
+                "the BOLD reference and the masked timeseries. This localizer's mask extraction "
+                "results and the coregistered masks are deleted, and mask extraction runs again; "
+                "the masks then need review and approval, and coregistration runs again.",
+                size=st.BODY,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=_cancel),
+                ft.FilledButton("Recompute", icon=ft.Icons.REFRESH, on_click=_go),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.overlay.append(confirm)
+        confirm.open = True
+        self.page.update()
+
+    def _recompute_brain_mask(self, loc_idx: int, task: str, fraction: float, cleanup: int) -> None:
+        """Recompute the brain mask in the background, invalidate what depended on it, re-run extraction."""
+        reason = self._mask_lock_reason()
+        if self._is_running or reason:
+            _snack = ft.SnackBar(
+                ft.Text(reason or "Wait for the running step to finish, then accept the brain mask again."),
+                bgcolor=st.WARNING,
+            )
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        is_multi = len(config.get("localizers", [])) > 1
+        self._add_log(f"[INFO] Recomputing brain mask (task-{task}): {fraction} × mean, cleanup {cleanup}")
+
+        def _work() -> None:
+            error, had_extraction = None, False
+            try:
+                from pineuro.gui.components.mask_invalidation import (
+                    extraction_root,
+                    invalidate_coregistration,
+                    invalidate_localizer_extraction,
+                )
+                from pineuro.preprocessing import recompute_brain_mask
+
+                recompute_brain_mask(
+                    self.participant_id,
+                    self.session_id,
+                    task,
+                    base_dir / "preprocessing",
+                    threshold_fraction=fraction,
+                    cleanup=cleanup,
+                )
+                root = extraction_root(base_dir, config, loc_idx)
+                had_extraction = (root / "03_masks").exists() or any(root.glob("01_*"))
+                if had_extraction:
+                    invalidate_localizer_extraction(base_dir, config, loc_idx, self._bids_prefix)
+                    invalidate_coregistration(base_dir, include_transforms=True)
+            except Exception as ex:
+                logger.exception("Brain mask recompute failed")
+                error = str(ex)
+
+            async def _finish() -> None:
+                if error is not None:
+                    self._add_log(f"[ERROR] Brain mask recompute failed: {error}")
+                    return
+                self._add_log("[SUCCESS] Brain mask recomputed")
+                if not had_extraction:
+                    self._refresh_step_list()
+                    return
+                if self._is_mni_atlas_mode:
+                    extraction_step = "mni_mask_extraction"
+                else:
+                    extraction_step = f"localizer_{loc_idx}_extraction" if is_multi else "mask_extraction"
+                self._set_qc_approved("initial", False, loc_idx=loc_idx if is_multi else None)
+                for step_id in (extraction_step, "coregistration", "coregistration_realtime"):
+                    if step_id in self.step_statuses:
+                        self.step_statuses[step_id] = StepStatus.PENDING
+                self._refresh_step_list()
+                self._update_run_next_button()
+                self._add_log("[INFO] Re-running mask extraction with the new brain mask")
+                self._pending_overwrite = True
+                self._start_step(extraction_step)
+
+            self.page.run_task(_finish)
+
+        self.page.run_thread(_work)
+
+    def _mask_lock_reason(self) -> str | None:
+        """Why masks can no longer be changed (a feedback run has completed), or None."""
+        from pineuro.gui.components.task_mask_tools import mask_lock_reason
+
+        return mask_lock_reason(s for s, status in self.step_statuses.items() if status == StepStatus.COMPLETE)
+
+    def _task_mask_card_controls(
+        self,
+        loc_idx: int,
+        mask_name: str,
+        sel: dict,
+        *,
+        empty: bool,
+        overlay_box: ft.Container,
+        ref_file: Path,
+        overlays_dir: Path,
+        pending_previews: set[str],
+        refresh_approval: Callable[[], None],
+        mask_file: Path,
+        threshold_method: str,
+        fallback: dict | None,
+        locked_reason: str | None,
+        close_review: Callable[[], None],
+        adjust_panel_cls: Any,
+        build_replace_dialog: Callable[..., ft.AlertDialog],
+        fallback_label: Callable[[dict], str],
+        provenance_label: Callable[[dict], str | None],
+    ) -> list[ft.Control]:
+        """Review controls for one task mask: provenance, empty-mask warning and the change actions."""
+        controls: list[ft.Control] = []
+        provenance = provenance_label(sel)
+        if provenance:
+            controls.append(
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.EDIT_NOTE, color=st.INFO, size=st.ICON_SM),
+                        ft.Text(provenance, size=st.CAPTION, color=st.INFO),
+                    ],
+                    spacing=st.GAP_XS,
+                )
+            )
+
+        def _change(override: dict | None) -> None:
+            close_review()
+            self._apply_task_mask_changes(loc_idx, {mask_name: override})
+
+        def _choose_replacement(override: dict | None) -> None:
+            self._apply_task_mask_changes(loc_idx, {mask_name: override})
+
+        fallback_button: ft.Control | None = None
+        if fallback:
+            from pineuro.mask_extraction import fallback_override
+
+            fallback_button = ft.OutlinedButton(
+                f"Use fallback: {fallback_label(fallback)}",
+                icon=ft.Icons.MAP,
+                disabled=locked_reason is not None,
+                tooltip=locked_reason,
+                on_click=lambda _e: _change(fallback_override(fallback)),
+            )
+
+        if empty:
+            controls.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(ft.Icons.ERROR_OUTLINE, color=st.ERROR, size=st.ICON_MD),
+                            ft.Text(
+                                "0 voxels: feedback cannot run with this mask. Re-threshold it or use a fallback.",
+                                size=st.BODY,
+                                color=st.ERROR_FG,
+                                expand=True,
+                            ),
+                        ],
+                        spacing=st.GAP_SM,
+                    ),
+                    padding=st.GAP_SM,
+                    bgcolor=st.ERROR_BG,
+                    border_radius=6,
+                )
+            )
+
+        values = {
+            **_extraction_values(_loc(self.study_config.session_config, loc_idx)),
+            **(sel.get("threshold_params") or {}),
+        }
+        panel: Any = adjust_panel_cls(
+            threshold_method,
+            values,
+            stat_type=sel.get("stat_type", "t"),
+            override_active=sel.get("selection_reason", "auto") != "auto",
+            locked_reason=locked_reason,
+            on_preview=lambda override: self._preview_task_mask(
+                loc_idx,
+                mask_name,
+                override,
+                panel,
+                overlay_box=overlay_box,
+                ref_file=ref_file,
+                overlays_dir=overlays_dir,
+                on_shown=_preview_shown,
+            ),
+            on_apply=_change,
+            on_reset=lambda: _change(None),
+            on_discard=lambda: _discard_preview(),
+        )
+
+        committed_figure = overlay_box.content
+
+        def _preview_shown() -> None:
+            pending_previews.add(mask_name)
+            panel.set_preview_pending(True)
+            refresh_approval()
+
+        def _discard_preview() -> None:
+            """Drop an unapplied preview and show the current mask again."""
+            if mask_name not in pending_previews:
+                return
+            pending_previews.discard(mask_name)
+            overlay_box.content = committed_figure
+            panel.show_result("")
+            panel.set_preview_pending(False)
+            with contextlib.suppress(Exception):
+                overlay_box.update()
+            refresh_approval()
+
+        def _toggle_panel(e: Any) -> None:
+            panel.visible = not panel.visible
+            e.control.icon = ft.Icons.EXPAND_LESS if panel.visible else ft.Icons.TUNE
+            if not panel.visible:
+                _discard_preview()  # closing the panel keeps the current mask
+            panel.update()
+            e.control.update()
+
+        def _open_replace(_e: Any) -> None:
+            close_review()  # one modal at a time; Cancel returns to the review
+
+            def _cancel() -> None:
+                replace_dialog.open = False
+                self.page.update()
+                self._show_mask_review_dialog(loc_idx=loc_idx)
+
+            def _choose(override: dict) -> None:
+                replace_dialog.open = False
+                self.page.update()
+                _choose_replacement(override)
+
+            replace_dialog: ft.AlertDialog = build_replace_dialog(
+                mask_name, on_choose=_choose, on_cancel=_cancel, initial_path=mask_file
+            )
+            self.page.overlay.append(replace_dialog)
+            replace_dialog.open = True
+            self.page.update()
+
+        actions: list[ft.Control] = [
+            ft.TextButton("Adjust threshold", icon=ft.Icons.TUNE, on_click=_toggle_panel),
+            ft.TextButton(
+                "Replace…",
+                icon=ft.Icons.SWAP_HORIZ,
+                disabled=locked_reason is not None,
+                tooltip=locked_reason,
+                on_click=_open_replace,
+            ),
+        ]
+        if fallback_button is not None:
+            actions.insert(0, fallback_button)
+        controls.append(ft.Row(actions, spacing=st.GAP_SM, wrap=True))
+        controls.append(panel)
+        return controls
+
+    def _preview_task_mask(
+        self,
+        loc_idx: int,
+        mask_name: str,
+        override: dict,
+        panel: Any,
+        *,
+        overlay_box: ft.Container,
+        ref_file: Path,
+        overlays_dir: Path,
+        on_shown: Callable[[], None],
+    ) -> None:
+        """Show what a re-threshold would give, in the card's figure and counts, without changing the mask.
+
+        ``on_shown`` then marks the mask as showing an unapplied preview, which
+        blocks approval until it is applied or discarded.
+        """
+        import base64
+        from dataclasses import asdict
+
+        from pineuro.gui.components.task_mask_tools import preview_summary
+
+        config = self.study_config.session_config
+        panel.show_result("Computing preview…")
+
+        def _work() -> None:
+            text, error, png_b64 = None, None, None
+            try:
+                from pineuro.gui.components.pipeline_runner import build_task_extraction_params
+                from pineuro.mask_extraction import preview_task_mask
+
+                params = build_task_extraction_params(
+                    config, loc_idx, self.participant_id, self.session_id, overwrite=False
+                )
+                mask_img, sel = preview_task_mask(params, mask_name, override)
+                text = preview_summary(asdict(sel))
+            except Exception as ex:
+                logger.exception(f"Task mask preview failed for {mask_name}")
+                error = str(ex)
+            else:
+                # The preview gets its own files; the mask's review overlay is untouched until Apply
+                try:
+                    from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
+
+                    preview_mask = overlays_dir / f"{self._bids_prefix}_{mask_name}_preview_mask.nii.gz"
+                    preview_png = overlays_dir / f"{self._bids_prefix}_{mask_name}_preview_overlay.png"
+                    mask_img.to_filename(str(preview_mask))
+                    slices = (
+                        select_slices_from_atlas(
+                            atlas_path=ref_file, labels=[], target_label="", top_n_per_plane=1, mask_path=preview_mask
+                        )
+                        if sel.n_voxels_thresholded > 0
+                        else {}  # an empty preview falls back to the middle slices
+                    )
+                    plot_mask_overlay_tripanel(
+                        mask_path=preview_mask,
+                        ref_path=ref_file,
+                        out_path=preview_png,
+                        slices=slices,
+                        title=f"Preview: {mask_name} ({sel.n_voxels_thresholded} voxels, not applied)",
+                    )
+                    png_b64 = base64.b64encode(preview_png.read_bytes()).decode("utf-8")
+                except Exception as ex:
+                    logger.warning(f"Could not draw the preview of {mask_name}: {ex}")
+
+            async def _show() -> None:
+                if error is not None:
+                    panel.show_error(error)
+                    return
+                on_shown()
+                panel.show_result(f"Preview (not applied): {text}")
+                if png_b64 is not None:
+                    overlay_box.content = ft.Image(
+                        src=f"data:image/png;base64,{png_b64}", fit=ft.BoxFit.CONTAIN, height=st.PREVIEW_H_SM
+                    )
+                    with contextlib.suppress(Exception):
+                        overlay_box.update()
+
+            self.page.run_task(_show)
+
+        self.page.run_thread(_work)
+
+    def _apply_task_mask_changes(self, loc_idx: int, changes: dict[str, dict | None], *, approve: bool = False) -> None:
+        """Re-derive task masks with operator changes (None restores the study's parameters).
+
+        Runs in the background from the saved GLM outputs, records the changes in
+        ``mask_overrides.json`` and ``reproduce_masks.py`` so a replay gives the same
+        masks, and deletes the coregistered masks so coregistration runs again.
+        Approval is revoked, unless ``approve`` and every changed mask is non-empty.
+        Then the review dialog reopens.
+        """
+        reason = self._mask_lock_reason()
+        if reason:
+            _snack = ft.SnackBar(ft.Text(reason), bgcolor=st.WARNING)
+            _snack.open = True
+            self.page.overlay.append(_snack)
+            self.page.update()
+            return
+
+        config = self.study_config.session_config
+        base_dir = Path(config["paths"]["base_dir"])
+        is_multi = len(config.get("localizers", [])) > 1
+        review_idx = loc_idx if is_multi else None
+        self._add_log(f"[INFO] Updating task mask(s): {', '.join(changes)}")
+
+        def _work() -> None:
+            results: dict = {}
+            error = None
+            try:
+                from pineuro import qc
+                from pineuro.gui.components.mask_invalidation import (
+                    copy_to_shared_masks,
+                    extraction_root,
+                    invalidate_coregistration,
+                    store_participant_mask,
+                )
+                from pineuro.gui.components.pipeline_runner import build_task_extraction_params
+                from pineuro.mask_extraction import load_mask_overrides, save_mask_overrides, update_task_mask
+                from pineuro.script_generator import generate_mask_extraction_script, save_script
+
+                root = extraction_root(base_dir, config, loc_idx)
+                params = build_task_extraction_params(
+                    config, loc_idx, self.participant_id, self.session_id, overwrite=False
+                )
+                overrides = load_mask_overrides(root)
+                for name, override in changes.items():
+                    if override is not None and override["kind"] == "native_file":
+                        # Record a copy, so the override stays valid if the chosen file changes
+                        stored = store_participant_mask(root, self._bids_prefix, name, Path(override["file"]))
+                        override = {**override, "file": str(stored)}
+                    results[name] = update_task_mask(params, name, override)
+                    if override is None:
+                        overrides.pop(name, None)
+                    else:
+                        overrides[name] = override
+                save_mask_overrides(root, overrides)
+                params.pop("mask_overrides", None)
+                if overrides:
+                    params["mask_overrides"] = overrides
+                if is_multi:
+                    copy_to_shared_masks(
+                        base_dir, [root / "03_masks" / f"{self._bids_prefix}_{name}_thr.nii.gz" for name in changes]
+                    )
+                save_script(generate_mask_extraction_script("task", params), root / "reproduce_masks.py")
+                invalidate_coregistration(base_dir, include_transforms=False)
+
+                contrasts = dict(params["contrasts"])
+                if params.get("include_reverse"):
+                    contrasts.update({f"{n}_reverse": f"-({c})" for n, c in params["contrasts"].items()})
+                try:
+                    qc.generate_task_mask_extraction_report(
+                        mask_extraction_dir=root,
+                        participant_id=self.participant_id,
+                        session_id=self.session_id,
+                        mask_names=list(contrasts),
+                        contrasts=contrasts,
+                        stat_type=params.get("stat_type", "t"),
+                        output_dir=root.parent / "qc",
+                        overwrite=True,
+                        open_browser=False,
+                        ref_file=params["ref_file"],
+                    )
+                except Exception as qc_ex:  # the masks are updated; a stale report is not fatal
+                    logger.warning(f"Could not regenerate the task mask QC report: {qc_ex}")
+            except Exception as ex:
+                logger.exception("Task mask update failed")
+                error = str(ex)
+
+            async def _finish() -> None:
+                if error is not None:
+                    self._add_log(f"[ERROR] Task mask update failed: {error}")
+                else:
+                    for name, sel in results.items():
+                        self._add_log(f"[INFO] {name}: {sel.n_voxels_thresholded} voxels ({sel.selection_reason})")
+                    all_nonempty = all(sel.n_voxels_thresholded > 0 for sel in results.values())
+                    self._set_qc_approved("initial", approve and all_nonempty, loc_idx=review_idx)
+                    for step_id in ("coregistration", "coregistration_realtime"):
+                        if step_id in self.step_statuses:
+                            self.step_statuses[step_id] = StepStatus.PENDING
+                    if approve and all_nonempty:
+                        self._add_log("[SUCCESS] Using atlas region mask — approved")
+                self._refresh_step_list()
+                self._update_run_next_button()
+                if not (approve and error is None):
+                    self._show_mask_review_dialog(loc_idx=review_idx)
+
+            self.page.run_task(_finish)
+
+        self.page.run_thread(_work)
 
     def _show_mni_mask_review_dialog(
         self,
@@ -1966,7 +2665,7 @@ class ParticipantWorkflowScreen:
                 step). When None, the dialog only persists the selections.
         """
         from pineuro.gui.components.manual_masks import read_manual_masks, write_manual_masks
-        from pineuro.gui.utils import pick_file
+        from pineuro.gui.utils import NIFTI_FILETYPES, pick_file
 
         config = self.study_config.session_config
         base_dir = Path(config["paths"]["base_dir"])
@@ -3078,8 +3777,14 @@ class ParticipantWorkflowScreen:
                     )
                 )
 
-        # MNI atlas fallback button (skip localizer entirely)
-        if not self._is_all_reused_mode and not self._is_mni_atlas_mode:
+        # MNI atlas fallback button (skip localizer entirely; network-named masks, so rest only)
+        from pineuro.gui.utils import mni_atlas_fallback_available
+
+        if (
+            not self._is_all_reused_mode
+            and not self._is_mni_atlas_mode
+            and mni_atlas_fallback_available(self.study_config.session_config)
+        ):
             controls.extend(
                 [
                     ft.Divider(),
@@ -3257,6 +3962,9 @@ class ParticipantWorkflowScreen:
                             lambda e, sid=preproc_id: self._on_step_clicked(sid),
                         )
                     )
+                    review_button = self._brain_mask_review_button(preproc_id, loc_idx)
+                    if review_button is not None:
+                        controls.append(review_button)
                 controls.append(
                     self._create_step_button(
                         extract_id,
@@ -3371,6 +4079,13 @@ class ParticipantWorkflowScreen:
                         "Run Preprocessing",
                         lambda e: self._on_step_clicked("preprocessing"),
                     ),
+                ]
+            )
+            review_button = self._brain_mask_review_button("preprocessing", 0)
+            if review_button is not None:
+                controls.append(review_button)
+            controls.extend(
+                [
                     ft.Divider(),
                     ft.Text("Network Masks", size=st.BODY, weight=ft.FontWeight.W_500),
                     self._create_step_button(
@@ -3416,8 +4131,15 @@ class ParticipantWorkflowScreen:
                         )
                     )
 
-        # MNI fallback button (always available unless in mask-reuse or already MNI mode)
-        if not self._is_all_reused_mode and not self._is_mni_atlas_mode:
+        # MNI fallback button (unless in mask-reuse or already MNI mode). It writes masks
+        # named after atlas networks, so task localizers use the per-mask fallback instead.
+        from pineuro.gui.utils import mni_atlas_fallback_available
+
+        if (
+            not self._is_all_reused_mode
+            and not self._is_mni_atlas_mode
+            and mni_atlas_fallback_available(self.study_config.session_config)
+        ):
             controls.extend(
                 [
                     ft.Divider(),
@@ -6363,6 +7085,11 @@ class ParticipantWorkflowScreen:
                 _snack.open = True
                 self.page.overlay.append(_snack)
             self.page.update()
+
+            # Auto-show the brain mask review after preprocessing (Close keeps the mask as is)
+            preproc_idx = _preprocessing_localizer_index(completed_step_id) if success else None
+            if preproc_idx is not None:
+                self._show_brain_mask_review_dialog(preproc_idx)
 
             # Auto-show QC approval dialog after coregistration steps
             if success and completed_step_id == "coregistration":

@@ -929,3 +929,24 @@ class TestBuildFeedbackSteps:
 
     def test_empty_config(self):
         assert build_feedback_steps({}) == []
+
+
+class TestMniAtlasFallbackAvailable:
+    """The session-wide MNI fallback names masks after atlas networks, so it fits rest localizers only."""
+
+    @pytest.mark.parametrize(
+        ("localizers", "expected"),
+        [
+            ([{"type": "rest"}], True),
+            ([{"type": "rest"}, {"type": "rest"}], True),
+            ([{"type": "rit"}], False),
+            ([{"type": "rest"}, {"type": "rit"}], False),
+            ([{"type": "manual"}], False),
+            ([{"type": "rit", "reuse_from_session": "ses-01"}, {"type": "rest"}], True),
+            ([], True),
+        ],
+    )
+    def test_only_when_every_fresh_localizer_is_rest(self, localizers, expected):
+        from pineuro.gui.utils import mni_atlas_fallback_available
+
+        assert mni_atlas_fallback_available({"localizers": localizers}) is expected

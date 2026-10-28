@@ -366,3 +366,38 @@ class TestLocalizerOnlyStepSeeding:
         screen = _make_detect_screen(tmp_path, config, session_id="ses-02")
         screen._detect_completed_steps()
         assert screen._has_mask_extraction is False
+
+
+# ---------------------------------------------------------------------------
+# Changing masks at review: coregistration resets, and masks lock after feedback
+# ---------------------------------------------------------------------------
+class TestMaskChangeInvalidation:
+    CONFIG = {
+        "localizers": [{"type": "rit", "n_runs": 1, "contrasts": {"rumination_network": "rumination - distraction"}}],
+        "feedback_runs": [],
+        "reference": {"initial_enabled": True, "realtime_enabled": False},
+    }
+
+    def test_coregistration_returns_to_pending_after_invalidation(self, tmp_path):
+        import copy
+
+        from pineuro.gui.components.mask_invalidation import invalidate_coregistration
+
+        coreg_mask = tmp_path / "mask_extraction" / "04_reference" / "masks"
+        coreg_mask.mkdir(parents=True)
+        (coreg_mask / "sub-01_ses-01_rumination_network_thr_to_task-reference_run-01_mean.nii.gz").write_text("x")
+        screen = _make_detect_screen(tmp_path, copy.deepcopy(self.CONFIG))
+        screen._detect_completed_steps()
+        assert screen.step_statuses["coregistration"] == StepStatus.COMPLETE
+
+        invalidate_coregistration(tmp_path, include_transforms=False)
+        screen = _make_detect_screen(tmp_path, copy.deepcopy(self.CONFIG))
+        screen._detect_completed_steps()
+        assert screen.step_statuses["coregistration"] == StepStatus.PENDING
+
+    def test_masks_lock_once_feedback_completed(self, tmp_path):
+        screen = _make_detect_screen(tmp_path, {})
+        screen.step_statuses = {"mask_extraction": StepStatus.COMPLETE, "feedback_1": StepStatus.PENDING}
+        assert screen._mask_lock_reason() is None
+        screen.step_statuses["feedback_1"] = StepStatus.COMPLETE
+        assert "locked" in screen._mask_lock_reason()

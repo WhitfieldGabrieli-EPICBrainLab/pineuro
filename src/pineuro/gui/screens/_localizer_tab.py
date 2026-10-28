@@ -192,6 +192,26 @@ class LocalizerTabBuilder:
             ),
         )
 
+        # Brain mask study defaults (preprocessing sub-block); adjustable per participant at review
+        from ..components.brain_mask_dialog import CLEANUP_LEVELS
+
+        preprocessing_cfg = c.get("preprocessing", {}) or {}
+        self.brain_mask_fraction_field = ft.TextField(
+            label="Intensity threshold (× image mean)",
+            value=str(preprocessing_cfg.get("brain_mask_threshold_fraction", 0.5)),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            hint_text="Higher excludes more dim non-brain tissue (default 0.5)",
+            on_change=lambda _: self._validate_field(
+                "brain_mask_threshold_fraction", self.brain_mask_fraction_field, validate_positive_number
+            ),
+        )
+        self.brain_mask_cleanup_dropdown = ft.Dropdown(
+            label="Cleanup (voxels)",
+            value=str(preprocessing_cfg.get("brain_mask_cleanup", 2)),
+            options=[ft.dropdown.Option(key=str(n), text=str(n)) for n in CLEANUP_LEVELS],
+            tooltip="Higher detaches more tissue joined to the brain by narrow connections (default 2)",
+        )
+
         # Reverse contrasts checkbox (task-based only)
         self.include_reverse_contrasts_checkbox = ft.Checkbox(
             label="Include reverse contrasts (enables dual-network from single-contrast localizer)",
@@ -379,6 +399,9 @@ class LocalizerTabBuilder:
             spacing=st.GAP_MD,
         )
 
+        # Per-contrast fallback masks (task localizers only)
+        self._create_fallback_mask_fields(extraction_cfg)
+
         # Create localizer task parameter fields
         self._create_task_parameter_fields()
 
@@ -482,6 +505,13 @@ class LocalizerTabBuilder:
                 st.field_row(self.dvars_threshold_field),
                 st.field_row(self.tsnr_threshold_field),
                 ft.Divider(),
+                st.section("Brain Mask"),
+                st.caption(
+                    "Study defaults for the brain mask made during preprocessing. The operator reviews "
+                    "the mask after preprocessing and can adjust it for a participant."
+                ),
+                st.field_pair(self.brain_mask_fraction_field, self.brain_mask_cleanup_dropdown),
+                ft.Divider(),
                 self.target_networks_section,
                 self.networks_section,
                 self.task_params_section,
@@ -492,6 +522,7 @@ class LocalizerTabBuilder:
                 self.threshold_row,
                 self.cluster_settings_section,
                 self.cluster_extent_settings_section,
+                self._build_fallback_masks_section(),
             ]
 
         return ft.Container(
@@ -530,6 +561,17 @@ class LocalizerTabBuilder:
                 "tsnr_threshold": float(self.tsnr_threshold_field.value or 20),
             },
         }
+
+        # Brain mask defaults — written only when changed, so an unchanged study gains no key
+        brain_mask = (
+            float(self.brain_mask_fraction_field.value or 0.5),
+            int(self.brain_mask_cleanup_dropdown.value or 2),
+        )
+        if brain_mask != (0.5, 2):
+            cfg["preprocessing"] = {
+                "brain_mask_threshold_fraction": brain_mask[0],
+                "brain_mask_cleanup": brain_mask[1],
+            }
 
         # Cluster settings — go into extraction sub-block
         if extraction["threshold_method"] == "cluster":
@@ -581,6 +623,11 @@ class LocalizerTabBuilder:
             cfg["stat_type"] = self.config.get("stat_type", "t")
             cfg["hrf_model"] = self.config.get("hrf_model", "spm")
             cfg["drift_model"] = self.config.get("drift_model", "cosine")
+
+            # Written only when configured, so saving an unchanged study adds no new key
+            fallbacks = self._collect_fallback_masks()
+            if fallbacks:
+                extraction["fallback_masks"] = fallbacks
 
             # Task-specific parameters
             task_params = self._collect_task_params()
@@ -712,13 +759,147 @@ class LocalizerTabBuilder:
             self._on_change()
 
     # ------------------------------------------------------------------
+    # Fallback masks (task localizers)
+    # ------------------------------------------------------------------
+
+    def _task_contrasts(self) -> dict[str, str]:
+        """This task localizer's contrasts, or its task's default contrasts."""
+        contrasts = self.config.get("contrasts", {})
+        if not contrasts:
+            with contextlib.suppress(KeyError, ValueError):
+                contrasts = get_task_metadata(self._loc_type).default_contrasts or {}
+        return dict(contrasts)
+
+    def _create_fallback_mask_fields(self, extraction_cfg: dict[str, Any]) -> None:
+        """Create one fallback-mask row per mask this task localizer can produce."""
+        self._fallback_rows: dict[str, dict[str, Any]] = {}
+        if self._loc_type in ("rest", "manual"):
+            return
+        saved = extraction_cfg.get("fallback_masks") or {}
+        names = list(self._task_contrasts())
+        for name in names + [f"{n}_reverse" for n in names]:
+            self._fallback_rows[name] = self._make_fallback_row(name, saved.get(name) or {})
+
+    def _make_fallback_row(self, name: str, spec: dict[str, str]) -> dict[str, Any]:
+        """Build the controls for one mask's fallback: none, an atlas network, or an MNI file."""
+        from pineuro.atlas_registry import ATLAS_SOURCES
+
+        from ..utils import NIFTI_FILETYPES
+
+        kind = "file" if "file" in spec else "atlas" if "atlas" in spec else "none"
+        kind_dropdown = ft.Dropdown(
+            label=f"{name} fallback",
+            value=kind,
+            options=[
+                ft.dropdown.Option(key="none", text="None"),
+                ft.dropdown.Option(key="atlas", text="Atlas network"),
+                ft.dropdown.Option(key="file", text="MNI-space mask file"),
+            ],
+        )
+        atlas = spec.get("atlas", "yeo_17")
+        atlas_dropdown = ft.Dropdown(
+            label="Atlas",
+            value=atlas,
+            options=[
+                ft.dropdown.Option(key=k, text=v["display_name"])
+                for k, v in ATLAS_SOURCES.items()
+                if v["type"] == "network"
+            ],
+        )
+        network_dropdown = ft.Dropdown(
+            label="Network",
+            value=spec.get("network"),
+            options=self._get_yeo_network_options(ATLAS_SOURCES.get(atlas, {}).get("n_networks", 17)),
+        )
+        file_field = ft.TextField(
+            label="Mask file (MNI space)",
+            value=spec.get("file", ""),
+            hint_text="NIfTI mask in MNI152 space",
+        )
+        atlas_row = st.field_pair(atlas_dropdown, network_dropdown)
+        if self._create_file_browse_button:
+            file_row: ft.Control = st.browse_row(
+                file_field, self._create_file_browse_button(file_field, filetypes=NIFTI_FILETYPES)
+            )
+        else:
+            file_row = st.field_row(file_field)
+        atlas_row.visible = kind == "atlas"
+        file_row.visible = kind == "file"
+        column = ft.Column(
+            [st.field_row(kind_dropdown), atlas_row, file_row],
+            spacing=st.GAP_MD,
+            visible=not name.endswith("_reverse") or bool(self.include_reverse_contrasts_checkbox.value),
+        )
+
+        def _on_kind(_e: Any) -> None:
+            atlas_row.visible = kind_dropdown.value == "atlas"
+            file_row.visible = kind_dropdown.value == "file"
+            with contextlib.suppress(Exception):
+                column.update()
+
+        def _on_atlas(_e: Any) -> None:
+            n_networks = ATLAS_SOURCES.get(atlas_dropdown.value or "", {}).get("n_networks", 17)
+            network_dropdown.options = self._get_yeo_network_options(n_networks)
+            if network_dropdown.value not in [o.key for o in network_dropdown.options]:
+                network_dropdown.value = None
+            with contextlib.suppress(Exception):
+                network_dropdown.update()
+
+        kind_dropdown.on_select = _on_kind
+        atlas_dropdown.on_select = _on_atlas
+        return {
+            "kind": kind_dropdown,
+            "atlas": atlas_dropdown,
+            "network": network_dropdown,
+            "file": file_field,
+            "column": column,
+        }
+
+    def _build_fallback_masks_section(self) -> ft.Container:
+        """Build the optional Fallback Masks section (hidden for rest localizers)."""
+        return ft.Container(
+            content=ft.Column(
+                [
+                    st.subsection("Fallback Masks (optional)"),
+                    st.caption(
+                        "An MNI-space mask the operator can apply for a participant at mask review, "
+                        "for example when the GLM mask is empty. It is warped to the participant's "
+                        "space and used under the contrast's mask name."
+                    ),
+                    *[row["column"] for row in self._fallback_rows.values()],
+                ],
+                spacing=st.GAP_MD,
+            ),
+            visible=bool(self._fallback_rows),
+        )
+
+    def _collect_fallback_masks(self) -> dict[str, dict[str, str]]:
+        """Configured fallbacks for the masks this localizer currently produces."""
+        fallbacks: dict[str, dict[str, str]] = {}
+        for name in self.get_mask_names():
+            row = self._fallback_rows.get(name)
+            if row is None:
+                continue
+            kind = row["kind"].value
+            if kind == "atlas" and row["atlas"].value and row["network"].value:
+                fallbacks[name] = {"atlas": row["atlas"].value, "network": row["network"].value}
+            elif kind == "file" and (path := (row["file"].value or "").strip()):
+                fallbacks[name] = {"file": path}
+        return fallbacks
+
+    # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
     def _on_reverse_contrasts_changed(self, e):
         """Handle reverse contrasts checkbox change."""
+        for name, row in self._fallback_rows.items():
+            if name.endswith("_reverse"):
+                row["column"].visible = bool(self.include_reverse_contrasts_checkbox.value)
         if self._on_change:
             self._on_change()
+        with contextlib.suppress(Exception):
+            self.page.update()
 
     def _on_n_target_networks_changed(self, e):
         """Handle change in number of target networks."""
