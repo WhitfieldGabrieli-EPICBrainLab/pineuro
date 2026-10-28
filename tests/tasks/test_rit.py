@@ -671,3 +671,42 @@ class TestRITInstructionKeyNames:
 
         task = create_localizer_task("rit", tmp_path, "sub-01", "ses-01", self.LABELS, run=1, attempt=1)
         assert task._key_names() == ("index finger", "middle finger", "thumb")
+
+
+# =============================================================================
+# RIT cleanup — stimuli released before the window closes
+# =============================================================================
+
+
+class TestRITCleanup:
+    STIMULI = [
+        "_text_stim",
+        "_fixation_stim",
+        "_rating_scale_line",
+        "_rating_tick_marks",
+        "_rating_tick_labels",
+        "_rating_left_label",
+        "_rating_right_label",
+        "_rating_question",
+        "_rating_marker",
+    ]
+
+    def test_stimuli_deleted_before_base_cleanup(self, monkeypatch):
+        """Regression: RIT's TextStims outlived the window and were freed off the
+        main thread at exit, where ``glDeleteLists`` segfaults on macOS."""
+        from pineuro.tasks.localizer_base import BaseLocalizerTask
+        from pineuro.tasks.rit import RITTask
+
+        remaining: list[str] = []
+
+        def _record_base_cleanup(self):
+            remaining.extend(a for a in TestRITCleanup.STIMULI if hasattr(self, a))
+
+        monkeypatch.setattr(BaseLocalizerTask, "cleanup", _record_base_cleanup)
+        task = RITTask.__new__(RITTask)
+        for attr in self.STIMULI:
+            setattr(task, attr, object())
+
+        task.cleanup()
+
+        assert remaining == []

@@ -1155,4 +1155,19 @@ class RITTask(BaseLocalizerTask):
 
     def cleanup(self) -> None:
         """Release resources after task completes."""
+        # Delete visual stimuli while GL context is still alive
+        for attr in [
+            "_text_stim",
+            "_fixation_stim",
+            "_rating_scale_line",
+            "_rating_tick_marks",
+            "_rating_tick_labels",
+            "_rating_left_label",
+            "_rating_right_label",
+            "_rating_question",
+            "_rating_marker",
+        ]:
+            if hasattr(self, attr):
+                delattr(self, attr)
+
         super().cleanup()

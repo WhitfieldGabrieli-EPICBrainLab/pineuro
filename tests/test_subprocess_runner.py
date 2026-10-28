@@ -272,6 +272,43 @@ def test_stop_bridge_close_ends_polling_without_acting():
     assert task.stopped is False
 
 
+def test_stop_bridge_close_releases_task_on_caller_thread():
+    """Regression: the bridge thread dropped the last task reference at exit.
+
+    The task's PsychoPy stimuli were then finalized on that thread, where
+    ``TextStim.__del__`` calls ``glDeleteLists`` with no GL context (a macOS
+    segfault at the end of RIT). close() must free the task on its caller.
+    """
+    freed_on: list[int] = []
+
+    class _TrackedTask(_StubTask):
+        def __del__(self):
+            freed_on.append(threading.get_ident())
+
+    flag = sr.SharedFlag(multiprocessing.get_context("spawn"))
+    bridge = _StopBridge(flag, _Value(False))
+    bridge.bind(task=_TrackedTask())  # the bridge holds the only reference
+
+    bridge.close()
+
+    assert not bridge._thread.is_alive()
+    assert bridge._task is None and bridge._coordinator is None
+    assert freed_on == [threading.get_ident()]
+
+
+def test_stop_bridge_close_releases_stop_waiting_for_bind():
+    flag = sr.SharedFlag(multiprocessing.get_context("spawn"))
+    bridge = _StopBridge(flag, _Value(False))
+    flag.set()  # a stop that arrives before bind()
+    time.sleep(0.1)
+
+    start = time.monotonic()
+    bridge.close()
+
+    assert time.monotonic() - start < 1.0
+    assert not bridge._thread.is_alive()
+
+
 def test_parent_stop_signal_does_not_block_after_child_exits():
     """Regression: the parent's stop signal hung forever once the child had exited.
 

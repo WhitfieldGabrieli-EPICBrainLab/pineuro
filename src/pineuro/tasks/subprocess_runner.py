@@ -184,9 +184,16 @@ class _StopBridge:
     calls the in-process stop path used to make. It polls the flag rather than
     blocking on it, so the parent never waits on this thread (see
     :class:`SharedFlag`); :meth:`close` ends the polling when the step is over.
+
+    :meth:`close` also joins the thread and drops the task/coordinator references
+    on the calling (main) thread. Otherwise this daemon thread could hold the last
+    reference to the task when it exits during interpreter shutdown, and the
+    task's PsychoPy stimuli would be finalized on it; ``TextStim.__del__`` then
+    calls ``glDeleteLists`` with no GL context, which segfaults on macOS.
     """
 
     _POLL_INTERVAL = 0.05  # seconds; far below a perceptible stop latency
+    _JOIN_TIMEOUT = 1.0  # seconds; the thread wakes within one poll interval
 
     def __init__(self, stop_flag: Any, show_questions_value: Any) -> None:
         self._stop_flag = stop_flag
@@ -204,8 +211,15 @@ class _StopBridge:
         self._bound.set()
 
     def close(self) -> None:
-        """Stop polling: the step has finished, so a late stop has nothing to act on."""
+        """Stop polling and release the task: the step has finished, so a late stop has nothing to act on."""
         self._closed.set()
+        self._bound.set()  # release a stop still waiting for bind()
+        if threading.current_thread() is not self._thread:
+            self._thread.join(self._JOIN_TIMEOUT)
+            if self._thread.is_alive():
+                logger.warning("Stop bridge thread did not exit within %.1fs", self._JOIN_TIMEOUT)
+        self._coordinator = None
+        self._task = None
 
     def _wait(self) -> None:
         while not self._stop_flag.is_set():
@@ -213,6 +227,8 @@ class _StopBridge:
                 return
         # A stop may arrive before the coordinator/task exist; give bind() a moment.
         self._bound.wait(timeout=10.0)
+        if self._closed.is_set():
+            return
         show_q = bool(self._show_q.value) if self._show_q is not None else False
         if self._coordinator is not None:
             with contextlib.suppress(Exception):
