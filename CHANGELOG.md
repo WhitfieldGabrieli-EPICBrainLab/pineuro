@@ -5,6 +5,12 @@ All notable changes to pineuro will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **mypy no longer stops on PyQt6's stubs.** PyQt6 6.12.0, released on 2026-10-28 and installed by PsychoPy, ships a `QtGui.pyi` that does not parse (`*args, /`), and mypy reached it through Pillow's `ImageQt`, so the type check failed before checking any of pineuro. pineuro never imports PyQt6, and mypy now skips it. Running pineuro is unaffected.
+
 ## [1.1.0] - 2026-10-28
 
 ### Added

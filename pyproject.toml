@@ -143,3 +143,11 @@ ignore_missing_imports = true
 no_implicit_optional = false
 disable_error_code = ["import-untyped"]
 
+# pineuro never imports PyQt6; mypy reaches it only through Pillow's ImageQt, and PsychoPy
+# installs whatever PyQt6 is newest. PyQt6 6.12.0's stubs do not parse (`*args, /` in
+# QtGui.pyi), which stopped mypy before it checked any of pineuro.
+[[tool.mypy.overrides]]
+module = ["PyQt6", "PyQt6.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true  # PyQt6 ships .pyi stubs, which mypy otherwise always follows
+
