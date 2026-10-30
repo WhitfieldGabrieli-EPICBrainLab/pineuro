@@ -153,7 +153,7 @@ import json  # JSON I/O for selection metadata
 import logging
 import re  # Regex for filename parsing
 import threading  # Cooperative cancellation signal for long-running steps
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Union, cast
@@ -2950,6 +2950,7 @@ class TaskMaskSelection:
     selection_reason : str
         ``"auto"`` for the study's own thresholding. Operator changes at review
         are ``"operator_rethreshold"`` (new threshold parameters),
+        ``"operator_exclude_clusters"`` (clusters left out of the mask),
         ``"fallback_configured"`` (the study's fallback mask),
         ``"operator_replace"`` (a network or file chosen at review), or
         ``"atlas_roi"`` (the search atlas)
@@ -2978,6 +2979,9 @@ class TaskMaskSelection:
     source : str or None
         What a replaced mask came from, e.g. ``"yeo_17:DefaultA"`` or the path
         of an MNI-space mask file
+    excluded_clusters : list of dict or None
+        Clusters an operator left out of the mask: ``n_voxels``, ``peak_stat``
+        and ``peak_ijk`` of each (None when no exclusion was requested)
     """
 
     mask_name: str
@@ -3000,6 +3004,7 @@ class TaskMaskSelection:
     largest_cluster_input: int | None = None
     threshold_params: dict[str, Any] | None = None
     source: str | None = None
+    excluded_clusters: list[dict[str, Any]] | None = None
 
 
 def save_task_mask_selections(masks_dir: Union[str, Path], selections: dict[str, TaskMaskSelection]) -> Path:
@@ -3125,6 +3130,7 @@ _RETHRESHOLD_FIELDS: dict[str, tuple[str, ...]] = {
 # Override kind -> selection_reason recorded when the override does not name one.
 _OVERRIDE_DEFAULT_REASONS: dict[str, str] = {
     "rethreshold": "operator_rethreshold",
+    "exclude_clusters": "operator_exclude_clusters",
     "atlas_network": "operator_replace",
     "mni_file": "operator_replace",
     "native_file": "operator_replace",
@@ -3282,6 +3288,24 @@ def _validate_mask_override(mask_name: str, override: dict[str, Any], threshold_
                 f"Re-threshold override for '{mask_name}' may set {sorted(allowed)} for "
                 f"threshold_method='{threshold_method}', got {sorted(extra)}"
             )
+    elif kind == "exclude_clusters":
+        allowed = set(_RETHRESHOLD_FIELDS[threshold_method])
+        peaks = override.get("peaks")
+        valid_peaks = (
+            isinstance(peaks, (list, tuple))
+            and len(peaks) > 0
+            and all(
+                isinstance(peak, (list, tuple))
+                and len(peak) == 3
+                and all(isinstance(v, (int, np.integer)) for v in peak)
+                for peak in peaks
+            )
+        )
+        if not valid_peaks or not (extra - {"peaks"}) <= allowed:
+            raise ValueError(
+                f"Cluster exclusion for '{mask_name}' needs 'peaks' (a list of [i, j, k] voxels) and may set "
+                f"{sorted(allowed)} for threshold_method='{threshold_method}', got {override!r}"
+            )
     elif kind == "atlas_network":
         atlas, network = override.get("atlas"), override.get("network")
         if extra != {"atlas", "network"} or ATLAS_SOURCES.get(str(atlas), {}).get("type") != "network":
@@ -3296,6 +3320,81 @@ def _validate_mask_override(mask_name: str, override: dict[str, Any], threshold_
             raise ValueError(f"File override for '{mask_name}' needs a 'file', got {override!r}")
     elif extra:
         raise ValueError(f"Atlas-ROI override for '{mask_name}' takes no parameters, got {sorted(extra)}")
+
+
+def _exclude_clusters(
+    mask_name: str, binary_mask: np.ndarray, stat_data: np.ndarray, peaks: Iterable[Iterable[int]]
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    """Remove the clusters containing the given peak voxels from a thresholded mask.
+
+    Clusters are face-connected, as in :func:`compute_cluster_table`, so a removal
+    matches its row in the cluster table. Nothing is added back, so the result is
+    the input mask minus those clusters. A peak outside the mask (the stat map
+    changed since the review) is ignored with a warning.
+
+    Returns
+    -------
+    kept_mask : np.ndarray
+        The mask without the excluded clusters.
+    removed : list of dict
+        ``n_voxels``, ``peak_stat`` and ``peak_ijk`` of each removed cluster.
+    """
+    labeled, _ = ndimage_label(binary_mask.astype(np.int32))
+    kept = binary_mask.copy()
+    removed: list[dict[str, Any]] = []
+    removed_labels: set[int] = set()
+    for peak in peaks:
+        ijk = tuple(int(v) for v in peak)
+        in_bounds = all(0 <= v < size for v, size in zip(ijk, labeled.shape, strict=True))
+        cluster_label = int(labeled[ijk]) if in_bounds else 0
+        if cluster_label == 0:
+            logger.warning(f"Excluded cluster peak {list(ijk)} is not in '{mask_name}' any more; ignoring it")
+            continue
+        if cluster_label in removed_labels:
+            continue
+        removed_labels.add(cluster_label)
+        cluster = labeled == cluster_label
+        kept[cluster] = 0
+        removed.append(
+            {
+                "n_voxels": int(cluster.sum()),
+                "peak_stat": round(float(stat_data[cluster].max()), 3),
+                "peak_ijk": list(ijk),
+            }
+        )
+    return kept, removed
+
+
+def single_cluster_image(mask_file: Union[str, Path], peak_ijk: Iterable[int]) -> tuple[Nifti1Image, int]:
+    """One cluster of a saved mask, for showing which voxels a cluster-table row covers.
+
+    Parameters
+    ----------
+    mask_file : str or Path
+        A thresholded binary mask.
+    peak_ijk : iterable of int
+        A voxel in the cluster (its ``peak_ijk`` in the cluster table).
+
+    Returns
+    -------
+    cluster_img : Nifti1Image
+        A binary mask of that cluster only.
+    n_voxels : int
+        Its size.
+
+    Raises
+    ------
+    ValueError
+        If the voxel is not in the mask.
+    """
+    img = cast(Nifti1Image, load(mask_file))
+    labeled, _ = ndimage_label((np.asarray(img.dataobj) > 0).astype(np.int32))
+    ijk = tuple(int(v) for v in peak_ijk)
+    cluster_label = int(labeled[ijk])
+    if cluster_label == 0:
+        raise ValueError(f"Voxel {list(ijk)} is not in {Path(mask_file).name}")
+    cluster = (labeled == cluster_label).astype(np.uint8)
+    return Nifti1Image(cluster, img.affine, img.header), int(cluster.sum())
 
 
 def _replacement_mask(
@@ -3403,13 +3502,19 @@ def _derive_task_mask(
     stat_data = stat_img.get_fdata()
     kind = override["kind"] if override else None
 
-    if kind in (None, "rethreshold"):
+    if kind in (None, "rethreshold", "exclude_clusters"):
         params = dict(method_params)
         if override:
             params.update({k: override[k] for k in _RETHRESHOLD_FIELDS[threshold_method] if k in override})
         binary_mask, info = threshold_task_stat_map(
             stat_data, threshold_method=threshold_method, atlas_data=atlas_data, **params
         )
+        excluded: list[dict[str, Any]] | None = None
+        if override and kind == "exclude_clusters":
+            binary_mask, excluded = _exclude_clusters(mask_name, binary_mask, stat_data, override["peaks"])
+            info["n_voxels"] = int(binary_mask.sum())
+            if info["n_clusters_found"] is not None:
+                info["n_clusters_found"] = int(ndimage_label(binary_mask.astype(np.int32))[1])
         selection = TaskMaskSelection(
             mask_name=mask_name,
             contrast_definition=contrast_expr,
@@ -3418,7 +3523,9 @@ def _derive_task_mask(
             n_voxels_above_zero=info["n_positive"],
             n_voxels_thresholded=info["n_voxels"],
             threshold_method=threshold_method,
-            selection_reason=override.get("selection_reason", "operator_rethreshold") if override else "auto",
+            selection_reason=override.get("selection_reason", _OVERRIDE_DEFAULT_REASONS[override["kind"]])
+            if override
+            else "auto",
             atlas_used=atlas_used if threshold_method != "top_n" else None,
             final_cluster_threshold=info["final_cluster_threshold"],
             n_clusters_found=info["n_clusters_found"],
@@ -3426,6 +3533,7 @@ def _derive_task_mask(
             n_clusters_input=info["n_clusters_input"],
             largest_cluster_input=info["largest_cluster_input"],
             threshold_params=info["threshold_params"],
+            excluded_clusters=excluded,
         )
         if threshold_method == "cluster_extent":
             selection.min_cluster_size = params["min_cluster_size"]
@@ -3668,6 +3776,10 @@ def mask_extraction_task(
           ``threshold``, ``cluster_start_threshold``, ``cluster_step`` and
           ``cluster_return_all`` for cluster; ``cluster_start_threshold``,
           ``min_cluster_size`` and ``max_total_voxels`` for cluster_extent).
+        - ``{"kind": "exclude_clusters", "peaks": [[i, j, k], ...], ...}``
+          thresholds this mask (optionally with the same fields as
+          ``rethreshold``), then removes the whole clusters containing those
+          voxels. A peak outside the mask is ignored with a warning.
         - ``{"kind": "atlas_network", "atlas": "yeo_17", "network": "DefaultA"}``
           replaces the mask with a whole atlas network warped from MNI space.
         - ``{"kind": "mni_file", "file": "/path/mask_mni.nii.gz"}`` replaces it

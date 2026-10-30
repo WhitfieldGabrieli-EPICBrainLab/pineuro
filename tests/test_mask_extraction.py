@@ -977,6 +977,153 @@ class TestUpdateTaskMask:
             update_task_mask({**params, **self.KWARGS}, "net", None)
 
 
+class TestExcludeClusters:
+    """_task_tree's stat map has a 64-voxel t=5 blob and a smaller t=3 blob."""
+
+    KWARGS = {"threshold_method": "cluster_extent", "min_cluster_size": 5}
+
+    @staticmethod
+    def _peak(stat, value):
+        return [int(v) for v in np.argwhere(stat == value)[0]]
+
+    def test_removes_only_the_chosen_cluster(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        peak = self._peak(stat, 3.0)
+        mask_extraction_task(
+            **params, **self.KWARGS, mask_overrides={"net": {"kind": "exclude_clusters", "peaks": [peak]}}
+        )
+
+        mask = _thr(params["root_dir"])
+        assert mask.sum() == 64
+        assert np.all(stat[mask > 0] == 5.0)
+        sel = _selection(params["root_dir"])
+        assert sel["selection_reason"] == "operator_exclude_clusters"
+        assert sel["n_voxels_thresholded"] == 64
+        assert sel["n_clusters_found"] == 1
+        assert sel["excluded_clusters"] == [{"n_voxels": 8, "peak_stat": 3.0, "peak_ijk": peak}]
+        assert [c["n_voxels"] for c in sel["cluster_table"]] == [64]
+
+    def test_threshold_values_apply_before_the_exclusion(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        override = {"kind": "exclude_clusters", "peaks": [self._peak(stat, 5.0)], "min_cluster_size": 5}
+        mask_extraction_task(
+            **params, threshold_method="cluster_extent", min_cluster_size=100, mask_overrides={"net": override}
+        )
+
+        mask = _thr(params["root_dir"])
+        assert mask.sum() == 8  # the study's minimum size would have emptied the mask
+        assert np.all(stat[mask > 0] == 3.0)
+        assert _selection(params["root_dir"])["threshold_params"]["min_cluster_size"] == 5
+
+    def test_excluded_voxels_are_not_refilled_to_the_cap(self, tmp_path):
+        from pineuro.mask_extraction import preview_task_mask
+
+        params, stat, _ = _task_tree(tmp_path)
+        run_params = {**params, **self.KWARGS, "max_total_voxels": 64}
+        override = {"kind": "exclude_clusters", "peaks": [self._peak(stat, 5.0)]}
+        _img, sel = preview_task_mask(run_params, "net", override)
+        assert sel.n_voxels_thresholded == 0  # the cap kept only the t=5 blob, which is now gone
+
+    @pytest.mark.parametrize(
+        ("method", "kwargs"),
+        [
+            ("top_n", {"threshold": 72}),
+            ("cluster", {"threshold": 100, "cluster_return_all": True}),
+            ("cluster_extent", {"min_cluster_size": 5}),
+        ],
+    )
+    def test_review_and_replay_agree_for_every_method(self, tmp_path, method, kwargs):
+        from pineuro.mask_extraction import mask_extraction_task, update_task_mask
+
+        params, stat, atlas = _task_tree(tmp_path)
+        run = {**params, "threshold_method": method, **kwargs}
+        if method == "cluster":
+            run["atlas_mask"] = atlas
+        mask_extraction_task(**run)
+        before = _thr(params["root_dir"]).copy()
+        peak = self._peak(stat, 5.0)
+        override = {"kind": "exclude_clusters", "peaks": [peak]}
+
+        sel = update_task_mask(run, "net", override)
+        reviewed = _thr(params["root_dir"]).copy()
+        assert sel.selection_reason == "operator_exclude_clusters"
+        assert reviewed[tuple(peak)] == 0
+        assert reviewed.sum() == before.sum() - sel.excluded_clusters[0]["n_voxels"]
+
+        (params["root_dir"] / "03_masks" / f"{_PREFIX}_net_thr.nii.gz").unlink()  # replay from the cached GLM
+        mask_extraction_task(**run, mask_overrides={"net": override})
+        np.testing.assert_array_equal(_thr(params["root_dir"]), reviewed)
+
+    def test_peak_outside_the_mask_warns_and_keeps_the_mask(self, tmp_path, caplog):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        mask_extraction_task(
+            **params,
+            **self.KWARGS,
+            mask_overrides={"net": {"kind": "exclude_clusters", "peaks": [[11, 0, 11], [99, 0, 0]]}},
+        )
+
+        assert _thr(params["root_dir"]).sum() == 72
+        assert _selection(params["root_dir"])["excluded_clusters"] == []
+        assert sum("not in 'net'" in m for m in caplog.messages) == 2
+
+    def test_two_peaks_in_one_cluster_remove_it_once(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, stat, _ = _task_tree(tmp_path)
+        peaks = [[int(v) for v in ijk] for ijk in np.argwhere(stat == 3.0)[:2]]
+        mask_extraction_task(
+            **params, **self.KWARGS, mask_overrides={"net": {"kind": "exclude_clusters", "peaks": peaks}}
+        )
+
+        assert len(_selection(params["root_dir"])["excluded_clusters"]) == 1
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"kind": "exclude_clusters"},
+            {"kind": "exclude_clusters", "peaks": []},
+            {"kind": "exclude_clusters", "peaks": [[1, 2]]},
+            {"kind": "exclude_clusters", "peaks": [[1.5, 2, 3]]},
+            {"kind": "exclude_clusters", "peaks": [[1, 2, 3]], "threshold": 10},  # not a cluster_extent field
+        ],
+    )
+    def test_invalid_override_raises(self, tmp_path, override):
+        from pineuro.mask_extraction import mask_extraction_task
+
+        params, _, _ = _task_tree(tmp_path)
+        with pytest.raises(ValueError, match="Cluster exclusion"):
+            mask_extraction_task(**params, **self.KWARGS, mask_overrides={"net": override})
+
+    def test_selection_written_before_this_field_still_loads(self, tmp_path):
+        import json
+
+        from pineuro.mask_extraction import load_task_mask_selections
+
+        (tmp_path / "mask_selections.json").write_text(
+            json.dumps({"type": "task", "selections": {"net": {"mask_name": "net"}}})
+        )
+        assert load_task_mask_selections(tmp_path)["net"].excluded_clusters is None
+
+    def test_single_cluster_image(self, tmp_path):
+        from pineuro.mask_extraction import mask_extraction_task, single_cluster_image
+
+        params, stat, _ = _task_tree(tmp_path)
+        mask_extraction_task(**params, **self.KWARGS)
+        thr_file = params["root_dir"] / "03_masks" / f"{_PREFIX}_net_thr.nii.gz"
+
+        img, n_voxels = single_cluster_image(thr_file, self._peak(stat, 3.0))
+        assert n_voxels == 8
+        assert np.all(stat[np.asarray(img.dataobj) > 0] == 3.0)
+        with pytest.raises(ValueError, match="not in"):
+            single_cluster_image(thr_file, [11, 0, 11])
+
+
 class TestMaskOverridesFile:
     def test_round_trip_and_empty_removes(self, tmp_path):
         from pineuro.mask_extraction import load_mask_overrides, save_mask_overrides

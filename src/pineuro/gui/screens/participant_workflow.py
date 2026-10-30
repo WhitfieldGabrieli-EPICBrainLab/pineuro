@@ -91,6 +91,29 @@ def _count_mask_voxels(mask_file: Path) -> int | None:
         return None
 
 
+def _cluster_column(label: str, *, numeric: bool = False) -> ft.DataColumn:
+    """A column of a task mask's cluster table."""
+    return ft.DataColumn(ft.Text(label, size=st.CAPTION, weight=ft.FontWeight.BOLD), numeric=numeric)  # type: ignore[arg-type, call-arg]
+
+
+def _render_mask_figure(
+    mask_img: Any, *, n_voxels: int, ref_file: Path, mask_out: Path, png_out: Path, title: str
+) -> str:
+    """Draw a mask image on the BOLD reference; return the figure as base64 PNG."""
+    import base64
+
+    from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
+
+    mask_img.to_filename(str(mask_out))
+    slices = (
+        select_slices_from_atlas(atlas_path=ref_file, labels=[], target_label="", top_n_per_plane=1, mask_path=mask_out)
+        if n_voxels > 0
+        else {}  # an empty mask falls back to the middle slices
+    )
+    plot_mask_overlay_tripanel(mask_path=mask_out, ref_path=ref_file, out_path=png_out, slices=slices, title=title)
+    return base64.b64encode(png_out.read_bytes()).decode("utf-8")
+
+
 def _preprocessing_localizer_index(step_id: str | None) -> int | None:
     """The localizer index a preprocessing step belongs to, or None for any other step."""
     if step_id == "preprocessing":
@@ -1171,14 +1194,18 @@ class ParticipantWorkflowScreen:
         preprocessing_dir = base_dir / "preprocessing"
         ref_file = preprocessing_dir / f"{self._bids_prefix}_task-{loc_task}_boldref.nii.gz"
 
-        # Operator changes at review: re-threshold, the study's fallback mask, or a replacement
+        # Operator changes at review: re-threshold, cluster exclusion, the study's fallback mask, or a replacement
+        from pineuro.gui.components.mask_invalidation import extraction_root
         from pineuro.gui.components.task_mask_tools import (
+            ClusterExcludePanel,
             TaskMaskAdjustPanel,
             build_replace_dialog,
             fallback_label,
             provenance_label,
         )
+        from pineuro.mask_extraction import load_mask_overrides
 
+        saved_overrides = load_mask_overrides(extraction_root(base_dir, config, idx))
         extraction_cfg = _loc(config, idx).get("extraction", {}) or {}
         threshold_method = extraction_cfg.get("threshold_method", "top_n")
         fallbacks = extraction_cfg.get("fallback_masks") or {}
@@ -1314,51 +1341,67 @@ class ParticipantWorkflowScreen:
 
             # Build collapsible cluster table widget if available
             cluster_table_widget: ft.Control | None = None
+            exclude_panel: ClusterExcludePanel | None = None
             cluster_table_data = sel.get("cluster_table")
             if cluster_table_data:
-                max_display = 15
+                has_exclusions = sel.get("selection_reason") == "operator_exclude_clusters"
+                # A replaced mask was not thresholded from the contrast, so it has no clusters to leave out
+                if sel.get("source_type", "glm_contrast") == "glm_contrast":
+                    exclude_panel = ClusterExcludePanel(
+                        len(cluster_table_data), has_exclusions=has_exclusions, locked_reason=locked_reason
+                    )
                 table_rows = []
-                for c in cluster_table_data[:max_display]:
+                for c in cluster_table_data:
                     region = c.get("anatomical_label", "")
                     table_rows.append(
                         ft.DataRow(
                             cells=[
+                                *([ft.DataCell(exclude_panel.tick_box(c))] if exclude_panel else []),
                                 ft.DataCell(ft.Text(str(c.get("cluster_id", "")), size=st.CAPTION)),
                                 ft.DataCell(ft.Text(str(c.get("n_voxels", "")), size=st.CAPTION)),
                                 ft.DataCell(ft.Text(f"{c.get('peak_stat', 0):.2f}", size=st.CAPTION)),
                                 ft.DataCell(ft.Text(region if region else "—", size=st.CAPTION)),
+                                *([ft.DataCell(exclude_panel.view_button(c))] if exclude_panel else []),
                             ],
                         )
                     )
-                if len(cluster_table_data) > max_display:
+                # The saved table stops at the largest clusters; say what it leaves out
+                unlisted_voxels = (n_vox or 0) - sum(c.get("n_voxels", 0) for c in cluster_table_data)
+                if unlisted_voxels > 0:
                     table_rows.append(
                         ft.DataRow(
                             cells=[
+                                *([ft.DataCell(ft.Text(""))] if exclude_panel else []),
                                 ft.DataCell(ft.Text("...", size=st.CAPTION, italic=True)),
-                                ft.DataCell(
-                                    ft.Text(
-                                        f"+{len(cluster_table_data) - max_display} more", size=st.CAPTION, italic=True
-                                    )
-                                ),
+                                ft.DataCell(ft.Text(f"+{unlisted_voxels}", size=st.CAPTION, italic=True)),
                                 ft.DataCell(ft.Text("")),
-                                ft.DataCell(ft.Text("")),
+                                ft.DataCell(ft.Text("in smaller clusters, not listed", size=st.CAPTION, italic=True)),
+                                *([ft.DataCell(ft.Text(""))] if exclude_panel else []),
                             ],
                         )
                     )
                 table_content = ft.Container(
-                    content=ft.DataTable(
-                        columns=[
-                            ft.DataColumn(ft.Text("#", size=st.CAPTION, weight=ft.FontWeight.BOLD)),  # type: ignore[arg-type, call-arg]
-                            ft.DataColumn(ft.Text("Voxels", size=st.CAPTION, weight=ft.FontWeight.BOLD), numeric=True),  # type: ignore[arg-type, call-arg]
-                            ft.DataColumn(ft.Text("Peak", size=st.CAPTION, weight=ft.FontWeight.BOLD), numeric=True),  # type: ignore[arg-type, call-arg]
-                            ft.DataColumn(ft.Text("Region", size=st.CAPTION, weight=ft.FontWeight.BOLD)),  # type: ignore[arg-type, call-arg]
+                    content=ft.Column(
+                        [
+                            ft.DataTable(
+                                columns=[
+                                    *([_cluster_column("Exclude")] if exclude_panel else []),
+                                    _cluster_column("#"),
+                                    _cluster_column("Voxels", numeric=True),
+                                    _cluster_column("Peak", numeric=True),
+                                    _cluster_column("Region"),
+                                    *([_cluster_column("View")] if exclude_panel else []),
+                                ],
+                                rows=table_rows,
+                                column_spacing=st.GAP,
+                                data_row_min_height=28,
+                                heading_row_height=30,
+                            ),
+                            *([exclude_panel] if exclude_panel else []),
                         ],
-                        rows=table_rows,
-                        column_spacing=st.GAP,
-                        data_row_min_height=28,
-                        heading_row_height=30,
+                        spacing=st.GAP_SM,
                     ),
-                    visible=False,
+                    visible=has_exclusions,  # stays open after an exclusion, where it can be restored
                     padding=ft.Padding.symmetric(horizontal=5),
                     animate_opacity=ft.Animation(200),
                 )
@@ -1374,7 +1417,7 @@ class ParticipantWorkflowScreen:
                     [
                         ft.TextButton(
                             f"Clusters ({len(cluster_table_data)})",
-                            icon=ft.Icons.EXPAND_MORE,
+                            icon=ft.Icons.EXPAND_LESS if table_content.visible else ft.Icons.EXPAND_MORE,
                             style=ft.ButtonStyle(color=st.ACCENT),
                             on_click=_toggle_table,
                         ),
@@ -1416,6 +1459,8 @@ class ParticipantWorkflowScreen:
                     fallback=fallbacks.get(mask_name),
                     locked_reason=locked_reason,
                     close_review=lambda: _close_dialog(dialog),
+                    exclude_panel=exclude_panel,
+                    saved_override=saved_overrides.get(mask_name),
                     adjust_panel_cls=TaskMaskAdjustPanel,
                     build_replace_dialog=build_replace_dialog,
                     fallback_label=fallback_label,
@@ -2022,6 +2067,8 @@ class ParticipantWorkflowScreen:
         fallback: dict | None,
         locked_reason: str | None,
         close_review: Callable[[], None],
+        exclude_panel: Any,
+        saved_override: dict | None,
         adjust_panel_cls: Any,
         build_replace_dialog: Callable[..., ft.AlertDialog],
         fallback_label: Callable[[dict], str],
@@ -2107,10 +2154,14 @@ class ParticipantWorkflowScreen:
         )
 
         committed_figure = overlay_box.content
+        viewed_cluster: list[Any] = []  # the peak of the cluster shown alone in the figure, if any
 
         def _preview_shown() -> None:
+            viewed_cluster.clear()
             pending_previews.add(mask_name)
             panel.set_preview_pending(True)
+            if exclude_panel is not None:
+                exclude_panel.set_preview_pending(True)
             refresh_approval()
 
         def _discard_preview() -> None:
@@ -2121,9 +2172,53 @@ class ParticipantWorkflowScreen:
             overlay_box.content = committed_figure
             panel.show_result("")
             panel.set_preview_pending(False)
+            if exclude_panel is not None:
+                exclude_panel.show_result("")
+                exclude_panel.set_preview_pending(False)
             with contextlib.suppress(Exception):
                 overlay_box.update()
             refresh_approval()
+
+        if exclude_panel is not None:
+            from pineuro.gui.components.task_mask_tools import exclusion_override, restored_override
+
+            def _view_cluster(cluster: dict) -> None:
+                """Show one cluster alone in the figure; its button again shows the whole mask."""
+                if mask_name in pending_previews:
+                    exclude_panel.show_error("Apply or discard the preview first.")
+                    return
+                if viewed_cluster == cluster["peak_ijk"]:
+                    viewed_cluster.clear()
+                    overlay_box.content = committed_figure
+                    exclude_panel.show_result("")
+                    with contextlib.suppress(Exception):
+                        overlay_box.update()
+                    return
+                viewed_cluster[:] = cluster["peak_ijk"]
+                self._view_task_cluster(
+                    mask_name,
+                    cluster,
+                    exclude_panel,
+                    mask_file=mask_file,
+                    overlay_box=overlay_box,
+                    ref_file=ref_file,
+                    overlays_dir=overlays_dir,
+                )
+
+            exclude_panel.on_view = _view_cluster
+            exclude_panel.on_preview = lambda peaks: self._preview_task_mask(
+                loc_idx,
+                mask_name,
+                exclusion_override(saved_override, peaks),
+                exclude_panel,
+                overlay_box=overlay_box,
+                ref_file=ref_file,
+                overlays_dir=overlays_dir,
+                on_shown=_preview_shown,
+            )
+            exclude_panel.on_apply = lambda peaks: _change(exclusion_override(saved_override, peaks))
+            exclude_panel.on_restore = lambda: _change(restored_override(saved_override))
+            exclude_panel.on_discard = _discard_preview
 
         def _toggle_panel(e: Any) -> None:
             panel.visible = not panel.visible
@@ -2186,7 +2281,6 @@ class ParticipantWorkflowScreen:
         ``on_shown`` then marks the mask as showing an unapplied preview, which
         blocks approval until it is applied or discarded.
         """
-        import base64
         from dataclasses import asdict
 
         from pineuro.gui.components.task_mask_tools import preview_summary
@@ -2211,26 +2305,14 @@ class ParticipantWorkflowScreen:
             else:
                 # The preview gets its own files; the mask's review overlay is untouched until Apply
                 try:
-                    from pineuro.qc import plot_mask_overlay_tripanel, select_slices_from_atlas
-
-                    preview_mask = overlays_dir / f"{self._bids_prefix}_{mask_name}_preview_mask.nii.gz"
-                    preview_png = overlays_dir / f"{self._bids_prefix}_{mask_name}_preview_overlay.png"
-                    mask_img.to_filename(str(preview_mask))
-                    slices = (
-                        select_slices_from_atlas(
-                            atlas_path=ref_file, labels=[], target_label="", top_n_per_plane=1, mask_path=preview_mask
-                        )
-                        if sel.n_voxels_thresholded > 0
-                        else {}  # an empty preview falls back to the middle slices
-                    )
-                    plot_mask_overlay_tripanel(
-                        mask_path=preview_mask,
-                        ref_path=ref_file,
-                        out_path=preview_png,
-                        slices=slices,
+                    png_b64 = _render_mask_figure(
+                        mask_img,
+                        n_voxels=sel.n_voxels_thresholded,
+                        ref_file=ref_file,
+                        mask_out=overlays_dir / f"{self._bids_prefix}_{mask_name}_preview_mask.nii.gz",
+                        png_out=overlays_dir / f"{self._bids_prefix}_{mask_name}_preview_overlay.png",
                         title=f"Preview: {mask_name} ({sel.n_voxels_thresholded} voxels, not applied)",
                     )
-                    png_b64 = base64.b64encode(preview_png.read_bytes()).decode("utf-8")
                 except Exception as ex:
                     logger.warning(f"Could not draw the preview of {mask_name}: {ex}")
 
@@ -2246,6 +2328,53 @@ class ParticipantWorkflowScreen:
                     )
                     with contextlib.suppress(Exception):
                         overlay_box.update()
+
+            self.page.run_task(_show)
+
+        self.page.run_thread(_work)
+
+    def _view_task_cluster(
+        self,
+        mask_name: str,
+        cluster: dict,
+        panel: Any,
+        *,
+        mask_file: Path,
+        overlay_box: ft.Container,
+        ref_file: Path,
+        overlays_dir: Path,
+    ) -> None:
+        """Show one cluster of the saved mask in the card's figure, without changing the mask."""
+        cluster_id = cluster.get("cluster_id", "")
+
+        def _work() -> None:
+            png_b64, error = None, None
+            try:
+                from pineuro.mask_extraction import single_cluster_image
+
+                cluster_img, n_voxels = single_cluster_image(mask_file, cluster["peak_ijk"])
+                png_b64 = _render_mask_figure(
+                    cluster_img,
+                    n_voxels=n_voxels,
+                    ref_file=ref_file,
+                    mask_out=overlays_dir / f"{self._bids_prefix}_{mask_name}_cluster_mask.nii.gz",
+                    png_out=overlays_dir / f"{self._bids_prefix}_{mask_name}_cluster_overlay.png",
+                    title=f"{mask_name}: cluster {cluster_id} only ({n_voxels} voxels)",
+                )
+            except Exception as ex:
+                logger.exception(f"Could not draw cluster {cluster_id} of {mask_name}")
+                error = str(ex)
+
+            async def _show() -> None:
+                if error is not None:
+                    panel.show_error(error)
+                    return
+                panel.show_result(f"Showing cluster {cluster_id} only. Its view button again shows the whole mask.")
+                overlay_box.content = ft.Image(
+                    src=f"data:image/png;base64,{png_b64}", fit=ft.BoxFit.CONTAIN, height=st.PREVIEW_H_SM
+                )
+                with contextlib.suppress(Exception):
+                    overlay_box.update()
 
             self.page.run_task(_show)
 

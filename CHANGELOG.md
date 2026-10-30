@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Clusters can be left out of a task mask at review.** The cluster table in Review & Approve Masks has a tick box and a view button per row: view shows that cluster alone in the overlay, Preview without selected shows the remaining mask, and Exclude selected applies it. The mask becomes the reviewed mask minus those clusters, with no voxels added back. Exclusions are saved by peak voxel as an `exclude_clusters` entry in `mask_overrides.json` and `reproduce_masks.py`, and `mask_selections.json` and the QC report list what was removed (`excluded_clusters`, with a `selection_reason` of `operator_exclude_clusters`). This works for every task localizer and thresholding method.
+
+### Changed
+
+- **The task mask cluster table lists every saved cluster, up to the 50 largest,** in the review and the QC report, instead of the 15 largest. When a mask has more, a last row gives the voxels in the clusters not listed.
+
 ### Fixed
 
 - **mypy no longer stops on PyQt6's stubs.** PyQt6 6.12.0, released on 2026-10-28 and installed by PsychoPy, ships a `QtGui.pyi` that does not parse (`*args, /`), and mypy reached it through Pillow's `ImageQt`, so the type check failed before checking any of pineuro. pineuro never imports PyQt6, and mypy now skips it. Running pineuro is unaffected.

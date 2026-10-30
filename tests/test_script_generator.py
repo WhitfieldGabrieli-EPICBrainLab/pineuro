@@ -165,6 +165,7 @@ class TestTaskScript:
         overrides = {
             "motor": {"kind": "rethreshold", "min_cluster_size": 20, "selection_reason": "operator_rethreshold"},
             "motor_reverse": {"kind": "atlas_network", "atlas": "yeo_17", "network": "DefaultA"},
+            "visual": {"kind": "exclude_clusters", "peaks": [[48, 92, 62]], "min_cluster_size": 20},
         }
         script = generate_mask_extraction_script("task", _task_params(tmp_path, mask_overrides=overrides))
 

@@ -3,12 +3,15 @@
 import pytest
 
 from pineuro.gui.components.task_mask_tools import (
+    ClusterExcludePanel,
     TaskMaskAdjustPanel,
     build_replace_dialog,
+    exclusion_override,
     fallback_label,
     mask_lock_reason,
     preview_summary,
     provenance_label,
+    restored_override,
 )
 
 
@@ -45,6 +48,97 @@ class TestLabels:
     def test_provenance_replacement_shows_source(self):
         sel = {"selection_reason": "fallback_configured", "source": "yeo_17:DefaultA"}
         assert provenance_label(sel) == "Study fallback mask: yeo_17:DefaultA"
+
+    def test_provenance_exclusion_shows_parameters_and_what_was_removed(self):
+        sel = {
+            "selection_reason": "operator_exclude_clusters",
+            "stat_type": "t",
+            "threshold_params": {
+                "threshold_method": "cluster_extent",
+                "cluster_start_threshold": 1.5,
+                "min_cluster_size": 50,
+                "max_total_voxels": 2000,
+            },
+            "excluded_clusters": [{"n_voxels": 95, "peak_stat": 3.18, "peak_ijk": [48, 92, 62]}],
+        }
+        assert provenance_label(sel) == (
+            "Clusters excluded at review (t ≥ 1.5, min 50 voxels, cap 2000): 1 cluster, 95 voxels"
+        )
+
+
+class TestExclusionOverride:
+    def test_from_the_study_mask(self):
+        assert exclusion_override(None, [[1, 2, 3]]) == {"kind": "exclude_clusters", "peaks": [[1, 2, 3]]}
+
+    def test_keeps_threshold_values(self):
+        current = {"kind": "rethreshold", "cluster_start_threshold": 1.5, "min_cluster_size": 50}
+        assert exclusion_override(current, [[1, 2, 3]]) == {
+            "kind": "exclude_clusters",
+            "peaks": [[1, 2, 3]],
+            "cluster_start_threshold": 1.5,
+            "min_cluster_size": 50,
+        }
+
+    def test_adds_to_earlier_exclusions_without_duplicates(self):
+        current = {"kind": "exclude_clusters", "peaks": [[1, 2, 3]], "min_cluster_size": 50}
+        override = exclusion_override(current, [[1, 2, 3], [4, 5, 6]])
+        assert override["peaks"] == [[1, 2, 3], [4, 5, 6]]
+        assert override["min_cluster_size"] == 50
+
+    def test_replacement_override_contributes_nothing(self):
+        current = {"kind": "native_file", "file": "/masks/net.nii.gz"}
+        assert exclusion_override(current, [[1, 2, 3]]) == {"kind": "exclude_clusters", "peaks": [[1, 2, 3]]}
+
+    def test_restore_keeps_threshold_values(self):
+        current = {"kind": "exclude_clusters", "peaks": [[1, 2, 3]], "min_cluster_size": 50}
+        assert restored_override(current) == {"kind": "rethreshold", "min_cluster_size": 50}
+
+    def test_restore_without_threshold_values_is_the_study_mask(self):
+        assert restored_override({"kind": "exclude_clusters", "peaks": [[1, 2, 3]]}) is None
+        assert restored_override(None) is None
+
+
+class TestClusterExcludePanel:
+    PEAKS = ([1, 2, 3], [4, 5, 6])
+
+    def test_actions_need_a_ticked_cluster(self):
+        panel = ClusterExcludePanel(2)
+        assert panel.preview_button.disabled and panel.apply_button.disabled
+        panel.set_ticked(self.PEAKS[0], True)
+        assert not panel.preview_button.disabled and not panel.apply_button.disabled
+        panel.set_ticked(self.PEAKS[0], False)
+        assert panel.apply_button.disabled
+
+    def test_every_cluster_cannot_be_excluded(self):
+        panel = ClusterExcludePanel(2)
+        panel.set_ticked(self.PEAKS[0], True)
+        panel.set_ticked(self.PEAKS[1], True)
+        assert panel.apply_button.disabled and panel.preview_button.disabled
+        assert "must stay" in panel.apply_button.tooltip
+
+    def test_locked_panel_disables_everything(self):
+        panel = ClusterExcludePanel(2, has_exclusions=True, locked_reason="Masks are locked")
+        panel.set_ticked(self.PEAKS[0], True)
+        assert panel.apply_button.disabled and panel.preview_button.disabled
+        assert panel.restore_button.disabled and panel.restore_button.visible
+        assert panel.tick_box({"peak_ijk": self.PEAKS[0]}).disabled
+
+    def test_callbacks_receive_the_ticked_peaks(self):
+        applied, previewed, viewed = [], [], []
+        panel = ClusterExcludePanel(2)
+        panel.on_apply, panel.on_preview, panel.on_view = applied.append, previewed.append, viewed.append
+        cluster = {"peak_ijk": self.PEAKS[0]}
+        tick = panel.tick_box(cluster)
+        tick.on_change(type("Event", (), {"control": type("Box", (), {"value": True})})())
+        panel.apply_button.on_click(None)
+        panel.preview_button.on_click(None)
+        panel.view_button(cluster).on_click(None)
+        assert applied == previewed == [[self.PEAKS[0]]]
+        assert viewed == [cluster]
+
+    def test_restore_is_shown_only_with_exclusions(self):
+        assert ClusterExcludePanel(2).restore_button.visible is False
+        assert ClusterExcludePanel(2, has_exclusions=True).restore_button.visible is True
 
 
 class TestPreviewSummary:

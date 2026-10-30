@@ -2144,7 +2144,7 @@ def generate_task_mask_extraction_report(
             if cluster_table:
                 sections.append({"type": "heading", "content": f"Cluster Table: {mask_name}"})
                 ct_rows = []
-                for c in cluster_table[:15]:
+                for c in cluster_table:
                     peak_ijk = c.get("peak_ijk", [])
                     peak_ijk_str = f"({', '.join(str(int(v)) for v in peak_ijk)})" if peak_ijk else ""
                     ct_rows.append(
@@ -2156,13 +2156,32 @@ def generate_task_mask_extraction_report(
                             c.get("anatomical_label", "") or "—",
                         ]
                     )
-                if len(cluster_table) > 15:
-                    ct_rows.append(["...", f"+{len(cluster_table) - 15} more", "", "", ""])
+                # The saved table stops at the largest clusters; say what it leaves out
+                unlisted_voxels = sel.get("n_voxels_thresholded", 0) - sum(c.get("n_voxels", 0) for c in cluster_table)
+                if unlisted_voxels > 0:
+                    ct_rows.append(["...", f"+{unlisted_voxels}", "", "", "in smaller clusters, not listed"])
                 sections.append(
                     {
                         "type": "table",
                         "headers": ["Cluster", "Voxels", f"Peak {stat_type}", "Peak (i,j,k)", "Region"],
                         "rows": ct_rows,
+                    }
+                )
+            excluded_clusters = sel.get("excluded_clusters")
+            if excluded_clusters:
+                sections.append({"type": "heading", "content": f"Clusters Excluded at Review: {mask_name}"})
+                sections.append(
+                    {
+                        "type": "table",
+                        "headers": ["Voxels", f"Peak {stat_type}", "Peak (i,j,k)"],
+                        "rows": [
+                            [
+                                str(c["n_voxels"]),
+                                f"{c['peak_stat']:.2f}",
+                                f"({', '.join(str(int(v)) for v in c['peak_ijk'])})",
+                            ]
+                            for c in excluded_clusters
+                        ],
                     }
                 )
 

@@ -1,4 +1,4 @@
-"""Controls for changing a task (GLM) mask at review: re-threshold, fallback, replace.
+"""Controls for changing a task (GLM) mask at review: re-threshold, cluster exclusion, fallback, replace.
 
 UI and formatting only. The participant workflow screen supplies the callbacks
 that preview and apply a change through
@@ -34,6 +34,7 @@ THRESHOLD_FIELDS: dict[str, list[tuple[str, str, str]]] = {
 
 _PROVENANCE = {
     "operator_rethreshold": "Re-thresholded at review",
+    "operator_exclude_clusters": "Clusters excluded at review",
     "fallback_configured": "Study fallback mask",
     "operator_replace": "Replaced at review",
     "atlas_roi": "Search atlas region",
@@ -79,9 +80,39 @@ def provenance_label(selection: dict[str, Any]) -> str | None:
     label = str(_PROVENANCE.get(reason, reason))
     if reason == "operator_rethreshold" and selection.get("threshold_params"):
         return f"{label} ({_threshold_text(selection['threshold_params'], selection.get('stat_type', 't'))})"
+    if reason == "operator_exclude_clusters":
+        excluded = selection.get("excluded_clusters") or []
+        n_voxels = sum(c["n_voxels"] for c in excluded)
+        removed = f"{len(excluded)} cluster{'s' if len(excluded) != 1 else ''}, {n_voxels} voxels"
+        if selection.get("threshold_params"):
+            return f"{label} ({_threshold_text(selection['threshold_params'], selection.get('stat_type', 't'))}): {removed}"
+        return f"{label}: {removed}"
     if selection.get("source"):
         return f"{label}: {selection['source']}"
     return label
+
+
+def _threshold_fields(override: dict[str, Any] | None) -> dict[str, Any]:
+    """The threshold values a re-threshold or exclusion override sets."""
+    if not override or override.get("kind") not in ("rethreshold", "exclude_clusters"):
+        return {}
+    return {k: v for k, v in override.items() if k not in ("kind", "peaks", "selection_reason")}
+
+
+def exclusion_override(current: dict[str, Any] | None, peaks: Iterable[Iterable[int]]) -> dict[str, Any]:
+    """The override that also leaves out the clusters at ``peaks``.
+
+    Keeps the threshold values and exclusions of ``current``, the mask's saved override.
+    """
+    merged = [list(peak) for peak in (current or {}).get("peaks", [])]
+    merged.extend(peak for peak in map(list, peaks) if peak not in merged)
+    return {"kind": "exclude_clusters", "peaks": merged, **_threshold_fields(current)}
+
+
+def restored_override(current: dict[str, Any] | None) -> dict[str, Any] | None:
+    """``current`` without its exclusions: its threshold values, or None for the study's own."""
+    fields = _threshold_fields(current)
+    return {"kind": "rethreshold", **fields} if fields else None
 
 
 def preview_summary(selection: dict[str, Any]) -> str:
@@ -164,7 +195,8 @@ class TaskMaskAdjustPanel(ft.Container):
                 [
                     ft.Text(
                         "Preview shows the mask these values give, from the saved GLM map, without "
-                        "changing it. Apply replaces the mask; Discard preview keeps the current one.",
+                        "changing it. Apply replaces the mask and brings back any excluded clusters; "
+                        "Discard preview keeps the current one.",
                         size=st.CAPTION,
                         color=st.MUTED,
                     ),
@@ -237,6 +269,120 @@ class TaskMaskAdjustPanel(ft.Container):
             return
         self.error_text.visible = False
         callback(override)
+
+
+class ClusterExcludePanel(ft.Column):
+    """Tick boxes, view buttons and actions to leave whole clusters out of one task mask.
+
+    The screen builds the cluster table's rows with :meth:`tick_box` and
+    :meth:`view_button`, shows this panel under the table and sets the callbacks:
+    ``on_preview`` and ``on_apply`` receive the ticked peaks, ``on_view`` a cluster
+    table row, and ``on_restore`` and ``on_discard`` nothing.
+    """
+
+    def __init__(self, n_clusters: int, *, has_exclusions: bool = False, locked_reason: str | None = None):
+        self._n_clusters = n_clusters
+        self._locked_reason = locked_reason
+        self._ticked: list[list[int]] = []
+        self.on_preview: Callable[[list[list[int]]], None] = lambda _peaks: None
+        self.on_apply: Callable[[list[list[int]]], None] = lambda _peaks: None
+        self.on_view: Callable[[dict[str, Any]], None] = lambda _cluster: None
+        self.on_restore: Callable[[], None] = lambda: None
+        self.on_discard: Callable[[], None] = lambda: None
+        self.preview_button = ft.OutlinedButton(
+            "Preview without selected",
+            icon=ft.Icons.VISIBILITY,
+            disabled=True,
+            on_click=lambda _e: self.on_preview(list(self._ticked)),
+        )
+        self.apply_button = ft.FilledButton(
+            "Exclude selected",
+            icon=ft.Icons.REMOVE_CIRCLE_OUTLINE,
+            disabled=True,
+            on_click=lambda _e: self.on_apply(list(self._ticked)),
+        )
+        self.discard_button = ft.TextButton(
+            "Discard preview", icon=ft.Icons.UNDO, visible=False, on_click=lambda _e: self.on_discard()
+        )
+        self.restore_button = ft.TextButton(
+            "Restore excluded clusters",
+            icon=ft.Icons.RESTORE,
+            visible=has_exclusions,
+            disabled=locked_reason is not None,
+            tooltip=locked_reason,
+            on_click=lambda _e: self.on_restore(),
+        )
+        self.result_text = ft.Text("", size=st.CAPTION, color=st.MUTED, visible=False)
+        self.error_text = ft.Text("", size=st.CAPTION, color=st.ERROR, visible=False)
+        self._refresh()
+        super().__init__(
+            [
+                ft.Row(
+                    [self.preview_button, self.apply_button, self.discard_button, self.restore_button],
+                    spacing=st.GAP_SM,
+                    wrap=True,
+                ),
+                self.result_text,
+                self.error_text,
+            ],
+            spacing=st.GAP_SM,
+        )
+
+    def tick_box(self, cluster: dict[str, Any]) -> ft.Checkbox:
+        """The tick box of one cluster table row."""
+        peak = [int(v) for v in cluster["peak_ijk"]]
+        return ft.Checkbox(
+            value=False,
+            disabled=self._locked_reason is not None,
+            tooltip=self._locked_reason or "Leave this cluster out of the mask",
+            on_change=lambda e: self.set_ticked(peak, bool(e.control.value)),
+        )
+
+    def view_button(self, cluster: dict[str, Any]) -> ft.IconButton:
+        """The button that shows one cluster in the mask's figure."""
+        return ft.IconButton(
+            icon=ft.Icons.VISIBILITY_OUTLINED,
+            icon_size=st.ICON_SM,
+            tooltip="Show only this cluster in the figure",
+            on_click=lambda _e: self.on_view(cluster),
+        )
+
+    def set_ticked(self, peak: list[int], ticked: bool) -> None:
+        if ticked and peak not in self._ticked:
+            self._ticked.append(peak)
+        elif not ticked and peak in self._ticked:
+            self._ticked.remove(peak)
+        self._refresh()
+        with contextlib.suppress(Exception):
+            self.update()
+
+    def _refresh(self) -> None:
+        """The actions need at least one ticked cluster, and at least one left in the mask."""
+        all_ticked = len(self._ticked) >= self._n_clusters
+        disabled = not self._ticked or all_ticked or self._locked_reason is not None
+        tooltip = self._locked_reason or ("At least one cluster must stay in the mask" if all_ticked else None)
+        for button in (self.preview_button, self.apply_button):
+            button.disabled = disabled
+            button.tooltip = tooltip
+
+    def set_preview_pending(self, pending: bool) -> None:
+        """Show the Discard preview button while a preview is shown but not applied."""
+        self.discard_button.visible = pending
+        with contextlib.suppress(Exception):
+            self.update()
+
+    def show_result(self, text: str) -> None:
+        self.result_text.value = text
+        self.result_text.visible = bool(text)
+        self.error_text.visible = False
+        with contextlib.suppress(Exception):
+            self.update()
+
+    def show_error(self, text: str) -> None:
+        self.error_text.value = text
+        self.error_text.visible = True
+        with contextlib.suppress(Exception):
+            self.update()
 
 
 def build_replace_dialog(
